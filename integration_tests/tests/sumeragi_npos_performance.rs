@@ -346,10 +346,15 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     if next_seed <= target_non_empty {
         let submit_client = submit_client_for_network(&network, &client);
         let message = format!("npos baseline seed {next_seed}");
-        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, message)))
-            .await
-            .wrap_err("join baseline log submission")?
-            .wrap_err("submit baseline log transaction")?;
+        tokio::task::spawn_blocking(move || {
+            submit_client.submit(
+                Log::new(Level::INFO, message),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await
+        .wrap_err("join baseline log submission")?
+        .wrap_err("submit baseline log transaction")?;
         next_seed = next_seed.saturating_add(1);
     }
 
@@ -430,7 +435,10 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
             let submit_client = submit_client_for_network(&network, &client);
             let message = format!("npos baseline seed {next_seed}");
             tokio::task::spawn_blocking(move || {
-                submit_client.submit(Log::new(Level::INFO, message))
+                submit_client.submit(
+                    Log::new(Level::INFO, message),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
             })
             .await
             .wrap_err("join paced baseline log submission")?
@@ -677,9 +685,13 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             "queue-rbc-primer-{idx:02}-{}",
             "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(18))
         );
-        let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions([Log::new(Level::INFO, payload)])
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, payload)])
+        .sign(ALICE_KEYPAIR.private_key());
         let submit_client = network.client();
         tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
     }
@@ -687,9 +699,13 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     let mut handles = Vec::with_capacity(QUEUE_STRESS_TXS);
     for idx in 0..QUEUE_STRESS_TXS {
         let client = network.client();
-        let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions([Log::new(Level::INFO, format!("queue-stress-{idx:04}"))])
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, format!("queue-stress-{idx:04}"))])
+        .sign(ALICE_KEYPAIR.private_key());
         handles.push(tokio::task::spawn_blocking(move || {
             client.submit_transaction(&tx)
         }));
@@ -906,9 +922,13 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
             "rbc-store-{idx:02}-{}",
             "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(13))
         );
-        let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions([Log::new(Level::INFO, message)])
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message)])
+        .sign(ALICE_KEYPAIR.private_key());
         let submit_client = network.client();
         tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
     }
@@ -1049,15 +1069,22 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         .await?;
 
     let client = network.client();
-    client.submit_blocking(Log::new(Level::INFO, "chunk-loss seed".to_owned()))?;
+    client.submit_blocking(
+        Log::new(Level::INFO, "chunk-loss seed".to_owned()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let chain_id = network.chain_id();
     let message = format!(
         "chunk-loss-fault-{}",
         "C".repeat(CHUNK_LOSS_PAYLOAD_BYTES.saturating_sub(18))
     );
-    let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-        .with_instructions([Log::new(Level::INFO, message)])
-        .sign(ALICE_KEYPAIR.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, message)])
+    .sign(ALICE_KEYPAIR.private_key());
     let submit_client = network.client();
     tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
 

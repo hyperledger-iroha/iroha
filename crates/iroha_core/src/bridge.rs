@@ -2375,9 +2375,13 @@ mod tests {
         let keypair = checked_keypair();
         let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        TransactionBuilder::new(chain, authority)
-            .with_executable(executable)
-            .sign(keypair.private_key())
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(executable)
+        .sign(keypair.private_key())
     }
 
     fn accepted_transaction_with_sccp_payload(payload: Vec<u8>) -> AcceptedTransaction<'static> {
@@ -2391,8 +2395,12 @@ mod tests {
         let keypair = checked_keypair();
         let chain_id: ChainId = "bridge-sccp-sealed-index".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .sign(keypair.private_key());
+        let inner_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
                 &chain_id, &inner_tx, [0x57; 32], 5,
@@ -2417,11 +2425,15 @@ mod tests {
         let keypair = checked_keypair();
         let chain_id: ChainId = "bridge-sccp-sealed-record".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(ivm_proved_with_overlay(vec![InstructionBox::from(
-                crate::bridge::test_record_sccp_message(payload),
-            )]))
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(ivm_proved_with_overlay(vec![InstructionBox::from(
+            crate::bridge::test_record_sccp_message(payload),
+        )]))
+        .sign(keypair.private_key());
         let salt = [0x58; 32];
         let reveal_deadline_height = 8;
         let commitment =
@@ -2554,9 +2566,13 @@ mod tests {
             .map(crate::bridge::test_record_sccp_message)
             .map(InstructionBox::from)
             .collect();
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_executable(ivm_proved_with_overlay(instructions))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(ivm_proved_with_overlay(instructions))
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),

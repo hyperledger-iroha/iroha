@@ -403,7 +403,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 successor_height: SumeragiV2LocalWorkStage::Idle,
             },
             queues: vec![SumeragiV2QueueStatus {
-                queue: SumeragiV2QueueKind::NetworkIngress,
+                queue: SumeragiV2QueueKind::EffectDispatch,
                 depth: 1,
                 capacity: 4,
                 oldest_age_ms: Some(17),

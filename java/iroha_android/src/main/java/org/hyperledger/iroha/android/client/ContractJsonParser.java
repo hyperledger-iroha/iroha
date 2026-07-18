@@ -72,8 +72,8 @@ public final class ContractJsonParser {
         optionalHash(receipt.get("entrypoint_hash_hex"), path + ".entrypoint_hash_hex"),
         gasLimit,
         asOptionalNonNegativeLong(receipt.get("gas_used"), path + ".gas_used"),
-        optionalString(receipt.get("gas_asset_id")),
-        optionalString(receipt.get("fee_sponsor")),
+        receipt.get("fee_payment") == null
+            ? null : FeePaymentJson.parse(receipt.get("fee_payment"), path + ".fee_payment"),
         HttpClientTransport.normalizeHex32(
             requiredString(receipt.get("payload_digest_hex"), path + ".payload_digest_hex"),
             "payloadDigestHex"));

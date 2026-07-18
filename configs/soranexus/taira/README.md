@@ -678,17 +678,16 @@ selected runtime path is missing, the rollout scripts generate a fresh
 keypair, onboard the account on public Taira, and write that runtime-only
 config before the signed ping. An explicit config path is never replaced,
 including when it contains a stale or placeholder authority. The Torii
-onboarding authority sponsors the onboarding transaction; onboarding does not
-accept gas fields. Bootstrap requires the onboarding endpoint to return a
+onboarding authority enrolls the account in the configured sponsor program;
+onboarding does not accept fee or gas overrides. Bootstrap requires the onboarding endpoint to return a
 `202 QUEUED` receipt and follows it through the canonical
 `/v1/pipeline/transactions/status` route before using the signer; the faucet
 helper follows the same canonical receipt path when it runs. With the default
-Taira XOR gas asset configured, bootstrap skips faucet funding by default, so
+Taira sponsor program configured, bootstrap skips faucet funding by default, so
 the write canary proves the sponsored-fee path directly. Set
 `ROLLOUT_CANARY_SKIP_FAUCET=0` only when intentionally validating an
-unsponsored/faucet-funded network. The signed ping attaches Taira's accepted XOR
-gas asset metadata by default; pass `--gas-asset-id ""` only against a network
-that does not enforce pipeline gas metadata. Keep the populated canary config
+unsponsored/faucet-funded network. The signed ping requests an exact fee quote
+for `testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default` revision 1 by default. Keep the populated canary config
 out of the repo and out of shell history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
@@ -802,14 +801,39 @@ base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
 per_gas_unit_fee = "0.00005"
-sponsorship_enabled = false
-sponsor_max_fee = "0"
+sponsor_vault_custody_account_id = "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
 ```
 
-Without this block, public app-api writes can fall back to the canonical default
-fee selector for `universal.xor`, which does not match Taira's on-chain
-`xor#universal` asset-definition alias and causes public deploy/call
-transactions to be rejected before SoraSwap instances can activate.
+Without this Taira-specific block, the node uses the generic configured XOR
+selector rather than Taira's on-chain `xor#universal` alias. This is a node
+configuration default, not a transaction payer fallback: clients cannot repair
+the mismatch with metadata, and quote/admission reject the transaction before a
+public deploy or call can activate.
+
+The live Taira manifest registers, funds, enrolls, and activates revision 1 of
+`testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default`. That owner is the live
+`[genesis].public_key` signer. The checked-in Kagami Taira profile deliberately
+uses its Alice genesis signer and therefore owns
+`testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/default` instead. Do not copy one profile's
+program ID into the other. Funds are transferred into the configured custody
+account while remaining isolated and accounted for by exact program ID.
+
+For an already-running network, `taira_fee_sponsor_program` provisions one
+owner-signed revision in the required `create -> stage -> enroll -> fund ->
+activate` order. Pass canonical Norito JSON through `--revision-json` and
+`--fee-payment-json`; the helper quotes the complete unsigned payload, replaces
+only its fee intent with the response, and signs once. The signer loaded from
+`--profile-config` must own the program—there is no implicit policy-account or
+default-sponsor fallback.
+
+Normal CLI submissions also quote before signing and require an explicit payer:
+
+- authority paid: `iroha --fee-payer authority <command>`
+- sponsored: `iroha --fee-payer sponsor --fee-program <canonical-I105>/<name> --fee-program-revision <nonzero-u64> <command>`
+
+For contract or IVM execution, add the command's positive `--gas-limit`; the
+CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
+`gas_limit` in transaction metadata.
 
 ## Containerized validator deployment
 
@@ -1127,8 +1151,8 @@ From `../iroha2-block-explorer-web`:
    - the public check auto-bootstraps a runtime-only canary config when
     `--write-config` is omitted, preferring `/run/secrets` only when that
     directory is writable and otherwise using the local temp directory; when
-    the default Taira gas asset is configured, bootstrap skips faucet and uses
-    sponsored gas unless you set `ROLLOUT_CANARY_SKIP_FAUCET=0`
+    the default Taira sponsor program is configured, bootstrap skips faucet and
+    signs its exact quoted intent unless you set `ROLLOUT_CANARY_SKIP_FAUCET=0`
 7. Verify that SNI now serves the correct cert for each host and that MCP,
    Connect, and CID-host routing still work through the public edge:
    - `curl -vI https://taira.sora.org`
@@ -1191,6 +1215,11 @@ For the local `dist/taira-localnet` deployment, use:
      (or point `IROHA_TAIRA_SECRETS_FILE` at a populated secrets file) so the
      bootstrap can inject the shared local onboarding signer, which it also
      reuses as the served local faucet signer, into the localnet configs
+   - when setting `DPN_SPONSOR_ACCOUNT_ID`, use the same account as the local
+     genesis signer unless the overlay already grants that signer exact
+     fee-program lifecycle delegation. The bootstrap creates, funds, and
+     activates `{DPN_SPONSOR_ACCOUNT_ID}/default`; ownership is enforced and a
+     different unfederated account fails closed.
 3. Verify the relay endpoints and explorer page:
    - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
    - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`

@@ -47,6 +47,16 @@
         {
           "Register": {
             "Account": {
+              "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
+              "metadata": {
+                "purpose": "fee_sponsor_vault_custody"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
               "id": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"

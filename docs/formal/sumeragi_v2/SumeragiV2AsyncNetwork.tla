@@ -1022,12 +1022,20 @@ CommandSuccessors(command) ==
          <<CausalCandidate("Completion", "PersistTimeout", command)>>
     [] command.kind = "PersistTimeout" ->
          <<CausalCandidate("Completion", "SignTimeout", command)>>
+    \* Production consumes authenticated timeout traffic after Decision but
+    \* returns AlreadyDecided before admitting it.  Core removes the exact
+    \* network envelope without changing its receive pool, and the adapter
+    \* must therefore emit no FormTC/BeginInstallTC continuation.
     [] command.kind = "DeliverTimeout" ->
-         <<CausalCandidate("Progress", "FormTC", command)>>
+         IF NoDecisionForNode(command.node)
+         THEN <<CausalCandidate("Progress", "FormTC", command)>>
+         ELSE <<>>
     [] command.kind = "FormTC" ->
          <<CausalCandidate("Completion", "PersistInstallTC", command)>>
     [] command.kind = "DeliverTC" ->
-         <<CausalCandidate("Progress", "BeginInstallTC", command)>>
+         IF NoDecisionForNode(command.node)
+         THEN <<CausalCandidate("Progress", "BeginInstallTC", command)>>
+         ELSE <<>>
     [] command.kind = "BeginInstallTC" ->
          <<CausalCandidate("Completion", "PersistInstallTC", command)>>
     [] command.kind = "PersistInstallTC" ->

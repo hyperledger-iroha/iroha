@@ -339,7 +339,8 @@ class SumeragiV2WireFixtureTest {
         assertEquals(1, decoded.liveness.commitQuorums.size)
         assertEquals(1, decoded.liveness.timeoutQuorums.size)
         assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE, decoded.liveness.outboundIntents.single().kind)
-        assertEquals(SumeragiV2Wire.QueueKind.NETWORK_INGRESS, decoded.liveness.queues.single().queue)
+        assertEquals(1, decoded.liveness.queues.size)
+        assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH, decoded.liveness.queues.single().queue)
         assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING, decoded.liveness.blocker)
 
         // The fifth struct field follows four fixed-width fields and is the

@@ -187,7 +187,7 @@ final class TransactionPayloadFixtures {
         throw new IllegalStateException(name + ": fixture missing payload and encoded data");
       }
       final TransactionPayload.Builder builder =
-          TransactionPayload.builder()
+          TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
               .setChainId(asString(payload.get("chain"), "chain"))
               .setAuthority(asString(payload.get("authority"), "authority"))
               .setCreationTimeMs(asNumber(payload.get("creation_time_ms"), "creation_time_ms").longValue());

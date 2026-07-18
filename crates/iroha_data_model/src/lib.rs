@@ -35,7 +35,10 @@ pub use norito_derive::{
 use crate::name::Name;
 
 /// Data model compatibility version for SDK and node handshakes.
-pub const DATA_MODEL_VERSION: u32 = 1;
+///
+/// Version 2 makes the signature-bound fee payment intent mandatory and
+/// replaces account/policy fee sponsorship with on-chain sponsor programs.
+pub const DATA_MODEL_VERSION: u32 = 2;
 
 #[macro_use]
 mod id_macros;
@@ -370,11 +373,17 @@ pub mod prelude {
         nexus::{
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
-            DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-            LaneIdError, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1,
-            LaneLifecyclePlan, LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
+            DomainEndorsementSignature, FeeDebitSource, FeeRejectionCode, FeeSponsorAssetBudget,
+            FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
+            FeeSponsorEligibility, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
+            FeeSponsorProgram, FeeSponsorProgramActivation, FeeSponsorProgramId,
+            FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
+            FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
+            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig, LaneId, LaneIdError,
+            LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
+            LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
             LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
+            LaneVisibilityParseError, VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
         },
         nft::prelude::*,
         parameter::prelude::*,

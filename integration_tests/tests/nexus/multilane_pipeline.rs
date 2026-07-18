@@ -46,10 +46,14 @@ fn sample_transaction(
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
-    let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-        .with_instructions(instructions)
-        .with_metadata(Metadata::default())
-        .sign(signer);
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .with_metadata(Metadata::default())
+    .sign(signer);
     let default_limits = TransactionParameters::default();
     let params = TransactionParameters::with_max_signatures(
         nonzero!(16_u64),

@@ -13,6 +13,11 @@ from iroha_torii_client.client import canonical_request_signature_message
 from iroha_python import DataspaceSpec, ToriiClient, plan_dataspace, write_dataspace_plan
 from iroha_python.crypto import Ed25519KeyPair
 
+FEE_PAYMENT = {
+    "payer": "authority",
+    "value": {"charge_limits": [], "gas_limit": None},
+}
+
 
 class FakeSession:
     def __init__(self, responses: list[requests.Response]):
@@ -544,6 +549,7 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
         chain_id="test-chain",
         authority="alice@wonderland",
         private_key=bytes([9] * 32),
+        fee_payment=FEE_PAYMENT,
     )
 
     assert result == ("envelope", {"kind": "Applied"})
@@ -565,6 +571,7 @@ def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:
         "chain_id": "test-chain",
         "authority": "alice@wonderland",
         "private_key": bytes([10] * 32),
+        "fee_payment": FEE_PAYMENT,
     }
 
     with pytest.raises(TypeError, match="additions"):
@@ -611,23 +618,38 @@ def test_nexus_lane_lifecycle_rejects_retired_operator_only_shape() -> None:
     key_pair = Ed25519KeyPair.from_private_key(bytes([11] * 32))
 
     with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle([], key_pair=key_pair)
+        client.nexus_lane_lifecycle([], key_pair=key_pair, fee_payment=FEE_PAYMENT)
     with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle([], private_key_hex="11" * 32)
+        client.nexus_lane_lifecycle(
+            [], private_key_hex="11" * 32, fee_payment=FEE_PAYMENT
+        )
     with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle([], private_key="11" * 32)
+        client.nexus_lane_lifecycle([], private_key="11" * 32, fee_payment=FEE_PAYMENT)
 
 
 def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     with pytest.raises(ValueError, match="chain_id is required"):
         client.nexus_lane_lifecycle(
-            [], authority="alice@wonderland", private_key=bytes([1] * 32)
+            [],
+            authority="alice@wonderland",
+            private_key=bytes([1] * 32),
+            fee_payment=FEE_PAYMENT,
         )
     with pytest.raises(ValueError, match="authority is required"):
-        client.nexus_lane_lifecycle([], chain_id="chain", private_key=bytes([1] * 32))
+        client.nexus_lane_lifecycle(
+            [],
+            chain_id="chain",
+            private_key=bytes([1] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
     with pytest.raises(ValueError, match="private_key bytes are required"):
-        client.nexus_lane_lifecycle([], chain_id="chain", authority="alice@wonderland")
+        client.nexus_lane_lifecycle(
+            [],
+            chain_id="chain",
+            authority="alice@wonderland",
+            fee_payment=FEE_PAYMENT,
+        )
 
 
 def test_nexus_lane_lifecycle_rejects_malformed_status() -> None:
@@ -694,6 +716,7 @@ def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(
             chain_id="test-chain",
             authority="alice@wonderland",
             private_key=bytes([12] * 32),
+            fee_payment=FEE_PAYMENT,
         )
 
     assert len(session.calls) == 1

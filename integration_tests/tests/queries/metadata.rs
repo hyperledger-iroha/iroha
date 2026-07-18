@@ -31,11 +31,14 @@ fn find_accounts_with_asset() {
         // Ensure Alice has the expected default metadata key used by assertions below.
         // Some environments may not preload this value via genesis.
         test_client
-            .submit_blocking(SetKeyValue::account(
-                ALICE_ID.clone(),
-                key.clone(),
-                iroha_primitives::json::Json::new("value"),
-            ))
+            .submit_blocking(
+                SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    key.clone(),
+                    iroha_primitives::json::Json::new("value"),
+                ),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .unwrap();
 
         // Ensure Bob account exists (defaults genesis may omit it).
@@ -46,15 +49,21 @@ fn find_accounts_with_asset() {
         let bob_missing = existing_accounts.iter().all(|acc| acc.id() != &*BOB_ID);
         if bob_missing {
             test_client
-                .submit_blocking(Grant::account_permission(
-                    CanRegisterAccount {
-                        domain: wonderland_domain.clone(),
-                    },
-                    ALICE_ID.clone(),
-                ))
+                .submit_blocking(
+                    Grant::account_permission(
+                        CanRegisterAccount {
+                            domain: wonderland_domain.clone(),
+                        },
+                        ALICE_ID.clone(),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .expect("Failed to grant account registration permission to Alice");
             test_client
-                .submit_blocking(Register::account(Account::new(BOB_ID.clone())))
+                .submit_blocking(
+                    Register::account(Account::new(BOB_ID.clone())),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .expect("Failed to register Bob account");
         }
         let bob_client = network
@@ -64,24 +73,26 @@ fn find_accounts_with_asset() {
             .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
 
         bob_client
-            .submit_blocking(SetKeyValue::account(
-                BOB_ID.clone(),
-                key.clone(),
-                iroha_primitives::json::Json::new(
-                    norito::json::object([(
-                        "funny",
-                        norito::json::to_value(&"value").expect("serialize"),
-                    )])
-                    .expect("serialize metadata object"),
+            .submit_blocking(
+                SetKeyValue::account(
+                    BOB_ID.clone(),
+                    key.clone(),
+                    iroha_primitives::json::Json::new(
+                        norito::json::object([(
+                            "funny",
+                            norito::json::to_value(&"value").expect("serialize"),
+                        )])
+                        .expect("serialize metadata object"),
+                    ),
                 ),
-            ))
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .unwrap();
         bob_client
-            .submit_blocking(SetKeyValue::account(
-                BOB_ID.clone(),
-                another_key.clone(),
-                "value",
-            ))
+            .submit_blocking(
+                SetKeyValue::account(BOB_ID.clone(), another_key.clone(), "value"),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .unwrap();
 
         // we have the following configuration:

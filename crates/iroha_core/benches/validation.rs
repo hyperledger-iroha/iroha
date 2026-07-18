@@ -45,7 +45,12 @@ fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
     );
     let create_asset = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
 
-    TransactionBuilder::new(chain_id, STARTER_ID.clone()).with_instructions::<InstructionBox>([
+    TransactionBuilder::new(
+        chain_id,
+        STARTER_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions::<InstructionBox>([
         create_domain.into(),
         create_account.into(),
         create_asset.into(),
@@ -78,9 +83,13 @@ fn build_test_and_transient_state() -> State {
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(key_pair.private_key());
         let (max_clock_drift, tx_limits) = {
             let state_view = state.view();
             let params = state_view.world.parameters();
@@ -206,9 +215,13 @@ fn validate_transaction(criterion: &mut Criterion) {
     let state = build_test_and_transient_state();
 
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
-    let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-        .with_instructions([Log::new(Level::INFO, "init".to_string())])
-        .sign(key_pair.private_key());
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "init".to_string())])
+    .sign(key_pair.private_key());
     let (max_clock_drift, tx_limits) = {
         let state_view = state.view();
         let params = state_view.world.parameters();

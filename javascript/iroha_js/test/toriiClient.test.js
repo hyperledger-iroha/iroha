@@ -86,6 +86,25 @@ function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");
 }
 
+function authorityFeePayment(gasLimit = null) {
+  return {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: gasLimit },
+  };
+}
+
+function sponsorFeePayment(sponsor, gasLimit, programRevision = 1) {
+  return {
+    payer: "sponsor",
+    value: {
+      program_id: { sponsor, name: "contracts" },
+      program_revision: programRevision,
+      charge_limits: [],
+      gas_limit: gasLimit,
+    },
+  };
+}
+
 function noncanonicalStandardBase64PadBitAlias(encoded) {
   assert.equal(encoded.endsWith("=="), true);
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -239,7 +258,7 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
-    "fee_sponsor",
+    "fee_payment",
     "memo",
     "validation_fee_policy_version",
     "validation_fee_policy_hash",
@@ -3319,7 +3338,6 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     private_key: "ed25519:deadbeef",
     manifest_payload: manifestPayload,
     submitted_epoch: 42,
-    gas_asset_id: "xor#universal",
     alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
     successor_of_hex: successorHex.toUpperCase(),
   });
@@ -3331,7 +3349,6 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     private_key: "ed25519:deadbeef",
     manifest_payload: manifestPayload,
     submitted_epoch: 42,
-    gas_asset_id: "xor#universal",
     alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
     successor_of_hex: successorHex,
   });
@@ -3362,7 +3379,6 @@ test("registerSorafsPinManifest omits null optionals and keeps signal out of JSO
     },
   });
   const input = sorafsPinRegisterInput({
-    gas_asset_id: null,
     alias: null,
     successor_of_hex: null,
     signal: controller.signal,
@@ -3409,6 +3425,7 @@ test("registerSorafsPinManifest rejects all unknown and retired fields before fe
     ["content_length", 1],
     ["submittedEpoch", 42],
     ["gasAssetId", "xor#universal"],
+    ["gas_asset_id", "xor#universal"],
     ["aliasNamespace", "docs"],
     ["alias_namespace", "docs"],
     ["aliasName", "main"],
@@ -3525,15 +3542,6 @@ test("registerSorafsPinManifest rejects invalid scalar fields before fetch", asy
           sorafsPinRegisterInput({ private_key: privateKey }),
         ),
       /private_key/i,
-    );
-  }
-  for (const gasAssetId of ["", "   ", " xor#universal", 42, {}, []]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ gas_asset_id: gasAssetId }),
-        ),
-      /gas_asset_id/i,
     );
   }
   assert.equal(fetchCalls, 0);
@@ -10071,13 +10079,7 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
       per_byte_fee: "0",
       per_instruction_fee: "0",
       per_gas_unit_fee: "0",
-      sponsorship_enabled: false,
-      sponsor_max_fee: "0",
-      sponsor_verified_balance_safety_floor: "0",
-      canonical_sponsor_account_id: null,
-      fee_receipts_activation_height: 7,
-      external_settlement_enabled: false,
-      burn_from_unix_timestamp_ms: 0,
+      sponsor_vault_custody_account_id: "vault@system",
       settlement_mode: "direct",
       successful_claim_fee_exempt_authorities: ["authority@system"],
     },
@@ -10108,6 +10110,7 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
   assert.equal(result.pipeline.signature_batch_max_ed25519, 64);
   assert.equal(result.queue.queued, 1);
   assert.equal(result.fees.base_fee, "0");
+  assert.equal(result.fees.sponsor_vault_custody_account_id, "vault@system");
   assert.deepEqual(result.fees.successful_claim_fee_exempt_authorities, ["authority@system"]);
   assert.equal(result.isStatusStalled(status), true);
 });
@@ -11084,13 +11087,14 @@ test("getSumeragiStatusTyped rejects malformed liveness diagnostics", async () =
     "runtime_completion",
     "effect_completion",
     "network_ingress",
+    "effect_dispatch",
   ].map((queue) => ({
     ...queueTemplate,
     queue: { queue, details: null },
   }));
   const everyQueueStatus = await sumeragiClientForPayload(everyQueueKind)
     .getSumeragiStatusTyped();
-  assert.equal(everyQueueStatus.liveness.queues.length, 9);
+  assert.equal(everyQueueStatus.liveness.queues.length, 10);
 
   const tooManyQueues = createSumeragiV2StatusPayload();
   tooManyQueues.liveness.queues = [
@@ -16650,9 +16654,7 @@ test("listContractActivity encodes contract activity filters", async () => {
             contract_alias: "dlmm_router",
             contract_entrypoint: "route_swap",
             contract_payload: { amount_in: 100, min_out: 95 },
-            gas_asset_id: "xor#universal",
-            fee_sponsor: FIXTURE_ALICE_ID,
-            gas_limit: 100000,
+            fee_payment: authorityFeePayment(100000),
           },
         ],
         total: 1,
@@ -16680,7 +16682,7 @@ test("listContractActivity encodes contract activity filters", async () => {
   assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
   assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
   assert.equal(payload.items[0].contract_payload.amount_in, 100);
-  assert.equal(payload.items[0].gas_limit, 100000);
+  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
 });
 
 test("listContractActivity rejects camelCase payload aliases", async () => {
@@ -16734,9 +16736,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
             asset_ids: ["xor#universal"],
             numeric_fields: { amount_in: 100 },
             payload: { amount_in: 100, min_out: 95 },
-            gas_asset_id: "xor#universal",
-            fee_sponsor: FIXTURE_ALICE_ID,
-            gas_limit: 100000,
+            fee_payment: authorityFeePayment(100000),
           },
         ],
         total: 1,
@@ -16771,6 +16771,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
   assert.equal(parsed.searchParams.get("result_ok"), "true");
   assert.equal(payload.items[0].payload.amount_in, 100);
   assert.equal(payload.items[0].block_height, 9);
+  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
 });
 
 test("contract query helpers reject padded selector filters before dispatch", async () => {
@@ -16856,6 +16857,46 @@ test("listContractEvents rejects camelCase payload aliases", async () => {
     () => client.listContractEvents(),
     /contract event list response\.items\[0]\.numericFields is not supported/,
   );
+});
+
+test("contract activity and event projections reject retired fee selectors", async () => {
+  const activity = {
+    entrypoint_hash: "tx1",
+    result_ok: true,
+    contract_address: "tairac1router",
+  };
+  const event = {
+    event_id: "tx1:0",
+    schema_version: 1,
+    provenance: "derived",
+    tx_hash_hex: "tx1",
+    block_height: 1,
+    block_hash_hex: "deadbeef",
+    result_ok: true,
+    contract_address: "tairac1router",
+    module: "router",
+    event_kind: "route_swap",
+  };
+  for (const [method, base] of [
+    ["listContractActivity", activity],
+    ["listContractEvents", event],
+  ]) {
+    for (const [field, value] of [
+      ["gas_asset_id", "xor#universal"],
+      ["fee_sponsor", FIXTURE_ALICE_ID],
+      ["gas_limit", 100000],
+    ]) {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () =>
+          createResponse({
+            status: 200,
+            jsonData: { items: [{ ...base, [field]: value }], total: 1 },
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      await assert.rejects(() => client[method](), new RegExp(`${field} is retired`, "u"));
+    }
+  }
 });
 
 test("queryAccountTransactions posts structured envelope", async () => {
@@ -20344,6 +20385,7 @@ test("setContractAlias supports clear requests and rejects lease expiry without 
 
 test("callContract posts payload metadata and normalizes response", async () => {
   let captured;
+  const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
   const responsePayload = {
     ok: true,
     submitted: true,
@@ -20370,8 +20412,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
       entrypoint_hash_hex: "4".repeat(64),
       gas_limit: 42,
       gas_used: null,
-      gas_asset_id: FIXTURE_ASSET_ID_D,
-      fee_sponsor: FIXTURE_BOB_ID,
+      fee_payment: feePayment,
       payload_digest_hex: "5".repeat(64),
     },
   };
@@ -20391,9 +20432,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
-    gasAssetId: FIXTURE_ASSET_ID_D,
-    feeSponsor: FIXTURE_BOB_ID,
-    gasLimit: 42n,
+    feePayment,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
   const body = JSON.parse(captured.init.body);
@@ -20403,9 +20442,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
-    gas_asset_id: FIXTURE_ASSET_ID_D,
-    fee_sponsor: FIXTURE_BOB_ID,
-    gas_limit: 42,
+    fee_payment: feePayment,
   });
   assert.deepEqual(result, {
     ok: true,
@@ -20464,8 +20501,7 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
           entrypoint_hash_hex: "4".repeat(64),
           gas_limit: 42,
           gas_used: null,
-          gas_asset_id: null,
-          fee_sponsor: null,
+          fee_payment: authorityFeePayment(42),
           payload_digest_hex: "5".repeat(64),
         },
       },
@@ -20477,7 +20513,7 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
     privateKey: "ed25519:deadbeef",
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
-    gasLimit: 42,
+    feePayment: authorityFeePayment(42),
   });
   assert.equal(result.pipeline_status?.status?.kind, "Rejected");
   assert.equal(result.pipeline_status?.content?.hash, txHash);
@@ -20507,7 +20543,7 @@ test("callContract response requires operation_receipt", async () => {
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "increment",
-        gasLimit: 42,
+        feePayment: authorityFeePayment(42),
       }),
     /contractCall response\.operation_receipt must be an object/,
   );
@@ -20597,7 +20633,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           privateKey: "ed25519:deadbeef",
           contractAddress,
           entrypoint: "increment",
-          gasLimit: 42,
+          feePayment: authorityFeePayment(42),
         }),
       pattern,
       label,
@@ -20605,7 +20641,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
   }
 });
 
-test("callContract rejects missing gasLimit", async () => {
+test("callContract rejects missing feePayment", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -20619,11 +20655,11 @@ test("callContract rejects missing gasLimit", async () => {
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "ping",
       }),
-    /contractCall\.gasLimit/,
+    /contractCall\.fee_payment must be an object/,
   );
 });
 
-test("callContract rejects zero gasLimit", async () => {
+test("callContract rejects a zero feePayment gas limit", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -20636,9 +20672,9 @@ test("callContract rejects zero gasLimit", async () => {
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "ping",
-        gasLimit: 0,
+        feePayment: authorityFeePayment(0),
       }),
-    /contractCall\.gasLimit must be a positive integer/,
+    /fee_payment\.value\.gas_limit must be a positive integer/,
   );
 });
 
@@ -20654,7 +20690,7 @@ test("callContract rejects an implicit entrypoint", async () => {
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-        gasLimit: 42,
+        feePayment: authorityFeePayment(42),
       }),
     /contractCall\.entrypoint/,
   );
@@ -20729,7 +20765,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [instruction],
-    feeSponsor: FIXTURE_BOB_ID,
+    feePayment: authorityFeePayment(),
     creationTimeMs: 123456,
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
@@ -20753,7 +20789,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       multisigAccountAlias: "cbdc@banka",
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
-      feeSponsor: "sponsor@sbp",
+      feePayment: authorityFeePayment(),
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
       validationFeeInstructionIndex: 1,
@@ -20763,7 +20799,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
-      fee_sponsor: "sponsor@sbp",
+      fee_payment: authorityFeePayment(),
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
       validation_fee_instruction_index: "1",
@@ -20780,7 +20816,7 @@ test("native multisig contract-call DTO flattens selector fields", () => {
     contractAlias: "apps_mint_request::sbp",
     entrypoint: "create_mint_request",
     payload,
-    feeSponsor: "sponsor@sbp",
+    feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
   });
 
@@ -20799,7 +20835,7 @@ test("native multisig contract-call DTO encodes concrete multisig IDs canonicall
     contractAlias: "apps_mint_request::sbp",
     entrypoint: "create_mint_request",
     payload: { amount: 111 },
-    feeSponsor: "sponsor@sbp",
+    feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
   });
 
@@ -20819,6 +20855,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [{ Custom: { payload: { probe: true } } }],
+    feePayment: authorityFeePayment(),
   };
 
   await assert.rejects(
@@ -20980,6 +21017,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [{ Custom: { payload: { probe: true } } }],
+    feePayment: authorityFeePayment(),
   };
 
   const clientWithResponse = (jsonData) =>
@@ -21062,6 +21100,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         ...selector,
         signerAccountId: FIXTURE_ALICE_ID,
         instructions: [{ Custom: { payload: { probe: true } } }],
+        feePayment: authorityFeePayment(),
       }),
     pattern,
   );
@@ -21119,9 +21158,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
-    gasAssetId: FIXTURE_ASSET_ID_D,
-    feeSponsor: "sponsor@sbp",
-    gasLimit: 5,
+    feePayment: authorityFeePayment(5),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
   const body = JSON.parse(captured.init.body);
@@ -21131,9 +21168,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
-    gas_asset_id: FIXTURE_ASSET_ID_D,
-    fee_sponsor: "sponsor@sbp",
-    gas_limit: 5,
+    fee_payment: authorityFeePayment(5),
   });
   assert.deepEqual(result, {
     ...responsePayload,
@@ -21142,9 +21177,9 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   });
 });
 
-test("multisig contract call request builders accept fee sponsor aliases", () => {
-  assert.equal(
-    buildMultisigContractCallProposeRequest({
+test("multisig contract call request builders reject retired sponsor aliases", () => {
+  assert.throws(
+    () => buildMultisigContractCallProposeRequest({
       multisigAccountAlias: "cbdc@hbl.sbp",
       signerAccountId: FIXTURE_ALICE_ID,
       contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
@@ -21152,8 +21187,9 @@ test("multisig contract call request builders accept fee sponsor aliases", () =>
       trigger: "probe",
       payload: { amount: "10" },
       feeSponsor: "sponsor@sbp",
-    }).fee_sponsor,
-    "sponsor@sbp",
+      feePayment: authorityFeePayment(5),
+    }),
+    /feeSponsor is retired/,
   );
 });
 
@@ -21181,14 +21217,16 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     signerAccountId: FIXTURE_BOB_ID,
     proposalId: "b".repeat(64),
     signatureB64: "AQ==",
+    feePayment: authorityFeePayment(),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/approve`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
     multisig_account_id: FIXTURE_ALICE_ID,
     signer_account_id: FIXTURE_BOB_ID,
-      proposal_id: "b".repeat(64),
-      signature_b64: "AQ==",
+    proposal_id: "b".repeat(64),
+    signature_b64: "AQ==",
+    fee_payment: authorityFeePayment(),
   });
   assert.deepEqual(result, {
     ...responsePayload,

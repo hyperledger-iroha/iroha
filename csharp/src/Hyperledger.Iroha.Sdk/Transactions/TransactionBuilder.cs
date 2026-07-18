@@ -8,20 +8,30 @@ namespace Hyperledger.Iroha.Transactions;
 
 public sealed class TransactionBuilder
 {
+    private static readonly HashSet<string> RetiredFeeMetadataKeys =
+        new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
+
     private readonly List<TransactionInstruction> instructions = [];
     private readonly Dictionary<string, JsonNode?> metadata = new(StringComparer.Ordinal);
+    private FeePaymentIntent feePayment;
 
-    public TransactionBuilder(string chainId, string authorityAccountId)
+    public TransactionBuilder(
+        string chainId,
+        string authorityAccountId,
+        FeePaymentIntent feePayment)
     {
         ChainId = RequireExactNonBlank(chainId, nameof(chainId));
         AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
             authorityAccountId,
             nameof(authorityAccountId));
+        this.feePayment = feePayment ?? throw new ArgumentNullException(nameof(feePayment));
     }
 
     public string ChainId { get; }
 
     public string AuthorityAccountId { get; }
+
+    public FeePaymentIntent FeePayment => feePayment;
 
     public ulong? CreationTimeMilliseconds { get; private set; }
 
@@ -219,7 +229,9 @@ public sealed class TransactionBuilder
 
     public TransactionBuilder SetMetadata(string key, JsonNode? value)
     {
-        metadata[RequireExactNonBlank(key, nameof(key))] = value?.DeepClone();
+        var normalizedKey = RequireExactNonBlank(key, nameof(key));
+        RejectRetiredFeeMetadata(normalizedKey, nameof(key));
+        metadata[normalizedKey] = value?.DeepClone();
         return this;
     }
 
@@ -229,7 +241,9 @@ public sealed class TransactionBuilder
         var replacement = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
         foreach (var (key, value) in values)
         {
-            replacement[RequireExactNonBlank(key, nameof(values))] = value?.DeepClone();
+            var normalizedKey = RequireExactNonBlank(key, nameof(values));
+            RejectRetiredFeeMetadata(normalizedKey, nameof(values));
+            replacement[normalizedKey] = value?.DeepClone();
         }
 
         metadata.Clear();
@@ -263,6 +277,7 @@ public sealed class TransactionBuilder
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
+        EnsureCreationTimeMilliseconds();
         var transactionPayload = BuildPayloadBytes(context);
         var payloadHash = IrohaHash.Hash(transactionPayload);
         var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
@@ -291,8 +306,72 @@ public sealed class TransactionBuilder
         payload.WriteField(context.EncodeInstructionsExecutable(instructions));
         payload.WriteField(context.EncodeOption(TimeToLiveMilliseconds, context.EncodeUInt64));
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
+        payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
         payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
         return payload.ToArray();
+    }
+
+    /// <summary>
+    /// Builds the exact unsigned JSON payload used for fee quoting and freezes its creation time.
+    /// </summary>
+    public UnsignedTransactionPayload BuildUnsignedPayload()
+    {
+        if (instructions.Count == 0)
+        {
+            throw new InvalidOperationException("Transactions must contain at least one instruction.");
+        }
+
+        EnsureCreationTimeMilliseconds();
+        var encodedInstructions = new JsonArray(
+            instructions
+                .Select(instruction => JsonValue.Create(
+                    instruction.EncodeInstructionBoxBase64(AuthorityAccountId)))
+                .Cast<JsonNode?>()
+                .ToArray());
+        var executable = new JsonObject
+        {
+            ["Instructions"] = encodedInstructions,
+        };
+        return new UnsignedTransactionPayload(
+            ChainId,
+            AuthorityAccountId,
+            CreationTimeMilliseconds!.Value,
+            executable,
+            TimeToLiveMilliseconds,
+            Nonce,
+            feePayment,
+            Metadata);
+    }
+
+    /// <summary>
+    /// Replaces only the signed fee maxima with a quote that preserves the selected payer,
+    /// exact sponsor revision, and gas bound.
+    /// </summary>
+    public TransactionBuilder ApplyFeeQuote(FeePaymentIntent quotedFeePayment)
+    {
+        ArgumentNullException.ThrowIfNull(quotedFeePayment);
+        if (!feePayment.HasSamePayerAndGasBound(quotedFeePayment))
+        {
+            throw new InvalidOperationException(
+                "Fee quote changed the selected payer, sponsor revision, or gas bound.");
+        }
+        feePayment = quotedFeePayment;
+        return this;
+    }
+
+    private void EnsureCreationTimeMilliseconds()
+    {
+        CreationTimeMilliseconds ??= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+
+    private static void RejectRetiredFeeMetadata(string key, string paramName)
+    {
+        if (RetiredFeeMetadataKeys.Contains(key))
+        {
+            throw new ArgumentException(
+                $"Metadata key `{key}` is retired; use the required fee payment intent.",
+                paramName);
+        }
     }
 
     private static string RequireExactNonBlank(string? value, string paramName)

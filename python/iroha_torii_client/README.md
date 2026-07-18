@@ -34,3 +34,27 @@ snapshot under `authoritative` in `SumeragiV2StatusResponse`.
 Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
+
+## Fee quotes and sponsor programs
+
+Transaction signing is quote-first. Build one complete unsigned payload with a
+required typed `fee_payment`, then account-sign the quote request with the same
+authority:
+
+```python
+from iroha_torii_client import ToriiCanonicalRequestAuth
+
+auth = ToriiCanonicalRequestAuth(account_id=authority, signer=wallet.sign)
+program = client.get_fee_sponsor_program(
+    f"{sponsor_account}/wallet_payments",
+    canonical_auth=auth,
+)
+quote = client.quote_fees(unsigned_payload, canonical_auth=auth)
+```
+
+For sponsorship, `unsigned_payload["fee_payment"]` must name the exact program
+and non-zero immutable revision. Verify that `quote["intent"]` preserves the
+payer, program/revision, and gas bound, replace only that field, then sign and
+submit the unchanged payload. The client does not infer a sponsor, reserve a
+quote, or fall back to the authority. Legacy transaction metadata keys
+`fee_sponsor`, `gas_asset_id`, and `gas_limit` are rejected.

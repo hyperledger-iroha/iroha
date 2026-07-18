@@ -90,9 +90,13 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         .enumerate()
         .map(|(i, (aid, kp))| {
             let msg = format!("log-{i}");
-            TransactionBuilder::new(chain_id.clone(), aid.clone())
-                .with_instructions([Log::new(Level::INFO, msg)])
-                .sign(kp.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                aid.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, msg)])
+            .sign(kp.private_key())
         })
         .collect();
 
@@ -138,9 +142,13 @@ fn scheduler_tie_break_randomized_input_orders() {
         .enumerate()
         .map(|(i, (aid, kp))| {
             let msg = format!("log-{i}");
-            TransactionBuilder::new(chain_id.clone(), aid.clone())
-                .with_instructions([Log::new(Level::INFO, msg)])
-                .sign(kp.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                aid.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, msg)])
+            .sign(kp.private_key())
         })
         .collect();
 

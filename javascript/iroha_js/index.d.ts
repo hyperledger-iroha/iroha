@@ -1,5 +1,7 @@
 /// <reference types="node" />
 
+import type { BrowserFeePayment } from "./transaction-codec.js";
+
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
@@ -12,7 +14,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 20;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 21;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
@@ -57,7 +59,7 @@ export interface KagemushaAuthenticatedArtifactSetV4 {
 }
 
 export interface KagemushaReadinessV4 {
-  readonly required_bridge_abi_version: 20;
+  readonly required_bridge_abi_version: 21;
   readonly max_hops: 8;
   readonly asset_definition_id: string;
   readonly asset_scale: number | null;
@@ -673,7 +675,7 @@ export type MultisigProposeInstructionInput =
 export interface MultisigProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
   instructions: MultisigProposeInstructionInput[];
-  feeSponsor?: string | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -689,7 +691,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
-  fee_sponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -705,7 +707,7 @@ export interface MultisigProposePayload {
   multisig_account_alias?: string;
   signer_account_id: string;
   instructions: string[];
-  fee_sponsor?: string;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -723,9 +725,7 @@ export interface MultisigContractCallProposeRequest
   contractAlias?: string;
   entrypoint: string;
   payload?: JsonValue;
-  gasAssetId?: string | null;
-  feeSponsor?: string | null;
-  gasLimit?: number | string | bigint | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -739,9 +739,7 @@ export interface MultisigContractCallProposeRequest
   signer_account_id?: string;
   contract_address?: string;
   contract_alias?: string;
-  gas_asset_id?: string | null;
-  fee_sponsor?: string | null;
-  gas_limit?: number | string | bigint | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -760,9 +758,7 @@ export interface MultisigContractCallProposePayload {
   contract_alias?: string;
   entrypoint: string;
   payload: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -774,7 +770,7 @@ export interface MultisigContractCallApproveRequest
   signerAccountId: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
-  feeSponsor?: string | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -788,7 +784,7 @@ export interface MultisigContractCallApproveRequest
   signer_account_id?: string;
   proposal_id?: string | null;
   instructions_hash?: string | null;
-  fee_sponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -805,7 +801,7 @@ export interface MultisigContractCallApprovePayload {
   signer_account_id: string;
   proposal_id?: string;
   instructions_hash?: string;
-  fee_sponsor?: string;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -1252,10 +1248,12 @@ export type SccpDetachedSigningState =
   | Readonly<{ signature_b64: string; transaction_payload_b64: string; creation_time_ms: number }>;
 export type SccpBridgeProofSubmitPayload = Readonly<{
   authority: string;
+  fee_payment: NoritoFeePaymentIntent;
   destination_proof_b64: string;
 }> & SccpDetachedSigningState;
 export type SccpBridgeMessageSubmitPayload = Readonly<{
   authority: string;
+  fee_payment: NoritoFeePaymentIntent;
   native_proof_b64: string;
 }> & SccpDetachedSigningState;
 export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly route_configuration_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
@@ -3544,6 +3542,11 @@ export interface CanonicalRequestOptions {
   canonicalAuth?: CanonicalRequestAuth;
 }
 
+export interface RequiredCanonicalRequestOptions {
+  signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
+}
+
 export interface AliasLookupByAccountItem {
   alias: string;
   dataspace: string;
@@ -3583,43 +3586,111 @@ export interface RetailRecipientRouteResponse {
   fi_id: "hbl.sbp" | "ubl.sbp";
 }
 
-export interface FeeSponsorPolicyId {
+export interface FeeSponsorProgramId {
   sponsor: string;
   name: string;
 }
 
-export interface FeeSponsorRuleEffect {
-  effect: "allow" | "deny";
+export type FeeSponsorProgramLifecycleState =
+  | "staged"
+  | "paused"
+  | "active"
+  | "closing"
+  | "closed";
+
+export interface FeeSponsorProgram {
+  id: FeeSponsorProgramId;
+  lifecycle: { state: FeeSponsorProgramLifecycleState; value: null };
+  active_revision?: number | null;
+  staged_revision?: number | null;
+  scheduled_activation?: {
+    revision: number;
+    activate_at_height: number;
+  } | null;
+}
+
+export interface NoritoFeeChargeKind {
+  kind: "nexus" | "pipeline_gas";
   value: null;
 }
 
-export interface FeeSponsorExecutableKind {
-  kind: "instructions" | "contract_call" | "ivm" | "ivm_proved";
-  value: null;
+export interface NoritoFeeChargeLimit {
+  kind: NoritoFeeChargeKind;
+  asset_definition_id: string;
+  max_amount: string;
 }
 
-export interface FeeSponsorContractSelector {
-  contract_alias?: string;
-  contract_address?: string;
-  entrypoints: ReadonlyArray<string>;
+export type NoritoFeePaymentIntent =
+  | {
+      payer: "authority";
+      value: {
+        charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
+        gas_limit?: number | null;
+      };
+    }
+  | {
+      payer: "sponsor";
+      value: {
+        program_id: FeeSponsorProgramId;
+        program_revision: number;
+        charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
+        gas_limit?: number | null;
+      };
+    };
+
+export type FeeDebitSource =
+  | { kind: "account"; value: string }
+  | { kind: "sponsor_program"; value: FeeSponsorProgramId };
+
+export interface FeeQuoteResponse {
+  intent: NoritoFeePaymentIntent;
+  observation: {
+    ledger_time_ms: number;
+    next_block_height: number;
+    route_dataspace_id?: number | null;
+  };
+  components: ReadonlyArray<{
+    kind: NoritoFeeChargeKind;
+    asset_definition_id: string;
+    max_amount: string;
+  }>;
+  capacities: ReadonlyArray<{
+    asset_definition_id: string;
+    vault_balance: string;
+    reserve_floor: string;
+    block_remaining: string;
+    program_epoch_remaining: string;
+    beneficiary_epoch_remaining: string;
+  }>;
+  decision: {
+    status: "accepted";
+    value: {
+      debit_source: FeeDebitSource;
+      program_revision?: number | null;
+    };
+  };
 }
 
-export interface FeeSponsorRule {
-  effect: FeeSponsorRuleEffect;
-  max_fee?: string | null;
-  dataspaces: ReadonlyArray<number>;
-  executable_kinds: ReadonlyArray<FeeSponsorExecutableKind>;
-  instruction_wire_ids: ReadonlyArray<string>;
-  asset_transfer_definition_ids: ReadonlyArray<string>;
-  contract_selectors: ReadonlyArray<FeeSponsorContractSelector>;
-}
-
-export interface FeeSponsorPolicy {
-  id: FeeSponsorPolicyId;
-  enabled: boolean;
-  max_fee?: string | null;
-  rules: ReadonlyArray<FeeSponsorRule>;
-}
+export type FeeRejectionCode =
+  | "invalid_fee_intent"
+  | "program_not_found"
+  | "revision_not_found"
+  | "revision_not_active"
+  | "program_not_active"
+  | "beneficiary_not_eligible"
+  | "operation_not_allowed"
+  | "operation_denied"
+  | "invalid_gas_limit"
+  | "fee_asset_not_covered"
+  | "signed_limit_exceeded"
+  | "program_transaction_limit_exceeded"
+  | "program_block_budget_exhausted"
+  | "program_epoch_budget_exhausted"
+  | "beneficiary_epoch_budget_exhausted"
+  | "vault_insufficient"
+  | "authority_payer_insufficient"
+  | "relay_capacity_unavailable"
+  | "invalid_program_configuration";
 
 export type IdentifierBfvInteger = number | bigint;
 
@@ -3936,9 +4007,7 @@ export interface ToriiContractActivityItem {
   contract_alias?: string;
   contract_entrypoint?: string;
   contract_payload?: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ToriiContractEventItem {
@@ -3959,9 +4028,7 @@ export interface ToriiContractEventItem {
   asset_ids?: ReadonlyArray<string>;
   numeric_fields?: JsonValue;
   payload?: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ToriiProverReport {
@@ -7043,13 +7110,7 @@ export interface ToriiPipelinePreflight {
     per_byte_fee: unknown;
     per_instruction_fee: unknown;
     per_gas_unit_fee: unknown;
-    sponsorship_enabled: boolean;
-    sponsor_max_fee: unknown;
-    sponsor_verified_balance_safety_floor: unknown;
-    canonical_sponsor_account_id: string | null;
-    fee_receipts_activation_height: number;
-    external_settlement_enabled: boolean;
-    burn_from_unix_timestamp_ms: number;
+    sponsor_vault_custody_account_id: string;
     settlement_mode: string;
     successful_claim_fee_exempt_authorities: string[];
   };
@@ -7484,7 +7545,8 @@ export type ToriiSumeragiV2QueueKind = Readonly<{
     | "runtime_progress"
     | "runtime_completion"
     | "effect_completion"
-    | "network_ingress";
+    | "network_ingress"
+    | "effect_dispatch";
   details: null;
 }>;
 
@@ -8221,6 +8283,8 @@ export interface RegisterDomainInput {
   chainId: string;
   authority: string;
   domainId: string;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8238,12 +8302,41 @@ export interface TransactionAssemblyInput {
   chainId: string;
   authority: string;
   instructions: Array<object | string>;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
   privateKeyAlgorithm?: string | null;
+}
+
+/** Exact unsigned payload whose non-fee fields are fixed before quoting. */
+export type TransactionPayloadDraftInput = Omit<
+  TransactionAssemblyInput,
+  "privateKey" | "privateKeyAlgorithm"
+>;
+
+/** Native and JSON projections of one exact unsigned quote draft. */
+export interface TransactionPayloadDraftResult {
+  payload: Record<string, unknown>;
+  payloadJson: string;
+  payloadBytes: Buffer;
+  payloadHash: Buffer;
+}
+
+/** Input for applying a returned quote to the exact draft and signing it. */
+export interface QuotedTransactionPayloadSigningInput {
+  payload: Record<string, unknown> | TransactionPayloadDraftResult;
+  quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+/** Required signature-bound fee intent shared by all transaction builders. */
+export interface FeePaymentRequired {
+  feePayment: BrowserFeePayment;
 }
 
 export type SccpRouteGovernanceActionKind =
@@ -8314,6 +8407,7 @@ export interface RegisterSnsNameTransactionInput {
   chainId: string;
   authority: string;
   request: object;
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8344,6 +8438,21 @@ export interface IvmProvedTransactionAssemblyInput {
   authority: string;
   proved: object | string;
   attachment: object | string;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
+  chainId: string;
+  authority: string;
+  accountId: string;
+  spec: MultisigSpecLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8525,9 +8634,7 @@ type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
   > &
   IvmRequiredAliasPair<"vkRef", "vk_ref", IvmVerifyingKeyRef> &
   IvmContractTarget &
-  IvmRequiredAliasPair<"gasLimit", "gas_limit", NumericLike> &
-  IvmOptionalAliasPair<"gasAssetId", "gas_asset_id", string | null> &
-  IvmOptionalAliasPair<"feeSponsor", "fee_sponsor", string | null> &
+  IvmRequiredAliasPair<"feePayment", "fee_payment", BrowserFeePayment> &
   IvmOptionalAliasPair<
     "requiredOverlayTransfer",
     "required_overlay_transfer",
@@ -9705,8 +9812,7 @@ export interface ContractOperationReceipt {
   entrypoint_hash_hex: string | null;
   gas_limit: number | null;
   gas_used: number | null;
-  gas_asset_id: string | null;
-  fee_sponsor: string | null;
+  fee_payment: NoritoFeePaymentIntent | null;
   payload_digest_hex: string;
 }
 
@@ -9759,12 +9865,8 @@ export interface ContractCallRequest {
   creation_time_ms?: NumericLike | null;
   transactionTtlMs?: NumericLike | null;
   transaction_ttl_ms?: NumericLike | null;
-  gasAssetId?: string | null;
-  gas_asset_id?: string | null;
-  feeSponsor?: string | null;
-  fee_sponsor?: string | null;
-  gasLimit: NumericLike;
-  gas_limit?: NumericLike;
+  feePayment: NoritoFeePaymentIntent;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ContractCallResponse {
@@ -9794,10 +9896,6 @@ export interface ContractCallSimulateRequest {
   contract_alias?: string;
   entrypoint?: string | null;
   payload?: JsonValue;
-  gasAssetId?: string | null;
-  gas_asset_id?: string | null;
-  feeSponsor?: string | null;
-  fee_sponsor?: string | null;
   gasLimit: NumericLike;
   gas_limit?: NumericLike;
 }
@@ -10446,7 +10544,6 @@ export interface SorafsPinRegisterRequest {
   private_key: string;
   manifest_payload: string;
   submitted_epoch: NumericLike;
-  gas_asset_id?: string | null;
   alias?: SorafsPinRegisterAliasInput | null;
   successor_of_hex?: string | null;
   signal?: AbortSignal;
@@ -12138,11 +12235,14 @@ export declare class ToriiClient {
     accountId: string,
     options?: CanonicalRequestOptions,
   ): Promise<RetailRecipientRouteResponse>;
-  findFeeSponsorPolicyById(
-    sponsorAccountId: string,
-    policyName: string,
-    options?: CanonicalRequestOptions,
-  ): Promise<FeeSponsorPolicy | null>;
+  findFeeSponsorProgramById(
+    programId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<FeeSponsorProgram | null>;
+  quoteFees(
+    payload: Record<string, unknown> | TransactionPayloadDraftResult,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<FeeQuoteResponse>;
   listIdentifierPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<IdentifierPolicyListResponse>;
@@ -13399,8 +13499,8 @@ export interface MultisigProposeNoritoRequest {
   signatureB64?: string | null;
   creation_time_ms?: number | string | bigint | null;
   creationTimeMs?: number | string | bigint | null;
-  fee_sponsor?: string | null;
-  feeSponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
+  feePayment?: NoritoFeePaymentIntent;
   memo?: string | null;
   validation_fee_policy_version?: string | null;
   validation_fee_policy_hash?: string | null;
@@ -13553,8 +13653,42 @@ export function resignSignedTransaction(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
+/** Convert the ergonomic fee intent into the native signer's exact Norito JSON. */
+export function feePaymentIntentToNoritoJson(
+  feePayment: BrowserFeePayment,
+): string;
+
 export function buildTransaction(
   input: TransactionAssemblyInput,
+): SignedTransactionResult;
+
+export function buildTransactionPayload(
+  input: TransactionPayloadDraftInput,
+): TransactionPayloadDraftResult;
+
+export function signQuotedTransactionPayload(
+  input: QuotedTransactionPayloadSigningInput,
+): SignedTransactionResult;
+
+export function quoteAndSignTransaction(
+  client: ToriiClient,
+  input: TransactionPayloadDraftInput & {
+    privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+    privateKeyAlgorithm?: string | null;
+  },
+  options?: {
+    canonicalAuth?: CanonicalRequestAuth;
+    signal?: AbortSignal;
+  },
+): Promise<
+  SignedTransactionResult & {
+    draft: TransactionPayloadDraftResult;
+    quote: FeeQuoteResponse;
+  }
+>;
+
+export function buildRegisterDomainTransaction(
+  input: RegisterDomainInput,
 ): SignedTransactionResult;
 
 export function buildApplySccpRouteGovernanceInstruction(
@@ -13566,7 +13700,7 @@ export function buildApplySccpRouteGovernanceInstruction(
 };
 
 export function buildApplySccpRouteGovernanceTransaction(
-  input: ApplySccpRouteGovernanceTransactionInput,
+  input: ApplySccpRouteGovernanceTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 
 /**
@@ -13633,72 +13767,75 @@ export function submitValidationFeeIvmProvedContractCall(
 ): Promise<IvmProvedContractCallResult>;
 
 export function buildMintAssetTransaction(
-  input: MintAssetInput,
+  input: MintAssetInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::Asset` instruction.
  * Throws if the quantity is non-positive or the asset identifier is empty.
  */
 export function buildBurnAssetTransaction(
-  input: BurnAssetInput,
+  input: BurnAssetInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::TriggerRepetitions`
  * instruction. Throws when repetitions are not positive integers.
  */
 export function buildBurnTriggerTransaction(
-  input: BurnTriggerInput,
+  input: BurnTriggerInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildMintTriggerTransaction(
-  input: MintTriggerInput,
+  input: MintTriggerInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferAssetTransaction(
-  input: TransferAssetInput,
+  input: TransferAssetInput & FeePaymentRequired,
+): SignedTransactionResult;
+export function buildRegisterMultisigTransaction(
+  input: RegisterMultisigTransactionInput,
 ): SignedTransactionResult;
 export function buildTransferAssetDefinitionTransaction(
-  input: TransferAssetDefinitionInput,
+  input: TransferAssetDefinitionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferDomainTransaction(
-  input: TransferDomainInput,
+  input: TransferDomainInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferNftTransaction(
-  input: TransferNftInput,
+  input: TransferNftInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterRwaTransaction(
-  input: RegisterRwaInput,
+  input: RegisterRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferRwaTransaction(
-  input: TransferRwaInput,
+  input: TransferRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildMergeRwasTransaction(
-  input: MergeRwasInput,
+  input: MergeRwasInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRedeemRwaTransaction(
-  input: RedeemRwaInput,
+  input: RedeemRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFreezeRwaTransaction(
-  input: FreezeRwaInput,
+  input: FreezeRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildUnfreezeRwaTransaction(
-  input: UnfreezeRwaInput,
+  input: UnfreezeRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildHoldRwaTransaction(
-  input: HoldRwaInput,
+  input: HoldRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildReleaseRwaTransaction(
-  input: ReleaseRwaInput,
+  input: ReleaseRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildForceTransferRwaTransaction(
-  input: ForceTransferRwaInput,
+  input: ForceTransferRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetRwaControlsTransaction(
-  input: SetRwaControlsInput,
+  input: SetRwaControlsInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetRwaKeyValueTransaction(
-  input: SetRwaKeyValueInput,
+  input: SetRwaKeyValueInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRemoveRwaKeyValueTransaction(
-  input: RemoveRwaKeyValueInput,
+  input: RemoveRwaKeyValueInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
@@ -13706,21 +13843,21 @@ export function buildRemoveRwaKeyValueTransaction(
  * destination asset identifier.
  */
 export function buildMintAndTransferTransaction(
-  input: MintAndTransferInput,
+  input: MintAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register a domain and optionally perform follow-up mints in the same
  * transaction. Accepts either a single `mint` or an array of `mints`.
  */
 export function buildRegisterDomainAndMintTransaction(
-  input: RegisterDomainAndMintInput,
+  input: RegisterDomainAndMintInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an account and enqueue one or more asset transfers. Each transfer
  * must specify its source asset identifier; the helper enforces this at runtime.
  */
 export function buildRegisterAccountAndTransferTransaction(
-  input: RegisterAccountAndTransferInput,
+  input: RegisterAccountAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an asset definition and optionally mint initial supply. When both
@@ -13728,7 +13865,7 @@ export function buildRegisterAccountAndTransferTransaction(
  * the canonical asset-holding id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
-  input: RegisterAssetDefinitionAndMintInput,
+  input: RegisterAssetDefinitionAndMintInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an asset definition, mint supply, and optionally fan-out transfers.
@@ -13736,7 +13873,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(
  * destination identifier.
  */
 export function buildRegisterAssetDefinitionMintAndTransferTransaction(
-  input: RegisterAssetDefinitionMintAndTransferInput,
+  input: RegisterAssetDefinitionMintAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 
 export interface TimeTriggerActionOptions {
@@ -13763,7 +13900,7 @@ export function buildPrecommitTriggerAction(
 ): string;
 
 export function buildCreateKaigiTransaction(
-  input: CreateKaigiTransactionInput,
+  input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateKaigiFeeSpend(
   input: PrivateKaigiFeeSpendInput,
@@ -13806,88 +13943,88 @@ export function buildPrivateCreateKaigiTransaction(
   input: PrivateCreateKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
-  input: JoinKaigiTransactionInput,
+  input: JoinKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateJoinKaigiTransaction(
   input: PrivateJoinKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
-  input: LeaveKaigiTransactionInput,
+  input: LeaveKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
-  input: EndKaigiTransactionInput,
+  input: EndKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateEndKaigiTransaction(
   input: PrivateEndKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
-  input: RecordKaigiUsageTransactionInput,
+  input: RecordKaigiUsageTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetKaigiRelayManifestTransaction(
-  input: SetKaigiRelayManifestTransactionInput,
+  input: SetKaigiRelayManifestTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterKaigiRelayTransaction(
-  input: RegisterKaigiRelayTransactionInput,
+  input: RegisterKaigiRelayTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractCodeTransaction(
-  input: RegisterSmartContractCodeTransactionInput,
+  input: RegisterSmartContractCodeTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractBytesTransaction(
-  input: RegisterSmartContractBytesTransactionInput,
+  input: RegisterSmartContractBytesTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRemoveSmartContractBytesTransaction(
-  input: RemoveSmartContractBytesTransactionInput,
+  input: RemoveSmartContractBytesTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildProposeDeployContractTransaction(
-  input: ProposeDeployContractTransactionInput,
+  input: ProposeDeployContractTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildProposeSccpRouteGovernanceTransaction(
-  input: ProposeSccpRouteGovernanceTransactionInput,
+  input: ProposeSccpRouteGovernanceTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCastZkBallotTransaction(
-  input: CastZkBallotTransactionInput,
+  input: CastZkBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCastPlainBallotTransaction(
-  input: CastPlainBallotTransactionInput,
+  input: CastPlainBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEnactReferendumTransaction(
-  input: EnactReferendumTransactionInput,
+  input: EnactReferendumTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFinalizeReferendumTransaction(
-  input: FinalizeReferendumTransactionInput,
+  input: FinalizeReferendumTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPersistCouncilForEpochTransaction(
-  input: PersistCouncilForEpochTransactionInput,
+  input: PersistCouncilForEpochTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
-  input: RegisterZkAssetTransactionInput,
+  input: RegisterZkAssetTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildScheduleConfidentialPolicyTransitionTransaction(
-  input: ScheduleConfidentialPolicyTransitionTransactionInput,
+  input: ScheduleConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCancelConfidentialPolicyTransitionTransaction(
-  input: CancelConfidentialPolicyTransitionTransactionInput,
+  input: CancelConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildShieldTransaction(
-  input: ShieldTransactionInput,
+  input: ShieldTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildZkTransferTransaction(
-  input: ZkTransferTransactionInput,
+  input: ZkTransferTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildUnshieldTransaction(
-  input: UnshieldTransactionInput,
+  input: UnshieldTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCreateElectionTransaction(
-  input: CreateElectionTransactionInput,
+  input: CreateElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSubmitBallotTransaction(
-  input: SubmitBallotTransactionInput,
+  input: SubmitBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFinalizeElectionTransaction(
-  input: FinalizeElectionTransactionInput,
+  input: FinalizeElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterSnsNameTransaction(
-  input: RegisterSnsNameTransactionInput,
+  input: RegisterSnsNameTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 
 export function submitSignedTransaction(

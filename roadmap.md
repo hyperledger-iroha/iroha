@@ -1,12 +1,21 @@
 # Roadmap
 
-Last updated: 2026-07-17
+Last updated: 2026-07-18
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+Fee sponsorship has two intentionally deferred extensions. Sponsor-program
+assets are globally scoped in the first release; supporting
+`DataspaceRestricted` assets requires one scope-keyed vault, queue-reservation,
+budget, relay-allocation, and settlement ledger. Receipt-backed authority
+payment likewise remains unavailable until authority balances have a
+proof-bound source-lock/lease protocol equivalent to sponsor spend leases.
+Neither extension may be implemented as a sender fallback or an unscoped
+aggregate balance check.
+
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Exact bridge ABI 20 and governed schema
+It is the only offline-spend protocol. Exact bridge ABI 21 and governed schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
 artifact and readiness contract, not a runtime product selector. Runtime,
 wallet, and readiness surfaces remain selector-free. Each authenticated V4
@@ -16,7 +25,7 @@ final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
 The unreleased recursive state boundary and vector layout have deliberately
-advanced to V2 without changing bridge ABI 20 or manifest V4. The boundary is
+advanced to V2 without changing bridge ABI 21 or manifest V4. The boundary is
 the complete 890-limb canonical state, including the public append-only
 `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 4,027 limbs.
 There is no fallback for the former layout. All earlier V4 candidate keys,
@@ -99,7 +108,7 @@ authenticated artifact set and distinct active Eq/Ep records, with
 `recursive_lineage_unavailable` present exactly when that conjunction is
 false. `ready` is true only when the complete blocker set is empty.
 
-The ABI-20/V4 recursive transport and data model are the only release target.
+The ABI-21/V4 recursive transport and data model are the only release target.
 V2 remains only for unchanged amount, note/opening, authorization, membership,
 finality, recipient/acknowledgement, and other explicitly reused leaf
 primitives. No decoder upgrades retired V2/V3 recursive lifecycle bytes, and no
@@ -1857,7 +1866,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
   or compatibility selector. The current artifact/readiness contract is exact
-  bridge ABI 20 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bridge ABI 21 and manifest V4 with exactly eight external Eq/Ep artifacts;
   bounded circuit parameters remain authenticated inline. Versioned type names
   are internal wire and artifact schemas, not selectable products.
   Proof-gated init, append, verify, top-up, redeem, and change are selected by
@@ -11574,7 +11583,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   `--phase-evidence-dir` logs must report the standard checked layouts without
   echoing the operator-supplied directory.
 - Keep Kagemusha offline-to-offline payments routed only through the single
-  mode-free ABI-20/manifest-V4 protocol. SDK and native bindings expose the
+  mode-free ABI-21/manifest-V4 protocol. SDK and native bindings expose the
   exact typed request/result and V4 artifact schemas required by that protocol,
   but no runtime product, version, or compatibility selector. All
   archive decoders must reject unknown, duplicate,
@@ -18384,7 +18393,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-  and readiness contract is exact bridge ABI 20 with authenticated manifest V4
+  and readiness contract is exact bridge ABI 21 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,
@@ -25190,6 +25199,23 @@ height-context identity. Mixed-version operation, rolling protocol upgrades,
 global RBC, collectors, adaptive pacing, missing-QC shortcuts, and runtime
 mode flips are not first-release architecture and must not return.
 
+First-release voting validators are explicitly scoped to the Linux/macOS
+storage contract; non-Unix nodes are restricted to uncertified observer or
+development use and fail voting startup.
+Windows validator support remains blocked on a unified handle-relative
+filesystem layer covering progress-temp replacement, no-clobber lane-geometry
+moves, recursive authenticated archive deletion, 128-bit ReFS identities, and
+durable namespace barriers, together with NTFS/ReFS crash and substitution
+tests. Compile success alone must not remove the validator startup gate.
+
+The append planner no longer repeats a full historical-index allocation after
+descriptor-bound recovery, but the recovery pass itself still validates the
+complete index before an ordinary write. Keep that full scan for startup and
+ambiguous crash repair, then add an authenticated tail checkpoint or equivalent
+bounded steady-state attestation before treating the 100,000-height result as a
+storage-throughput gate. The optimized path must retain exact rollback,
+non-overlap, range, namespace, and durability checks.
+
 The production boundary now preserves a durable locked Commit intent across
 TC-driven volatile resets through generation-scoped exact-vote delivery,
 executable reducer/WAL progress witnesses, retained locked-body recovery, and
@@ -25274,10 +25300,15 @@ acknowledgement; second-callback failure, mixed decided-local work, corrupt
 indexes, and post-commit status failure are pinned by adversarial tests.
 Certified-body request conflicts remain nonfatal, and conflicting
 Commit-certificate responses preserve outstanding discovery for retry. The
-gate pins 185 required tests across 16 modules, including exact composite
+gate pins 204 required tests across 17 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
-catch-up. The added watchdog regression distinguishes a remote partial timeout
+catch-up. Post-decision regressions reject new durable timeout and TC formation
+after a local decision. Capacity regressions bind the real serialized-runtime
+Proposal-A/distinct-PrepareQC-B/TimeoutVote trace, bounded causal effect
+dispatch, deterministic reconstructible-Fetch preemption, full-capacity Fetch
+reconstruction, Decision filtering, and the canonical `EffectDispatch`
+watchdog lane. The timeout watchdog regression distinguishes a remote partial timeout
 pool, a durable local current-view timeout path, and exact same-/older-view
 locked Commit recovery. Before the three-corridor expansion, all
 twelve then-owning modules were green on the then-current unsealed source:
@@ -25301,8 +25332,14 @@ mutable-tree discovery found all 170 then-required names exactly once among
 classifier is green exactly 1/1, in the watchdog module at 21/21, and in the
 complete status module at 29/29. Eleven Kura progress-witness durability
 regressions, two lane-geometry durability regressions, and one lane-work
-alternate-certificate retirement regression raise the current inventory to
-185 names across 16 modules. Fresh full discovery and serial
+alternate-certificate retirement regression raised the inventory to 185 names
+across 16 modules. Six exact lane-retirement recovery/substitution regressions
+and the lane-work plus runner platform-role gates raised the inventory to 193.
+The isolated-runner view-zero deadline/view-one observation contract raised the
+inventory to 194 across 17 modules. Seven bounded effect-dispatch/executor
+regressions and the `EffectDispatch` watchdog regression raised it to 202. Two
+exact post-decision timeout/TC quiescence regressions raise the current
+inventory to 204. Fresh full discovery and serial
 execution are pending for that inventory; the preceding 170-name
 corridor was green with one passing row per name. The committed, detached,
 source-sealed serial rerun remains pending. A fresh exact isolated-network run after the status-registry
@@ -25342,13 +25379,17 @@ green: `authoritative_v2_finalizes_through_validator_restart` passed 1/1 in
 165.05 seconds after replaying heights 1 through 4, and
 `taira_npos_leader_timeout_commits_within_rotation_bound` passed 1/1 in 90.00
 seconds. The historical distinct-subject PrepareQC attempt remains red. It
-split the four
-validators 2/2 across QC views 1 and 0, but both QCs named the same block
-subject, so the harness did not construct its required distinct-subject state
-within 25 seconds. The retained network is
+split the four validators 2/2 across QC views 1 and 0, but both QCs named the
+same block subject because the view-zero QC reached every validator and the
+safe-value rule correctly forced an exact-body re-proposal. The retained
+network is
 `/tmp/iroha-divergent-prepareqc-retained-20260718/irohad_test_network_M4CsaG`;
-the first message-control/harness divergence is under causal audit and must be
-fixed before this scenario can reduce any matrix debt.
+that result remains diagnostic only. A replacement schedule is implemented: it
+isolates A at the actual view-zero leader, advances the remaining three using
+no-high-QC timeout votes, forms B at two receivers, installs stale A at a
+fourth, and then drains one FIFO fence. Static checks pass, but compilation and
+the exact real-network run remain required before this scenario can reduce
+matrix debt.
 
 Ten arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
 uniqueness, lock monotonicity, external validity, certified-body availability,
@@ -25369,11 +25410,12 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 185 production-liveness tests across 16
+completion. The PR gate inventories 204 production-liveness tests across 17
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
-installed/destination rebind, and certified cleanup plan/commit boundaries.
+installed/destination rebind, certified cleanup plan/commit boundaries, and
+post-decision timeout/TC quiescence.
 It also inventories the Rust
 cross-SDK fixture authority and exact JavaScript/Python status-parser tests.
 The exact-evidence four-validator reproduction passed its first attempt in
@@ -25425,12 +25467,12 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 35 pre-network legs and their exact
-185-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 36 pre-network legs and their exact
+204-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
-and receipt publication revalidates all 128 scenario and exact-seed libtest
+and receipt publication revalidates all 160 scenario and exact-seed libtest
 markers. The 100,000-height launcher requires an explicit 50,000-per-mode
 completion marker and publishes its source-bound log receipt, and the soak
 promotes an invocation-local `.partial` JSON only after validation and final
@@ -25457,17 +25499,41 @@ ancestor owners, or storage which violates `fsync`. The remaining work is to
 discharge the proof debts below and then execute the hardened gates, not to
 accept evidence from the mutable caller.
 
-The 46-entry ledger contains 24 `tlaps_proved`, 15 `specified_unproved`, 6
+The 49-entry ledger contains 24 `tlaps_proved`, 18 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. Outstanding release work:
 
-- preserve the strict-green 196/196 Stage-4 protected-rank checkpoint and its
+- rerun the repaired Stage-4 protected-rank proof strictly and preserve its
   counterexample gate (four causal refill lassos, causal replacement,
   Commit-certificate discovery debt, all-I/O indexing, and the 42,817-state
-  ownership check), then extend it to progress-relevant Normal
+  ownership check). The historical 196/196 run is superseded because 48
+  heterogeneous grouped binders constrained their supporting rank, budget,
+  capacity, or position variable to the wrong carrier. The checker and
+  representative mutants now reject that form. Extend the repaired proof to
+  progress-relevant Normal
   proposal/Prepare work and replace the weak enabled-action deadlock seam with
   a productive protocol/deadline/rank decrease theorem. The checkpoint is
   evidence for this sub-slice only and does not discharge any proof debt;
+- complete protected Stage 6 by deriving strict temporal descent from the
+  doubled causal FIFO index and source-cursor distance. Generalize the existing
+  non-Completion causal-capacity theorem, and add a well-founded Completion
+  product rank covering outstanding-work debt, Consensus-I/O capacity debt,
+  and I/O-worker plus ready/local scheduler positions. The production
+  reverse/push-front sequence and conditional stable first-owner tail append,
+  including retention of every fresh emitted identity, are now machine-stated
+  in Verus and token-bound to their real operator bodies. Machine-check the
+  remaining concrete effect-identity and complete
+  scheduler-owner-union mapping to the abstract causal FIFO; that cross-tool
+  refinement is still not established by source binding;
+- keep the standalone effect-capacity mutation matrix green and source-bound.
+  Its four compact modules and 19 pinned configurations cover the concrete
+  A/B/TimeoutVote capacity trace, full-capacity Fetch reconstruction,
+  decided/non-Fetch retirement, six preemption orderings, retained-suffix FIFO,
+  Decision filtering, and the exact eight-effect source bound. The eight
+  repaired cases and eleven targeted safety/liveness mutants are finite TLC
+  regression evidence only; crash authority remains delegated to the crash
+  replay model and the matrix does not discharge the outstanding Completion
+  product-rank or cross-tool refinement obligations;
 - discharge the executable
   `EffectiveLockAcquisitionModelObligation` over the height-scoped immutable
   physical-owner/mutable-consumer state machine. Its exhaustive bounded TLC and
@@ -25533,9 +25599,15 @@ remains false. Outstanding release work:
   adding the same-step Decision reconciliation cases. The new timeout-path
   classifier is green in focused and full status-module execution; eleven Kura
   progress-witness durability names, two lane-geometry durability names, and
-  one lane-work alternate-certificate retirement name raise the current
-  inventory to 185. Fresh full discovery/serial execution and the clean
-  source-sealed rerun remain pending for all 185 names. The 16-module pre-network
+  one lane-work alternate-certificate retirement name raised the inventory to
+  185. Six exact lane-retirement recovery/substitution names and the two
+  platform-role gates raised the inventory to 193. The isolated-runner timing
+  contract raised the inventory to 194. Seven bounded effect-dispatch/executor
+  regressions and the canonical watchdog lane regression raised it to 202. Two
+  exact post-decision timeout/TC quiescence regressions raise the current
+  inventory to 204 across 17 modules. Fresh full
+  discovery/serial execution and the clean source-sealed rerun remain pending
+  for all 204 names. The 17-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
@@ -25545,14 +25617,12 @@ remains false. Outstanding release work:
   progress evidence;
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
-- execute and archive a clean 32-seed release matrix for four-validator
-  genesis, restart, timeout rotation, and same-subject locked-body re-proposal
-  convergence after ordered release of captured quorum evidence, including the
-  50-second Taira bound; the explicit quorum releases are increasing captured
-  subsequences rather than FIFO prefixes, while only the final drain has a FIFO
-  fence;
-  add a separate adversarial distinct-subject PrepareQC scenario, because the
-  same-subject matrix leg intentionally does not discharge that obligation;
+- execute and archive a clean 32-seed release matrix for each of five
+  four-validator scenarios: genesis, restart, timeout rotation, same-subject
+  locked-body re-proposal, and causally staged distinct-subject PrepareQC
+  convergence, including the 50-second Taira bound; the explicit quorum
+  releases are increasing captured subsequences rather than FIFO prefixes,
+  while only the final drain has a FIFO fence;
 - reproduce and archive the green 100,000-height permissioned/NPoS
   chain-prefix chaos gate inside the source-manifest-bound release corridor;
   the current queued-work/restart schema is green in the standalone 320-height

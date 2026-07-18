@@ -3817,8 +3817,14 @@ impl IzanamiRunner {
                         }
                     };
                     let metadata = submission_metadata(submission_counter.as_ref());
-                    let transaction =
-                        client.build_transaction_from_items(plan.instructions.clone(), metadata);
+                    let transaction = client.build_transaction_from_items(
+                        plan.instructions.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        metadata,
+                    );
                     let payload = client.prepare_transaction_payload(&transaction);
                     let next_index = built_count.fetch_add(1, Ordering::Relaxed);
                     if next_index >= buffer_capacity as u64 {
@@ -6904,7 +6910,11 @@ fn submit_repeatable_trigger_plan_on_endpoint(
         );
         let metadata = submission_metadata(submission_counter);
         client
-            .submit_all_with_metadata(instructions.to_vec(), metadata)
+            .submit_all_with_metadata(
+                instructions.to_vec(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                metadata,
+            )
             .map(|hash| SubmissionOutcome {
                 endpoint_idx: resolved_endpoint_idx,
                 hash,

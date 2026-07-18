@@ -3,7 +3,7 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use axum::{Router, routing::post};
 use base64::Engine as _;
@@ -17,8 +17,11 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
-    DomainId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
-    transaction::SignedTransaction,
+    DomainId,
+    asset::AssetDefinitionId,
+    name::Name,
+    smart_contract::ContractAddress,
+    transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_version::codec::DecodeVersioned as _;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
@@ -557,7 +560,6 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "main",
             payload: None,
-            gas_asset_id: None,
             gas_limit: 0,
         },
     );
@@ -577,7 +579,10 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
-        iroha_torii::json_entry("gas_limit", 5_000u64),
+        iroha_torii::json_entry(
+            "fee_payment",
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
+        ),
     ]);
     let call_body = json::to_json(&call_payload).expect("serialize call request");
     let call_req = http::Request::builder()
@@ -695,7 +700,10 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
-        iroha_torii::json_entry("gas_limit", 5_000u64),
+        iroha_torii::json_entry(
+            "fee_payment",
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
+        ),
     ]);
     let draft_body = json::to_json(&draft_body).expect("serialize draft call request");
     let draft_req = http::Request::builder()
@@ -799,7 +807,10 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("creation_time_ms", creation_time_ms),
         iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
-        iroha_torii::json_entry("gas_limit", 5_000u64),
+        iroha_torii::json_entry(
+            "fee_payment",
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
+        ),
     ]);
     let detached_submit_body =
         json::to_json(&detached_submit_body).expect("serialize detached submit request");
@@ -1016,7 +1027,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "configure",
             payload: Some(&init_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1113,7 +1123,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "credit_by_payload",
             payload: Some(&payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1149,7 +1158,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1250,7 +1258,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "bind",
             payload: Some(&bind_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1392,7 +1399,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "configure",
             payload: Some(&configure_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1497,7 +1503,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "credit_by_payload",
             payload: Some(&credit_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1523,7 +1528,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1651,7 +1655,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "write_with_isi",
             payload: Some(&write_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1780,7 +1783,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "write_with_mint",
             payload: Some(&write_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -1904,7 +1906,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "init_hub",
             payload: None,
-            gas_asset_id: None,
             gas_limit: 10_000,
         },
     );
@@ -1935,7 +1936,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -2050,7 +2050,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "init_hub",
             payload: None,
-            gas_asset_id: None,
             gas_limit: 10_000,
         },
     );
@@ -2081,7 +2080,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );
@@ -2110,7 +2108,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "burn_like",
             payload: Some(&burn_payload),
-            gas_asset_id: None,
             gas_limit: 1_500_000,
         },
     );

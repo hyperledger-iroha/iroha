@@ -20,7 +20,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level contract checks for the typed ABI-20 Kagemusha V4 lifecycle bridge. */
+/** Source-level contract checks for the typed ABI-21 Kagemusha V4 lifecycle bridge. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     exactAbiIsRequired();
@@ -52,14 +52,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void exactAbiIsRequired() {
-    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
-    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(19);
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(21);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 20, () -> true);
+        () -> {}, () -> 21, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 20, () -> false);
+        () -> {}, () -> 21, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 20, () -> true);
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 21, () -> true);
   }
 
   private static void appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
@@ -113,7 +113,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void artifactContractIsFixed() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 20;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 21;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
@@ -831,7 +831,7 @@ public final class KagemushaRecursiveSpendProverTest {
       final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
       final boolean proofBackendAvailable) {
     return new KagemushaRecursiveSpendProver.ReadinessProjection(
-        20,
+        21,
         8,
         "xor#sora",
         9,

@@ -151,6 +151,7 @@ final class PendingTransactionQueueTests: XCTestCase {
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         do {
             try await sdk.submit(transfer: transfer, keypair: keypair)
@@ -182,6 +183,7 @@ final class PendingTransactionQueueTests: XCTestCase {
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         try await sdk.submit(transfer: transfer, keypair: keypair)
 

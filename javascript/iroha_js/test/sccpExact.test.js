@@ -60,6 +60,13 @@ const PUBLIC_SIGNAL_SCHEMA_HASH =
 const SORA_TAIRA_CHAIN_ID_HASH =
   "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
 
+function feePayment(gasLimit = null) {
+  return {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: gasLimit },
+  };
+}
+
 function b64(bytes) {
   return Buffer.from(bytes).toString("base64");
 }
@@ -1903,6 +1910,7 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
   const nativeProof = nativeProofB64();
   const proof = normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     signature_b64: b64(new Uint8Array(64).fill(1)),
     transaction_payload_b64: transactionPayload,
     destination_proof_b64: destinationProof,
@@ -1910,6 +1918,7 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
   });
   assert.deepEqual(Object.keys(proof), [
     "authority",
+    "fee_payment",
     "signature_b64",
     "transaction_payload_b64",
     "destination_proof_b64",
@@ -1918,10 +1927,12 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
   assert.equal(proof.transaction_payload_b64, transactionPayload);
   assert.deepEqual(Object.keys(normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     native_proof_b64: nativeProof,
-  })), ["authority", "native_proof_b64"]);
+  })), ["authority", "fee_payment", "native_proof_b64"]);
   const native = normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     signature_b64: "AQ==",
     transaction_payload_b64: transactionPayload,
     native_proof_b64: nativeProof,
@@ -1931,7 +1942,11 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
 });
 
 test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
-  const proof = { authority: AUTHORITY, destination_proof_b64: destinationProofB64() };
+  const proof = {
+    authority: AUTHORITY,
+    fee_payment: feePayment(),
+    destination_proof_b64: destinationProofB64(),
+  };
   for (const [field, value] of [
     ["public_key_hex", HASH(1)],
     ["message_bundle_b64", "AQ=="],
@@ -1958,46 +1973,76 @@ test("submit DTOs reject mixed signing state, malformed encodings, and retired f
   for (const creation_time_ms of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, creation_time_ms }));
   }
+  const { fee_payment: _feePayment, ...withoutFeePayment } = proof;
+  assert.throws(
+    () => normalizeBridgeProofSubmitPayload(withoutFeePayment),
+    /fee_payment/u,
+  );
+  for (const fee_payment of [
+    null,
+    { payer: "authority", value: { charge_limits: [], gas_limit: 0 } },
+    { payer: "authority", value: { charge_limits: [], gas_limit: null, legacy: true } },
+    {
+      payer: "sponsor",
+      value: {
+        program_id: { sponsor: AUTHORITY, name: "wallet_fx" },
+        program_revision: 0,
+        charge_limits: [],
+        gas_limit: null,
+      },
+    },
+  ]) {
+    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, fee_payment }));
+  }
 });
 
 test("submit DTOs bind the exact proof schema and require zero header padding", () => {
   assert.doesNotThrow(() => normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     destination_proof_b64: destinationProofB64(),
   }));
   assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     native_proof_b64: nativeProofB64(),
   }));
   assert.throws(() => normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     destination_proof_b64: nativeProofB64(),
   }), /schema hash/u);
   assert.throws(() => normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     native_proof_b64: destinationProofB64(),
   }), /schema hash/u);
   for (const padding of [1, 8, 64]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({
       authority: AUTHORITY,
+      fee_payment: feePayment(),
       destination_proof_b64: destinationProofB64({ padding }),
     }), /exactly 0 bytes/u);
     assert.throws(() => normalizeBridgeMessageSubmitPayload({
       authority: AUTHORITY,
+      fee_payment: feePayment(),
       native_proof_b64: nativeProofB64({ padding }),
     }), /exactly 0 bytes/u);
   }
   assert.throws(() => normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     destination_proof_b64: destinationProofB64({ payload: Buffer.alloc(0) }),
   }), /non-empty/u);
   for (const authority of [ACCOUNT.toI105(753), ACCOUNT.toI105(0), ACCOUNT.toI105(370)]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({
       authority,
+      fee_payment: feePayment(),
       destination_proof_b64: destinationProofB64(),
     }), /discriminant|prefix/u);
     assert.throws(() => normalizeBridgeMessageSubmitPayload({
       authority,
+      fee_payment: feePayment(),
       native_proof_b64: nativeProofB64(),
     }), /discriminant|prefix/u);
   }
@@ -2335,6 +2380,7 @@ test("Torii SCCP routes apply their endpoint-specific declared response limits",
       maximumBytes: 64 * 1024 * 1024,
       invoke: (client) => client.submitBridgeProof({
         authority: AUTHORITY,
+        fee_payment: feePayment(),
         destination_proof_b64: destinationProofB64(),
       }),
       contentType: "application/json",
@@ -2412,6 +2458,7 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
   });
   await client.submitBridgeProof({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     destination_proof_b64: destinationProofB64(),
     creation_time_ms: 42,
   });
@@ -2419,6 +2466,7 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
     url: "https://example.invalid/v1/bridge/proofs/submit",
     body: {
       authority: AUTHORITY,
+      fee_payment: feePayment(),
       destination_proof_b64: destinationProofB64(),
       creation_time_ms: 42,
     },
@@ -2444,11 +2492,13 @@ test("Torii prepare then submit resends the byte-identical transaction payload",
   });
   const preparation = await client.submitBridgeProof({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     destination_proof_b64: destinationProofB64(),
     creation_time_ms: 42,
   });
   const submission = await client.submitBridgeProof({
     authority: AUTHORITY,
+    fee_payment: feePayment(),
     signature_b64: b64(new Uint8Array(64).fill(7)),
     transaction_payload_b64: preparation.transaction_payload_b64,
     destination_proof_b64: destinationProofB64(),
@@ -2456,6 +2506,7 @@ test("Torii prepare then submit resends the byte-identical transaction payload",
   });
   assert.equal(submission.submitted, true);
   assert.equal(calls[1].body.transaction_payload_b64, prepared.transaction_payload_b64);
+  assert.deepEqual(calls[1].body.fee_payment, feePayment());
   assert.deepEqual(
     [...Buffer.from(calls[1].body.transaction_payload_b64, "base64")],
     [1, 2, 3, 4],
@@ -2476,6 +2527,7 @@ test("Torii rejects response state that contradicts prepare or signed submit", a
   await assert.rejects(
     () => prepareClient.submitBridgeProof({
       authority: AUTHORITY,
+      fee_payment: feePayment(),
       destination_proof_b64: destinationProofB64(),
     }),
     /signing state/u,
@@ -2486,6 +2538,7 @@ test("Torii rejects response state that contradicts prepare or signed submit", a
   await assert.rejects(
     () => submitClient.submitBridgeProof({
       authority: AUTHORITY,
+      fee_payment: feePayment(),
       signature_b64: "AQ==",
       transaction_payload_b64: "Ag==",
       destination_proof_b64: destinationProofB64(),

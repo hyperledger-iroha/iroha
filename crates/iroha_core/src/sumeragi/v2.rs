@@ -257,6 +257,15 @@ pub(crate) enum SignRequest {
 }
 
 impl SignRequest {
+    /// Return the canonical bytes authorized by this durable signing request.
+    pub(crate) fn signature_preimage(&self) -> Vec<u8> {
+        match self {
+            Self::Proposal(proposal) => proposal.signature_preimage(),
+            Self::Vote(vote) => vote.signature_preimage(),
+            Self::TimeoutVote(vote) => vote.signature_preimage(),
+        }
+    }
+
     /// Return the exact block subject owned by proposal or phase-vote work.
     ///
     /// Timeout votes carry only an optional high-QC report and do not own that
@@ -3494,6 +3503,7 @@ impl SumeragiV2Adapter {
             .map(|result| result.outcome)
     }
 
+    #[cfg(test)]
     fn step_authenticated_ingress(
         &mut self,
         event: reducer::Event,
@@ -4035,9 +4045,7 @@ impl SumeragiV2Adapter {
                         continuation.disposition(),
                         continuation.effects(),
                     );
-                    for effect in continuation.into_effects().into_iter().rev() {
-                        pending.push_front(effect);
-                    }
+                    reducer::prepend_causal_continuation(&mut pending, continuation.into_effects());
                 }
                 effect => match self.convert_effect(effect) {
                     Ok(effect) => ready.push(effect),
@@ -4284,6 +4292,7 @@ fn deferred_queue_status(
     queue_status(queue, inputs.len(), capacity, oldest_age, service_debt)
 }
 
+#[cfg(test)]
 fn progress_rank(event: &reducer::Event) -> u8 {
     match event {
         reducer::Event::QuorumCertificateReceived { certificate, .. }
@@ -6576,38 +6585,59 @@ mod tests {
                 .all(|effect| !matches!(effect, AdapterEffect::Sign { .. })),
             "the TC cannot expose Commit signing before local body validation"
         );
-        let fetch_tag = installed
-            .iter()
-            .find_map(|effect| match effect {
+        let fetch_tag = match installed.as_slice() {
+            [
+                AdapterEffect::EnterView {
+                    tag: enter_tag,
+                    protected_body: Some((protected_round, protected_subject)),
+                    ..
+                },
                 AdapterEffect::FetchBody {
                     tag,
                     round: fetched_round,
                     subject: fetched_subject,
                     certificate: Some(certificate),
                     ..
-                } if *fetched_round == round
-                    && *fetched_subject == subject
-                    && certificate.as_ref() == prepare.as_ref() =>
-                {
-                    Some(*tag)
-                }
-                _ => None,
-            })
-            .expect("TC promotion reconstructs the exact certified body");
+                },
+            ] if enter_tag == tag
+                && *protected_round == round
+                && *protected_subject == subject
+                && *fetched_round == round
+                && *fetched_subject == subject
+                && certificate.as_ref() == prepare.as_ref() =>
+            {
+                *tag
+            }
+            effects => panic!(
+                "TC acknowledgement must expose EnterView before its exact body fetch: {effects:?}"
+            ),
+        };
 
         assert!(matches!(
             adapter
                 .body_available(fetch_tag, manifest)
                 .expect("recover the TC-protected body")
                 .effects(),
-            [AdapterEffect::StoreBody { .. }]
+            [AdapterEffect::StoreBody {
+                tag,
+                round: stored_round,
+                subject: stored_subject,
+            }] if *tag == fetch_tag
+                && *stored_round == round
+                && *stored_subject == subject
         ));
         assert!(matches!(
             adapter
                 .body_stored(fetch_tag, round, subject, &durable)
                 .expect("store the TC-protected body")
                 .effects(),
-            [AdapterEffect::ValidateBody { .. }]
+            [AdapterEffect::ValidateBody {
+                tag,
+                round: validated_round,
+                subject: validated_subject,
+            }] if *tag == fetch_tag
+                && *validated_round == round
+                && *validated_subject == subject
         ));
         let sign = adapter
             .validation_succeeded(fetch_tag, round, subject, &validated)
@@ -6616,10 +6646,11 @@ mod tests {
         let commit_vote = match sign.as_slice() {
             [
                 AdapterEffect::Sign {
+                    tag,
                     request: SignRequest::Vote(vote),
-                    ..
                 },
-            ] if vote.round == round
+            ] if *tag == fetch_tag
+                && vote.round == round
                 && vote.phase == wire::GlobalPhase::Commit
                 && vote.subject == subject
                 && vote.execution_commitment == execution_commitment
@@ -6637,12 +6668,13 @@ mod tests {
         );
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 3);
         let core_round = reducer::Round::new(round.height, round.view);
-        assert!(
-            adapter
-                .reducer
-                .durable_state()
-                .commit_intent(core_round)
-                .is_some(),
+        let core_commit_vote = adapter
+            .registry
+            .vote_to_core(commit_vote, &adapter.wire_context)
+            .expect("convert the exact emitted Commit vote");
+        assert_eq!(
+            adapter.reducer.durable_state().commit_intent(core_round),
+            Some(core_commit_vote.vote()),
             "the acknowledged WAL frame is the signing authority"
         );
         let status = adapter.status().expect("historical Commit status");

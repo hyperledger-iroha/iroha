@@ -37,6 +37,8 @@ import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -729,27 +731,80 @@ public final class HttpClientTransport implements IrohaClient {
     return executeAccepted(request, "verifying key update", 202);
   }
 
+  /** Quotes the exact unsigned transaction payload before signing. */
+  public CompletableFuture<FeeQuoteResponse> quoteFees(
+      final Map<String, Object> unsignedPayload,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(unsignedPayload, "unsignedPayload");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final Object authority = unsignedPayload.get("authority");
+    if (!(authority instanceof String) || !authority.equals(canonicalAuth.accountId())) {
+      throw new IllegalArgumentException(
+          "canonicalAuth.accountId must equal unsignedPayload.authority");
+    }
+    final FeePaymentIntent requestedIntent =
+        FeePaymentJson.parse(unsignedPayload.get("fee_payment"), "unsignedPayload.fee_payment");
+    final Map<String, Object> requestBody = new LinkedHashMap<>();
+    requestBody.put("payload", unsignedPayload);
+    final byte[] body = encodeJsonBody(requestBody);
+    return fetchJson(
+            buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth),
+            FeePaymentJson::parseQuote,
+            "fee quote",
+            200)
+        .thenApply(
+            quote -> {
+              if (!requestedIntent.hasSamePayerAndGasBound(quote.intent())) {
+                throw new IllegalArgumentException(
+                    "fee quote response changed the requested payer, sponsor revision, or gas bound");
+              }
+              return quote;
+            });
+  }
+
+  /** Fetches one exact on-chain fee sponsor program under canonical request authentication. */
+  public CompletableFuture<FeeSponsorProgramResponse> getFeeSponsorProgram(
+      final FeeSponsorProgramId programId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(programId, "programId");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final Map<String, Object> requestBody = new LinkedHashMap<>();
+    requestBody.put("program_id", programId.literal());
+    final byte[] body = encodeJsonBody(requestBody);
+    return fetchJson(
+            buildVpnRequest("POST", "/v1/fee-sponsor-programs/by-id", body, canonicalAuth),
+            FeePaymentJson::parseProgram,
+            "fee sponsor program lookup",
+            200)
+        .thenApply(
+            program -> {
+              if (!programId.equals(program.id())) {
+                throw new IllegalArgumentException(
+                    "fee sponsor program response id does not match the requested program");
+              }
+              return program;
+            });
+  }
+
   /** Calls a deployed contract via `POST /v1/contracts/call`. */
   public CompletableFuture<ContractCallResponse> callContract(
       final String authority,
       final String privateKey,
-      final long gasLimit,
+      final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
-      final Object payload,
-      final String gasAssetId) {
+      final Object payload) {
     final byte[] body =
         encodeJsonBody(
             buildContractCallPayload(
                 authority,
                 privateKey,
-                gasLimit,
+                feePayment,
                 contractAddress,
                 contractAlias,
                 entrypoint,
-                payload,
-                gasAssetId));
+                payload));
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
   }
@@ -2011,14 +2066,13 @@ public final class HttpClientTransport implements IrohaClient {
   static Map<String, Object> buildContractCallPayload(
       final String authority,
       final String privateKey,
-      final long gasLimit,
+      final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
-      final Object payloadValue,
-      final String gasAssetId) {
-    if (gasLimit <= 0L) {
-      throw new IllegalArgumentException("gasLimit must be positive");
+      final Object payloadValue) {
+    if (feePayment == null || feePayment.gasLimit() == null) {
+      throw new IllegalArgumentException("contract feePayment must include gasLimit");
     }
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("authority", normalizeNonBlank(authority, "authority"));
@@ -2028,10 +2082,7 @@ public final class HttpClientTransport implements IrohaClient {
     if (payloadValue != null) {
       payload.put("payload", payloadValue);
     }
-    if (gasAssetId != null) {
-      payload.put("gas_asset_id", normalizeNonBlank(gasAssetId, "gasAssetId"));
-    }
-    payload.put("gas_limit", gasLimit);
+    payload.put("fee_payment", feePayment.toJsonMap());
     return payload;
   }
 
@@ -2073,9 +2124,7 @@ public final class HttpClientTransport implements IrohaClient {
       }
       payload.put("creation_time_ms", request.creationTimeMs());
     }
-    if (request.feeSponsor() != null) {
-      payload.put("fee_sponsor", normalizeNonBlank(request.feeSponsor(), "feeSponsor"));
-    }
+    payload.put("fee_payment", request.feePayment().toJsonMap());
     if (request.memo() != null) {
       payload.put("memo", normalizeNonBlank(request.memo(), "memo"));
     }
@@ -2470,6 +2519,8 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException("authority is required and must be canonical");
     }
     SccpSubmitEncoding.requireCanonicalAuthority((String) fields.get("authority"), "authority");
+    final FeePaymentIntent feePayment =
+        FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
     final boolean hasSignature = fields.containsKey("signature_b64");
     final Object signature = fields.get("signature_b64");
     if (hasSignature) {
@@ -2505,7 +2556,8 @@ public final class HttpClientTransport implements IrohaClient {
       SccpSubmitEncoding.normalizeOptionalTransactionPayload(
           (String) transactionPayload,
           normalizedCreationTime,
-          (String) fields.get("authority"));
+          (String) fields.get("authority"),
+          feePayment);
     }
     if ("/v1/bridge/messages".equals(path)) {
       final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
@@ -2747,6 +2799,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final java.util.Set<String> SCCP_PROOF_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "destination_proof_b64",
@@ -2754,6 +2807,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",

@@ -26,12 +26,20 @@ fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTran
     let authority: AccountId = AccountId::new(keypair.public_key().clone());
 
     let txs = vec![
-        TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key()),
-        TransactionBuilder::new(chain, authority)
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key()),
+        TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key()),
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key()),
     ];
     let block = SignedBlock::genesis(txs.clone(), keypair.private_key(), None, None);
     (block, txs)

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.norito;
 
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,6 +13,9 @@ import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeeChargeKind;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.model.JsonValue;
@@ -62,14 +66,14 @@ public final class NoritoCodecAdapterTests {
     javaCodecSupportsWireInstructionPayloads();
     javaCodecEncodesIvmBytecodeLayout();
     javaCodecEncodesInstructionLayout();
-    javaCodecEncodesTypedMetadata();
+    javaCodecEncodesTypedFeePayment();
     System.out.println("[IrohaAndroid] Norito codec scaffolding tests passed.");
   }
 
   private static void javaCodecRoundTripsPayload() throws NoritoException {
     final byte[] instructions = "android-instructions".getBytes();
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000001")
             .setAuthority(sampleAuthority((byte) 0x01))
             .setCreationTimeMs(1_735_000_000_123L)
@@ -95,15 +99,22 @@ public final class NoritoCodecAdapterTests {
     assertBarePayload(encoded);
   }
 
-  private static void javaCodecEncodesTypedMetadata() throws NoritoException {
+  private static void javaCodecEncodesTypedFeePayment() throws NoritoException {
+    final FeePaymentIntent feePayment =
+        FeePaymentIntent.authority(
+            Collections.singletonList(
+                new FeeChargeLimit(
+                    FeeChargeKind.PIPELINE_GAS,
+                    "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+                    "1000")),
+            1000L);
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setFeePayment(feePayment)
             .setChainId("00000014")
             .setAuthority(sampleAuthority((byte) 0x08))
             .setCreationTimeMs(1_735_333_333_123L)
             .setExecutable(Executable.ivm(new byte[] {0x05}))
-            .putMetadata("gas_asset_id", "xor#universal")
-            .putMetadata("gas_limit", JsonValue.number(1000L))
             .putMetadata("checked", JsonValue.bool(true))
             .build();
 
@@ -111,17 +122,14 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
-    assert JsonValue.string("xor#universal").equals(decoded.metadata().get("gas_asset_id"))
-        : "gas_asset_id must remain a JSON string";
-    assert JsonValue.number(1000L).equals(decoded.metadata().get("gas_limit"))
-        : "gas_limit must round-trip as a JSON number";
+    assert feePayment.equals(decoded.feePayment()) : "fee payment must round-trip";
+    assert !decoded.metadata().containsKey("gas_asset_id") : "legacy gas_asset_id must be absent";
+    assert !decoded.metadata().containsKey("gas_limit") : "legacy gas_limit must be absent";
     assert JsonValue.bool(true).equals(decoded.metadata().get("checked"))
         : "boolean metadata must round-trip";
 
     final Map<String, String> rawMetadata = rawMetadata(encoded);
-    assert "1000".equals(rawMetadata.get("gas_limit")) : "gas_limit must be encoded without quotes";
-    assert !"\"1000\"".equals(rawMetadata.get("gas_limit"))
-        : "gas_limit must not be encoded as a JSON string";
+    assert "true".equals(rawMetadata.get("checked")) : "checked metadata must remain boolean";
   }
 
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
@@ -137,7 +145,7 @@ public final class NoritoCodecAdapterTests {
     }
     final String authority = i105;
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000002")
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
@@ -184,7 +192,7 @@ public final class NoritoCodecAdapterTests {
     }
     final String authority = i105;
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000002")
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
@@ -261,14 +269,14 @@ public final class NoritoCodecAdapterTests {
             destinationAccountId);
     final byte[] encodedTransfer = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
     final MultisigProposeRequest request =
-        MultisigProposeRequest.builder()
+        MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setMultisigAccountId(multisigAccountId)
             .setSignerAccountId(signerAccountId)
             .addInstructionBytes(encodedTransfer)
             .setCreationTimeMs(1_735_444_555_123L)
             .setPublicKeyHex("deadbeef")
             .setSignatureB64("c2ln")
-            .setFeeSponsor("sponsor@boi.is2")
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
             .setMemo("QR invoice 42")
             .setValidationFeePolicyVersion(7L)
             .setValidationFeePolicyHash("AB".repeat(32))
@@ -306,8 +314,8 @@ public final class NoritoCodecAdapterTests {
         : "signature must be present";
     assert decodeOptionPayload(readField(decoder, "request.creation_time_ms"), "request.creation_time_ms").isPresent()
         : "creation time must be present";
-    assert decodeOptionPayload(readField(decoder, "request.fee_sponsor"), "request.fee_sponsor").isPresent()
-        : "fee sponsor must be present";
+    assert readField(decoder, "request.fee_payment").length > 0
+        : "typed fee payment must be present";
     assert decodeOptionPayload(readField(decoder, "request.memo"), "request.memo").isPresent()
         : "memo must be present";
     final byte[] policyVersionPayload =
@@ -372,7 +380,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -381,7 +389,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -391,7 +399,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -400,7 +408,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -409,7 +417,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -420,7 +428,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -431,7 +439,7 @@ public final class NoritoCodecAdapterTests {
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
@@ -444,7 +452,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000003")
             .setAuthority(sampleAuthority((byte) 0x02))
             .setCreationTimeMs(1_735_000_000_789L)
@@ -524,7 +532,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecRejectsMalformedSignedTransactions() throws NoritoException {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000003")
             .setAuthority(sampleAuthority((byte) 0x12))
             .setCreationTimeMs(1_735_000_001_000L)
@@ -551,7 +559,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesChainIdLayout() throws NoritoException {
     final String chainId = "00000003";
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId(chainId)
             .setAuthority(sampleAuthority((byte) 0x03))
             .setCreationTimeMs(1_735_000_000_789L)
@@ -576,7 +584,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] wirePayloadB =
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000009")
             .setAuthority(sampleAuthority((byte) 0x04))
             .setCreationTimeMs(1_735_111_111_000L)
@@ -621,7 +629,7 @@ public final class NoritoCodecAdapterTests {
         InstructionBox.fromWirePayload("iroha.custom", wirePayload);
 
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000011")
             .setAuthority(sampleAuthority((byte) 0x05))
             .setCreationTimeMs(1_735_111_111_123L)
@@ -644,7 +652,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesIvmBytecodeLayout() throws NoritoException {
     final byte[] ivmBytes = new byte[] {0x01, 0x02, 0x03, 0x04};
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000012")
             .setAuthority(sampleAuthority((byte) 0x06))
             .setCreationTimeMs(1_735_222_222_123L)
@@ -685,7 +693,7 @@ public final class NoritoCodecAdapterTests {
     final InstructionBox wireInstruction =
         InstructionBox.fromWirePayload("iroha.custom.layout", wirePayload);
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000013")
             .setAuthority(sampleAuthority((byte) 0x07))
             .setCreationTimeMs(1_735_222_333_123L)

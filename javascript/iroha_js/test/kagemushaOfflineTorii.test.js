@@ -24,7 +24,7 @@ function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   });
 }
 
-function unavailableReadiness(abiVersion = 20) {
+function unavailableReadiness(abiVersion = 21) {
   return {
     required_bridge_abi_version: abiVersion,
     max_hops: 8,
@@ -68,12 +68,12 @@ function operationReference(kind) {
   };
 }
 
-test("Kagemusha JavaScript surface is transport-only ABI-20/V4", () => {
-  assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 20);
+test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
+  assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
   assert.equal(KAGEMUSHA_MANIFEST_VERSION, 4);
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
-  assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 20);
+  assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
   assert.equal(typeof distSdk.ToriiClient.prototype.getKagemushaReadinessV4, "function");
   assert.equal(
     Object.keys(sdk).some((name) => /kagemusha.*prover/iu.test(name)),
@@ -86,7 +86,7 @@ test("Kagemusha JavaScript surface is transport-only ABI-20/V4", () => {
 
   assert.throws(
     () => normalizeKagemushaReadinessV4(unavailableReadiness(19), "coin#wonderland"),
-    /required_bridge_abi_version must be 20/u,
+    /required_bridge_abi_version must be 21/u,
   );
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4({ ...requestV4(), version: 3 }),
@@ -134,7 +134,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
   const redeem = await client.submitKagemushaRedeemV4(requestV4());
   const status = await client.getKagemushaOperationStatus(OPERATION_ID);
 
-  assert.equal(readiness.required_bridge_abi_version, 20);
+  assert.equal(readiness.required_bridge_abi_version, 21);
   assert.equal(topUp.kind.kind, "top_up");
   assert.equal(redeem.kind.kind, "redeem");
   assert.equal(status.state, "applied");

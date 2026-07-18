@@ -40,7 +40,7 @@ use iroha::{
         prelude::*,
         query::account::prelude::FindAccountById,
         smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
-        transaction::TransactionBuilder,
+        transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
 use iroha_config::parameters::{
@@ -52,13 +52,13 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
+use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
-const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -80,12 +80,12 @@ struct Args {
     dataspace_id: Option<u64>,
     #[arg(long, default_value_t = DEFAULT_CHAIN_DISCRIMINANT_TAIRA)]
     chain_discriminant: u16,
+    /// Canonical Norito JSON selecting the fee payer, sponsor revision, and gas bound.
+    /// Every deployment transaction is quoted and signed with exact recommended limits.
     #[arg(long)]
-    gas_asset_id: Option<String>,
+    fee_payment_json: PathBuf,
     #[arg(long = "gov-manifest-approver", value_name = "ACCOUNT")]
     gov_manifest_approvers: Vec<String>,
-    #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
-    gas_limit: u64,
     #[arg(long, default_value_t = 300_000)]
     status_timeout_ms: u64,
     #[arg(long)]
@@ -167,13 +167,6 @@ fn insert_string_metadata(
     Ok(())
 }
 
-fn insert_gas_asset_id(metadata: &mut Metadata, gas_asset_id: Option<&str>) -> Result<()> {
-    if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
-        insert_string_metadata(metadata, "gas_asset_id", asset_id.trim().to_owned())?;
-    }
-    Ok(())
-}
-
 fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) -> Result<()> {
     let mut accounts = Vec::new();
     for (index, raw) in approvers.iter().enumerate() {
@@ -193,14 +186,10 @@ fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) 
 }
 
 fn deployment_transaction_metadata(
-    gas_asset_id: Option<&str>,
-    gas_limit: u64,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     gov_manifest_approvers: &[String],
 ) -> Result<Metadata> {
     let mut metadata = Metadata::default();
-    insert_gas_asset_id(&mut metadata, gas_asset_id)?;
-    iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
     insert_string_metadata(
         &mut metadata,
         "gov_contract_address",
@@ -305,6 +294,7 @@ fn build_native_upload_transaction_plan(
     authority: &AccountId,
     private_key: &PrivateKey,
     transaction_ttl: Option<Duration>,
+    fee_payment: &FeePaymentIntent,
     metadata: &Metadata,
     code_hash: Hash,
     code: &[u8],
@@ -353,6 +343,7 @@ fn build_native_upload_transaction_plan(
             authority,
             private_key,
             transaction_ttl,
+            fee_payment.clone(),
             metadata.clone(),
             instructions,
         )?;
@@ -380,11 +371,20 @@ fn build_native_upload_transaction_plan(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use super::*;
 
     fn checked_ivm_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked IVM contract deploy fixture key")
+    }
+
+    fn test_fee_payment() -> FeePaymentIntent {
+        FeePaymentIntent::authority(
+            Vec::new(),
+            Some(NonZeroU64::new(1_000_000).expect("nonzero test gas limit")),
+        )
     }
 
     #[test]
@@ -408,6 +408,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            test_fee_payment(),
             Metadata::default(),
             Vec::<InstructionBox>::new(),
         )?;
@@ -428,6 +429,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             ivm::contract_code_hash(&code),
             &code,
@@ -475,6 +477,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             Hash::new(b""),
             &[],
@@ -497,6 +500,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             Hash::new(b"not-the-canonical-artifact-hash"),
             &code,
@@ -519,6 +523,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             ivm::contract_code_hash(&code),
             &code,
@@ -552,17 +557,14 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .map_err(|error| eyre!(error.to_string()))?;
-        let metadata = deployment_transaction_metadata(
-            Some("fee#native-upload"),
-            2_000_000,
-            &contract_address,
-            &[authority.to_string()],
-        )?;
+        let metadata =
+            deployment_transaction_metadata(&contract_address, &[authority.to_string()])?;
         let plan = build_native_upload_transaction_plan(
             &ChainId::from("ivm-contract-deploy-large-native-register-test"),
             &authority,
             key_pair.private_key(),
             Some(Duration::from_secs(30)),
+            &test_fee_payment(),
             &metadata,
             ivm::contract_code_hash(&code),
             &code,
@@ -636,6 +638,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             ivm::contract_code_hash(&code),
             &code,
@@ -706,6 +709,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &test_fee_payment(),
             &Metadata::default(),
             ivm::contract_code_hash(&code),
             &code,
@@ -718,6 +722,7 @@ mod tests {
                 &authority,
                 key_pair.private_key(),
                 None,
+                test_fee_payment(),
                 Metadata::default(),
                 Vec::<InstructionBox>::new(),
             )
@@ -791,12 +796,8 @@ mod tests {
         )
         .map_err(|error| eyre!(error.to_string()))?;
         let approvers = vec![authority.to_string()];
-        let metadata = deployment_transaction_metadata(
-            Some("fee#ivm"),
-            42_000,
-            &contract_address,
-            &approvers,
-        )?;
+        let metadata = deployment_transaction_metadata(&contract_address, &approvers)?;
+        let fee_payment = test_fee_payment();
         let chain = ChainId::from("ivm-contract-deploy-metadata-test");
         let code = vec![0x44; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let upload = build_native_upload_transaction_plan(
@@ -804,6 +805,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            &fee_payment,
             &metadata,
             ivm::contract_code_hash(&code),
             &code,
@@ -835,6 +837,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            fee_payment.clone(),
             metadata.clone(),
             [InstructionBox::from(RegisterSmartContractCode { manifest })],
         )?);
@@ -843,6 +846,7 @@ mod tests {
             &authority,
             key_pair.private_key(),
             None,
+            fee_payment.clone(),
             metadata.clone(),
             [InstructionBox::from(ActivateContractInstance {
                 contract_address,
@@ -852,12 +856,9 @@ mod tests {
 
         for transaction in &transactions {
             assert_eq!(transaction.metadata(), &metadata);
-            assert_eq!(
-                iroha::data_model::transaction::parse_transaction_gas_limit(
-                    transaction.metadata()
-                )?,
-                Some(42_000)
-            );
+            assert_eq!(transaction.fee_payment_intent(), &fee_payment);
+            assert!(transaction.metadata().get("gas_limit").is_none());
+            assert!(transaction.metadata().get("gas_asset_id").is_none());
             for key in [
                 "gov_contract_address",
                 "contract_address",
@@ -884,7 +885,7 @@ mod tests {
         )
         .expect("derive test address");
 
-        let error = deployment_transaction_metadata(None, 1, &contract_address, &["  ".to_owned()])
+        let error = deployment_transaction_metadata(&contract_address, &["  ".to_owned()])
             .expect_err("blank governance approver must fail before signing");
         assert!(error.to_string().contains("must not be blank"));
     }
@@ -895,10 +896,11 @@ fn sign_instruction_transaction(
     authority: &AccountId,
     private_key: &PrivateKey,
     transaction_ttl: Option<Duration>,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<SignedTransaction> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone(), fee_payment);
     if let Some(transaction_ttl) = transaction_ttl {
         builder.set_ttl(transaction_ttl);
     }
@@ -907,6 +909,38 @@ fn sign_instruction_transaction(
         .with_instructions(instructions)
         .try_sign(private_key)
         .wrap_err("failed to sign instruction transaction")
+}
+
+fn quote_and_resign_transaction(
+    client: &Client,
+    draft: SignedTransaction,
+    requested_fee_payment: &FeePaymentIntent,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    let mut payload = draft.payload().clone();
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact contract-deployment transaction fees")?;
+    let selection_matches = match (requested_fee_payment, &quote.intent) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    };
+    if !selection_matches {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
+        ));
+    }
+    payload.fee_payment = quote.intent.clone();
+    let transaction = client
+        .try_sign_transaction_payload(payload)
+        .wrap_err("failed to sign exact quoted contract-deployment payload")?;
+    Ok((transaction, quote))
 }
 
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
@@ -920,6 +954,14 @@ fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathB
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    let fee_payment_bytes = fs::read(&args.fee_payment_json)
+        .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
+    let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
+        .wrap_err_with(|| format!("parse {}", args.fee_payment_json.display()))?;
+    fee_payment
+        .validate()
+        .wrap_err("invalid fee payment intent")?;
 
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
@@ -981,21 +1023,44 @@ fn main() -> Result<()> {
     // transaction in the sequence to the same contract address and approver
     // set so protected-lane admission cannot observe a partially attributed
     // deployment.
-    let tx_metadata = deployment_transaction_metadata(
-        args.gas_asset_id.as_deref(),
-        args.gas_limit,
-        &contract_address,
-        &args.gov_manifest_approvers,
-    )?;
+    let tx_metadata =
+        deployment_transaction_metadata(&contract_address, &args.gov_manifest_approvers)?;
     let upload_plan = build_native_upload_transaction_plan(
         &client.chain,
         &authority,
         &private_key,
         transaction_ttl,
+        &fee_payment,
         &tx_metadata,
         code_hash,
         &code,
     )?;
+    let mut fee_quotes = Vec::new();
+    let upload_plan = if args.skip_register_bytes {
+        upload_plan
+    } else {
+        let NativeUploadTransactionPlan {
+            chunk_count,
+            pre_stage,
+            finalize,
+        } = upload_plan;
+        let mut quoted_pre_stage = Vec::with_capacity(pre_stage.len());
+        for (name, slug, transaction) in pre_stage {
+            let (transaction, quote) =
+                quote_and_resign_transaction(&client, transaction, &fee_payment)?;
+            fee_quotes.push(quote);
+            quoted_pre_stage.push((name, slug, transaction));
+        }
+        let (finalize_name, finalize_slug, finalize_transaction) = finalize;
+        let (finalize_transaction, finalize_quote) =
+            quote_and_resign_transaction(&client, finalize_transaction, &fee_payment)?;
+        fee_quotes.push(finalize_quote);
+        NativeUploadTransactionPlan {
+            chunk_count,
+            pre_stage: quoted_pre_stage,
+            finalize: (finalize_name, finalize_slug, finalize_transaction),
+        }
+    };
     let upload_report = native_upload_report(&upload_plan, args.skip_register_bytes);
     let NativeUploadTransactionPlan {
         pre_stage,
@@ -1009,11 +1074,15 @@ fn main() -> Result<()> {
         &authority,
         &private_key,
         transaction_ttl,
+        fee_payment.clone(),
         tx_metadata.clone(),
         [InstructionBox::from(RegisterSmartContractCode {
             manifest: manifest.clone(),
         })],
     )?;
+    let (register_manifest_tx, register_manifest_quote) =
+        quote_and_resign_transaction(&client, register_manifest_tx, &fee_payment)?;
+    fee_quotes.push(register_manifest_quote);
 
     let nonce_key =
         Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
@@ -1046,9 +1115,14 @@ fn main() -> Result<()> {
         &authority,
         &private_key,
         transaction_ttl,
+        fee_payment.clone(),
         tx_metadata,
         activate_instructions,
     )?;
+    let (activate_tx, activate_quote) =
+        quote_and_resign_transaction(&client, activate_tx, &fee_payment)?;
+    let activation_fee_payment = activate_quote.intent.clone();
+    fee_quotes.push(activate_quote);
 
     let register_manifest_tx_hash = register_manifest_tx.hash();
     let activate_tx_hash = activate_tx.hash();
@@ -1094,10 +1168,10 @@ fn main() -> Result<()> {
         "tx_hash_hex": (activate_tx_hash.to_string()),
         "entrypoint": (Option::<String>::None),
         "entrypoint_hash_hex": (Option::<String>::None),
-        "gas_limit": (args.gas_limit),
+        "gas_limit": (activation_fee_payment.gas_limit().map(std::num::NonZeroU64::get)),
         "gas_used": (Option::<u64>::None),
-        "gas_asset_id": (args.gas_asset_id.clone()),
-        "fee_sponsor": (Option::<String>::None),
+        "fee_payment": (activation_fee_payment),
+        "fee_quotes": (fee_quotes.clone()),
         "payload_digest_hex": (payload_digest_hex),
     });
     let result = norito::json!({
@@ -1114,6 +1188,7 @@ fn main() -> Result<()> {
         "code_hash_hex": (code_hash_hex.clone()),
         "register_manifest_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
+        "fee_quotes": (fee_quotes),
         "operation_receipt": (operation_receipt),
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
         "final": (if args.emit_only {

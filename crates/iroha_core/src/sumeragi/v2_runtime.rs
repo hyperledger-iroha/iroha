@@ -1263,9 +1263,7 @@ pub(crate) trait RuntimeDriver {
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
     /// Return whether the unauthenticated wire shape could match a protected
     /// active-lock item after authentication.
-    fn wire_ingress_may_use_progress(&self, _payload: &wire::ConsensusMessageV2Payload) -> bool {
-        false
-    }
+    fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool;
 }
 
 impl RuntimeDriver for SumeragiV2Adapter {

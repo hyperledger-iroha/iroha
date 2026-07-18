@@ -327,7 +327,7 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
       release_cargo_verus_sha256="42a79c9afd700f8312a9ac7ab212070723e71beeb07f5ab855453010455bdc6d"
       ;;
     *)
-      echo "unsupported formal release host: $(uname -s)-$(uname -m)" >&2
+      echo "unsupported Sumeragi v2 validator release host: $(uname -s)-$(uname -m); admitted hosts are Linux-x86_64 and Darwin-arm64" >&2
       exit 1
       ;;
   esac
@@ -871,6 +871,12 @@ required_production_liveness_tests=(
   kura::tests::progress_witness_durability::progress_prepend_directory_failure_retries_without_corruption
   kura::tests::progress_witness_durability::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload
   kura::tests::progress_witness_durability::unindexed_crash_suffix_is_repaired_before_retry_or_append
+  kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
+  kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
+  kura::lane_geometry::tests::first_release_retirement_promotes_then_rejects_complete_autonomous_rewrite
+  kura::lane_geometry::tests::first_release_retirement_recovers_complete_certified_rewrite_before_snapshot
+  kura::lane_geometry::tests::first_release_retirement_recovery_rejects_temp_symlink_without_external_writes
+  kura::lane_geometry::tests::first_release_retirement_rejects_directory_substitution_at_pair_refresh
   kura::lane_geometry::tests::first_release_retirement_requires_bound_progress_sidecar_durability
   kura::lane_geometry::tests::geometry_gc_requires_bound_merge_receipt_durability_before_deletion
   sumeragi::v2_core::tests::prior_view_commit_votes_rebuild_the_exact_locked_round_quorum
@@ -885,6 +891,8 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_resigns_current_timeout_then_historical_locked_commit_fifo
   sumeragi::v2_core::tests::current_view_commit_waits_for_the_exact_durable_lock
   sumeragi::v2_core::tests::decision_retains_in_flight_body_pipeline_without_duplicate_fetch
+  sumeragi::v2_core::tests::timeout_elapsed_cannot_start_durable_timeout_after_decision
+  sumeragi::v2_core::tests::quorum_completing_timeout_vote_cannot_form_tc_after_decision
   sumeragi::v2_core::refinement::tests::retransmit_may_reconstruct_one_final_decision_body_stage
   sumeragi::v2_core::refinement::tests::source_linked_effective_lock_body_kernels_reject_adversarial_inputs
   sumeragi::v2_core::reducer::source_link_tests::retransmit_body_stage_requires_an_exact_durable_decision_capability
@@ -961,6 +969,13 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
+  sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
+  sumeragi::v2_effects::tests::serialized_runtime_emits_proposal_a_prepare_qc_b_timeout_capacity_trace
+  sumeragi::v2_effects::tests::full_capacity_certified_fetch_remains_missing_and_retransmit_later_adopts_it
+  sumeragi::v2_effects::tests::durable_sign_preemption_orders_speculative_certified_and_locked_fetches
+  sumeragi::v2_effects::tests::retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
+  sumeragi::v2_effects::tests::retained_effect_tail_is_fifo_and_refilters_after_durable_decision
+  sumeragi::v2_effects::tests::pending_work_producer_inventory_is_exhaustive_and_source_linked
   sumeragi::v2_effects::tests::runtime_step_dispatches_entire_effect_batch_before_returning
   sumeragi::v2_effects::tests::failed_view_cleanup_keeps_stale_fetch_and_requires_restart
   sumeragi::v2_effects::tests::view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation
@@ -979,6 +994,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::global_body_lock_replacement_requires_higher_prepare_round_and_exact_subject
   sumeragi::v2_lane_work::tests::superseded_commit_protected_lane_session_cannot_retransmit
   sumeragi::v2_lane_work::tests::same_body_binds_after_prepare_lock_advances_beyond_header_view
+  sumeragi::v2_lane_work::tests::validator_storage_platform_gate_rejects_voters_and_allows_observers
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
@@ -1011,6 +1027,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary
   sumeragi::v2_runner::tests::successor_startup_failure_stays_running_and_fails_closed_without_activation
   sumeragi::v2_runner::tests::status_guard_retains_failure_snapshot_and_clears_clean_shutdown
+  sumeragi::v2_runner::tests::unsupported_storage_platform_rejects_runner_voter_and_admits_observer
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
   sumeragi::v2_worker::tests::locked_candidate_requests_coalesce_by_immutable_subject
@@ -1038,6 +1055,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::repeated_tc_reconstruction_of_same_locked_commit_pool_does_not_reset_height_clock
   sumeragi::status::v2_liveness_watchdog_tests::apply_waiting_on_merge_sidecar_is_application_pending_not_body_unavailable
   sumeragi::status::v2_liveness_watchdog_tests::effect_completion_overlay_preserves_capacity_age_and_service_debt
+  sumeragi::status::v2_liveness_watchdog_tests::effect_dispatch_overlay_exposes_age_without_claiming_scheduler_starvation
   sumeragi::status::v2_liveness_watchdog_tests::live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_is_visible_until_the_exact_successor_becomes_active_once
   sumeragi::status::v2_liveness_watchdog_tests::completed_predecessor_work_alone_never_claims_successor_activation
@@ -1045,8 +1063,9 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::rejected_successor_activation_never_mutates_or_replaces_the_predecessor
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
+  sumeragi_v2_runner::prepare_qc_split_tests::distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one
 )
-readonly expected_production_liveness_test_count=185
+readonly expected_production_liveness_test_count=204
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1055,12 +1074,24 @@ production_unit_list="$(cargo test --locked -p iroha_core --lib -- --list)"
 production_ignored_unit_list="$(
   cargo test --locked -p iroha_core --lib -- --list --ignored
 )"
+production_integration_unit_list="$(
+  cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated -- --list
+)"
+production_integration_ignored_unit_list="$(
+  cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated -- --list --ignored
+)"
 for required_test in "${required_production_liveness_tests[@]}"; do
-  if ! grep -Fqx -- "${required_test}: test" <<<"$production_unit_list"; then
+  required_unit_list="$production_unit_list"
+  required_ignored_unit_list="$production_ignored_unit_list"
+  if [[ "$required_test" == sumeragi_v2_runner::* ]]; then
+    required_unit_list="$production_integration_unit_list"
+    required_ignored_unit_list="$production_integration_ignored_unit_list"
+  fi
+  if ! grep -Fqx -- "${required_test}: test" <<<"$required_unit_list"; then
     echo "missing required production Sumeragi v2 liveness test: ${required_test}" >&2
     exit 1
   fi
-  if grep -Fqx -- "${required_test}: test" <<<"$production_ignored_unit_list"; then
+  if grep -Fqx -- "${required_test}: test" <<<"$required_ignored_unit_list"; then
     echo "required production Sumeragi v2 liveness test is ignored: ${required_test}" >&2
     exit 1
   fi
@@ -1082,6 +1113,7 @@ production_liveness_modules=(
   sumeragi::v2_runner::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
+  sumeragi_v2_runner
 )
 production_liveness_leg_ids=(
   production-kura-progress-durability
@@ -1100,6 +1132,7 @@ production_liveness_leg_ids=(
   production-v2-runner
   production-v2-worker
   production-v2-watchdog
+  production-v2-integration-runner
 )
 if ((corridor_enabled)); then
   printf '%s\n' $'module\ttest' >"$corridor_required_tests"
@@ -1125,10 +1158,19 @@ for module_index in "${!production_liveness_modules[@]}"; do
   for required_test in "${required_production_liveness_tests[@]}"; do
     [[ "$required_test" == "${module}::"* ]] && ((module_required_count += 1))
   done
-  module_command="cargo test --locked -p iroha_core --lib ${module} -- --test-threads=1"
-  run_corridor_leg \
-    "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-    cargo test --locked -p iroha_core --lib "$module" -- --test-threads=1
+  if [[ "$module" == sumeragi_v2_runner ]]; then
+    module_command="cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::prepare_qc_split_tests::distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one -- --exact --test-threads=1"
+    run_corridor_leg \
+      "$module_leg_id" cargo-exact "$module_required_count" "$module_command" \
+      cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated \
+        sumeragi_v2_runner::prepare_qc_split_tests::distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one \
+        -- --exact --test-threads=1
+  else
+    module_command="cargo test --locked -p iroha_core --lib ${module} -- --test-threads=1"
+    run_corridor_leg \
+      "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
+      cargo test --locked -p iroha_core --lib "$module" -- --test-threads=1
+  fi
   if ((corridor_enabled)); then
     for required_test in "${required_production_liveness_tests[@]}"; do
       if [[ "$required_test" == "${module}::"* ]] \
@@ -1447,16 +1489,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^173 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^175 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 173 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 175 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 173 \
+  preflight-release-receipt pytest 175 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -1477,15 +1519,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^440 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^477 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 440 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 477 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 440 \
+  preflight-proof-fidelity pytest 477 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -1543,7 +1585,7 @@ record_corridor_log \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=35
+  readonly expected_corridor_leg_count=36
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -1598,7 +1640,7 @@ fi
 verify_release_identity "after release contract preflights"
 
 if [[ "$profile" == "--release" ]]; then
-  # Fail before 128 real-network runs when the strict deductive ledger or its
+  # Fail before 160 real-network runs when the strict deductive ledger or its
   # source-bound backend evidence is not release-complete.
   formal_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/formal-completion-path"
   rm -f -- "$formal_completion_path_file"
@@ -1640,7 +1682,7 @@ if [[ "$profile" == "--pr" ]]; then
     echo "workspace sources changed during the PR release corridor" >&2
     exit 1
   fi
-  echo "Sumeragi v2 PR gate passed: cross-SDK fixture/status parity, 4 seeds × 4 scenarios (16 runs), reducer invariants, adversarial simulations, and trace replay" >&2
+  echo "Sumeragi v2 PR gate passed: cross-SDK fixture/status parity, 4 seeds × 5 scenarios (20 runs), reducer invariants, adversarial simulations, and trace replay" >&2
   exit 0
 fi
 

@@ -22,7 +22,10 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     name::Name,
-    nexus::{DataSpaceId, UniversalAccountId},
+    nexus::{
+        DataSpaceId, FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
+        UniversalAccountId,
+    },
     peer::PeerId,
     permission::Permission,
     prelude::{Account, Domain, ExposedPrivateKey, Mint},
@@ -31,8 +34,8 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
 };
 use iroha_executor_data_model::permission::nexus::{
-    CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
-    CanPublishSpaceDirectoryManifestForAccountDomain, CanUseFeeSponsorForAccount,
+    CanEnrollFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
+    CanPublishSpaceDirectoryManifestForAccountDomain,
 };
 use iroha_torii::{Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
@@ -146,7 +149,7 @@ async fn post_account_onboarding_for_validation(
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor: None,
+        fee_sponsor_program_id: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -492,7 +495,10 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let sponsor_id = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
-    let fee_sponsor_policy: Name = "retail".parse().expect("retail fee sponsor policy");
+    let fee_sponsor_program_id = FeeSponsorProgramId::new(
+        sponsor_id.clone(),
+        "retail".parse().expect("retail fee sponsor program name"),
+    );
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
@@ -536,12 +542,15 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
             stx.world_mut_for_testing()
                 .add_account_permission(&authority_id, permission);
         }
+        iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
+            program: FeeSponsorProgram::new(fee_sponsor_program_id.clone()),
+        }
+        .execute(&sponsor_id, &mut stx)
+        .expect("create onboarding fee sponsor program");
         stx.world_mut_for_testing().add_account_permission(
             &authority_id,
-            Permission::from(CanEnrollFeeSponsorPolicyForAccountDomain {
-                sponsor: sponsor_id.clone(),
-                policy: fee_sponsor_policy.clone(),
-                domain: domain_id.clone(),
+            Permission::from(CanEnrollFeeSponsorProgram {
+                program_id: fee_sponsor_program_id.clone(),
             }),
         );
         Mint::asset_quantity(
@@ -564,12 +573,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor: Some(
-            iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
-                account: sponsor_id.clone(),
-                policy: fee_sponsor_policy.clone(),
-            },
-        ),
+        fee_sponsor_program_id: Some(fee_sponsor_program_id.clone()),
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -705,33 +709,16 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .world()
         .account(&user_id)
         .expect("onboarded account exists");
-    let fee_sponsor_permissions = view
-        .world()
-        .account_permissions_iter(&user_id)
-        .expect("onboarded account permissions")
-        .filter(|permission| permission.name().to_string() == "CanUseFeeSponsorForAccount")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        fee_sponsor_permissions.len(),
-        1,
-        "onboarding must grant exactly one per-account fee sponsor permission"
-    );
-    let fee_sponsor_permission = fee_sponsor_permissions[0]
-        .payload()
-        .try_into_any_norito::<CanUseFeeSponsorForAccount>()
-        .expect("decode exact fee sponsor permission");
-    assert_eq!(fee_sponsor_permission.sponsor, sponsor_id);
-    assert_eq!(fee_sponsor_permission.policy, fee_sponsor_policy);
-    assert_eq!(fee_sponsor_permission.beneficiary, user_id);
-    assert_eq!(fee_sponsor_permission.domain, domain_id);
-    assert_eq!(
+    let enrollment_key = FeeSponsorEnrollmentKey {
+        program_id: fee_sponsor_program_id,
+        beneficiary: user_id.clone(),
+    };
+    assert!(
         view.world()
-            .account_permissions_iter(&user_id)
-            .expect("onboarded account permissions")
-            .filter(|permission| permission.name().to_string() == "CanUseFeeSponsor")
-            .count(),
-        0,
-        "onboarding must never grant legacy broad fee sponsor authority"
+            .fee_sponsor_enrollments()
+            .get(&enrollment_key)
+            .is_some(),
+        "onboarding must persist one exact sponsor-program enrollment"
     );
     let uaid = account_entry
         .value()
@@ -895,7 +882,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor: None,
+        fee_sponsor_program_id: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -1117,7 +1104,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor: None,
+        fee_sponsor_program_id: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -1344,7 +1331,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor: None,
+        fee_sponsor_program_id: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,

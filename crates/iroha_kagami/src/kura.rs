@@ -323,10 +323,14 @@ mod tests {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         // A simple instruction is enough; validity is not exercised here.
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(chain_id, authority)
-            .with_instructions([Log::new(Level::INFO, "test".to_owned())])
-            .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-            .expect("sign Kagami Kura fixture transaction");
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "test".to_owned())])
+        .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+        .expect("sign Kagami Kura fixture transaction");
         tx.verify_signature()
             .expect("Kagami Kura fixture transaction signature verifies");
         let acc = AcceptedTransaction::new_unchecked(Cow::Owned(tx));

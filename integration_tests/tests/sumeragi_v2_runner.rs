@@ -2,7 +2,7 @@
 //! End-to-end regressions for the authoritative Sumeragi v2 production runner.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
@@ -43,6 +43,9 @@ const LOCKED_REPROPOSAL_FIRST_VIEW: u64 = 0;
 const LOCKED_REPROPOSAL_SECOND_VIEW: u64 = 1;
 const LOCKED_REPROPOSAL_QUEUE_CAPACITY: usize = 256;
 const LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES: usize = 2;
+const DISTINCT_PREPARE_QC_QUEUE_CAPACITY: usize = 512;
+const DISTINCT_PREPARE_QC_BLOCK_CADENCE: Duration = Duration::from_secs(8);
+const DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT: Duration = Duration::from_secs(120);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -78,6 +81,12 @@ struct PrepareQcSnapshot {
 struct LockedReproposalPrepareQcSplit<'a> {
     locked: &'a QuorumCertificateRef,
     reproposed: &'a QuorumCertificateRef,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DistinctPrepareQcSplit<'a> {
+    first: &'a QuorumCertificateRef,
+    second: &'a QuorumCertificateRef,
 }
 
 fn classify_locked_reproposal_prepare_qc_split<'a>(
@@ -122,6 +131,115 @@ fn classify_locked_reproposal_prepare_qc_split<'a>(
     Some(LockedReproposalPrepareQcSplit {
         locked: locked_reference,
         reproposed: reproposed_reference,
+    })
+}
+
+fn classify_distinct_prepare_qc_split<'a>(
+    qcs: &[&'a PrepareQcSnapshot],
+    first_group: [usize; 2],
+    second_group: [usize; 2],
+    height: u64,
+    first_view: u64,
+    second_view: u64,
+) -> Option<DistinctPrepareQcSplit<'a>> {
+    if qcs.len() != VALIDATOR_COUNT {
+        return None;
+    }
+    let groups = first_group
+        .into_iter()
+        .chain(second_group)
+        .collect::<BTreeSet<_>>();
+    if groups.len() != VALIDATOR_COUNT || groups.iter().any(|index| *index >= qcs.len()) {
+        return None;
+    }
+    let first = qcs.get(first_group[0])?.reference;
+    let second = qcs.get(second_group[0])?.reference;
+    if first_group
+        .iter()
+        .any(|index| qcs.get(*index).is_none_or(|qc| qc.reference != first))
+        || second_group
+            .iter()
+            .any(|index| qcs.get(*index).is_none_or(|qc| qc.reference != second))
+        || first.round.height != height
+        || first.round.view != first_view
+        || second.round.height != height
+        || second.round.view != second_view
+        || first.round.context_id != second.round.context_id
+        || first.subject == second.subject
+        || first == second
+    {
+        return None;
+    }
+    Some(DistinctPrepareQcSplit {
+        first: &qcs[first_group[0]].reference,
+        second: &qcs[second_group[0]].reference,
+    })
+}
+
+fn held_distinct_sender_sequences(
+    ack: &ConsensusMessageControlAck,
+    height: u64,
+    view: u64,
+    kind: ConsensusMessageControlKind,
+    allowed_senders: &BTreeSet<PeerId>,
+    block_hash: Option<&HashOf<BlockHeader>>,
+    require_no_block_hash: bool,
+    required: usize,
+) -> Option<Vec<u64>> {
+    let mut senders = BTreeSet::new();
+    let mut sequences = Vec::with_capacity(required);
+    for message in &ack.held {
+        if message.height != Some(height)
+            || message.view != Some(view)
+            || message.kind != kind
+            || !allowed_senders.contains(&message.sender)
+            || block_hash.is_some_and(|expected| message.block_hash.as_ref() != Some(expected))
+            || (require_no_block_hash && message.block_hash.is_some())
+            || !senders.insert(message.sender.clone())
+        {
+            continue;
+        }
+        sequences.push(message.sequence);
+        if sequences.len() == required {
+            return Some(sequences);
+        }
+    }
+    None
+}
+
+fn held_prepare_vote_subject(
+    ack: &ConsensusMessageControlAck,
+    height: u64,
+    view: u64,
+    allowed_senders: &BTreeSet<PeerId>,
+    rejected_hash: Option<&HashOf<BlockHeader>>,
+    required: usize,
+) -> Option<(HashOf<BlockHeader>, Vec<u64>)> {
+    let mut subjects = BTreeMap::<HashOf<BlockHeader>, BTreeMap<PeerId, u64>>::new();
+    for message in &ack.held {
+        if message.height != Some(height)
+            || message.view != Some(view)
+            || message.kind != ConsensusMessageControlKind::PrepareVote
+            || !allowed_senders.contains(&message.sender)
+        {
+            continue;
+        }
+        let block_hash = message.block_hash?;
+        if rejected_hash == Some(&block_hash) {
+            continue;
+        }
+        subjects
+            .entry(block_hash)
+            .or_default()
+            .entry(message.sender.clone())
+            .or_insert(message.sequence);
+    }
+    subjects.into_iter().find_map(|(block_hash, senders)| {
+        (senders.len() >= required).then(|| {
+            let mut sequences = senders.into_values().take(required).collect::<Vec<_>>();
+            sequences.sort_unstable();
+            (block_hash, sequences)
+        })
     })
 }
 
@@ -228,6 +346,52 @@ fn locked_reproposal_receiver_rules(
     rules
 }
 
+fn distinct_prepare_qc_receiver_rules(
+    receiver_index: usize,
+    peer_ids: &[PeerId],
+) -> Vec<ConsensusMessageControlRule> {
+    let mut rules = Vec::new();
+    for (sender_index, sender) in peer_ids.iter().enumerate() {
+        if sender_index == receiver_index {
+            continue;
+        }
+        for view in [LOCKED_REPROPOSAL_FIRST_VIEW, LOCKED_REPROPOSAL_SECOND_VIEW] {
+            for kind in [
+                ConsensusMessageControlKind::PrepareVote,
+                ConsensusMessageControlKind::PrepareCertificate,
+                ConsensusMessageControlKind::TimeoutVote,
+                ConsensusMessageControlKind::TimeoutCertificate,
+            ] {
+                rules.push(ConsensusMessageControlRule::exact(
+                    sender.clone(),
+                    kind,
+                    LOCKED_REPROPOSAL_HEIGHT,
+                    view,
+                    ConsensusMessageControlAction::Hold,
+                ));
+            }
+            for kind in [
+                ConsensusMessageControlKind::CommitVote,
+                ConsensusMessageControlKind::CommitCertificate,
+                ConsensusMessageControlKind::CommitCertificateResponse,
+            ] {
+                rules.push(ConsensusMessageControlRule::exact(
+                    sender.clone(),
+                    kind,
+                    LOCKED_REPROPOSAL_HEIGHT,
+                    view,
+                    if view == LOCKED_REPROPOSAL_FIRST_VIEW {
+                        ConsensusMessageControlAction::Drop
+                    } else {
+                        ConsensusMessageControlAction::Hold
+                    },
+                ));
+            }
+        }
+    }
+    rules
+}
+
 #[cfg(test)]
 mod prepare_qc_split_tests {
     use super::*;
@@ -240,6 +404,7 @@ mod prepare_qc_split_tests {
             },
         },
     };
+    use iroha_test_network::ConsensusMessageControlHeld;
 
     const HEIGHT: u64 = 3;
     const FIRST_VIEW: u64 = 0;
@@ -295,8 +460,29 @@ mod prepare_qc_split_tests {
             .collect()
     }
 
+    fn ack(held: Vec<ConsensusMessageControlHeld>) -> ConsensusMessageControlAck {
+        ConsensusMessageControlAck {
+            revision: 1,
+            command_digest: hash(0x60),
+            rules: Vec::new(),
+            queue_capacity: DISTINCT_PREPARE_QC_QUEUE_CAPACITY,
+            held_bytes: held.iter().map(|message| message.size_bytes).sum(),
+            held,
+            release_pending: Vec::new(),
+            in_flight: None,
+            delivered: Vec::new(),
+            dropped: 0,
+            overflowed: 0,
+            rejected_commands: 0,
+            last_error: None,
+            fatal: false,
+            draining: false,
+            drain_fence: None,
+        }
+    }
+
     #[test]
-    fn accepts_ordered_two_by_two_references_for_one_locked_subject() {
+    fn classifies_prepare_qc_partitions_and_held_evidence() {
         let reproposed = snapshot(SECOND_VIEW, 0x40, 0x50);
         let locked = snapshot(FIRST_VIEW, 0x40, 0x50);
         let snapshots = [
@@ -311,6 +497,117 @@ mod prepare_qc_split_tests {
         assert_eq!(*split.reproposed, reproposed.reference);
         assert_ne!(split.locked, split.reproposed);
         assert_eq!(split.locked.subject, split.reproposed.subject);
+
+        let first = snapshot(FIRST_VIEW, 0x40, 0x50);
+        let second = snapshot(SECOND_VIEW, 0x41, 0x51);
+        let snapshots = [first.clone(), first.clone(), second.clone(), second.clone()];
+        let qcs = snapshots.iter().collect::<Vec<_>>();
+        let split = classify_distinct_prepare_qc_split(
+            &qcs,
+            [0, 1],
+            [2, 3],
+            HEIGHT,
+            FIRST_VIEW,
+            SECOND_VIEW,
+        )
+        .expect("valid distinct-subject split");
+        assert_eq!(*split.first, first.reference);
+        assert_eq!(*split.second, second.reference);
+        assert_ne!(split.first.subject, split.second.subject);
+        assert!(
+            classify_distinct_prepare_qc_split(
+                &qcs,
+                [0, 1],
+                [1, 2],
+                HEIGHT,
+                FIRST_VIEW,
+                SECOND_VIEW,
+            )
+            .is_none()
+        );
+        let same_subject = [
+            first.clone(),
+            first,
+            snapshot(SECOND_VIEW, 0x40, 0x50),
+            snapshot(SECOND_VIEW, 0x40, 0x50),
+        ];
+        let same_subject = same_subject.iter().collect::<Vec<_>>();
+        assert!(
+            classify_distinct_prepare_qc_split(
+                &same_subject,
+                [0, 1],
+                [2, 3],
+                HEIGHT,
+                FIRST_VIEW,
+                SECOND_VIEW,
+            )
+            .is_none()
+        );
+
+        let peer_ids = peer_ids();
+        let first_hash = hash_of::<BlockHeader>(0x70);
+        let second_hash = hash_of::<BlockHeader>(0x71);
+        let held = vec![
+            ConsensusMessageControlHeld {
+                sequence: 1,
+                sender: peer_ids[0].clone(),
+                kind: ConsensusMessageControlKind::PrepareVote,
+                height: Some(HEIGHT),
+                view: Some(FIRST_VIEW),
+                block_hash: Some(first_hash),
+                size_bytes: 64,
+            },
+            ConsensusMessageControlHeld {
+                sequence: 2,
+                sender: peer_ids[0].clone(),
+                kind: ConsensusMessageControlKind::PrepareVote,
+                height: Some(HEIGHT),
+                view: Some(FIRST_VIEW),
+                block_hash: Some(first_hash),
+                size_bytes: 64,
+            },
+            ConsensusMessageControlHeld {
+                sequence: 3,
+                sender: peer_ids[1].clone(),
+                kind: ConsensusMessageControlKind::PrepareVote,
+                height: Some(HEIGHT),
+                view: Some(FIRST_VIEW),
+                block_hash: Some(first_hash),
+                size_bytes: 64,
+            },
+            ConsensusMessageControlHeld {
+                sequence: 4,
+                sender: peer_ids[2].clone(),
+                kind: ConsensusMessageControlKind::PrepareVote,
+                height: Some(HEIGHT),
+                view: Some(FIRST_VIEW),
+                block_hash: Some(second_hash),
+                size_bytes: 64,
+            },
+        ];
+        let ack = ack(held);
+        let allowed = peer_ids.iter().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            held_distinct_sender_sequences(
+                &ack,
+                HEIGHT,
+                FIRST_VIEW,
+                ConsensusMessageControlKind::PrepareVote,
+                &allowed,
+                Some(&first_hash),
+                false,
+                2,
+            ),
+            Some(vec![1, 3])
+        );
+        assert_eq!(
+            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, Some(&second_hash), 2,),
+            Some((first_hash, vec![1, 3]))
+        );
+        assert!(
+            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, Some(&first_hash), 2,)
+                .is_none()
+        );
     }
 
     #[test]
@@ -410,6 +707,58 @@ mod prepare_qc_split_tests {
                 }
             );
         }
+        for receiver_index in 0..VALIDATOR_COUNT {
+            let rules = distinct_prepare_qc_receiver_rules(receiver_index, &peer_ids);
+            assert_eq!(rules.len(), 14 * (VALIDATOR_COUNT - 1));
+            assert!(rules.iter().all(|rule| {
+                rule.sender != peer_ids[receiver_index]
+                    && rule.height == LOCKED_REPROPOSAL_HEIGHT
+                    && matches!(
+                        rule.view,
+                        LOCKED_REPROPOSAL_FIRST_VIEW | LOCKED_REPROPOSAL_SECOND_VIEW
+                    )
+                    && match rule.kind {
+                        ConsensusMessageControlKind::CommitVote
+                        | ConsensusMessageControlKind::CommitCertificate
+                        | ConsensusMessageControlKind::CommitCertificateResponse => {
+                            rule.action
+                                == if rule.view == LOCKED_REPROPOSAL_FIRST_VIEW {
+                                    ConsensusMessageControlAction::Drop
+                                } else {
+                                    ConsensusMessageControlAction::Hold
+                                }
+                        }
+                        ConsensusMessageControlKind::PrepareVote
+                        | ConsensusMessageControlKind::PrepareCertificate
+                        | ConsensusMessageControlKind::TimeoutVote
+                        | ConsensusMessageControlKind::TimeoutCertificate => {
+                            rule.action == ConsensusMessageControlAction::Hold
+                        }
+                        _ => false,
+                    }
+            }));
+        }
+    }
+
+    #[test]
+    fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
+        let cadence_ms = u64::try_from(DISTINCT_PREPARE_QC_BLOCK_CADENCE.as_millis())
+            .expect("scenario cadence fits the canonical millisecond width");
+        let (base_round_timeout_ms, _) =
+            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
+                .expect("scenario cadence derives valid v2 timing");
+        let base_round_timeout = Duration::from_millis(base_round_timeout_ms);
+
+        assert_eq!(base_round_timeout, Duration::from_secs(80));
+        assert!(
+            DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT
+                >= base_round_timeout.saturating_add(Duration::from_secs(30)),
+            "the staged view-zero timeout needs scheduling and control-publication margin"
+        );
+        assert!(
+            DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT < base_round_timeout.saturating_mul(2),
+            "the view-zero observation bound must stay below one full view-one deadline"
+        );
     }
 }
 
@@ -906,8 +1255,8 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
 /// subject without deciding, then converge on that exact body after ordered
 /// release of captured quorum evidence.
 ///
-/// TODO: Add a separate distinct-subject PrepareQC adversarial scenario; this
-/// same-subject locked-body re-proposal gate intentionally does not cover it.
+/// The distinct-subject adversarial schedule is covered separately by
+/// `real_network_distinct_subject_prepare_qcs_converge_after_causal_release`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release()
 -> Result<()> {
@@ -1287,9 +1636,488 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
     result
 }
 
+/// A staged four-validator schedule must construct two honest PrepareQCs for
+/// different subjects without forging traffic or letting the lower QC reach
+/// the next leader, then converge on the higher-view certified subject after
+/// one FIFO drain fence heals every receiver.
+///
+/// Quorum intersection means an honest 2+2 *lock* split for distinct subjects
+/// is impossible: after one node locks the first QC, the other three validators
+/// are the only causally valid quorum that can certify the second subject. The
+/// observable 2+2 split is therefore over highest PrepareQC references; one
+/// first-group node owns the old lock, while the other observes that QC only
+/// after it has already voted in the next view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release() -> Result<()> {
+    init_instruction_registry();
+
+    const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+        .with_base_seed(stringify!(
+            real_network_distinct_subject_prepare_qcs_converge_after_causal_release
+        ))
+        .with_block_cadence(DISTINCT_PREPARE_QC_BLOCK_CADENCE)
+        .with_initial_consensus_message_control_rules(
+            DISTINCT_PREPARE_QC_QUEUE_CAPACITY,
+            distinct_prepare_qc_receiver_rules,
+        )
+        .with_sync_timeout(Duration::from_secs(180));
+    let context =
+        stringify!(real_network_distinct_subject_prepare_qcs_converge_after_causal_release);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+
+    let result = async {
+        let peers = network.peers().to_vec();
+        ensure!(
+            peers.len() == VALIDATOR_COUNT,
+            "distinct-subject PrepareQC regression requires four voting validators"
+        );
+        let peer_ids = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+        let expected_rules = peers
+            .iter()
+            .enumerate()
+            .map(|(receiver_index, _)| {
+                distinct_prepare_qc_receiver_rules(receiver_index, &peer_ids)
+            })
+            .collect::<Vec<_>>();
+        try_join_all(peers.iter().zip(&expected_rules).map(|(peer, expected)| async move {
+            let ack = peer
+                .consensus_message_control()
+                .ok_or_else(|| eyre!("{} lacks the requested controller", peer.mnemonic()))?
+                .wait_until_ready(CONTROL_TIMEOUT)
+                .await
+                .wrap_err_with(|| format!("wait for {} staged controller", peer.mnemonic()))?;
+            ensure!(
+                ack.revision == 1
+                    && ack.rules.as_slice() == expected.as_slice()
+                    && ack.queue_capacity == DISTINCT_PREPARE_QC_QUEUE_CAPACITY
+                    && !ack.fatal
+                    && ack.overflowed == 0,
+                "{} did not acknowledge the exact distinct-subject freeze rules",
+                peer.mnemonic()
+            );
+            Ok::<(), eyre::Report>(())
+        }))
+        .await?;
+
+        let height = LOCKED_REPROPOSAL_HEIGHT;
+        let first_view = LOCKED_REPROPOSAL_FIRST_VIEW;
+        let second_view = LOCKED_REPROPOSAL_SECOND_VIEW;
+        let initial = wait_for_v2_status_condition(
+            &peers,
+            "one common frozen view-zero height",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                snapshots.iter().all(|snapshot| {
+                    snapshot.height == height
+                        && snapshot.view == first_view
+                        && snapshot.last_committed_height < height
+                        && snapshot.leader == snapshots[0].leader
+                })
+            },
+        )
+        .await?;
+
+        let first_leader_validator = initial[0].leader;
+        ensure!(
+            first_leader_validator < VALIDATOR_COUNT as u64,
+            "view-zero leader index is outside the four-validator roster"
+        );
+        let second_leader_validator = (first_leader_validator + 1) % VALIDATOR_COUNT as u64;
+        let first_lock_index = peer_index_for_validator(&peers, first_leader_validator)?;
+        let second_leader_index = peer_index_for_validator(&peers, second_leader_validator)?;
+        ensure!(
+            first_lock_index != second_leader_index,
+            "successive views unexpectedly selected the same validator"
+        );
+        let unlocked = (0..VALIDATOR_COUNT)
+            .filter(|index| *index != first_lock_index)
+            .collect::<Vec<_>>();
+        ensure!(
+            unlocked.contains(&second_leader_index),
+            "the view-one leader must remain outside the staged old lock"
+        );
+        let second_qc_partner = unlocked
+            .iter()
+            .copied()
+            .find(|index| *index != second_leader_index)
+            .expect("three unlocked validators include a QC partner");
+        let first_qc_observer = unlocked
+            .iter()
+            .copied()
+            .find(|index| *index != second_leader_index && *index != second_qc_partner)
+            .expect("three unlocked validators include an old-QC observer");
+        let first_group = [first_lock_index, first_qc_observer];
+        let second_group = [second_leader_index, second_qc_partner];
+
+        let first_account = fixture_account(0xC2)?;
+        let second_account = fixture_account(0xC3)?;
+        assert_accounts_absent(&peers, &[first_account.clone(), second_account.clone()]).await?;
+        enqueue_account(peers[first_lock_index].client(), first_account.clone()).await?;
+
+        let first_vote_senders = peer_ids
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != first_lock_index)
+            .map(|(_, peer_id)| peer_id.clone())
+            .collect::<BTreeSet<_>>();
+        let (first_block_hash, first_prepare_release) = wait_for_control_selection(
+            &peers[first_lock_index],
+            "two distinct view-zero Prepare votes for one subject",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_prepare_vote_subject(
+                    ack,
+                    height,
+                    first_view,
+                    &first_vote_senders,
+                    None,
+                    LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                )
+            },
+        )
+        .await?;
+        release_exact_control_sequences(
+            &peers[first_lock_index],
+            &expected_rules[first_lock_index],
+            &first_prepare_release,
+            "view-zero Prepare votes",
+            CONTROL_TIMEOUT,
+        )
+        .await?;
+
+        let first_locked = wait_for_v2_status_condition(
+            &peers,
+            "one isolated durable view-zero PrepareQC lock",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                snapshots[first_lock_index]
+                    .locked_prepare_qc
+                    .as_ref()
+                    .is_some_and(|qc| {
+                        qc.reference.round.height == height
+                            && qc.reference.round.view == first_view
+                            && qc.reference.subject.block_hash == first_block_hash
+                    })
+                    && snapshots
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| *index != first_lock_index)
+                        .all(|(_, snapshot)| {
+                            snapshot.locked_prepare_qc.is_none()
+                                && snapshot.highest_prepare_qc.is_none()
+                        })
+            },
+        )
+        .await?;
+        let first_reference = first_locked[first_lock_index]
+            .locked_prepare_qc
+            .as_ref()
+            .expect("wait condition requires the old lock")
+            .reference;
+
+        // Queue work directly at the next leader only after subject A is
+        // frozen. Its no-high-QC timeout justification must therefore produce
+        // a genuinely new proposal subject rather than reload A's bytes.
+        enqueue_account(peers[second_leader_index].client(), second_account.clone()).await?;
+
+        let unlocked_senders = unlocked
+            .iter()
+            .map(|index| peer_ids[*index].clone())
+            .collect::<BTreeSet<_>>();
+        let mut timeout_releases = Vec::with_capacity(VALIDATOR_COUNT);
+        for receiver_index in 0..VALIDATOR_COUNT {
+            let allowed = if receiver_index == first_lock_index {
+                unlocked_senders.clone()
+            } else {
+                unlocked
+                    .iter()
+                    .filter(|index| **index != receiver_index)
+                    .map(|index| peer_ids[*index].clone())
+                    .collect::<BTreeSet<_>>()
+            };
+            let release = wait_for_control_selection(
+                &peers[receiver_index],
+                "two no-high-QC view-zero Timeout votes from the unlocked quorum",
+                DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT,
+                |ack| {
+                    held_distinct_sender_sequences(
+                        ack,
+                        height,
+                        first_view,
+                        ConsensusMessageControlKind::TimeoutVote,
+                        &allowed,
+                        None,
+                        true,
+                        LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                    )
+                },
+            )
+            .await?;
+            timeout_releases.push(release);
+        }
+        try_join_all(
+            peers
+                .iter()
+                .zip(&expected_rules)
+                .zip(&timeout_releases)
+                .map(|((peer, rules), release)| async move {
+                    release_exact_control_sequences(
+                        peer,
+                        rules,
+                        release,
+                        "view-zero Timeout votes",
+                        CONTROL_TIMEOUT,
+                    )
+                    .await
+                    .map(|_| ())
+                }),
+        )
+        .await?;
+
+        wait_for_v2_status_condition(
+            &peers,
+            "all validators in frozen view one with the next leader selected",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                snapshots.iter().all(|snapshot| {
+                    snapshot.height == height
+                        && snapshot.view == second_view
+                        && snapshot.leader == second_leader_validator
+                        && snapshot.last_committed_height < height
+                })
+            },
+        )
+        .await?;
+
+        let (second_block_hash, second_leader_prepare_release) = wait_for_control_selection(
+            &peers[second_leader_index],
+            "two unlocked view-one Prepare votes for a subject distinct from the old lock",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_prepare_vote_subject(
+                    ack,
+                    height,
+                    second_view,
+                    &unlocked_senders,
+                    Some(&first_block_hash),
+                    LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                )
+            },
+        )
+        .await?;
+        ensure!(
+            second_block_hash != first_block_hash,
+            "the no-high-QC view-one leader re-used the old block subject"
+        );
+        let second_partner_prepare_release = wait_for_control_selection(
+            &peers[second_qc_partner],
+            "the same two-sender view-one Prepare quorum at the second QC receiver",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_distinct_sender_sequences(
+                    ack,
+                    height,
+                    second_view,
+                    ConsensusMessageControlKind::PrepareVote,
+                    &unlocked_senders,
+                    Some(&second_block_hash),
+                    false,
+                    LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                )
+            },
+        )
+        .await?;
+        let prepare_releases = [
+            (
+                &peers[second_leader_index],
+                expected_rules[second_leader_index].as_slice(),
+                second_leader_prepare_release.as_slice(),
+                "view-one Prepare votes at the leader",
+            ),
+            (
+                &peers[second_qc_partner],
+                expected_rules[second_qc_partner].as_slice(),
+                second_partner_prepare_release.as_slice(),
+                "view-one Prepare votes at the partner",
+            ),
+        ];
+        try_join_all(prepare_releases.into_iter().map(
+            |(peer, rules, release, description)| async move {
+                release_exact_control_sequences(
+                    peer,
+                    rules,
+                    release,
+                    description,
+                    CONTROL_TIMEOUT,
+                )
+                .await
+                .map(|_| ())
+            },
+        ))
+        .await?;
+
+        let second_certified = wait_for_v2_status_condition(
+            &peers,
+            "two exact view-one PrepareQC references for subject B",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                second_group.iter().all(|index| {
+                    snapshots[*index]
+                        .highest_prepare_qc
+                        .as_ref()
+                        .is_some_and(|qc| {
+                            qc.reference.round.height == height
+                                && qc.reference.round.view == second_view
+                                && qc.reference.subject.block_hash == second_block_hash
+                        })
+                })
+            },
+        )
+        .await?;
+        let second_reference = second_certified[second_leader_index]
+            .highest_prepare_qc
+            .as_ref()
+            .expect("wait condition requires the higher PrepareQC")
+            .reference;
+        ensure!(
+            second_certified[second_qc_partner]
+                .highest_prepare_qc
+                .as_ref()
+                .is_some_and(|qc| qc.reference == second_reference),
+            "the two view-one receivers formed different PrepareQC references"
+        );
+        ensure!(
+            first_reference.subject != second_reference.subject,
+            "the staged PrepareQCs did not certify distinct subjects"
+        );
+
+        let first_certificate_sender = BTreeSet::from([peer_ids[first_lock_index].clone()]);
+        let old_certificate_release = wait_for_control_selection(
+            &peers[first_qc_observer],
+            "the authenticated view-zero PrepareQC broadcast from its sole receiver",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_distinct_sender_sequences(
+                    ack,
+                    height,
+                    first_view,
+                    ConsensusMessageControlKind::PrepareCertificate,
+                    &first_certificate_sender,
+                    Some(&first_block_hash),
+                    false,
+                    1,
+                )
+            },
+        )
+        .await?;
+        release_exact_control_sequences(
+            &peers[first_qc_observer],
+            &expected_rules[first_qc_observer],
+            &old_certificate_release,
+            "the stale view-zero PrepareQC",
+            CONTROL_TIMEOUT,
+        )
+        .await?;
+
+        let divergent = wait_for_distinct_prepare_qc_split(
+            &peers,
+            first_group,
+            second_group,
+            height,
+            first_view,
+            second_view,
+            STATUS_TIMEOUT,
+        )
+        .await?;
+        let qcs = divergent
+            .iter()
+            .map(|snapshot| {
+                snapshot
+                    .highest_prepare_qc
+                    .as_ref()
+                    .expect("split wait requires every highest PrepareQC")
+            })
+            .collect::<Vec<_>>();
+        let split = classify_distinct_prepare_qc_split(
+            &qcs,
+            first_group,
+            second_group,
+            height,
+            first_view,
+            second_view,
+        )
+        .expect("wait helper returned a malformed distinct-subject split");
+        ensure!(
+            *split.first == first_reference && *split.second == second_reference,
+            "the observed split lost the exact staged QC identities"
+        );
+
+        let healed = try_join_all(peers.iter().map(|peer| async move {
+            peer.consensus_message_control()
+                .expect("controlled peer")
+                .heal_and_release_all(CONTROL_TIMEOUT)
+                .await
+                .wrap_err_with(|| format!("heal and drain {} traffic", peer.mnemonic()))
+        }))
+        .await?;
+        for (peer, ack) in peers.iter().zip(&healed) {
+            ensure!(
+                !ack.draining
+                    && ack.drain_fence == Some(ack.revision)
+                    && ack.held.is_empty()
+                    && ack.release_pending.is_empty()
+                    && ack.in_flight.is_none()
+                    && !ack.fatal
+                    && ack.overflowed == 0,
+                "{} did not complete the distinct-subject drain fence",
+                peer.mnemonic()
+            );
+        }
+
+        network
+            .ensure_blocks_with(|block_height| block_height.total >= height)
+            .await
+            .wrap_err("healed distinct-subject validators did not finalize")?;
+        let committed_hashes = try_join_all(
+            peers
+                .iter()
+                .map(|peer| committed_hash_at_height(peer, height)),
+        )
+        .await?;
+        let expected_hash = second_reference.subject.block_hash.to_string();
+        ensure!(
+            committed_hashes.iter().all(|hash| hash == &expected_hash),
+            "validators did not converge on the higher-view certified subject: expected={expected_hash}, committed={committed_hashes:?}"
+        );
+        wait_for_accounts_visible(
+            &peers,
+            &[first_account, second_account],
+            ACCOUNT_VISIBILITY_TIMEOUT,
+        )
+        .await?;
+        let successor = wait_for_common_awaiting_v2_round(&peers, height, STATUS_TIMEOUT).await?;
+        validate_v2_status_set(&successor, VALIDATOR_COUNT)?;
+        Ok(())
+    }
+    .await;
+
+    network.shutdown_and_release().await;
+    result
+}
+
 async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     task::spawn_blocking(move || {
-        client.submit_blocking(Register::account(Account::new(account_id)))
+        client.submit_blocking(
+            Register::account(Account::new(account_id)),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await
     .wrap_err("account-registration task panicked")??;
@@ -1297,9 +2125,14 @@ async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
 }
 
 async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
-    task::spawn_blocking(move || client.submit(Register::account(Account::new(account_id))))
-        .await
-        .wrap_err("account-registration enqueue task panicked")??;
+    task::spawn_blocking(move || {
+        client.submit(
+            Register::account(Account::new(account_id)),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err("account-registration enqueue task panicked")??;
     Ok(())
 }
 
@@ -1475,6 +2308,181 @@ async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<Str
     })
     .await
     .wrap_err_with(|| format!("block-hash query panicked for {}", peer.mnemonic()))?
+}
+
+async fn wait_for_control_selection<T>(
+    peer: &NetworkPeer,
+    description: &str,
+    timeout: Duration,
+    select: impl Fn(&ConsensusMessageControlAck) -> Option<T>,
+) -> Result<T> {
+    let control = peer
+        .consensus_message_control()
+        .ok_or_else(|| eyre!("{} lacks the requested controller", peer.mnemonic()))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let observation = match control.read_ack() {
+            Ok(ack) => {
+                ensure!(!ack.fatal, "{} controller failed closed", peer.mnemonic());
+                ensure!(
+                    ack.overflowed == 0,
+                    "{} hold queue overflowed while waiting for {description}",
+                    peer.mnemonic()
+                );
+                if let Some(selected) = select(&ack) {
+                    return Ok(selected);
+                }
+                format!(
+                    "revision={}, held={}, tail={:?}",
+                    ack.revision,
+                    ack.held.len(),
+                    ack.held
+                        .iter()
+                        .rev()
+                        .take(16)
+                        .map(|message| (
+                            message.sequence,
+                            message.sender.clone(),
+                            message.kind,
+                            message.height,
+                            message.view,
+                            message.block_hash,
+                        ))
+                        .collect::<Vec<_>>()
+                )
+            }
+            Err(error) => format!("acknowledgement read failed: {error:#}"),
+        };
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{} did not retain {description} within {timeout:?}: {observation}",
+                peer.mnemonic()
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
+}
+
+async fn release_exact_control_sequences(
+    peer: &NetworkPeer,
+    rules: &[ConsensusMessageControlRule],
+    release: &[u64],
+    description: &str,
+    timeout: Duration,
+) -> Result<ConsensusMessageControlAck> {
+    let ack = peer
+        .consensus_message_control()
+        .ok_or_else(|| eyre!("{} lacks the requested controller", peer.mnemonic()))?
+        .apply(rules, release, DISTINCT_PREPARE_QC_QUEUE_CAPACITY, timeout)
+        .await
+        .wrap_err_with(|| format!("release {description} to {}", peer.mnemonic()))?;
+    ensure!(
+        ack.rules.as_slice() == rules
+            && ack.delivered.as_slice() == release
+            && !ack.fatal
+            && ack.overflowed == 0,
+        "{} did not deliver the exact {description} sequence while retaining its partition: delivered={:?}, expected={release:?}, fatal={}, overflowed={}",
+        peer.mnemonic(),
+        ack.delivered,
+        ack.fatal,
+        ack.overflowed,
+    );
+    Ok(ack)
+}
+
+async fn wait_for_v2_status_condition(
+    peers: &[NetworkPeer],
+    description: &str,
+    timeout: Duration,
+    predicate: impl Fn(&[V2StatusSnapshot]) -> bool,
+) -> Result<Vec<V2StatusSnapshot>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut snapshots = Vec::with_capacity(peers.len());
+        let mut errors = Vec::new();
+        for peer in peers {
+            match fetch_v2_status(peer).await {
+                Ok(snapshot) => snapshots.push(snapshot),
+                Err(error) => errors.push(format!("{}: {error:#}", peer.mnemonic())),
+            }
+        }
+        if errors.is_empty() && snapshots.len() == peers.len() && predicate(&snapshots) {
+            return Ok(snapshots);
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "validators did not expose {description} within {timeout:?}: observed={:?}, errors={errors:?}",
+                snapshots
+                    .iter()
+                    .map(|snapshot| (
+                        snapshot.peer.clone(),
+                        snapshot.height,
+                        snapshot.view,
+                        snapshot.leader,
+                        snapshot.last_committed_height,
+                        snapshot.body_state,
+                        snapshot.locked_prepare_qc.as_ref().map(|qc| qc.reference),
+                        snapshot.highest_prepare_qc.as_ref().map(|qc| qc.reference),
+                    ))
+                    .collect::<Vec<_>>()
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_distinct_prepare_qc_split(
+    peers: &[NetworkPeer],
+    first_group: [usize; 2],
+    second_group: [usize; 2],
+    height: u64,
+    first_view: u64,
+    second_view: u64,
+    timeout: Duration,
+) -> Result<Vec<V2StatusSnapshot>> {
+    wait_for_v2_status_condition(
+        peers,
+        "the exact causally staged 2+2 distinct-subject PrepareQC split",
+        timeout,
+        |snapshots| {
+            if !snapshots.iter().all(|snapshot| {
+                snapshot.height == height
+                    && snapshot.view == second_view
+                    && snapshot.last_committed_height < height
+            }) {
+                return false;
+            }
+            let Some(qcs) = snapshots
+                .iter()
+                .map(|snapshot| snapshot.highest_prepare_qc.as_ref())
+                .collect::<Option<Vec<_>>>()
+            else {
+                return false;
+            };
+            let Some(split) = classify_distinct_prepare_qc_split(
+                &qcs,
+                first_group,
+                second_group,
+                height,
+                first_view,
+                second_view,
+            ) else {
+                return false;
+            };
+            snapshots[first_group[0]]
+                .locked_prepare_qc
+                .as_ref()
+                .is_some_and(|qc| qc.reference == *split.first)
+                && snapshots[first_group[1]].locked_prepare_qc.is_none()
+                && second_group.iter().all(|index| {
+                    snapshots[*index]
+                        .locked_prepare_qc
+                        .as_ref()
+                        .is_none_or(|qc| qc.reference == *split.second)
+                })
+        },
+    )
+    .await
 }
 
 async fn wait_for_locked_reproposal_prepare_qc_split(

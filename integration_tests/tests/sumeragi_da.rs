@@ -125,9 +125,14 @@ async fn large_da_payload_commits_with_consistent_v2_subject() -> Result<()> {
     let expected_height = client.get_status()?.blocks.saturating_add(1);
     let payload = "D".repeat(LARGE_PAYLOAD_BYTES);
     let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
-        .await
-        .wrap_err("join large DA payload submission")??;
+    tokio::task::spawn_blocking(move || {
+        submit_client.submit(
+            Log::new(Level::INFO, payload),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err("join large DA payload submission")??;
 
     tokio::time::timeout(
         COMMIT_WAIT_BUDGET,

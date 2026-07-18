@@ -98,9 +98,13 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
             None,
         )),
     ];
-    let tx = TransactionBuilder::new(ChainId::from("chain"), authority_id.clone())
-        .with_instructions(instructions)
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        ChainId::from("chain"),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(kp.private_key());
 
     // Build, validate, commit a block with the single tx and capture events
     let tx_call_hash = tx.hash_as_entrypoint();

@@ -4,6 +4,7 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpV1
@@ -13,16 +14,19 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 class SccpDestinationProofSubmitRequest(
     authority: String,
     destinationProofB64: String,
+    feePayment: FeePaymentIntent,
     signatureB64: String? = null,
     transactionPayloadB64: String? = null,
     creationTimeMs: Long? = null,
 ) {
     val authority: String = requireCanonicalSccpAuthority(authority)
+    val feePayment: FeePaymentIntent = feePayment
     val signatureB64: String? = normalizeOptionalSignature(signatureB64)
     val transactionPayloadB64: String? = normalizeOptionalTransactionPayload(
         transactionPayloadB64,
         creationTimeMs,
         this.authority,
+        this.feePayment,
     )
     val destinationProofB64: String = destinationProofB64.also {
         validateCanonicalSccpNoritoBase64(
@@ -43,6 +47,7 @@ class SccpDestinationProofSubmitRequest(
     /** Exact JSON object accepted by Torii; route overrides are unrepresentable. */
     fun toJsonMap(): Map<String, Any> = linkedMapOf<String, Any>(
         "authority" to authority,
+        "fee_payment" to feePayment.toJsonMap(),
         "destination_proof_b64" to destinationProofB64,
     ).also { output ->
         signatureB64?.let { output["signature_b64"] = it }
@@ -57,16 +62,19 @@ class SccpDestinationProofSubmitRequest(
 class SccpNativeMessageSubmitRequest(
     authority: String,
     nativeProofB64: String,
+    feePayment: FeePaymentIntent,
     signatureB64: String? = null,
     transactionPayloadB64: String? = null,
     creationTimeMs: Long? = null,
 ) {
     val authority: String = requireCanonicalSccpAuthority(authority)
+    val feePayment: FeePaymentIntent = feePayment
     val signatureB64: String? = normalizeOptionalSignature(signatureB64)
     val transactionPayloadB64: String? = normalizeOptionalTransactionPayload(
         transactionPayloadB64,
         creationTimeMs,
         this.authority,
+        this.feePayment,
     )
     val nativeProofB64: String = nativeProofB64.also {
         validateCanonicalSccpNoritoBase64(
@@ -87,6 +95,7 @@ class SccpNativeMessageSubmitRequest(
     /** Exact JSON object accepted by Torii; settlement selectors are unrepresentable. */
     fun toJsonMap(): Map<String, Any> = linkedMapOf<String, Any>(
         "authority" to authority,
+        "fee_payment" to feePayment.toJsonMap(),
         "native_proof_b64" to nativeProofB64,
     ).also { output ->
         signatureB64?.let { output["signature_b64"] = it }
@@ -191,6 +200,7 @@ internal fun normalizeOptionalTransactionPayload(
     value: String?,
     creationTimeMs: Long?,
     expectedAuthority: String,
+    expectedFeePayment: FeePaymentIntent,
 ): String? {
     if (value == null) return null
     val bytes = decodeCanonicalBase64(value, "transaction_payload_b64", SCCP_MAX_TRANSACTION_PAYLOAD_BYTES)
@@ -210,6 +220,9 @@ internal fun normalizeOptionalTransactionPayload(
     require(canonical.contentEquals(bytes)) { "transaction_payload_b64 is not canonical" }
     require(sameCanonicalAccountId(payload.authority, expectedAuthority)) {
         "transaction payload authority does not match authority"
+    }
+    require(expectedFeePayment.hasSamePayerAndGasBound(payload.feePayment)) {
+        "transaction payload changed the requested payer, sponsor revision, or gas bound"
     }
     if (creationTimeMs != null) {
         require(payload.creationTimeMs == creationTimeMs) {

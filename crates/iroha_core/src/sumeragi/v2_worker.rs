@@ -1143,6 +1143,7 @@ impl V2IoHandle {
         self.completion_rx.try_recv()
     }
 
+    #[cfg(test)]
     fn try_recv_completion(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
         let completion = self.completion_rx.try_recv()?;
         self.acknowledge_completion(&completion);

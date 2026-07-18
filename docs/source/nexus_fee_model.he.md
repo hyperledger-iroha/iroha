@@ -25,10 +25,19 @@ translation_last_reviewed: 2026-01-08
   `liquidity_profile` (`tier1`, `tier2`, או `tier3`), ו-`volatility_class` (`stable`,
   `elevated`, `dislocated`). דגלים אלה מוזנים ל-settlement router כדי שהצעת מחיר XOR
   תתאים ל-TWAP הקנוני ול-tier ה-haircut של ה-lane.
-- עסקאות IVM חייבות לכלול מטא-נתון `gas_limit` (`u64`, > 0) כדי להגביל חשיפה לעמלות. נקודת הקצה
-  `/v1/contracts/call` מחייבת `gas_limit` במפורש, וערכים לא תקינים נדחים.
-- כאשר עסקה מגדירה מטא-נתון `fee_sponsor`, הספונסר חייב להעניק לקורא
-  `CanUseFeeSponsor { sponsor }`. נסיונות ספונסרשיפ לא מורשים נדחים ומתועדים.
+- כל עסקה חייבת לשאת את השדה המובנה והקשור לחתימה `fee_payment`
+  (`FeePaymentIntent`). השדה בוחר את הרשות או תוכנית ספונסר מדויקת ואת
+  הגרסה הבלתי משתנה שלה, וכולל תקרות חיוב חתומות וגבול gas חיובי כשנדרש.
+  מפתחות המטא-נתונים הישנים `fee_sponsor`, `gas_limit` ו-`gas_asset_id`
+  נדחים.
+- יש לקבל הצעת מחיר לפני החתימה: בונים את ה-payload הלא חתום המדויק, נותנים
+  לרשות שלו לאמת את `POST /v1/fees/quote`, בודקים את ה-intent המומלץ,
+  מחליפים רק את `payload.fee_payment`, ואז חותמים ושולחים בדיוק את אותו
+  payload. הצעת המחיר היא תצפית ולא הזמנה; admission בודק שוב את המצב העדכני.
+- settlement ישיר תומך ברשות או בתוכנית ספונסר מדויקת. settlement מבוסס
+  receipts (`lane_relay_burn`) מיועד רק לספונסר מדויק: עמלות Nexus במימון
+  הרשות נדחות עם `relay_capacity_unavailable`, משום שיתרת הרשות אינה
+  source lock מאומת של receipt.
 - כל טרנזקציה שמשלמת gas רושמת `LaneSettlementReceipt`. כל קבלה שומרת מזהה מקור שסופק על ידי
   הקורא, micro-amount מקומי, XOR לתשלום מיידי, XOR צפוי לאחר haircut, מרווח בטיחות ממומש
   (`xor_variance`), וחותמת זמן בלוק במילישניות.

@@ -37,7 +37,8 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
           dataspace: "universal",
           contract_alias: boundary.contract_alias,
           entrypoint: boundary.entrypoint,
-          gas_limit: boundary.gas_limit,
+          gas_limit: boundary.fee_payment.value.gas_limit,
+          fee_payment: boundary.fee_payment,
           payload_digest_hex: "33".repeat(32),
         },
       }),
@@ -57,7 +58,7 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
     contract_alias: boundary.contract_alias,
     entrypoint: boundary.entrypoint,
     payload: boundary.payload,
-    gas_limit: boundary.gas_limit,
+    fee_payment: boundary.fee_payment,
   });
   assert.equal(Object.hasOwn(submittedBody, "argument_record"), false);
   assert.equal(Object.hasOwn(submittedBody, "argument_record_norito_hex"), false);

@@ -256,8 +256,11 @@ async fn submit_proof_and_query_record() -> Result<()> {
 
     // Submit the transaction to all peers so one healthy peer can accept it
     // even if another peer is timing out under load.
-    let tx =
-        client.build_transaction_from_items([isi], iroha_data_model::metadata::Metadata::default());
+    let tx = client.build_transaction_from_items(
+        [isi],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        iroha_data_model::metadata::Metadata::default(),
+    );
     let mut accepted = false;
     let mut submit_last_err: Option<Report> = None;
     for submit_client in &peer_clients {

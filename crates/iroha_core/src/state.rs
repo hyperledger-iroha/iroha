@@ -103,11 +103,15 @@ use iroha_data_model::{
         AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtReplayRecord, DataSpaceCatalog,
         DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-        DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId, LaneLifecycleParameterV1,
-        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
-        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+        DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
+        FeeSponsorBudgetCounterKey, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
+        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+        FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
+        FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
+        LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+        LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
@@ -539,7 +543,11 @@ macro_rules! build_world_block {
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
-            fee_sponsor_policies: $state.fee_sponsor_policies.$method(),
+            fee_sponsor_programs: $state.fee_sponsor_programs.$method(),
+            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.$method(),
+            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.$method(),
+            fee_sponsor_vaults: $state.fee_sponsor_vaults.$method(),
+            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.$method(),
             identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
             account_recovery_policies: $state.account_recovery_policies.$method(),
@@ -762,7 +770,11 @@ macro_rules! build_world_transaction {
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
-            fee_sponsor_policies: $state.fee_sponsor_policies.transaction(),
+            fee_sponsor_programs: $state.fee_sponsor_programs.transaction(),
+            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.transaction(),
+            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.transaction(),
+            fee_sponsor_vaults: $state.fee_sponsor_vaults.transaction(),
+            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.transaction(),
             identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
             account_recovery_policies: $state.account_recovery_policies.transaction(),
@@ -1174,9 +1186,6 @@ struct AccountPermissionSummary {
     hydrated: bool,
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
-    fee_sponsor_policies: std::collections::BTreeSet<FeeSponsorPolicyId>,
-    exact_fee_sponsor_permissions:
-        Vec<iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount>,
 }
 
 pub(crate) fn parse_permission_account_field(
@@ -1200,161 +1209,18 @@ pub(crate) fn parse_permission_account_field(
         .map(Into::into)
 }
 
-pub(crate) fn parse_permission_name_field(
-    payload: &iroha_primitives::json::Json,
-    field: &str,
-) -> Option<Name> {
-    let value = norito::json::parse_value(payload.get()).ok()?;
-    let map = match value {
-        norito::json::Value::Object(map) => map,
-        _ => return None,
-    };
-    let entry = map.get(field)?;
-    let literal = match entry {
-        norito::json::Value::String(value) => value.as_str(),
-        _ => return None,
-    };
-    Name::from_str(literal).ok()
-}
-
-fn account_has_alias_in_domain(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    account: &AccountId,
-    domain: &DomainId,
-    now_ms: u64,
-) -> bool {
-    world.bound_account_aliases(account).iter().any(|alias| {
-        crate::sns::resolve_active_account_alias(world, dataspace_catalog, alias, now_ms).as_ref()
-            == Some(account)
-            && alias
-                .domain_id(dataspace_catalog)
-                .is_ok_and(|alias_domain| alias_domain.as_ref() == Some(domain))
-    })
-}
-
-pub(crate) fn fee_sponsor_policy_from_permission(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    permission_owner: &AccountId,
-    permission: &Permission,
-    now_ms: u64,
-) -> Option<FeeSponsorPolicyId> {
-    match permission.name() {
-        "CanUseFeeSponsor" => {
-            let sponsor = parse_permission_account_field(
-                world,
-                dataspace_catalog,
-                permission.payload(),
-                "sponsor",
-                now_ms,
-            )?;
-            let name = parse_permission_name_field(permission.payload(), "policy")?;
-            Some(FeeSponsorPolicyId::new(sponsor, name))
-        }
-        "CanUseFeeSponsorForAccount" => permission
-            .payload()
-            .try_into_any_norito::<
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
-            >()
-            .ok()
-            .filter(|token| {
-                token.beneficiary == *permission_owner
-                    && account_has_alias_in_domain(
-                        world,
-                        dataspace_catalog,
-                        permission_owner,
-                        &token.domain,
-                        now_ms,
-                    )
-            })
-            .map(|token| FeeSponsorPolicyId::new(token.sponsor, token.policy)),
-        _ => None,
-    }
-}
-
-pub(crate) fn dataspace_fee_sponsor_from_config(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
-    dataspace: DataSpaceId,
-    now_ms: u64,
-) -> Result<Option<AccountId>, iroha_data_model::ValidationFail> {
-    let Some(literal) = dataspace_fee_sponsors.get(&dataspace) else {
-        return Ok(None);
-    };
-
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-        .map(Some)
-        .ok_or_else(|| {
-            iroha_data_model::ValidationFail::InternalError(format!(
-                "invalid nexus dataspace fee_sponsor_account_id for dataspace {}: expected canonical I105 account id or on-chain alias",
-                dataspace.as_u64()
-            ))
-        })
-}
-
-pub(crate) fn dataspace_fee_sponsor_matches(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
-    dataspace: DataSpaceId,
-    account_id: &AccountId,
-    now_ms: u64,
-) -> bool {
-    dataspace_fee_sponsor_from_config(
-        world,
-        dataspace_catalog,
-        dataspace_fee_sponsors,
-        dataspace,
-        now_ms,
-    )
-    .ok()
-    .flatten()
-    .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
-}
-
-pub(crate) fn dataspace_fee_sponsor_policy_from_config(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
-    dataspace_fee_sponsor_policies: &BTreeMap<DataSpaceId, Name>,
-    dataspace: DataSpaceId,
-    now_ms: u64,
-) -> Result<Option<FeeSponsorPolicyId>, iroha_data_model::ValidationFail> {
-    let Some(sponsor) = dataspace_fee_sponsor_from_config(
-        world,
-        dataspace_catalog,
-        dataspace_fee_sponsors,
-        dataspace,
-        now_ms,
-    )?
-    else {
-        return Ok(None);
-    };
-    let Some(policy) = dataspace_fee_sponsor_policies.get(&dataspace).cloned() else {
-        return Err(iroha_data_model::ValidationFail::InternalError(format!(
-            "nexus.dataspace_catalog fee_sponsor_account_id for dataspace {} requires fee_sponsor_policy",
-            dataspace.as_u64()
-        )));
-    };
-    Ok(Some(FeeSponsorPolicyId::new(sponsor, policy)))
-}
-
 impl AccountPermissionSummary {
     fn clear(&mut self) {
         self.hydrated = false;
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
-        self.fee_sponsor_policies.clear();
-        self.exact_fee_sponsor_permissions.clear();
     }
 
     fn apply_grant(
         &mut self,
         world: &impl WorldReadOnly,
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-        permission_owner: &AccountId,
+        _permission_owner: &AccountId,
         permission: &Permission,
         now_ms: u64,
     ) {
@@ -1376,25 +1242,6 @@ impl AccountPermissionSummary {
                     .try_into_any_norito::<CanExecuteTrigger>()
                 {
                     self.exec_trigger_ids.insert(decoded.trigger.clone());
-                }
-            }
-            "CanUseFeeSponsor" => {
-                if let Some(policy_id) = fee_sponsor_policy_from_permission(
-                    world,
-                    dataspace_catalog,
-                    permission_owner,
-                    permission,
-                    now_ms,
-                ) {
-                    self.fee_sponsor_policies.insert(policy_id);
-                }
-            }
-            "CanUseFeeSponsorForAccount" => {
-                if let Ok(permission) = permission.payload().try_into_any_norito::<
-                    iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
-                >() && permission.beneficiary == *permission_owner
-                {
-                    self.exact_fee_sponsor_permissions.push(permission);
                 }
             }
             _ => {}
@@ -1807,7 +1654,9 @@ impl MergeLedgerStore {
 
 struct NexusFeeSettlementPlan {
     receipts: Vec<NexusFeeReceipt>,
+    receipt_authority_heights: BTreeMap<[u8; 32], u64>,
     aggregate_burns: BTreeMap<AssetId, Numeric>,
+    settled_lease_usage: BTreeMap<Hash, Quantity>,
     settlement_markers: Vec<Name>,
     receipt_markers: Vec<([u8; 32], Name)>,
 }
@@ -2938,9 +2787,7 @@ pub enum LaneLifecycleError {
     #[error("nexus.enabled=false requires the default single-lane catalog and routing policy")]
     NexusDisabledWithLaneOverrides,
     /// Relay worker requires asynchronous lane-relay-burn fee settlement.
-    #[error(
-        "nexus.relay_worker.enabled requires lane-relay-burn settlement and nexus.fees.canonical_sponsor_account_id"
-    )]
+    #[error("nexus.relay_worker.enabled requires lane-relay-burn fee settlement")]
     RelayWorkerFeeConfig,
     /// Nexus fee asset selector must be the canonical XOR asset or XOR alias.
     #[error(
@@ -2950,31 +2797,15 @@ pub enum LaneLifecycleError {
     /// Nexus fee sink account literal must be non-empty.
     #[error("nexus.fees.fee_sink_account_id must not be empty")]
     NexusFeeSinkAccountEmpty,
-    /// Lane-relay-burn fee receipts require a canonical sponsor account.
-    #[error(
-        "nexus.fees.canonical_sponsor_account_id must be set when lane-relay-burn fee receipts are activated"
-    )]
-    LaneRelayBurnFeeConfig,
     /// Lane-relay emergency multisig threshold cannot exceed member count.
     #[error("nexus.lane_relay_emergency.multisig_threshold must be <= multisig_members")]
     LaneRelayEmergencyThreshold,
-    /// Dataspace fee sponsors require Nexus fee sponsorship to be enabled.
-    #[error(
-        "nexus.dataspace_catalog fee_sponsor_account_id requires nexus.fees.sponsorship_enabled=true"
-    )]
-    DataspaceFeeSponsorsRequireSponsorship,
-    /// Dataspace fee sponsors require Nexus to be enabled.
-    #[error("nexus.dataspace_catalog fee_sponsor_account_id requires nexus.enabled=true")]
-    DataspaceFeeSponsorsRequireNexusEnabled,
-    /// Dataspace fee sponsor references a dataspace not present in the catalog.
-    #[error("nexus dataspace fee sponsor references unknown dataspace {0}")]
-    DataspaceFeeSponsorUnknownDataspace(DataSpaceId),
-    /// Dataspace fee sponsor is missing a policy name.
-    #[error("nexus dataspace fee sponsor for dataspace {0} requires fee_sponsor_policy")]
-    DataspaceFeeSponsorMissingPolicy(DataSpaceId),
-    /// Dataspace fee sponsor policy references a dataspace without a sponsor.
-    #[error("nexus dataspace fee sponsor policy for dataspace {0} requires fee_sponsor_account_id")]
-    DataspaceFeeSponsorPolicyWithoutSponsor(DataSpaceId),
+    /// Dataspace default sponsor programs require Nexus to be enabled.
+    #[error("nexus dataspace fee sponsor programs require nexus.enabled=true")]
+    DataspaceFeeSponsorProgramsRequireNexusEnabled,
+    /// Dataspace default sponsor program references a dataspace absent from the catalog.
+    #[error("nexus dataspace fee sponsor program references unknown dataspace {0}")]
+    DataspaceFeeSponsorProgramUnknownDataspace(DataSpaceId),
     /// Lifecycle plan references a dataspace that is not present in the catalog.
     #[error("lane lifecycle plan references unknown dataspace {0}")]
     UnknownDataspace(DataSpaceId),
@@ -3588,8 +3419,18 @@ pub struct World {
     pub(crate) ram_lfe_program_policies: Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry keyed by `(kind, business_rule)`.
     pub(crate) identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy>,
-    /// Sponsor-owned Nexus fee sponsorship policies keyed by `(sponsor, policy name)`.
-    pub(crate) fee_sponsor_policies: Storage<FeeSponsorPolicyId, FeeSponsorPolicy>,
+    /// Sponsor-owned fee programs keyed by their stable on-chain identifier.
+    pub(crate) fee_sponsor_programs: Storage<FeeSponsorProgramId, FeeSponsorProgram>,
+    /// Immutable sponsor-program revisions keyed by `(program, revision)`.
+    pub(crate) fee_sponsor_program_revisions:
+        Storage<FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
+    /// Explicit sponsor-program beneficiary enrollments.
+    pub(crate) fee_sponsor_enrollments: Storage<FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
+    /// Program-isolated fee-asset vault allocations.
+    pub(crate) fee_sponsor_vaults: Storage<FeeSponsorVaultKey, FeeSponsorVault>,
+    /// Durable epoch spend counters for sponsor programs and beneficiaries.
+    pub(crate) fee_sponsor_budget_counters:
+        Storage<FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -4111,8 +3952,19 @@ pub struct WorldBlock<'world> {
     pub(crate) ram_lfe_program_policies: StorageBlock<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageBlock<'world, IdentifierPolicyId, IdentifierPolicy>,
-    /// Sponsor-owned Nexus fee sponsorship policy registry.
-    pub(crate) fee_sponsor_policies: StorageBlock<'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
+    /// Sponsor-owned fee program registry.
+    pub(crate) fee_sponsor_programs: StorageBlock<'world, FeeSponsorProgramId, FeeSponsorProgram>,
+    /// Immutable sponsor-program revision registry.
+    pub(crate) fee_sponsor_program_revisions:
+        StorageBlock<'world, FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
+    /// Sponsor-program enrollment registry.
+    pub(crate) fee_sponsor_enrollments:
+        StorageBlock<'world, FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
+    /// Sponsor-program vault allocation registry.
+    pub(crate) fee_sponsor_vaults: StorageBlock<'world, FeeSponsorVaultKey, FeeSponsorVault>,
+    /// Sponsor-program durable budget-counter registry.
+    pub(crate) fee_sponsor_budget_counters:
+        StorageBlock<'world, FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -4857,7 +4709,11 @@ impl<'world> WorldBlock<'world> {
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
-            fee_sponsor_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -5064,9 +4920,21 @@ pub struct WorldTransaction<'block, 'world> {
     /// Global identifier policy registry.
     pub(crate) identifier_policies:
         StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
-    /// Sponsor-owned Nexus fee sponsorship policy registry.
-    pub(crate) fee_sponsor_policies:
-        StorageTransaction<'block, 'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
+    /// Sponsor-owned fee program registry.
+    pub(crate) fee_sponsor_programs:
+        StorageTransaction<'block, 'world, FeeSponsorProgramId, FeeSponsorProgram>,
+    /// Immutable sponsor-program revision registry.
+    pub(crate) fee_sponsor_program_revisions:
+        StorageTransaction<'block, 'world, FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
+    /// Sponsor-program enrollment registry.
+    pub(crate) fee_sponsor_enrollments:
+        StorageTransaction<'block, 'world, FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
+    /// Sponsor-program vault allocation registry.
+    pub(crate) fee_sponsor_vaults:
+        StorageTransaction<'block, 'world, FeeSponsorVaultKey, FeeSponsorVault>,
+    /// Sponsor-program durable budget-counter registry.
+    pub(crate) fee_sponsor_budget_counters:
+        StorageTransaction<'block, 'world, FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims:
         StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
@@ -6640,8 +6508,19 @@ pub struct WorldView<'world> {
     pub(crate) ram_lfe_program_policies: StorageView<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageView<'world, IdentifierPolicyId, IdentifierPolicy>,
-    /// Sponsor-owned Nexus fee sponsorship policy registry.
-    pub(crate) fee_sponsor_policies: StorageView<'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
+    /// Sponsor-owned fee program registry.
+    pub(crate) fee_sponsor_programs: StorageView<'world, FeeSponsorProgramId, FeeSponsorProgram>,
+    /// Immutable sponsor-program revision registry.
+    pub(crate) fee_sponsor_program_revisions:
+        StorageView<'world, FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
+    /// Sponsor-program enrollment registry.
+    pub(crate) fee_sponsor_enrollments:
+        StorageView<'world, FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
+    /// Sponsor-program vault allocation registry.
+    pub(crate) fee_sponsor_vaults: StorageView<'world, FeeSponsorVaultKey, FeeSponsorVault>,
+    /// Sponsor-program durable budget-counter registry.
+    pub(crate) fee_sponsor_budget_counters:
+        StorageView<'world, FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -10962,26 +10841,6 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         record: crate::settlement::PendingNexusFeeReceipt,
     ) {
         self.pending_nexus_fee_records.insert(tx_hash, record);
-    }
-
-    /// Sum lane-relay-burn Nexus fee receipts already staged in this block for a payer/asset.
-    pub(crate) fn pending_nexus_fee_amount_for(
-        &self,
-        payer: &AccountId,
-        fee_asset_id: &str,
-    ) -> Option<Numeric> {
-        let mut total = Numeric::zero();
-        for record in self
-            .settlement_accumulator
-            .nexus_fee_records()
-            .map(|(_, record)| record)
-            .chain(self.pending_nexus_fee_records.values())
-        {
-            if &record.payer_account_id == payer && record.fee_asset_id == fee_asset_id {
-                total = total.checked_add(record.fee_amount.as_numeric().clone())?;
-            }
-        }
-        Some(total)
     }
 
     /// Drain settlement receipts staged while executing this transaction.
@@ -18554,7 +18413,11 @@ impl World {
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
-            fee_sponsor_policies: self.fee_sponsor_policies.view(),
+            fee_sponsor_programs: self.fee_sponsor_programs.view(),
+            fee_sponsor_program_revisions: self.fee_sponsor_program_revisions.view(),
+            fee_sponsor_enrollments: self.fee_sponsor_enrollments.view(),
+            fee_sponsor_vaults: self.fee_sponsor_vaults.view(),
+            fee_sponsor_budget_counters: self.fee_sponsor_budget_counters.view(),
             identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
             account_recovery_policies: self.account_recovery_policies.view(),
@@ -18854,8 +18717,23 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy>;
     /// Global identifier policy registry (read-only).
     fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
-    /// Sponsor-owned Nexus fee sponsorship policy registry (read-only).
-    fn fee_sponsor_policies(&self) -> &impl StorageReadOnly<FeeSponsorPolicyId, FeeSponsorPolicy>;
+    /// Sponsor-owned fee program registry (read-only).
+    fn fee_sponsor_programs(&self)
+    -> &impl StorageReadOnly<FeeSponsorProgramId, FeeSponsorProgram>;
+    /// Immutable sponsor-program revision registry (read-only).
+    fn fee_sponsor_program_revisions(
+        &self,
+    ) -> &impl StorageReadOnly<FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>;
+    /// Sponsor-program enrollment registry (read-only).
+    fn fee_sponsor_enrollments(
+        &self,
+    ) -> &impl StorageReadOnly<FeeSponsorEnrollmentKey, FeeSponsorEnrollment>;
+    /// Sponsor-program vault registry (read-only).
+    fn fee_sponsor_vaults(&self) -> &impl StorageReadOnly<FeeSponsorVaultKey, FeeSponsorVault>;
+    /// Sponsor-program budget-counter registry (read-only).
+    fn fee_sponsor_budget_counters(
+        &self,
+    ) -> &impl StorageReadOnly<FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>;
     /// Active identifier claims keyed by opaque identifier (read-only).
     fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
 
@@ -18873,10 +18751,12 @@ pub trait WorldReadOnly {
         self.identifier_policies().iter().map(|(_, policy)| policy)
     }
 
-    /// Iterate registered fee sponsor policies.
+    /// Iterate registered fee sponsor programs.
     #[inline]
-    fn fee_sponsor_policies_iter(&self) -> impl Iterator<Item = &FeeSponsorPolicy> {
-        self.fee_sponsor_policies().iter().map(|(_, policy)| policy)
+    fn fee_sponsor_programs_iter(&self) -> impl Iterator<Item = &FeeSponsorProgram> {
+        self.fee_sponsor_programs()
+            .iter()
+            .map(|(_, program)| program)
     }
 
     /// Resolve an opaque identifier within a specific policy namespace.
@@ -20322,10 +20202,30 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy> {
                 &self.identifier_policies
             }
-            fn fee_sponsor_policies(
+            fn fee_sponsor_programs(
                 &self,
-            ) -> &impl StorageReadOnly<FeeSponsorPolicyId, FeeSponsorPolicy> {
-                &self.fee_sponsor_policies
+            ) -> &impl StorageReadOnly<FeeSponsorProgramId, FeeSponsorProgram> {
+                &self.fee_sponsor_programs
+            }
+            fn fee_sponsor_program_revisions(
+                &self,
+            ) -> &impl StorageReadOnly<FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision> {
+                &self.fee_sponsor_program_revisions
+            }
+            fn fee_sponsor_enrollments(
+                &self,
+            ) -> &impl StorageReadOnly<FeeSponsorEnrollmentKey, FeeSponsorEnrollment> {
+                &self.fee_sponsor_enrollments
+            }
+            fn fee_sponsor_vaults(
+                &self,
+            ) -> &impl StorageReadOnly<FeeSponsorVaultKey, FeeSponsorVault> {
+                &self.fee_sponsor_vaults
+            }
+            fn fee_sponsor_budget_counters(
+                &self,
+            ) -> &impl StorageReadOnly<FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter> {
+                &self.fee_sponsor_budget_counters
             }
             fn identifier_claims(
                 &self,
@@ -21247,7 +21147,11 @@ impl<'world> WorldBlock<'world> {
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
-            fee_sponsor_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -21581,7 +21485,11 @@ impl<'world> WorldBlock<'world> {
         assets.commit();
         identifier_claims.commit();
         identifier_policies.commit();
-        fee_sponsor_policies.commit();
+        fee_sponsor_programs.commit();
+        fee_sponsor_program_revisions.commit();
+        fee_sponsor_enrollments.commit();
+        fee_sponsor_vaults.commit();
+        fee_sponsor_budget_counters.commit();
         ram_lfe_program_policies.commit();
         account_recovery_requests.commit();
         account_recovery_policies.commit();
@@ -22608,7 +22516,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
-            fee_sponsor_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -22919,7 +22831,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         nfts_by_owner.apply();
         identifier_claims.apply();
         identifier_policies.apply();
-        fee_sponsor_policies.apply();
+        fee_sponsor_programs.apply();
+        fee_sponsor_program_revisions.apply();
+        fee_sponsor_enrollments.apply();
+        fee_sponsor_vaults.apply();
+        fee_sponsor_budget_counters.apply();
         ram_lfe_program_policies.apply();
         account_recovery_requests.apply();
         account_recovery_policies.apply();
@@ -27133,6 +27049,42 @@ impl State {
                 current_slot,
                 axt_lane_map,
             );
+            // Scheduled sponsor-program activations are materialized at the
+            // start of their exact consensus height. This keeps queries,
+            // admission, and execution on one persisted lifecycle view.
+            let due_fee_sponsor_programs: Vec<_> = wtx
+                .fee_sponsor_programs
+                .iter()
+                .filter_map(|(id, program)| {
+                    program
+                        .scheduled_activation
+                        .filter(|activation| activation.activate_at_height <= now_h)
+                        .map(|activation| (id.clone(), activation.revision))
+                })
+                .collect();
+            for (program_id, revision) in due_fee_sponsor_programs {
+                let mut program = wtx
+                    .fee_sponsor_programs
+                    .get(&program_id)
+                    .cloned()
+                    .expect("scheduled fee sponsor program must remain persisted");
+                assert!(
+                    wtx.fee_sponsor_program_revisions
+                        .get(&FeeSponsorProgramRevisionKey::new(
+                            program_id.clone(),
+                            revision,
+                        ))
+                        .is_some(),
+                    "scheduled fee sponsor revision must remain persisted"
+                );
+                program.active_revision = Some(revision);
+                if program.staged_revision == Some(revision) {
+                    program.staged_revision = None;
+                }
+                program.scheduled_activation = None;
+                program.lifecycle = FeeSponsorProgramLifecycle::Active;
+                wtx.fee_sponsor_programs.insert(program_id, program);
+            }
             let _expired_manifests = wtx.expire_due_space_directory_manifests(
                 now_h.saturating_sub(1),
                 &sb.nexus.lane_config,
@@ -30933,11 +30885,7 @@ impl State {
             Err(LaneRelayError::MissingFastpqProof) => false,
             Err(err) => return Err(err),
         };
-        if fastpq_verified
-            && nexus
-                .fees
-                .lane_relay_burn_receipts_active_at(proposal_height)
-        {
+        if fastpq_verified && nexus.fees.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
 
@@ -33921,14 +33869,103 @@ impl State {
         })
     }
 
+    fn verified_fee_sponsor_allocation_for_receipt(
+        world: &impl WorldReadOnly,
+        receipt: &NexusFeeReceipt,
+        authority_context_height: u64,
+    ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>, MergeLedgerCommitError> {
+        let FeeDebitSource::SponsorProgram(program_id) = &receipt.debit_source else {
+            return Ok(None);
+        };
+        let program_revision = receipt.program_revision.ok_or_else(|| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "sponsored lane receipt is missing its immutable program revision".to_owned(),
+            )
+        })?;
+        let lease_id = receipt.lease_id.ok_or_else(|| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "sponsored lane receipt is missing its proof-bound spend lease".to_owned(),
+            )
+        })?;
+        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+            program_id,
+            &receipt.fee_asset_id,
+            &lease_id,
+        ))
+        .map_err(|_| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "sponsored lane receipt produced an invalid allocation state key".to_owned(),
+            )
+        })?;
+        let payload = world.smart_contract_state().get(&key).ok_or_else(|| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "sponsored lane receipt references unknown spend lease `{lease_id}`"
+            ))
+        })?;
+        let json: Json = norito::decode_from_bytes(payload).map_err(|err| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "verified sponsor allocation state decode failed: {err}"
+            ))
+        })?;
+        let record: VerifiedFeeSponsorVaultAllocation =
+            norito::json::from_slice(json.get().as_bytes()).map_err(|err| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "verified sponsor allocation JSON decode failed: {err}"
+                ))
+            })?;
+        if record.program_id != *program_id
+            || record.program_revision != program_revision
+            || record.asset_definition_id != receipt.fee_asset_id
+            || record.source_dataspace_id != receipt.dataspace_id
+            || record.source_height > authority_context_height
+            || record.verified_at_height > authority_context_height
+            || record.expires_at_height < authority_context_height
+            || record.lease_id != lease_id
+            || record.verified_allocation < receipt.fee_amount
+        {
+            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "sponsored lane receipt does not match verified spend lease `{lease_id}`"
+            )));
+        }
+        Ok(Some(record))
+    }
+
+    fn fee_sponsor_allocation_settled_usage_key(
+        lease_id: &Hash,
+    ) -> Result<Name, MergeLedgerCommitError> {
+        Name::from_str(&VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id))
+            .map_err(|_| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                    "invalid settled sponsor allocation usage state key".to_owned(),
+                )
+            })
+    }
+
+    fn fee_sponsor_allocation_settled_usage(
+        world: &impl WorldReadOnly,
+        lease_id: &Hash,
+    ) -> Result<Quantity, MergeLedgerCommitError> {
+        let key = Self::fee_sponsor_allocation_settled_usage_key(lease_id)?;
+        world.smart_contract_state().get(&key).map_or_else(
+            || Ok(Quantity::zero()),
+            |payload| {
+                norito::decode_from_bytes(payload).map_err(|err| {
+                    MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                        "settled sponsor allocation usage decode failed: {err}"
+                    ))
+                })
+            },
+        )
+    }
+
     fn validate_nexus_fee_receipt(
         receipt: &NexusFeeReceipt,
         expected_lane: LaneId,
         expected_dataspace: DataSpaceId,
         expected_height: u64,
-        fee_asset_id: &str,
+        fee_asset_id: &AssetDefinitionId,
     ) -> Result<(), MergeLedgerCommitError> {
-        if receipt.version != 1 {
+        if receipt.version != NexusFeeReceipt::VERSION {
             return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                 "unsupported receipt version {}",
                 receipt.version
@@ -33942,7 +33979,7 @@ impl State {
                 "receipt coordinates do not match relay lane={expected_lane} dataspace={expected_dataspace} height={expected_height}"
             )));
         }
-        if receipt.fee_asset_id != fee_asset_id {
+        if &receipt.fee_asset_id != fee_asset_id {
             return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                 "fee asset mismatch: expected `{fee_asset_id}`, got `{}`",
                 receipt.fee_asset_id
@@ -33957,17 +33994,33 @@ impl State {
                 receipt.fee_amount
             )));
         }
+        match &receipt.debit_source {
+            FeeDebitSource::Account(_) => {
+                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                    "authority-paid lane-relay fee receipts are unsupported without an authenticated authority spend lease"
+                        .to_owned(),
+                ));
+            }
+            FeeDebitSource::SponsorProgram(_) => {
+                if receipt.program_revision.is_none() || receipt.lease_id.is_none() {
+                    return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                        "sponsored lane receipt requires an immutable revision and spend lease"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
     fn collect_nexus_fee_receipts_for_merge(
         &self,
         lane_snapshots: &[MergeLaneSnapshot],
-        fee_asset_id: &str,
-        fee_receipts_activation_height: u64,
+        fee_asset_id: &AssetDefinitionId,
     ) -> Result<NexusFeeSettlementPlan, MergeLedgerCommitError> {
         let world = self.world.view();
         let mut receipts = Vec::new();
+        let mut receipt_authority_heights = BTreeMap::new();
         let mut settlement_markers = Vec::new();
         let mut receipt_markers = Vec::new();
         let mut seen_settlements = BTreeSet::new();
@@ -33976,12 +34029,6 @@ impl State {
         for snapshot in lane_snapshots {
             if snapshot.settlement_commitment.nexus_fee_receipts.is_empty() {
                 continue;
-            }
-            if snapshot.proposal_height < fee_receipts_activation_height {
-                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                    "Nexus fee receipts are not active at proposal height {}",
-                    snapshot.proposal_height
-                )));
             }
             let settlement_root = *snapshot.settlement_hash;
             let settlement_key = Self::nexus_fee_settlement_marker_key(
@@ -34028,12 +34075,15 @@ impl State {
                     ));
                 }
                 receipt_markers.push((receipt.source_id, receipt_key));
+                receipt_authority_heights.insert(receipt.source_id, snapshot.proposal_height);
                 receipts.push(receipt.clone());
             }
         }
         Ok(NexusFeeSettlementPlan {
             receipts,
+            receipt_authority_heights,
             aggregate_burns: BTreeMap::new(),
+            settled_lease_usage: BTreeMap::new(),
             settlement_markers,
             receipt_markers,
         })
@@ -34047,24 +34097,30 @@ impl State {
         if nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
             return Ok(NexusFeeSettlementPlan {
                 receipts: Vec::new(),
+                receipt_authority_heights: BTreeMap::new(),
                 aggregate_burns: BTreeMap::new(),
+                settled_lease_usage: BTreeMap::new(),
                 settlement_markers: Vec::new(),
                 receipt_markers: Vec::new(),
             });
         }
-        let mut plan = self.collect_nexus_fee_receipts_for_merge(
-            lane_snapshots,
-            nexus.fees.fee_asset_id.as_str(),
-            nexus.fees.fee_receipts_activation_height,
-        )?;
-        if plan.receipts.is_empty() {
-            return Ok(plan);
+        if !lane_snapshots
+            .iter()
+            .any(|snapshot| !snapshot.settlement_commitment.nexus_fee_receipts.is_empty())
+        {
+            return Ok(NexusFeeSettlementPlan {
+                receipts: Vec::new(),
+                receipt_authority_heights: BTreeMap::new(),
+                aggregate_burns: BTreeMap::new(),
+                settled_lease_usage: BTreeMap::new(),
+                settlement_markers: Vec::new(),
+                receipt_markers: Vec::new(),
+            });
         }
 
-        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
-        {
+        let asset_def = {
             let world = self.world.view();
-            let asset_def = crate::block::parse_asset_definition_literal_with_world(
+            crate::block::parse_asset_definition_literal_with_world(
                 &world,
                 &nexus.fees.fee_asset_id,
                 0,
@@ -34074,16 +34130,70 @@ impl State {
                     "invalid nexus fee asset id; expected canonical XOR asset definition id or active xor#universal alias"
                         .to_owned(),
                 )
-            })?;
+            })?
+        };
+        let mut plan = self.collect_nexus_fee_receipts_for_merge(lane_snapshots, &asset_def)?;
+
+        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
+        let mut settled_lease_usage = BTreeMap::<Hash, Quantity>::new();
+        {
+            let world = self.world.view();
             for receipt in &plan.receipts {
-                let asset_id = AssetId::new(asset_def.clone(), receipt.payer_account_id.clone());
+                let payer = match &receipt.debit_source {
+                    FeeDebitSource::Account(_) => {
+                        return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                            "authority-paid lane-relay fee receipts are unsupported without an authenticated authority spend lease"
+                                .to_owned(),
+                        ));
+                    }
+                    FeeDebitSource::SponsorProgram(_) => {
+                        let authority_context_height = plan
+                            .receipt_authority_heights
+                            .get(&receipt.source_id)
+                            .copied()
+                            .ok_or_else(|| {
+                                MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                    "sponsored receipt {} is missing its authenticated authority height",
+                                    hex::encode(receipt.source_id)
+                                ))
+                            })?;
+                        let allocation = Self::verified_fee_sponsor_allocation_for_receipt(
+                            &world,
+                            receipt,
+                            authority_context_height,
+                        )?
+                        .ok_or_else(|| {
+                            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                                "sponsored receipt did not resolve a verified allocation"
+                                    .to_owned(),
+                            )
+                        })?;
+                        let lease_id = allocation.lease_id;
+                        let current = settled_lease_usage.get(&lease_id).cloned().map_or_else(
+                            || Self::fee_sponsor_allocation_settled_usage(&world, &lease_id),
+                            Ok,
+                        )?;
+                        let next = current.checked_add(&receipt.fee_amount).map_err(|_| {
+                            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                "settled spend usage overflow for lease `{lease_id}`"
+                            ))
+                        })?;
+                        if next > allocation.verified_allocation {
+                            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                "sponsored receipts exceed verified spend lease `{lease_id}`"
+                            )));
+                        }
+                        settled_lease_usage.insert(lease_id, next);
+                        nexus.fees.sponsor_vault_custody_account_id.clone()
+                    }
+                };
+                let asset_id = AssetId::new(asset_def.clone(), payer.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
                     .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                            "aggregate fee overflow for payer {}",
-                            receipt.payer_account_id
+                            "aggregate fee overflow for payer {payer}",
                         ))
                     })?;
                 aggregate.insert(asset_id, next);
@@ -34109,6 +34219,7 @@ impl State {
             }
         }
         plan.aggregate_burns = aggregate;
+        plan.settled_lease_usage = settled_lease_usage;
         Ok(plan)
     }
 
@@ -34167,7 +34278,9 @@ impl State {
     ) -> Result<(), MergeLedgerCommitError> {
         let NexusFeeSettlementPlan {
             receipts,
+            receipt_authority_heights: _,
             aggregate_burns,
+            settled_lease_usage,
             settlement_markers,
             receipt_markers,
         } = plan;
@@ -34216,6 +34329,15 @@ impl State {
             }
             for (_, key) in &receipt_markers {
                 tx.smart_contract_state.insert(key.clone(), vec![1]);
+            }
+            for (lease_id, usage) in settled_lease_usage {
+                let key = Self::fee_sponsor_allocation_settled_usage_key(&lease_id)?;
+                let payload = norito::to_bytes(&usage).map_err(|err| {
+                    MergeLedgerCommitError::NexusFeeSettlement(format!(
+                        "failed to encode settled sponsor allocation usage: {err}"
+                    ))
+                })?;
+                tx.smart_contract_state.insert(key, payload);
             }
             tx.apply();
         }
@@ -36152,62 +36274,24 @@ impl State {
         if nexus.fees.fee_sink_account_id.trim().is_empty() {
             return Err(LaneLifecycleError::NexusFeeSinkAccountEmpty);
         }
-        if nexus
-            .fees
-            .canonical_sponsor_account_id
-            .as_ref()
-            .is_some_and(|sponsor| sponsor.trim().is_empty())
-        {
-            nexus.fees.canonical_sponsor_account_id = None;
-        }
         if nexus.relay_worker.enabled
-            && (nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn
-                || nexus.fees.canonical_sponsor_account_id.is_none())
+            && nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn
         {
             return Err(LaneLifecycleError::RelayWorkerFeeConfig);
-        }
-        if nexus.fees.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
-            && nexus.fees.fee_receipts_activation_height != u64::MAX
-            && nexus.fees.canonical_sponsor_account_id.is_none()
-        {
-            return Err(LaneLifecycleError::LaneRelayBurnFeeConfig);
         }
         if nexus.lane_relay_emergency.multisig_threshold
             > nexus.lane_relay_emergency.multisig_members
         {
             return Err(LaneLifecycleError::LaneRelayEmergencyThreshold);
         }
-        if !nexus.dataspace_fee_sponsors.is_empty() && !nexus.fees.sponsorship_enabled {
-            return Err(LaneLifecycleError::DataspaceFeeSponsorsRequireSponsorship);
+        if !nexus.dataspace_fee_sponsor_program_ids.is_empty() && !nexus.enabled {
+            return Err(LaneLifecycleError::DataspaceFeeSponsorProgramsRequireNexusEnabled);
         }
-        if !nexus.dataspace_fee_sponsors.is_empty() && !nexus.enabled {
-            return Err(LaneLifecycleError::DataspaceFeeSponsorsRequireNexusEnabled);
-        }
-        for dataspace_id in nexus.dataspace_fee_sponsors.keys() {
+        for dataspace_id in nexus.dataspace_fee_sponsor_program_ids.keys() {
             if !dataspace_ids.contains(dataspace_id) {
-                return Err(LaneLifecycleError::DataspaceFeeSponsorUnknownDataspace(
-                    *dataspace_id,
-                ));
-            }
-            if !nexus
-                .dataspace_fee_sponsor_policies
-                .contains_key(dataspace_id)
-            {
-                return Err(LaneLifecycleError::DataspaceFeeSponsorMissingPolicy(
-                    *dataspace_id,
-                ));
-            }
-        }
-        for dataspace_id in nexus.dataspace_fee_sponsor_policies.keys() {
-            if !dataspace_ids.contains(dataspace_id) {
-                return Err(LaneLifecycleError::DataspaceFeeSponsorUnknownDataspace(
-                    *dataspace_id,
-                ));
-            }
-            if !nexus.dataspace_fee_sponsors.contains_key(dataspace_id) {
-                return Err(LaneLifecycleError::DataspaceFeeSponsorPolicyWithoutSponsor(
-                    *dataspace_id,
-                ));
+                return Err(
+                    LaneLifecycleError::DataspaceFeeSponsorProgramUnknownDataspace(*dataspace_id),
+                );
             }
         }
         if !nexus.enabled
@@ -36676,19 +36760,6 @@ impl State {
                         .get(permission.domain.dataspace().as_ref())
                         .is_none_or(|dataspace| *dataspace != permission.dataspace);
             }
-            if let Ok(permission) =
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount::try_from(
-                    permission,
-                )
-            {
-                return !dataspace_aliases.contains(permission.domain.dataspace().as_ref());
-            }
-            if let Ok(permission) = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain::try_from(
-                permission,
-            ) {
-                return !dataspace_aliases.contains(permission.domain.dataspace().as_ref());
-            }
-
             false
         };
         let stale_permission_holders: Vec<AccountId> = self
@@ -44533,10 +44604,10 @@ impl<'state> StateBlock<'state> {
         let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
         let mut settlement_markers = Vec::new();
         let mut receipt_markers = Vec::new();
+        let mut settled_lease_usage = BTreeMap::<Hash, Quantity>::new();
         let mut seen_sources = BTreeSet::new();
         let mut seen_settlements = BTreeSet::new();
         let fee_asset_id = self.nexus.fees.fee_asset_id.as_str();
-        let activation_height = self.nexus.fees.fee_receipts_activation_height;
         let asset_definition =
             crate::block::parse_asset_definition_literal_with_world(&self.world, fee_asset_id, 0)
                 .ok_or_else(|| {
@@ -44549,12 +44620,6 @@ impl<'state> StateBlock<'state> {
             let commitment = &execution.settlement_commitment;
             if commitment.nexus_fee_receipts.is_empty() {
                 continue;
-            }
-            if execution.proposal.descriptor.proposal_height < activation_height {
-                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                    "Nexus fee receipts are not active at proposal height {}",
-                    execution.proposal.descriptor.proposal_height
-                )));
             }
             let settlement_root = *execution.settlement_hash;
             let settlement_key = State::nexus_fee_settlement_marker_key(
@@ -44585,7 +44650,7 @@ impl<'state> StateBlock<'state> {
                     commitment.lane_id,
                     commitment.dataspace_id,
                     commitment.block_height,
-                    fee_asset_id,
+                    &asset_definition,
                 )?;
                 let receipt_key = State::nexus_fee_receipt_marker_key(&receipt.source_id)?;
                 if !seen_sources.insert(receipt.source_id)
@@ -44595,15 +44660,51 @@ impl<'state> StateBlock<'state> {
                         hex::encode(receipt.source_id),
                     ));
                 }
-                let asset_id =
-                    AssetId::new(asset_definition.clone(), receipt.payer_account_id.clone());
+                let payer = match &receipt.debit_source {
+                    FeeDebitSource::Account(_) => {
+                        return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                            "authority-paid lane-relay fee receipts are unsupported without an authenticated authority spend lease"
+                                .to_owned(),
+                        ));
+                    }
+                    FeeDebitSource::SponsorProgram(_) => {
+                        let allocation = State::verified_fee_sponsor_allocation_for_receipt(
+                            &self.world,
+                            receipt,
+                            execution.proposal.descriptor.proposal_height,
+                        )?
+                        .ok_or_else(|| {
+                            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                                "sponsored receipt did not resolve a verified allocation"
+                                    .to_owned(),
+                            )
+                        })?;
+                        let lease_id = allocation.lease_id;
+                        let current = settled_lease_usage.get(&lease_id).cloned().map_or_else(
+                            || State::fee_sponsor_allocation_settled_usage(&self.world, &lease_id),
+                            Ok,
+                        )?;
+                        let next = current.checked_add(&receipt.fee_amount).map_err(|_| {
+                            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                "settled spend usage overflow for lease `{lease_id}`"
+                            ))
+                        })?;
+                        if next > allocation.verified_allocation {
+                            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                "sponsored receipts exceed verified spend lease `{lease_id}`"
+                            )));
+                        }
+                        settled_lease_usage.insert(lease_id, next);
+                        self.nexus.fees.sponsor_vault_custody_account_id.clone()
+                    }
+                };
+                let asset_id = AssetId::new(asset_definition.clone(), payer.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
                     .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                            "aggregate fee overflow for payer {}",
-                            receipt.payer_account_id
+                            "aggregate fee overflow for payer {payer}",
                         ))
                     })?;
                 aggregate.insert(asset_id, next);
@@ -44661,6 +44762,15 @@ impl<'state> StateBlock<'state> {
         for key in receipt_markers {
             tx.world.smart_contract_state.insert(key, vec![1]);
         }
+        for (lease_id, usage) in settled_lease_usage {
+            let key = State::fee_sponsor_allocation_settled_usage_key(&lease_id)?;
+            let payload = norito::to_bytes(&usage).map_err(|err| {
+                MergeLedgerCommitError::NexusFeeSettlement(format!(
+                    "failed to encode settled sponsor allocation usage: {err}"
+                ))
+            })?;
+            tx.world.smart_contract_state.insert(key, payload);
+        }
         tx.apply();
         self.pending_nexus_fee_receipt_source_ids
             .extend(seen_sources);
@@ -44673,7 +44783,9 @@ impl<'state> StateBlock<'state> {
     ) -> Result<(), MergeLedgerCommitError> {
         let NexusFeeSettlementPlan {
             receipts,
+            receipt_authority_heights: _,
             aggregate_burns,
+            settled_lease_usage,
             settlement_markers,
             receipt_markers,
         } = plan;
@@ -44709,6 +44821,15 @@ impl<'state> StateBlock<'state> {
         }
         for (_, key) in receipt_markers {
             tx.world.smart_contract_state.insert(key, vec![1]);
+        }
+        for (lease_id, usage) in settled_lease_usage {
+            let key = State::fee_sponsor_allocation_settled_usage_key(&lease_id)?;
+            let payload = norito::to_bytes(&usage).map_err(|err| {
+                MergeLedgerCommitError::NexusFeeSettlement(format!(
+                    "failed to encode settled sponsor allocation usage: {err}"
+                ))
+            })?;
+            tx.world.smart_contract_state.insert(key, payload);
         }
         tx.apply();
         self.pending_nexus_fee_receipt_source_ids
@@ -47728,6 +47849,7 @@ mod state_commit_lock_order_tests {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("apply-sccp-duplicate"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -47787,6 +47909,7 @@ mod state_commit_lock_order_tests {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("apply-sccp-invalid-record"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -47857,6 +47980,7 @@ mod state_commit_lock_order_tests {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("apply-sccp-unbound-route"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -47927,6 +48051,7 @@ mod state_commit_lock_order_tests {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("apply-sccp-scoped-asset-alias"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -47996,6 +48121,7 @@ mod state_commit_lock_order_tests {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("apply-sccp-resultless"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -48116,9 +48242,13 @@ mod committed_transaction_context_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
-        let signed = TransactionBuilder::new((*DEFAULT_TEST_CHAIN_ID).clone(), ALICE_ID.clone())
-            .with_instructions([Log::new(Level::INFO, "context".into())])
-            .sign(ALICE_KEYPAIR.private_key());
+        let signed = TransactionBuilder::new(
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "context".into())])
+        .sign(ALICE_KEYPAIR.private_key());
 
         StateBlock::seed_committed_transaction_context(&mut transaction, &signed, 7);
 
@@ -48228,6 +48358,7 @@ mod tiered_snapshot_diff_tests {
         let mut transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
         transaction.set_creation_time(core::time::Duration::from_millis(1));
         let transaction = transaction
@@ -48379,6 +48510,7 @@ mod tiered_snapshot_diff_tests {
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([isi])
         .sign(key_pair.private_key());
@@ -51766,12 +51898,20 @@ mod fastpq_tx_set_hash_tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx1 = builder
             .with_instructions([Log::new(Level::INFO, "alpha".to_owned())])
             .sign(keypair.private_key());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx2 = builder
             .with_instructions([Log::new(Level::INFO, "beta".to_owned())])
@@ -52038,8 +52178,12 @@ mod block_proof_tests {
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -53387,6 +53531,40 @@ fn replay_blocks_from_kura_range_inner(
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_lines)]
+fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
+    use std::path::PathBuf;
+
+    use norito::codec::Encode as _;
+
+    if std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR").is_some() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut candidates = vec![
+            manifest_dir.join("../../defaults/executor.to"),
+            manifest_dir.join("defaults/executor.to"),
+        ];
+        if let Some(workspace_dir) = option_env!("CARGO_WORKSPACE_DIR") {
+            candidates.push(PathBuf::from(workspace_dir).join("defaults/executor.to"));
+        }
+        candidates.extend([
+            PathBuf::from("defaults/executor.to"),
+            PathBuf::from("../../defaults/executor.to"),
+        ]);
+        for candidate in candidates {
+            if candidate.exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    let executor_path = temp_dir.path().join("executor.to");
+    let verdict: Result<(), iroha_data_model::ValidationFail> = Ok(());
+    let program = crate::executor::build_program_from_encoded_result(&verdict.encode());
+    std::fs::write(&executor_path, program).expect("write temporary executor bytecode");
+    executor_path.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
 mod strict_replay_tests;
 
 #[cfg(test)]
@@ -53796,9 +53974,13 @@ mod replay_validation_tests {
         };
         let chain_id = ChainId::from(format!("iroha:test:missing-replay-checkpoint:{suffix}"));
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis = SignedBlock::genesis(
             vec![tx],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -53883,9 +54065,13 @@ mod replay_validation_tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
         );
 
-        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
         let rogue_signer = crate::state::checked_keypair();
         let bad_block = SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None);
@@ -54038,9 +54224,13 @@ mod replay_validation_tests {
         let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
-        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx_genesis = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -54048,9 +54238,13 @@ mod replay_validation_tests {
             None,
         );
 
-        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
-            .sign(user_keypair.private_key());
+        let tx_block2 = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
+        .sign(user_keypair.private_key());
         let accepted_block2 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
         let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
@@ -54059,9 +54253,13 @@ mod replay_validation_tests {
             .unpack(|_| {});
         let signed_block2: SignedBlock = block2.into();
 
-        let tx_block3 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
-            .sign(user_keypair.private_key());
+        let tx_block3 = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
+        .sign(user_keypair.private_key());
         let accepted_block3 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
         let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
@@ -54241,7 +54439,7 @@ mod replay_validation_tests {
             ),
         ];
 
-        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
+        let executor_path = super::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
@@ -54266,12 +54464,16 @@ mod replay_validation_tests {
             )
         };
 
-        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "npos replay".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "npos replay".to_owned(),
+        )])
+        .sign(user_keypair.private_key());
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let mut base_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
         base_topology.block_committed(peers.clone(), genesis_signed.hash());
@@ -54405,7 +54607,7 @@ mod replay_validation_tests {
             ),
         ];
 
-        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
+        let executor_path = super::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
@@ -54448,12 +54650,16 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(genesis_signed.clone()))
             .expect("store genesis");
 
-        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "replay roster journal".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "replay roster journal".to_owned(),
+        )])
+        .sign(user_keypair.private_key());
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let new_block = crate::block::BlockBuilder::new(vec![accepted])
             .chain(0, Some(&genesis_signed))
@@ -54613,9 +54819,13 @@ mod replay_validation_tests {
         let fallback_topology =
             crate::sumeragi::network_topology::Topology::new(fallback_peers.clone());
 
-        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx_genesis = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -54670,12 +54880,16 @@ mod replay_validation_tests {
             peer_a.private_key()
         };
 
-        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "signature-rotation-replay".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
+        let tx_block2 = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "signature-rotation-replay".to_owned(),
+        )])
+        .sign(user_keypair.private_key());
         let accepted_block2 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
         let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
@@ -54801,9 +55015,13 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx_genesis = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -54820,12 +55038,16 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(genesis_block.clone()))
             .expect("store genesis");
 
-        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "result mismatch".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
+        let tx_block2 = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "result mismatch".to_owned(),
+        )])
+        .sign(user_keypair.private_key());
         let accepted_block2 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
         let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
@@ -54934,9 +55156,13 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx_genesis = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -54953,12 +55179,16 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(genesis_block.clone()))
             .expect("store genesis");
 
-        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "checkpoint mismatch".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
+        let tx_block2 = TransactionBuilder::new(
+            chain_id.clone(),
+            user_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            iroha_logger::Level::INFO,
+            "checkpoint mismatch".to_owned(),
+        )])
+        .sign(user_keypair.private_key());
         let accepted_block2 =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
         let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
@@ -55090,9 +55320,13 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx_genesis = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
@@ -55161,9 +55395,13 @@ mod replay_validation_tests {
                 Json::new("retail"),
             )),
         ];
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions::<InstructionBox>(instructions)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>(instructions)
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let block = crate::block::BlockBuilder::new(vec![accepted])
             .chain(0, Some(&genesis_block))
@@ -55209,9 +55447,13 @@ mod replay_validation_tests {
                 Json::new(2_u32),
             )),
         ];
-        let block3_tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions::<InstructionBox>(block3_instructions)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let block3_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>(block3_instructions)
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let block3_accepted =
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
         let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
@@ -55296,7 +55538,6 @@ mod permission_cache_tests {
     };
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
-        nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
     use iroha_primitives::json::Json;
@@ -55491,219 +55732,6 @@ mod permission_cache_tests {
             !stx.can_execute_trigger_for(&registrar, &trigger_id),
             "revoking role should invalidate cache and revoke execution permission"
         );
-    }
-
-    #[test]
-    fn fee_sponsor_permission_cache_grant_and_revoke() {
-        let (sponsor, _) = gen_account_in("wonderland");
-        let (caller, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
-        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
-        let caller_account = new_wonderland_account(&caller).build(&sponsor);
-        let world = World::with([domain], [sponsor_account, caller_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        assert!(
-            !stx.can_use_fee_sponsor(&caller, &sponsor),
-            "fee sponsor permission should be denied by default"
-        );
-
-        let permission = CanUseFeeSponsor {
-            sponsor: sponsor.clone(),
-            policy: "default".parse().expect("default fee sponsor policy"),
-        };
-        Grant::account_permission(permission.clone(), caller.clone())
-            .execute(&sponsor, &mut stx)
-            .expect("grant fee sponsor permission");
-
-        assert!(
-            stx.can_use_fee_sponsor(&caller, &sponsor),
-            "granting permission should allow sponsorship"
-        );
-        assert!(stx.can_use_fee_sponsor(&caller, &sponsor));
-
-        Revoke::account_permission(permission, caller.clone())
-            .execute(&sponsor, &mut stx)
-            .expect("revoke fee sponsor permission");
-
-        assert!(
-            !stx.can_use_fee_sponsor(&caller, &sponsor),
-            "revoking permission should invalidate cache and deny sponsorship"
-        );
-    }
-
-    #[test]
-    fn exact_fee_sponsor_cache_rechecks_live_alias_binding() {
-        use iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount;
-
-        let (sponsor, _) = gen_account_in("wonderland");
-        let (caller, _) = gen_account_in("wonderland");
-        let domain_id = wonderland_domain_id();
-        let domain: Domain = Domain::new(domain_id.clone()).build(&sponsor);
-        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
-        let caller_account = new_wonderland_account(&caller).build(&sponsor);
-        let world = World::with([domain], [sponsor_account, caller_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        let alias = AccountAlias::from_literal(
-            "customer@wonderland.universal",
-            &stx.nexus.dataspace_catalog,
-        )
-        .expect("customer alias");
-        stx.world
-            .insert_account_alias_binding(alias.clone(), caller.clone());
-        let permission = CanUseFeeSponsorForAccount {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail fee sponsor policy"),
-            beneficiary: caller.clone(),
-            domain: domain_id,
-        };
-        Grant::account_permission(permission, caller.clone())
-            .execute(&sponsor, &mut stx)
-            .expect("grant exact fee sponsor permission");
-
-        assert!(stx.can_use_fee_sponsor(&caller, &sponsor));
-        assert!(
-            stx.can_use_fee_sponsor(&caller, &sponsor),
-            "repeat check hydrates the permission cache"
-        );
-
-        stx.world.remove_account_alias_binding(&alias);
-        assert!(
-            !stx.can_use_fee_sponsor(&caller, &sponsor),
-            "removing the exact FI alias must make an already-cached sponsor token inert"
-        );
-
-        stx.world
-            .insert_account_alias_binding(alias, caller.clone());
-        assert!(
-            stx.can_use_fee_sponsor(&caller, &sponsor),
-            "restoring the exact FI alias reactivates the exact beneficiary token"
-        );
-    }
-
-    #[test]
-    fn fee_sponsor_permission_accepts_dataspace_default_sponsor() {
-        let (sponsor, _) = gen_account_in("wonderland");
-        let (caller, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
-        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
-        let caller_account = new_wonderland_account(&caller).build(&sponsor);
-        let world = World::with([domain], [sponsor_account, caller_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-        stx.nexus
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, sponsor.to_string());
-        stx.nexus.dataspace_fee_sponsor_policies.insert(
-            DataSpaceId::UNIVERSAL,
-            "default".parse().expect("default fee sponsor policy"),
-        );
-
-        assert!(
-            stx.can_use_fee_sponsor(&caller, &sponsor),
-            "dataspace default sponsor should not require an account grant"
-        );
-    }
-
-    #[test]
-    fn dataspace_fee_sponsor_match_uses_configured_default_sponsor() {
-        let (sponsor, _) = gen_account_in("wonderland");
-        let (caller, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
-        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
-        let caller_account = new_wonderland_account(&caller).build(&sponsor);
-        let world = World::with([domain], [sponsor_account, caller_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        stx.nexus
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, sponsor.to_string());
-
-        assert!(super::dataspace_fee_sponsor_matches(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.dataspace_fee_sponsors,
-            DataSpaceId::UNIVERSAL,
-            &sponsor,
-            stx.block_unix_timestamp_ms(),
-        ));
-        assert!(!super::dataspace_fee_sponsor_matches(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.dataspace_fee_sponsors,
-            DataSpaceId::UNIVERSAL,
-            &caller,
-            stx.block_unix_timestamp_ms(),
-        ));
-    }
-
-    #[allow(clippy::too_many_lines)]
-    pub(super) fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
-        use std::path::PathBuf;
-
-        if std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR").is_some() {
-            // Resolve the canonical sample executor relative to the crate/workspace roots so the
-            // test does not depend on the runtime working directory.
-            let mut candidates = Vec::new();
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            candidates.push(manifest_dir.join("../../defaults/executor.to"));
-            candidates.push(manifest_dir.join("defaults/executor.to"));
-            if let Some(workspace_dir) = option_env!("CARGO_WORKSPACE_DIR") {
-                candidates.push(PathBuf::from(workspace_dir).join("defaults/executor.to"));
-            }
-            candidates.push(PathBuf::from("defaults/executor.to"));
-            candidates.push(PathBuf::from("../../defaults/executor.to"));
-            for candidate in candidates {
-                if candidate.exists() {
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "permission_cache_rebuilds_after_restart executor: {}",
-                        candidate.display()
-                    );
-                    return candidate.to_string_lossy().into_owned();
-                }
-            }
-        }
-        #[cfg(debug_assertions)]
-        println!("permission_cache_rebuilds_after_restart executor: synthesized fallback");
-
-        let exec_path = temp_dir.path().join("executor.to");
-        {
-            use iroha_data_model::ValidationFail;
-            use norito::codec::Encode as _;
-
-            let verdict: Result<(), ValidationFail> = Ok(());
-            let program = crate::executor::build_program_from_encoded_result(&verdict.encode());
-            std::fs::write(&exec_path, &program).expect("write temp executor bytecode");
-        }
-
-        exec_path.to_string_lossy().to_string()
     }
 
     fn previous_roster_evidence_for_parent(
@@ -55952,18 +55980,22 @@ mod permission_cache_tests {
                 .expect("dry-run grant execute");
         }
 
-        let grant_tx = TransactionBuilder::new(chain_id.clone(), owner.clone())
-            .with_instructions([
-                InstructionBox::from(Grant::account_permission(
-                    permission_register.clone(),
-                    registrar.clone(),
-                )),
-                InstructionBox::from(Grant::account_permission(
-                    permission_execute.clone(),
-                    registrar.clone(),
-                )),
-            ])
-            .sign(owner_keypair.private_key());
+        let grant_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            owner.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Grant::account_permission(
+                permission_register.clone(),
+                registrar.clone(),
+            )),
+            InstructionBox::from(Grant::account_permission(
+                permission_execute.clone(),
+                registrar.clone(),
+            )),
+        ])
+        .sign(owner_keypair.private_key());
         let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
 
         let latest_block = state.view().latest_block();
@@ -56110,18 +56142,22 @@ mod permission_cache_tests {
                 reg_cached
             );
         }
-        let revoke_tx = TransactionBuilder::new(chain_id.clone(), owner.clone())
-            .with_instructions([
-                InstructionBox::from(Revoke::account_permission(
-                    permission_register.clone(),
-                    registrar.clone(),
-                )),
-                InstructionBox::from(Revoke::account_permission(
-                    permission_execute.clone(),
-                    registrar.clone(),
-                )),
-            ])
-            .sign(owner_keypair.private_key());
+        let revoke_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            owner.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Revoke::account_permission(
+                permission_register.clone(),
+                registrar.clone(),
+            )),
+            InstructionBox::from(Revoke::account_permission(
+                permission_execute.clone(),
+                registrar.clone(),
+            )),
+        ])
+        .sign(owner_keypair.private_key());
         let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
         let latest_block = state.view().latest_block();
         let unverified_revoke = build_test_block(
@@ -56244,12 +56280,16 @@ mod permission_cache_tests {
             .add_permission(permission_register.clone())
             .add_permission(permission_execute.clone());
 
-        let register_role_tx = TransactionBuilder::new(chain_id.clone(), owner.clone())
-            .with_instructions([
-                InstructionBox::from(Register::role(role)),
-                InstructionBox::from(Grant::account_role(role_id.clone(), registrar.clone())),
-            ])
-            .sign(owner_keypair.private_key());
+        let register_role_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            owner.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::role(role)),
+            InstructionBox::from(Grant::account_role(role_id.clone(), registrar.clone())),
+        ])
+        .sign(owner_keypair.private_key());
         let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
         let latest_block = state.view().latest_block();
         let unverified_role = build_test_block(
@@ -56357,12 +56397,16 @@ mod permission_cache_tests {
             );
         }
 
-        let revoke_role_tx = TransactionBuilder::new(chain_id.clone(), owner.clone())
-            .with_instructions([InstructionBox::from(Revoke::account_role(
-                role_id.clone(),
-                registrar.clone(),
-            ))])
-            .sign(owner_keypair.private_key());
+        let revoke_role_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            owner.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(Revoke::account_role(
+            role_id.clone(),
+            registrar.clone(),
+        ))])
+        .sign(owner_keypair.private_key());
         let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
         let latest_block = state.view().latest_block();
         let unverified_revoke_role = build_test_block(
@@ -58762,65 +58806,6 @@ impl StateTransaction<'_, '_> {
         set.contains(id)
     }
 
-    /// Resolve policy IDs that can authorize `caller` to use `sponsor`.
-    pub fn fee_sponsor_policy_ids_for(
-        &mut self,
-        caller: &AccountId,
-        sponsor: &AccountId,
-    ) -> BTreeSet<FeeSponsorPolicyId> {
-        let (mut policies, exact_permissions) = {
-            let summary = self.ensure_permission_summary(caller);
-            let policies = summary
-                .fee_sponsor_policies
-                .iter()
-                .filter(|allowed| allowed.sponsor.subject_id() == sponsor.subject_id())
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            let exact_permissions = summary
-                .exact_fee_sponsor_permissions
-                .iter()
-                .filter(|permission| permission.sponsor.subject_id() == sponsor.subject_id())
-                .cloned()
-                .collect::<Vec<_>>();
-            (policies, exact_permissions)
-        };
-        for permission in exact_permissions {
-            if account_has_alias_in_domain(
-                &self.world,
-                &self.nexus.dataspace_catalog,
-                caller,
-                &permission.domain,
-                self.block_unix_timestamp_ms(),
-            ) {
-                policies.insert(FeeSponsorPolicyId::new(
-                    permission.sponsor,
-                    permission.policy,
-                ));
-            }
-        }
-
-        if let Some(dataspace_id) = self.current_dataspace_id
-            && let Ok(Some(default_policy)) = dataspace_fee_sponsor_policy_from_config(
-                &self.world,
-                &self.nexus.dataspace_catalog,
-                &self.nexus.dataspace_fee_sponsors,
-                &self.nexus.dataspace_fee_sponsor_policies,
-                dataspace_id,
-                self.block_unix_timestamp_ms(),
-            )
-            && default_policy.sponsor.subject_id() == sponsor.subject_id()
-        {
-            policies.insert(default_policy);
-        }
-
-        policies
-    }
-
-    /// Fast check: does `caller` have any fee sponsor policy for `sponsor`?
-    pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
-        !self.fee_sponsor_policy_ids_for(caller, sponsor).is_empty()
-    }
-
     fn seed_trigger_call_hash(&mut self, event: &ExecuteTriggerEvent) {
         use norito::codec::Encode as _;
         if self.tx_call_hash.is_some() {
@@ -59255,6 +59240,7 @@ impl SnapshotNexusRuntime {
     pub(crate) const VERSION: u8 = 3;
 
     /// Capture the stateful Nexus fields from a consistent state view.
+    #[cfg(test)]
     pub(crate) fn from_nexus(
         nexus: &iroha_config::parameters::actual::Nexus,
         lane_incarnations: &BTreeMap<LaneId, Hash>,
@@ -60346,7 +60332,13 @@ pub(crate) mod deserialize {
         let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
         validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
-        let fee_sponsor_policies = take_optional_default(&mut map, "fee_sponsor_policies")?;
+        let fee_sponsor_programs = take_optional_default(&mut map, "fee_sponsor_programs")?;
+        let fee_sponsor_program_revisions =
+            take_optional_default(&mut map, "fee_sponsor_program_revisions")?;
+        let fee_sponsor_enrollments = take_optional_default(&mut map, "fee_sponsor_enrollments")?;
+        let fee_sponsor_vaults = take_optional_default(&mut map, "fee_sponsor_vaults")?;
+        let fee_sponsor_budget_counters =
+            take_optional_default(&mut map, "fee_sponsor_budget_counters")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let account_recovery_policies =
             take_optional_default(&mut map, "account_recovery_policies")?;
@@ -60570,7 +60562,11 @@ pub(crate) mod deserialize {
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
-            fee_sponsor_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -65357,7 +65353,11 @@ mod tests {
         let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
         let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -65584,8 +65584,12 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .sign(keypair.private_key());
+        let inner_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let salt = [0x57; 32];
         let reveal_deadline_height = 3;
         let commitment =
@@ -65648,8 +65652,12 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .sign(keypair.private_key());
+        let inner_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
                 &chain_id, &inner_tx, [0x58; 32], 5,
@@ -65672,9 +65680,13 @@ mod tests {
         let sealed_hash = sealed_entrypoint.hash();
         let rejected_domain_id =
             DomainId::try_new("rejectedreplay", "universal").expect("domain id");
-        let rejected_tx = TransactionBuilder::new(chain_id, authority.clone())
-            .with_instructions([Register::domain(Domain::new(rejected_domain_id.clone()))])
-            .sign(keypair.private_key());
+        let rejected_tx = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Register::domain(Domain::new(rejected_domain_id.clone()))])
+        .sign(keypair.private_key());
         let rejected_hash = rejected_tx.hash_as_entrypoint();
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -65733,9 +65745,13 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let tx = TransactionBuilder::new(chain_id, authority.clone())
-            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+        .sign(keypair.private_key());
         let tx_hash = tx.hash();
 
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -65772,8 +65788,12 @@ mod tests {
 
         let chain: ChainId = "block-proof-sealed".parse().expect("chain id");
         let (authority, keypair) = gen_account_in("wonderland");
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let reveal_deadline_height = 5;
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
@@ -66387,128 +66407,6 @@ mod tests {
             .expect("latest block header should exist");
         assert_eq!(latest.height().get(), 1);
         assert_eq!(latest.creation_time().as_millis(), 42);
-    }
-
-    #[test]
-    fn permission_summary_resolves_accounts_from_payload() {
-        use iroha_data_model::permission::Permission;
-        use iroha_executor_data_model::permission::{
-            nexus::{CanUseFeeSponsor, CanUseFeeSponsorForAccount},
-            trigger::CanRegisterTrigger,
-        };
-
-        let (account_id, _keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let mut world = World::with(
-            [Domain::new(domain_id.clone()).build(&account_id)],
-            [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
-            [],
-        );
-        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
-        let account_alias =
-            AccountAlias::from_literal("customer@wonderland.universal", &dataspace_catalog)
-                .expect("beneficiary alias in exact sponsor domain");
-        world
-            .account_aliases
-            .insert(account_alias.clone(), account_id.clone());
-        world
-            .account_aliases_by_account
-            .insert(account_id.clone(), BTreeSet::from([account_alias]));
-        let world_view = world.view();
-
-        let mut summary = AccountPermissionSummary::default();
-        summary.apply_grant(
-            &world_view,
-            &dataspace_catalog,
-            &account_id,
-            &Permission::from(CanRegisterTrigger {
-                authority: account_id.clone(),
-            }),
-            0,
-        );
-        summary.apply_grant(
-            &world_view,
-            &dataspace_catalog,
-            &account_id,
-            &Permission::from(CanUseFeeSponsor {
-                sponsor: account_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            }),
-            0,
-        );
-        let exact_policy: Name = "retail".parse().expect("exact fee sponsor policy");
-        let exact_permission = Permission::from(CanUseFeeSponsorForAccount {
-            sponsor: account_id.clone(),
-            policy: exact_policy.clone(),
-            beneficiary: account_id.clone(),
-            domain: domain_id.clone(),
-        });
-        summary.apply_grant(
-            &world_view,
-            &dataspace_catalog,
-            &account_id,
-            &exact_permission,
-            0,
-        );
-
-        let (other_account, _other_keypair) = gen_account_in("elsewhere");
-        let mut other_summary = AccountPermissionSummary::default();
-        other_summary.apply_grant(
-            &world_view,
-            &dataspace_catalog,
-            &other_account,
-            &exact_permission,
-            0,
-        );
-        let wrong_domain_permission = Permission::from(CanUseFeeSponsorForAccount {
-            sponsor: account_id.clone(),
-            policy: "retail".parse().expect("exact fee sponsor policy"),
-            beneficiary: account_id.clone(),
-            domain: DomainId::try_new("ubl", "universal").expect("different FI domain"),
-        });
-        assert!(summary.reg_trigger_authorities.contains(&account_id));
-        assert!(
-            summary
-                .fee_sponsor_policies
-                .contains(&FeeSponsorPolicyId::new(
-                    account_id.clone(),
-                    "default".parse().expect("default fee sponsor policy"),
-                ))
-        );
-        assert!(
-            summary
-                .exact_fee_sponsor_permissions
-                .iter()
-                .any(|permission| permission.beneficiary == account_id
-                    && permission.policy == exact_policy),
-            "the cache must retain the exact beneficiary token for live-domain evaluation"
-        );
-        assert!(
-            other_summary.exact_fee_sponsor_permissions.is_empty(),
-            "an exact sponsor token attached to any account other than its beneficiary must be inert"
-        );
-        assert_eq!(
-            fee_sponsor_policy_from_permission(
-                &world_view,
-                &dataspace_catalog,
-                &account_id,
-                &exact_permission,
-                0,
-            ),
-            Some(FeeSponsorPolicyId::new(account_id.clone(), exact_policy,)),
-            "the live exact-domain check must accept the bound beneficiary"
-        );
-        assert_eq!(
-            fee_sponsor_policy_from_permission(
-                &world_view,
-                &dataspace_catalog,
-                &account_id,
-                &wrong_domain_permission,
-                0,
-            ),
-            None,
-            "an exact sponsor token must be inert unless the beneficiary currently has an alias in its delegated FI domain"
-        );
     }
 
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
@@ -69450,12 +69348,15 @@ mod tests {
         signer: &KeyPair,
     ) -> CommittedBlock {
         let parameter = manual_lane_lifecycle_payload().into_custom_parameter();
-        let transaction =
-            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
-                .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
-                    parameter,
-                ))])
-                .sign(signer.private_key());
+        let transaction = TransactionBuilder::new(
+            (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+            parameter,
+        ))])
+        .sign(signer.private_key());
         let entry_hash = transaction.hash_as_entrypoint();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let unverified = BlockBuilder::new(vec![accepted])
@@ -69600,12 +69501,15 @@ mod tests {
                 );
             }
             let state = manual_lane_lifecycle_test_state(world);
-            let transaction =
-                TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
-                    .with_instructions([iroha_data_model::isi::SetParameter::new(
-                        Parameter::Custom(manual_lane_lifecycle_payload().into_custom_parameter()),
-                    )])
-                    .sign(signer.private_key());
+            let transaction = TransactionBuilder::new(
+                (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                manual_lane_lifecycle_payload().into_custom_parameter(),
+            ))])
+            .sign(signer.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
             let unverified = BlockBuilder::new(vec![accepted])
                 .chain(0, Some(&previous))
@@ -69660,10 +69564,13 @@ mod tests {
                 manual_lane_lifecycle_payload().into_custom_parameter(),
             ))
         };
-        let transaction =
-            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
-                .with_instructions([instruction(), instruction()])
-                .sign(signer.private_key());
+        let transaction = TransactionBuilder::new(
+            (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction(), instruction()])
+        .sign(signer.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let unverified = BlockBuilder::new(vec![accepted])
             .chain(0, Some(&previous))
@@ -69729,12 +69636,15 @@ mod tests {
             },
         )
         .expect("stale lifecycle payload is structurally canonical");
-        let transaction =
-            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
-                .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
-                    stale_payload.into_custom_parameter(),
-                ))])
-                .sign(signer.private_key());
+        let transaction = TransactionBuilder::new(
+            (*super::DEFAULT_TEST_CHAIN_ID).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+            stale_payload.into_custom_parameter(),
+        ))])
+        .sign(signer.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let unverified = BlockBuilder::new(vec![accepted])
             .chain(0, Some(first.as_ref()))
@@ -85900,101 +85810,6 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_rejects_relay_worker_without_canonical_sponsor() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.relay_worker.enabled = true;
-        nexus.fees.settlement_mode = NexusFeeSettlementMode::LaneRelayBurn;
-        nexus.fees.canonical_sponsor_account_id = None;
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("relay worker requires a canonical sponsor account");
-        assert!(matches!(err, LaneLifecycleError::RelayWorkerFeeConfig));
-    }
-
-    #[test]
-    fn set_nexus_allows_relay_worker_with_lane_relay_burn_fees() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.relay_worker.enabled = true;
-        nexus.fees.settlement_mode = NexusFeeSettlementMode::LaneRelayBurn;
-        nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_string());
-
-        state
-            .set_nexus(nexus)
-            .expect("relay worker with lane-relay-burn fees should be accepted");
-        let applied = state.nexus_snapshot();
-        assert!(applied.relay_worker.enabled);
-        assert_eq!(
-            applied.fees.settlement_mode,
-            NexusFeeSettlementMode::LaneRelayBurn
-        );
-        assert_eq!(
-            applied.fees.canonical_sponsor_account_id.as_deref(),
-            Some("canonical-sponsor")
-        );
-    }
-
-    #[test]
-    fn set_nexus_rejects_lane_relay_burn_without_canonical_sponsor() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.fees.settlement_mode = NexusFeeSettlementMode::LaneRelayBurn;
-        nexus.fees.fee_receipts_activation_height = 0;
-        nexus.fees.canonical_sponsor_account_id = None;
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("activated lane-relay-burn fees require a canonical sponsor");
-        assert!(matches!(err, LaneLifecycleError::LaneRelayBurnFeeConfig));
-    }
-
-    #[test]
-    fn set_nexus_allows_lane_relay_burn_without_sponsor_when_receipts_disabled() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.fees.settlement_mode = NexusFeeSettlementMode::LaneRelayBurn;
-        nexus.fees.fee_receipts_activation_height = u64::MAX;
-        nexus.fees.canonical_sponsor_account_id = None;
-
-        state
-            .set_nexus(nexus)
-            .expect("disabled lane-relay-burn receipts do not require a sponsor");
-        let applied = state.nexus_snapshot();
-        assert_eq!(
-            applied.fees.settlement_mode,
-            NexusFeeSettlementMode::LaneRelayBurn
-        );
-        assert_eq!(applied.fees.fee_receipts_activation_height, u64::MAX);
-        assert!(applied.fees.canonical_sponsor_account_id.is_none());
-    }
-
-    #[test]
     fn set_nexus_rejects_non_xor_fee_asset_selector() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -86050,50 +85865,6 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_normalizes_blank_canonical_sponsor_to_none_when_not_required() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.fees.canonical_sponsor_account_id = Some("   ".to_string());
-
-        state
-            .set_nexus(nexus)
-            .expect("blank optional canonical sponsor should normalize to absent");
-        assert!(
-            state
-                .nexus_snapshot()
-                .fees
-                .canonical_sponsor_account_id
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn set_nexus_rejects_blank_canonical_sponsor_when_required() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus.fees.settlement_mode = NexusFeeSettlementMode::LaneRelayBurn;
-        nexus.fees.fee_receipts_activation_height = 0;
-        nexus.fees.canonical_sponsor_account_id = Some("   ".to_string());
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("blank canonical sponsor should be treated as absent");
-        assert!(matches!(err, LaneLifecycleError::LaneRelayBurnFeeConfig));
-    }
-
-    #[test]
     fn set_nexus_rejects_lane_relay_emergency_threshold_above_members() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -86113,215 +85884,6 @@ mod tests {
             err,
             LaneLifecycleError::LaneRelayEmergencyThreshold
         ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_dataspace_fee_sponsor_without_sponsorship() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            dataspace_fee_sponsors: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "sponsor".to_string(),
-            )]),
-            ..Default::default()
-        };
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("dataspace fee sponsors require fee sponsorship");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::DataspaceFeeSponsorsRequireSponsorship
-        ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_dataspace_fee_sponsor_when_nexus_disabled() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: false,
-            fees,
-            dataspace_fee_sponsors: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "sponsor".to_string(),
-            )]),
-            ..Default::default()
-        };
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("dataspace fee sponsors require Nexus to be enabled");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::DataspaceFeeSponsorsRequireNexusEnabled
-        ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_dataspace_fee_sponsor_for_unknown_dataspace() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let unknown = DataSpaceId::new(99);
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            fees,
-            dataspace_fee_sponsors: BTreeMap::from([(unknown, "sponsor".to_string())]),
-            ..Default::default()
-        };
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("dataspace fee sponsors must reference known dataspaces");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::DataspaceFeeSponsorUnknownDataspace(id) if id == unknown
-        ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_dataspace_fee_sponsor_without_policy() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            fees,
-            dataspace_fee_sponsors: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "sponsor".to_string(),
-            )]),
-            ..Default::default()
-        };
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("dataspace fee sponsors must reference a policy");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::DataspaceFeeSponsorMissingPolicy(DataSpaceId::UNIVERSAL)
-        ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_dataspace_fee_sponsor_policy_without_sponsor() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            fees,
-            dataspace_fee_sponsor_policies: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "default".parse().expect("default fee sponsor policy"),
-            )]),
-            ..Default::default()
-        };
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("dataspace fee sponsor policies require a sponsor");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::DataspaceFeeSponsorPolicyWithoutSponsor(DataSpaceId::UNIVERSAL)
-        ));
-    }
-
-    #[test]
-    fn set_nexus_allows_dataspace_fee_sponsor_for_known_dataspace() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            fees,
-            dataspace_fee_sponsors: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "sponsor".to_string(),
-            )]),
-            dataspace_fee_sponsor_policies: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "default".parse().expect("default fee sponsor policy"),
-            )]),
-            ..Default::default()
-        };
-
-        state
-            .set_nexus(nexus)
-            .expect("known dataspace fee sponsor should be accepted");
-        assert_eq!(
-            state
-                .nexus_snapshot()
-                .dataspace_fee_sponsors
-                .get(&DataSpaceId::UNIVERSAL)
-                .map(String::as_str),
-            Some("sponsor")
-        );
-        assert_eq!(
-            state
-                .nexus_snapshot()
-                .dataspace_fee_sponsor_policies
-                .get(&DataSpaceId::UNIVERSAL)
-                .map(ToString::to_string)
-                .as_deref(),
-            Some("default")
-        );
-    }
-
-    #[test]
-    fn set_nexus_does_not_seed_configured_default_fee_sponsor_policy() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let sponsor = AccountId::new(crate::state::checked_keypair().public_key().clone());
-
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.sponsorship_enabled = true;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            fees,
-            dataspace_fee_sponsors: BTreeMap::from([(DataSpaceId::UNIVERSAL, sponsor.to_string())]),
-            dataspace_fee_sponsor_policies: BTreeMap::from([(
-                DataSpaceId::UNIVERSAL,
-                "default".parse().expect("default fee sponsor policy"),
-            )]),
-            ..Default::default()
-        };
-
-        state
-            .set_nexus(nexus)
-            .expect("configured fee sponsor policy selector should be accepted");
-
-        let policy_id = FeeSponsorPolicyId::new(
-            sponsor,
-            "default".parse().expect("default fee sponsor policy"),
-        );
-        let policy_view = state.world.fee_sponsor_policies.view();
-        assert!(
-            policy_view.get(&policy_id).is_none(),
-            "dataspace configuration must not synthesize an allow-all policy"
-        );
     }
 
     #[test]
@@ -88048,399 +87610,6 @@ mod tests {
         );
         assert_public_lane_economic_state_presence(&state, &retained_keys, true);
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-    }
-
-    #[test]
-    fn set_nexus_prunes_manifest_permissions_for_removed_dataspaces() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let retained = DataSpaceId::UNIVERSAL;
-        let removed = DataSpaceId::new(7);
-        let other_retained = DataSpaceId::new(8);
-
-        let initial_nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            dataspace_catalog: DataSpaceCatalog::new(vec![
-                DataSpaceMetadata {
-                    id: retained,
-                    alias: "universal".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                DataSpaceMetadata {
-                    id: removed,
-                    alias: "historical".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                DataSpaceMetadata {
-                    id: other_retained,
-                    alias: "other".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog"),
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
-
-        let stale_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest {
-                dataspace: removed,
-            }
-            .into();
-        let retained_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest {
-                dataspace: retained,
-            }
-            .into();
-        let scoped_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::permission-cleanup"));
-        let stale_scoped_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
-                dataspace: removed,
-                uaid: scoped_uaid,
-            }
-            .into();
-        let retained_scoped_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
-                dataspace: retained,
-                uaid: scoped_uaid,
-            }
-            .into();
-        let stale_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
-            dataspace: removed,
-            domain: DomainId::try_new("historical", "historical").expect("stale domain id"),
-        }
-        .into();
-        let retained_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
-            dataspace: retained,
-            domain: DomainId::try_new("retained", "universal").expect("retained domain id"),
-        }
-        .into();
-        let mismatched_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
-            dataspace: retained,
-            domain: DomainId::try_new("retained", "other").expect("mismatched domain id"),
-        }
-        .into();
-        let stale_alias_delegation_permission: Permission =
-            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
-                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                    DomainId::try_new("hbl", "historical")
-                        .expect("stale alias-delegation domain"),
-                ),
-            }
-            .into();
-        let retained_alias_delegation_permission: Permission =
-            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
-                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                    DomainId::try_new("hbl", "universal")
-                        .expect("retained alias-delegation domain"),
-                ),
-            }
-            .into();
-        let holder = ALICE_ID.clone();
-        let sponsor = AccountId::new(checked_keypair().public_key().clone());
-        let beneficiary = AccountId::new(checked_keypair().public_key().clone());
-        let sponsor_policy: Name = "retail".parse().expect("sponsor policy name");
-        let stale_sponsor_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
-                sponsor: sponsor.clone(),
-                policy: sponsor_policy.clone(),
-                beneficiary: beneficiary.clone(),
-                domain: DomainId::try_new("hbl", "historical").expect("stale sponsor domain"),
-            }
-            .into();
-        let retained_sponsor_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
-                sponsor: sponsor.clone(),
-                policy: sponsor_policy.clone(),
-                beneficiary,
-                domain: DomainId::try_new("hbl", "universal").expect("retained sponsor domain"),
-            }
-            .into();
-        let stale_enrollment_permission: Permission = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: sponsor_policy.clone(),
-            domain: DomainId::try_new("hbl", "historical")
-                .expect("stale enrollment domain"),
-        }
-        .into();
-        let retained_enrollment_permission: Permission = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor,
-            policy: sponsor_policy,
-            domain: DomainId::try_new("hbl", "universal")
-                .expect("retained enrollment domain"),
-        }
-        .into();
-        let role_id: RoleId = "dataspace_manifest_cleanup".parse().expect("role id");
-
-        let mut wb = state.world.block();
-        wb.account_permissions.insert(
-            holder.clone(),
-            BTreeSet::from([
-                stale_permission.clone(),
-                retained_permission.clone(),
-                stale_scoped_permission.clone(),
-                retained_scoped_permission.clone(),
-                stale_domain_permission.clone(),
-                retained_domain_permission.clone(),
-                mismatched_domain_permission.clone(),
-                stale_alias_delegation_permission.clone(),
-                retained_alias_delegation_permission.clone(),
-                stale_sponsor_permission.clone(),
-                retained_sponsor_permission.clone(),
-                stale_enrollment_permission.clone(),
-                retained_enrollment_permission.clone(),
-            ]),
-        );
-        wb.roles.insert(
-            role_id.clone(),
-            Role {
-                id: role_id.clone(),
-                permissions: BTreeSet::from([
-                    stale_permission.clone(),
-                    retained_permission.clone(),
-                    stale_scoped_permission.clone(),
-                    retained_scoped_permission.clone(),
-                    stale_domain_permission.clone(),
-                    retained_domain_permission.clone(),
-                    mismatched_domain_permission.clone(),
-                    stale_alias_delegation_permission.clone(),
-                    retained_alias_delegation_permission.clone(),
-                    stale_sponsor_permission.clone(),
-                    retained_sponsor_permission.clone(),
-                    stale_enrollment_permission.clone(),
-                    retained_enrollment_permission.clone(),
-                ]),
-                permission_epochs: BTreeMap::from([
-                    (stale_permission.clone(), 1),
-                    (retained_permission.clone(), 1),
-                    (stale_scoped_permission.clone(), 1),
-                    (retained_scoped_permission.clone(), 1),
-                    (stale_domain_permission.clone(), 1),
-                    (retained_domain_permission.clone(), 1),
-                    (mismatched_domain_permission.clone(), 1),
-                    (stale_alias_delegation_permission.clone(), 1),
-                    (retained_alias_delegation_permission.clone(), 1),
-                    (stale_sponsor_permission.clone(), 1),
-                    (retained_sponsor_permission.clone(), 1),
-                    (stale_enrollment_permission.clone(), 1),
-                    (retained_enrollment_permission.clone(), 1),
-                ]),
-            },
-        );
-        wb.commit();
-
-        let updated_nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            dataspace_catalog: DataSpaceCatalog::new(vec![
-                DataSpaceMetadata {
-                    id: retained,
-                    alias: "universal".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                DataSpaceMetadata {
-                    id: other_retained,
-                    alias: "other".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog"),
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
-        state
-            .set_nexus(updated_nexus)
-            .expect("set updated nexus config");
-
-        let account_permissions_view = state.world.account_permissions.view();
-        let account_permissions = account_permissions_view
-            .get(&holder)
-            .expect("holder permissions should remain");
-        assert!(
-            account_permissions.contains(&retained_permission),
-            "retained dataspace permission should remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_permission),
-            "removed dataspace permission must be pruned from account"
-        );
-        assert!(
-            account_permissions.contains(&retained_scoped_permission),
-            "retained UAID-scoped dataspace permission should remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_scoped_permission),
-            "removed UAID-scoped dataspace permission must be pruned from account"
-        );
-        assert!(
-            account_permissions.contains(&retained_domain_permission),
-            "retained account-domain manifest permission should remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_domain_permission),
-            "removed account-domain manifest permission must be pruned from account"
-        );
-        assert!(
-            !account_permissions.contains(&mismatched_domain_permission),
-            "account-domain permission whose domain alias maps to another dataspace must be pruned"
-        );
-        assert!(
-            account_permissions.contains(&retained_alias_delegation_permission),
-            "alias-resolution delegation in a retained domain must remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_alias_delegation_permission),
-            "alias-resolution delegation in a removed dataspace alias must be pruned from account"
-        );
-        assert!(
-            account_permissions.contains(&retained_sponsor_permission),
-            "sponsor-use permission in a retained domain must remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_sponsor_permission),
-            "sponsor-use permission in a removed dataspace alias must be pruned from account"
-        );
-        assert!(
-            account_permissions.contains(&retained_enrollment_permission),
-            "sponsor enrollment permission in a retained domain must remain on account"
-        );
-        assert!(
-            !account_permissions.contains(&stale_enrollment_permission),
-            "sponsor enrollment permission in a removed dataspace alias must be pruned from account"
-        );
-
-        let roles_view = state.world.roles.view();
-        let role = roles_view.get(&role_id).expect("role should remain");
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_permission),
-            "retained dataspace permission should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_permission),
-            "removed dataspace permission must be pruned from role"
-        );
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_scoped_permission),
-            "retained UAID-scoped dataspace permission should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_scoped_permission),
-            "removed UAID-scoped dataspace permission must be pruned from role"
-        );
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_domain_permission),
-            "retained account-domain manifest permission should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_domain_permission),
-            "removed account-domain manifest permission must be pruned from role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &mismatched_domain_permission),
-            "domain/dataspace-mismatched manifest permission must be pruned from role"
-        );
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_alias_delegation_permission),
-            "retained alias-resolution delegation should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_alias_delegation_permission),
-            "stale alias-resolution delegation must be pruned from role"
-        );
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_sponsor_permission),
-            "retained sponsor-use permission should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_sponsor_permission),
-            "stale sponsor-use permission must be pruned from role"
-        );
-        assert!(
-            role.permissions()
-                .any(|permission| permission == &retained_enrollment_permission),
-            "retained sponsor enrollment permission should remain on role"
-        );
-        assert!(
-            !role
-                .permissions()
-                .any(|permission| permission == &stale_enrollment_permission),
-            "stale sponsor enrollment permission must be pruned from role"
-        );
-        assert!(
-            role.permission_epochs().contains_key(&retained_permission),
-            "retained permission epoch should remain"
-        );
-        assert!(
-            !role.permission_epochs().contains_key(&stale_permission),
-            "stale permission epoch should be pruned"
-        );
-        assert!(
-            role.permission_epochs()
-                .contains_key(&retained_scoped_permission),
-            "retained UAID-scoped permission epoch should remain"
-        );
-        assert!(
-            !role
-                .permission_epochs()
-                .contains_key(&stale_scoped_permission),
-            "stale UAID-scoped permission epoch should be pruned"
-        );
-        assert!(
-            role.permission_epochs()
-                .contains_key(&retained_domain_permission),
-            "retained account-domain permission epoch should remain"
-        );
-        assert!(
-            !role
-                .permission_epochs()
-                .contains_key(&stale_domain_permission),
-            "stale account-domain permission epoch should be pruned"
-        );
-        for stale in [
-            &mismatched_domain_permission,
-            &stale_alias_delegation_permission,
-            &stale_sponsor_permission,
-            &stale_enrollment_permission,
-        ] {
-            assert!(
-                !role.permission_epochs().contains_key(stale),
-                "stale scoped permission epoch should be pruned: {stale:?}"
-            );
-        }
-        for retained_permission in [
-            &retained_alias_delegation_permission,
-            &retained_sponsor_permission,
-            &retained_enrollment_permission,
-        ] {
-            assert!(
-                role.permission_epochs().contains_key(retained_permission),
-                "retained scoped permission epoch should remain: {retained_permission:?}"
-            );
-        }
     }
 
     #[test]
@@ -91790,8 +90959,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
 
         let recreated_lane_id = LaneId::new(1);
@@ -92029,8 +91196,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
 
         let recreated_lane_id = LaneId::new(1);
@@ -94979,8 +94144,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
         seed_consensus_keys_with_pops(&state, &validator_keypairs);
@@ -95469,8 +94632,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
         seed_consensus_keys_with_pops(&state, &validator_keypairs);
@@ -95591,8 +94752,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
         seed_consensus_keys_with_pops(&state, &validator_keypairs);
@@ -96049,8 +95208,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
         install_autoscale_elastic_catalog_for_test(
             &restarted,
@@ -96221,8 +95378,6 @@ mod tests {
             nexus.enabled = true;
             nexus.fees.settlement_mode =
                 iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-            nexus.fees.fee_receipts_activation_height = 2;
-            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
         if nexus_catalog_geometry_lane_dataspace(lane_id, &restarted.nexus_snapshot()).is_none() {
             restarted
@@ -113681,9 +112836,13 @@ seiyaku IdentitylessRawCallback {
                     .under_authority(ALICE_ID.clone()),
             ),
         ));
-        let register_tx = TransactionBuilder::new(ChainId::from("chain"), ALICE_ID.clone())
-            .with_instructions([register_trigger])
-            .sign(ALICE_KEYPAIR.private_key());
+        let register_tx = TransactionBuilder::new(
+            ChainId::from("chain"),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([register_trigger])
+        .sign(ALICE_KEYPAIR.private_key());
 
         // Build and validate a block containing the registration transaction.
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
@@ -113708,11 +112867,15 @@ seiyaku IdentitylessRawCallback {
         let prev_block = committed;
 
         // Tx 2: attempt to execute the failing trigger by call in the next block.
-        let exec_tx = TransactionBuilder::new(ChainId::from("chain"), ALICE_ID.clone())
-            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-                trigger_id.clone(),
-            ))])
-            .sign(ALICE_KEYPAIR.private_key());
+        let exec_tx = TransactionBuilder::new(
+            ChainId::from("chain"),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+            trigger_id.clone(),
+        ))])
+        .sign(ALICE_KEYPAIR.private_key());
 
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             exec_tx,
@@ -115763,9 +114926,16 @@ seiyaku IdentitylessRawCallback {
         source_id: [u8; 32],
     ) -> (State, AccountId, AssetDefinitionId, Vec<KeyPair>) {
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let (custody_id, _custody_kp) = gen_account_in("wonderland");
+        let program_id = FeeSponsorProgramId::new(
+            sponsor_id.clone(),
+            "merge-receipts".parse().expect("program name"),
+        );
+        let lease_id = Hash::new(b"merge-fee-sponsor-spend-lease");
         let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&sponsor_id);
         let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let custody = Account::new(custody_id.clone()).build(&sponsor_id);
         let fee_asset_selector = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
         let asset_def_id = AssetDefinitionId::parse_address_literal(&fee_asset_selector)
             .expect("default Nexus XOR fee asset id must be canonical");
@@ -115773,12 +114943,73 @@ seiyaku IdentitylessRawCallback {
             AssetDefinition::numeric(asset_def_id.clone()).with_name("xor".to_string());
         let mut asset_definition = asset_definition.build(&sponsor_id);
         asset_definition.total_quantity = sponsor_balance.clone();
-        let sponsor_asset = Asset::new(
-            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+        let custody_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), custody_id.clone()),
             sponsor_balance.clone(),
         );
-        let world =
-            World::with_assets([domain], [sponsor], [asset_definition], [sponsor_asset], []);
+        let mut world = World::with_assets(
+            [domain],
+            [sponsor, custody],
+            [asset_definition],
+            [custody_asset],
+            [],
+        );
+        let fee_asset_alias: AssetDefinitionAlias =
+            "xor#universal".parse().expect("canonical fee asset alias");
+        world.asset_definition_aliases =
+            std::iter::once((fee_asset_alias.clone(), asset_def_id.clone())).collect();
+        world.asset_definition_alias_bindings = std::iter::once((
+            asset_def_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: fee_asset_alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        ))
+        .collect();
+        let allocation = VerifiedFeeSponsorVaultAllocation::new(
+            program_id.clone(),
+            1,
+            asset_def_id.clone(),
+            Quantity::from(1_000_000_u32),
+            DataSpaceId::UNIVERSAL,
+            1,
+            Hash::new(b"merge-fee-sponsor-source-state"),
+            100,
+            lease_id,
+            Hash::new(b"merge-fee-sponsor-proof"),
+            *Hash::new(b"merge-fee-sponsor-statement").as_ref(),
+            Hash::new(b"merge-fee-sponsor-proof-digest"),
+            1,
+            *Hash::new(b"merge-fee-sponsor-manifest").as_ref(),
+            AxtFastpqBinding {
+                parameter: "fastpq-lane-balanced".to_owned(),
+                source_dsid: DataSpaceId::UNIVERSAL.as_u64(),
+                source_dataspace: "universal".to_owned(),
+                source_receipt_id: "merge-fee-sponsor-receipt".to_owned(),
+                source_tx_commitment: "aa".repeat(32),
+                claim_type: "fee_sponsor_vault_allocation".to_owned(),
+                claim_digest: "bb".repeat(32),
+                witness_commitment: "cc".repeat(32),
+                policy_commitment: "dd".repeat(32),
+                verified_effect_type: "fee_sponsor_vault_allocation".to_owned(),
+                corridor: "fee-sponsor".to_owned(),
+                verifier_id: "fastpq".to_owned(),
+                verifier_version: "v1".to_owned(),
+                target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+                effect_binding: None,
+            },
+        );
+        let allocation_key: Name =
+            VerifiedFeeSponsorVaultAllocation::state_key_for(&program_id, &asset_def_id, &lease_id)
+                .parse()
+                .expect("verified fee allocation state key");
+        world.smart_contract_state_mut_for_testing().insert(
+            allocation_key,
+            norito::to_bytes(&Json::try_new(allocation).expect("verified fee allocation JSON"))
+                .expect("verified fee allocation state"),
+        );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(world, kura, query);
@@ -115795,11 +115026,10 @@ seiyaku IdentitylessRawCallback {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             fees: iroha_config::parameters::actual::NexusFees {
-                fee_asset_id: fee_asset_selector.clone(),
+                fee_asset_id: "xor#universal".to_owned(),
                 settlement_mode:
                     iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
-                fee_receipts_activation_height: 1,
-                canonical_sponsor_account_id: Some(sponsor_id.to_string()),
+                sponsor_vault_custody_account_id: custody_id.clone(),
                 ..iroha_config::parameters::actual::NexusFees::default()
             },
             ..iroha_config::parameters::actual::Nexus::default()
@@ -115821,13 +115051,15 @@ seiyaku IdentitylessRawCallback {
         // so `tx_count` continues to describe one distinct transaction.
         settlement.receipts[0].source_id = source_id;
         settlement.nexus_fee_receipts = vec![NexusFeeReceipt {
-            version: 1,
+            version: NexusFeeReceipt::VERSION,
             source_id,
             dataspace_id: envelope.dataspace_id,
             lane_id: envelope.lane_id,
             block_height: envelope.block_height,
-            payer_account_id: sponsor_id.clone(),
-            fee_asset_id: fee_asset_selector,
+            debit_source: FeeDebitSource::SponsorProgram(program_id),
+            fee_asset_id: asset_def_id.clone(),
+            program_revision: Some(1),
+            lease_id: Some(lease_id),
             fee_amount: fee_amount.clone(),
             schedule: NexusFeeScheduleInputs {
                 tx_bytes_len: 0,
@@ -115866,7 +115098,7 @@ seiyaku IdentitylessRawCallback {
             block_hashes.commit_for_tests();
         }
 
-        (state, sponsor_id, asset_def_id, commit_keypairs)
+        (state, custody_id, asset_def_id, commit_keypairs)
     }
 
     fn account_numeric_asset_balance(
@@ -115884,6 +115116,148 @@ seiyaku IdentitylessRawCallback {
             .as_numeric()
             .clone()
             .into()
+    }
+
+    #[test]
+    fn sponsored_fee_receipt_validates_lease_at_authenticated_authority_height() {
+        let (sponsor, _) = gen_account_in("fee-sponsor-authority-height");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor, "lane-relay".parse().expect("program name"));
+        let asset_definition_id = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("default Nexus fee asset is canonical");
+        let dataspace_id = DataSpaceId::new(7);
+        let lease_id = Hash::new(b"fee-sponsor-authority-height-lease");
+        let binding = AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_owned(),
+            source_dsid: dataspace_id.as_u64(),
+            source_dataspace: "authority-height-test".to_owned(),
+            source_receipt_id: "authority-height-receipt".to_owned(),
+            source_tx_commitment: "aa".repeat(32),
+            claim_type: "fee_sponsor_vault_allocation".to_owned(),
+            claim_digest: "bb".repeat(32),
+            witness_commitment: "cc".repeat(32),
+            policy_commitment: "dd".repeat(32),
+            verified_effect_type: "fee_sponsor_vault_allocation".to_owned(),
+            corridor: "fee-sponsor".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+            effect_binding: None,
+        };
+        let record = VerifiedFeeSponsorVaultAllocation::new(
+            program_id.clone(),
+            3,
+            asset_definition_id.clone(),
+            Quantity::from(10_u32),
+            dataspace_id,
+            40,
+            Hash::new(b"fee-sponsor-authority-height-state"),
+            50,
+            lease_id,
+            Hash::new(b"fee-sponsor-authority-height-proof"),
+            *Hash::new(b"fee-sponsor-authority-height-statement").as_ref(),
+            Hash::new(b"fee-sponsor-authority-height-proof-digest"),
+            41,
+            *Hash::new(b"fee-sponsor-authority-height-manifest").as_ref(),
+            binding,
+        );
+        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &program_id,
+            &asset_definition_id,
+            &lease_id,
+        )
+        .parse()
+        .expect("verified allocation state key");
+        let payload =
+            norito::to_bytes(&Json::try_new(record.clone()).expect("verified allocation JSON"))
+                .expect("verified allocation state");
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(key, payload);
+        let world = world.block();
+        let receipt = NexusFeeReceipt {
+            version: NexusFeeReceipt::VERSION,
+            source_id: [0xA5; 32],
+            dataspace_id,
+            lane_id: LaneId::new(2),
+            block_height: 3,
+            debit_source: FeeDebitSource::SponsorProgram(program_id),
+            fee_asset_id: asset_definition_id,
+            program_revision: Some(3),
+            lease_id: Some(lease_id),
+            fee_amount: Quantity::from(2_u32),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 0,
+                instruction_count: 0,
+                gas_used: 0,
+                base_fee: Quantity::from(2_u32),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
+            },
+        };
+
+        assert_eq!(
+            State::verified_fee_sponsor_allocation_for_receipt(&world, &receipt, 45)
+                .expect("authority height is within the lease")
+                .expect("sponsored receipt resolves its lease"),
+            record
+        );
+        assert!(
+            State::verified_fee_sponsor_allocation_for_receipt(&world, &receipt, 39).is_err(),
+            "allocation cannot be consumed before its source state exists"
+        );
+        assert!(
+            State::verified_fee_sponsor_allocation_for_receipt(&world, &receipt, 51).is_err(),
+            "allocation cannot be consumed after its global-height expiry"
+        );
+    }
+
+    #[test]
+    fn lane_relay_fee_receipt_rejects_unauthenticated_authority_debit() {
+        let (authority, _) = gen_account_in("authority-receipt");
+        let asset_definition_id = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("default Nexus fee asset is canonical");
+        let receipt = NexusFeeReceipt {
+            version: NexusFeeReceipt::VERSION,
+            source_id: [0xA6; 32],
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_id: LaneId::SINGLE,
+            block_height: 1,
+            debit_source: FeeDebitSource::Account(authority),
+            fee_asset_id: asset_definition_id.clone(),
+            program_revision: None,
+            lease_id: None,
+            fee_amount: Quantity::from(1_u32),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 0,
+                instruction_count: 0,
+                gas_used: 0,
+                base_fee: Quantity::from(1_u32),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
+            },
+        };
+
+        let error = State::validate_nexus_fee_receipt(
+            &receipt,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            1,
+            &asset_definition_id,
+        )
+        .expect_err("receipt settlement must require an authenticated sponsor spend lease");
+        assert!(matches!(
+            error,
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(reason)
+                if reason.contains("authority spend lease")
+        ));
     }
 
     #[test]
@@ -122604,6 +121978,63 @@ seiyaku MissingBytecodeTrigger {
         stage.rejections.insert(rejecter);
 
         assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
+    }
+
+    #[test]
+    fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
+        use iroha_data_model::nexus::{
+            FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
+        };
+
+        let sponsor = governance_stage_account(b"fee-sponsor-activation");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor, "scheduled".parse().expect("program name"));
+        let revision = FeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            eligibility: FeeSponsorEligibility::EnrolledOnly,
+            rules: Vec::new(),
+            asset_budgets: Vec::new(),
+        };
+        let mut program = FeeSponsorProgram::new(program_id.clone());
+        program.staged_revision = Some(1);
+        program.scheduled_activation = Some(FeeSponsorProgramActivation {
+            revision: 1,
+            activate_at_height: 2,
+        });
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut first_block = state.block(first_header);
+        {
+            let mut transaction = first_block.transaction();
+            transaction.world.fee_sponsor_program_revisions.insert(
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+                revision,
+            );
+            transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+            transaction.apply();
+        }
+        first_block.commit().expect("commit scheduled program");
+
+        let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let second_block = state.block(second_header);
+        let activated = second_block
+            .world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .expect("scheduled program exists");
+        assert_eq!(activated.active_revision, Some(1));
+        assert_eq!(activated.staged_revision, None);
+        assert_eq!(activated.scheduled_activation, None);
+        assert_eq!(activated.lifecycle, FeeSponsorProgramLifecycle::Active);
     }
 
     fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {

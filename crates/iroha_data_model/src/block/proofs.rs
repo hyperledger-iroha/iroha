@@ -159,9 +159,13 @@ mod tests {
         let chain: ChainId = "proof-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .try_sign(keypair.private_key())
-            .expect("checked block proof fixture transaction signature");
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(keypair.private_key())
+        .expect("checked block proof fixture transaction signature");
         tx.hash_as_entrypoint()
     }
 

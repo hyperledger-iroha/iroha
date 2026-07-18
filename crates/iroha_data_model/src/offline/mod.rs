@@ -179,10 +179,10 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the ABI-20 Eq/Fp recursive-step half.
+/// Chain verifier role for the ABI-21 Eq/Fp recursive-step half.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4: &str =
     "kagemusha_recursive_step_eq_v4_verifier_record";
-/// Chain verifier role for the ABI-20 Ep/Fq recursive-step half.
+/// Chain verifier role for the ABI-21 Ep/Fq recursive-step half.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4: &str =
     "kagemusha_recursive_step_ep_v4_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
@@ -191,7 +191,7 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Verifier purpose for either half of the sole ABI-20 recursive step.
+/// Verifier purpose for either half of the sole ABI-21 recursive step.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V4: &str = "kagemusha_recursive_spend_step_v4";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
@@ -225,11 +225,11 @@ pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
 /// V4 is deliberately not an alias for ABI 19: its public accumulator layout,
 /// fold transcripts, key parsing parameters, and artifact framing all depend
 /// on an authenticated IPA degree.
-pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 20;
+pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
-/// Degree-parameterized Pasta-cycle backend selected only by ABI 20 releases.
+/// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4: &str = "halo2/ipa-pasta-cycle-v4";
 /// Transcript contract for V4 proofs and degree-sized BGH19 folds.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4: &str =
@@ -240,33 +240,33 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4: &str =
 /// Ep/Fq recursive-step circuit with authenticated dynamic IPA layout.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4: &str =
     "kagemusha-recursive-spend-step-ep-authenticated-layout-v4";
-/// Verifying-key curve for the ABI-20 EqAffine recursive-step half.
+/// Verifying-key curve for the ABI-21 EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
-/// Verifying-key curve for the ABI-20 EpAffine recursive-step half.
+/// Verifying-key curve for the ABI-21 EpAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
-/// Number of canonical Pasta field elements exposed by one ABI-20/V4 Step operation.
+/// Number of canonical Pasta field elements exposed by one ABI-21/V4 Step operation.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact `u32` limbs used by the eight-limb encoding of every operation element.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
-/// Minimum number of `u32` values in the ABI-20/V4 single-column Step ABI.
+/// Minimum number of `u32` values in the ABI-21/V4 single-column Step ABI.
 ///
 /// This is the exact layout at the authenticated degree floor (`k = 20`).
 /// Higher admitted degrees derive their exact length from
 /// [`KagemushaPastaPublicLayoutV4::for_ipa_round_count`].
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 4_156;
-/// Maximum number of `u32` values in the ABI-20/V4 single-column Step ABI.
+/// Maximum number of `u32` values in the ABI-21/V4 single-column Step ABI.
 ///
 /// This is the exact layout at the authenticated degree ceiling (`k = 21`).
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 4_172;
-/// Canonical ABI-20/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
+/// Canonical ABI-21/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
 ///
 /// The embedded `operation_protocol_v2` label versions the subordinate, field-neutral
 /// operation-vector layout. It is not a release or chain-wire version and cannot select
 /// a V2/V3 executor. The operation row remains V2, while the surrounding state-layout V2
 /// reset deliberately changes the V4 circuit identity and invalidates earlier candidates.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":{"formula":"3836+16*ipa_round_count","minimum":4156,"maximum":4172},"ipa_round_count":{"source":"authenticated_circuit_params.k","minimum":20,"maximum":21},"state_vector":{"layout_version":2,"limbs":890,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":4,"rounds":"ipa_round_count","limbs":{"formula":"10+8*ipa_round_count","minimum":170,"maximum":178}},"live_selector":{"offset":"last","encoding":"u32_bit","bootstrap":0,"live":1},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][890]","result_state_u32[890]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[10+8*ipa_round_count]","parent_ep_lineage_accumulator_u32[10+8*ipa_round_count]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]","live_selector_u32"]}"#;
-/// Canonical ABI-20/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
+/// Canonical ABI-21/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
 ///
 /// As with the Eq schema, `operation_protocol_v2` is the subordinate operation-vector
 /// ABI version, not permission to enter a historical Kagemusha execution path.
@@ -281,12 +281,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2: usize = 890;
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 = 4;
 /// Version of the degree-parameterized recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4: u16 = 4;
-/// Version carried by every ABI-20 chain-facing request and artifact binding.
+/// Version carried by every ABI-21 chain-facing request and artifact binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4: u16 = 4;
-/// Schema identifier for the immutable pre-evidence ABI-20 candidate record.
+/// Schema identifier for the immutable pre-evidence ABI-21 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.candidate.v4";
-/// Version of the immutable pre-evidence ABI-20 candidate record.
+/// Version of the immutable pre-evidence ABI-21 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4: u16 = 4;
 /// Schema identifier for the configured Kagemusha release-signing policy.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1: &str =
@@ -297,7 +297,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1: &str =
 /// Schema identifier for a signed V4 recursive-spend release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.release_attestation.v4";
-/// Schema identifier for an authenticated ABI-20/V4 promotion record.
+/// Schema identifier for an authenticated ABI-21/V4 promotion record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.promoted_release.v4";
 /// Version-one domain separator retained by the configured release policy.
@@ -326,7 +326,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum canonical signed V4 cryptographic-review envelope size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4: usize = 1024 * 1024;
-/// Maximum canonical ABI-20/V4 promotion record accepted by release consumers.
+/// Maximum canonical ABI-21/V4 promotion record accepted by release consumers.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: usize = 1024 * 1024;
 /// Historical version-one attestation file name retained by policy tooling.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
@@ -376,9 +376,9 @@ pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 1024 * 1024;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 16 * 1024 * 1024;
-/// Maximum canonical recipient-only ABI-20 peer-payment archive.
+/// Maximum canonical recipient-only ABI-21 peer-payment archive.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4: usize = 32 * 1024 * 1024;
-/// Maximum canonical provenance archive carried by one ABI-20 spendable branch.
+/// Maximum canonical provenance archive carried by one ABI-21 spendable branch.
 ///
 /// This admits one maximum roster plus exactly two bounded anchors and finality
 /// proofs, with fixed Norito framing headroom. Inventories remain capped at two.
@@ -388,14 +388,14 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4: usize =
             * (KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
                 + KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize)
         + 64 * 1024;
-/// Maximum canonical ABI-20 online-to-offline chain request.
+/// Maximum canonical ABI-21 online-to-offline chain request.
 ///
 /// This covers the 192 KiB shield-proof ceiling, the 16 KiB optional device
 /// attestation, and bounded authorization/note/release metadata with headroom.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4: usize = 512 * 1024;
-/// Number of canonical Pallas-field elements in one ABI-20 public operation row.
+/// Number of canonical Pallas-field elements in one ABI-21 public operation row.
 pub const KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
-/// Exact little-endian `u32` limbs carried for one ABI-20 public operation row.
+/// Exact little-endian `u32` limbs carried for one ABI-21 public operation row.
 pub const KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FIELD_ELEMENTS_V4 * 8;
 /// Pallas base-field modulus as eight exact little-endian `u32` limbs.
@@ -441,7 +441,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4: &str =
 /// Canonical Ep final-key selector-zero bootstrap-witness package for V4 runtime.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4: &str =
     "step-ep.bootstrap-witness.krv4";
-/// Exact ordered cryptographic artifact roles required by an ABI-20 release.
+/// Exact ordered cryptographic artifact roles required by an ABI-21 release.
 ///
 /// The order is part of the capability contract and follows the canonical
 /// Eq-then-Ep profile order and the four-artifact order within each profile.
@@ -469,7 +469,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-r
 /// Maximum canonical roster artifact size; one full 4,096-validator window is
 /// pinned below this bound by an exact maximum wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
-/// Production-promotion gate for the ABI-20/V4 paired recursive backend.
+/// Production-promotion gate for the ABI-21/V4 paired recursive backend.
 ///
 /// This remains false for candidate code and may become true only in the final
 /// signed promotion commit backed by authenticated review, benchmark, and
@@ -482,13 +482,13 @@ pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
 pub const KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND: &str = "halo2/ipa";
 
-/// Canonical public-input schema hash for the ABI-20/V4 StepEq verifier record.
+/// Canonical public-input schema hash for the ABI-21/V4 StepEq verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4).into()
 }
 
-/// Canonical public-input schema hash for the ABI-20/V4 StepEp verifier record.
+/// Canonical public-input schema hash for the ABI-21/V4 StepEp verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4).into()
@@ -686,7 +686,7 @@ impl std::error::Error for KagemushaReleaseVerificationError {}
 /// Runtime proof that a V4 manifest, evidence set, and role thresholds were authenticated.
 ///
 /// Its private fields prevent unsigned release material from entering the
-/// configured ABI-20 catalog without authentication.
+/// configured ABI-21 catalog without authentication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV4 {
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
@@ -1630,7 +1630,7 @@ mod model {
         pub release_attestation_sha256: [u8; 32],
     }
 
-    /// Immutable ABI-20 candidate captured before external review and device evidence exist.
+    /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
     /// The embedded manifest commits the clean source tree, network parameters,
     /// inline circuit configuration, exact eight recursive artifacts, and finality
@@ -1766,7 +1766,7 @@ mod model {
         /// SHA-256 of the complete retained review report.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub report_sha256: [u8; 32],
-        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-20.
+        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-21.
         pub artifact_roles: Vec<String>,
         /// Exact ordered set of mandatory, independently evidenced checks.
         pub checks: Vec<KagemushaRecursiveSpendCryptographicReviewCheckResultV4>,
@@ -1786,7 +1786,7 @@ mod model {
         pub signature: SignatureOf<KagemushaRecursiveSpendCryptographicReviewPayloadV4>,
     }
 
-    /// Canonical signed independent cryptographic-review evidence for ABI-20/V4.
+    /// Canonical signed independent cryptographic-review evidence for ABI-21/V4.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1939,7 +1939,7 @@ mod model {
         pub public_key: PublicKey,
     }
 
-    /// Deterministic ABI-20 deployment marker written only after V4 release verification.
+    /// Deterministic ABI-21 deployment marker written only after V4 release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1970,13 +1970,13 @@ mod model {
         pub artifact_inventory_verified: bool,
         /// Native bridge ABI required to consume this promoted release.
         pub bridge_abi_version: u32,
-        /// Exact Eq-then-Ep eight-role artifact inventory selected by ABI-20.
+        /// Exact Eq-then-Ep eight-role artifact inventory selected by ABI-21.
         pub artifact_roles: Vec<String>,
         /// Authenticated release-specific proof-pair byte ceiling.
         pub max_proof_bytes: u32,
     }
 
-    /// Complete signed ABI-20 release material persisted by consensus activation.
+    /// Complete signed ABI-21 release material persisted by consensus activation.
     ///
     /// The two evidence fields contain canonical signed summaries, never raw
     /// device logs, parameters, proving keys, or bootstrap witness payloads.
@@ -1999,7 +1999,7 @@ mod model {
         pub promotion_record: KagemushaRecursiveSpendPromotedReleaseV4,
     }
 
-    /// Atomic consensus payload for one ABI-20 release and its two terminal verifiers.
+    /// Atomic consensus payload for one ABI-21 release and its two terminal verifiers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2025,14 +2025,14 @@ mod model {
     /// Installed authenticated V4 release selected by a degree-parameterized operation.
     ///
     /// The explicit wire version prevents an unversioned historical binding
-    /// from being interpreted as an ABI-20 release identity.
+    /// from being interpreted as an ABI-21 release identity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendArtifactBindingV4 {
-        /// Exact ABI-20 binding version. Only `4` is accepted.
+        /// Exact ABI-21 binding version. Only `4` is accepted.
         pub version: u16,
         /// Human-readable authenticated V4 release generation.
         pub generation: String,
@@ -2112,7 +2112,7 @@ mod model {
         pub acknowledgement_digest: [u8; 32],
     }
 
-    /// Native capability record for the explicitly versioned ABI-20 backend.
+    /// Native capability record for the explicitly versioned ABI-21 backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2191,7 +2191,7 @@ mod model {
         pub proof: ProofBox,
     }
 
-    /// Exact fixed-size ABI-20 public operation row bound by the terminal proof.
+    /// Exact fixed-size ABI-21 public operation row bound by the terminal proof.
     ///
     /// Each consecutive group of eight limbs is one canonical Pallas-field
     /// element in little-endian `u32` order. Core rejects non-canonical field
@@ -2211,7 +2211,7 @@ mod model {
         pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4],
     }
 
-    /// Peer-to-peer split transition carried by an ABI-20 recursive output.
+    /// Peer-to-peer split transition carried by an ABI-21 recursive output.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2235,7 +2235,7 @@ mod model {
         pub parent_max_peer_hop_count: u32,
     }
 
-    /// Partial-redemption change transition carried by an ABI-20 child statement.
+    /// Partial-redemption change transition carried by an ABI-21 child statement.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2257,7 +2257,7 @@ mod model {
         pub parent_peer_hop_count: u32,
     }
 
-    /// Mutually exclusive semantic transition that produced an ABI-20 state.
+    /// Mutually exclusive semantic transition that produced an ABI-21 state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2271,7 +2271,7 @@ mod model {
         RedemptionChange(KagemushaRecursiveSpendRedemptionChangeTransitionV4),
     }
 
-    /// Canonical public statement bound by an ABI-20 recursive proof.
+    /// Canonical public statement bound by an ABI-21 recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2299,7 +2299,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
-        /// Binding-only semantic transition under the sole ABI-20 wire layout.
+        /// Binding-only semantic transition under the sole ABI-21 wire layout.
         pub transition: Option<KagemushaRecursiveSpendTransitionV4>,
         /// Authenticated V4 proving-artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
@@ -2323,7 +2323,7 @@ mod model {
         pub proof_envelope: KagemushaPastaCycleProofEnvelopeV4,
     }
 
-    /// Independently spendable ABI-20 recursive state.
+    /// Independently spendable ABI-21 recursive state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2387,7 +2387,7 @@ mod model {
         pub anchor_digest: [u8; 32],
     }
 
-    /// Canonical unsigned ABI-20 online-to-offline fields covered by payer authorization.
+    /// Canonical unsigned ABI-21 online-to-offline fields covered by payer authorization.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2405,14 +2405,14 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Proof that inserts this note without consuming a confidential input.
         pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
-        /// Authenticated ABI-20 release selected for recursive initialization.
+        /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
-    /// Authoritative ABI-20 chain-facing online-to-offline request.
+    /// Authoritative ABI-21 chain-facing online-to-offline request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2431,7 +2431,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Proof that inserts this note without consuming a confidential input.
         pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
-        /// Authenticated ABI-20 release selected for recursive initialization.
+        /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -2440,7 +2440,7 @@ mod model {
         pub authorization: KagemushaRequestAuthorizationV2,
     }
 
-    /// Public V4 split transition with an ABI-20 output binding.
+    /// Public V4 split transition with an ABI-21 output binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2473,7 +2473,7 @@ mod model {
         pub operation_id: [u8; 32],
     }
 
-    /// Public V4 redemption transition with an optional ABI-20 change binding.
+    /// Public V4 redemption transition with an optional ABI-21 change binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2518,7 +2518,7 @@ mod model {
         pub operation_id: [u8; 32],
     }
 
-    /// ABI-20 local initialization request.
+    /// ABI-21 local initialization request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2535,7 +2535,7 @@ mod model {
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
     }
 
-    /// ABI-20 initialization result.
+    /// ABI-21 initialization result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2560,13 +2560,13 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendAppendInputV4 {
-        /// Previous spendable ABI-20 recursive state.
+        /// Previous spendable ABI-21 recursive state.
         pub previous_bundle: KagemushaRecursiveSpendBundleV4,
         /// Complete authenticated top-up provenance required to verify this parent offline.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
 
-    /// ABI-20 recursive append request.
+    /// ABI-21 recursive append request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2583,7 +2583,7 @@ mod model {
         pub block_height: u64,
     }
 
-    /// Result of one ABI-20 recursive split append.
+    /// Result of one ABI-21 recursive split append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2609,14 +2609,14 @@ mod model {
         pub change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
     }
 
-    /// Recipient-only ABI-20 peer payload emitted from a local split result.
+    /// Recipient-only ABI-21 peer payload emitted from a local split result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendPeerPaymentV4 {
-        /// Receiver-owned independently spendable ABI-20 branch.
+        /// Receiver-owned independently spendable ABI-21 branch.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
         /// Proof-bound membership state required for the recipient's next spend.
         pub recipient_membership_witness: KagemushaNoteMembershipWitnessV2,
@@ -2631,13 +2631,13 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
-        /// Complete finalized ABI-20 top-up receipt.
+        /// Complete finalized ABI-21 top-up receipt.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
         /// Consensus proof for the compact anchor reference.
         pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
     }
 
-    /// Complete authenticated top-up provenance carried by every spendable ABI-20 branch.
+    /// Complete authenticated top-up provenance carried by every spendable ABI-21 branch.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2650,14 +2650,14 @@ mod model {
         pub topup_finality_evidence: Vec<KagemushaRecursiveSpendTopUpFinalityEvidenceV4>,
     }
 
-    /// ABI-20 receiver-verification request.
+    /// ABI-21 receiver-verification request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendVerifyRequestV4 {
-        /// Scale- and split-bound ABI-20 recursive bundle.
+        /// Scale- and split-bound ABI-21 recursive bundle.
         pub bundle: KagemushaRecursiveSpendBundleV4,
         /// Receiver request that the final branch must match.
         pub recipient_request: KagemushaRecipientPaymentRequestV2,
@@ -2673,7 +2673,7 @@ mod model {
         pub verified_at_ms: u64,
     }
 
-    /// Opaque-safe summary decoded from an ABI-20 bundle.
+    /// Opaque-safe summary decoded from an ABI-21 bundle.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2705,7 +2705,7 @@ mod model {
         pub bundle_digest: [u8; 32],
     }
 
-    /// Typed ABI-20 receiver-verification result.
+    /// Typed ABI-21 receiver-verification result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2720,7 +2720,7 @@ mod model {
         pub lineage_redeemable: bool,
         /// Chain supports redemption without a record-backed witness.
         pub witnessless_redemption_supported: bool,
-        /// Verified ABI-20 bundle summary.
+        /// Verified ABI-21 bundle summary.
         pub summary: KagemushaRecursiveSpendBundleSummaryV4,
         /// Canonical receiver request digest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -2757,7 +2757,7 @@ mod model {
         pub bundle: KagemushaRecursiveSpendBundleV4,
     }
 
-    /// ABI-20 native redemption builder input.
+    /// ABI-21 native redemption builder input.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2781,7 +2781,7 @@ mod model {
         pub operation_id: [u8; 32],
     }
 
-    /// Canonical unsigned ABI-20 chain redemption fields.
+    /// Canonical unsigned ABI-21 chain redemption fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2809,7 +2809,7 @@ mod model {
         pub operation_id: [u8; 32],
     }
 
-    /// Prepared unsigned ABI-20 redemption result.
+    /// Prepared unsigned ABI-21 redemption result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2832,7 +2832,7 @@ mod model {
         pub operation_id: [u8; 32],
     }
 
-    /// Versioned ABI-20 offline-to-online request.
+    /// Versioned ABI-21 offline-to-online request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2864,14 +2864,14 @@ mod model {
         pub authorization: KagemushaRequestAuthorizationV2,
     }
 
-    /// Typed native ABI-20 redemption output.
+    /// Typed native ABI-21 redemption output.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendRedeemResultV4 {
-        /// Exact ABI-20 result wire version. Only `4` is accepted.
+        /// Exact ABI-21 result wire version. Only `4` is accepted.
         pub version: u16,
         /// Canonical `KagemushaRecursiveSpendRedeemRequestV4` archive.
         pub redeem_request_archive: Vec<u8>,
@@ -2887,7 +2887,7 @@ mod model {
     }
 }
 
-/// Return the release-qualified verifier-key registry identifier for one ABI-20 parity.
+/// Return the release-qualified verifier-key registry identifier for one ABI-21 parity.
 ///
 /// The manifest digest suffix keeps verifier records for overlapping retained
 /// releases distinct while preserving the fixed Eq/Ep circuit identity inside
@@ -5486,7 +5486,7 @@ impl KagemushaAuthenticatedReleaseV4 {
 }
 
 impl KagemushaRecursiveSpendPromotedReleaseV4 {
-    /// Validate the standalone ABI-20 promotion marker.
+    /// Validate the standalone ABI-21 promotion marker.
     pub fn validate(&self) -> Result<(), KagemushaReleaseVerificationError> {
         let digests = [
             self.candidate_sha256,
@@ -5786,7 +5786,7 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
 }
 
 impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
-    /// Validate an installed ABI-20 backend capability record.
+    /// Validate an installed ABI-21 backend capability record.
     ///
     /// `max_proof_bytes` is deliberately release-specific: it must come from
     /// the authenticated V4 manifest selected by the installed artifact
@@ -5824,7 +5824,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
 }
 
 impl KagemushaPastaCycleProofEnvelopeV4 {
-    /// Validate the fixed ABI-20 envelope shape before release lookup.
+    /// Validate the fixed ABI-21 envelope shape before release lookup.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
@@ -7468,7 +7468,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &mut legacy_encoded.as_slice(),
             )
             .is_err(),
-            "the legacy field layout must not decode as ABI-20"
+            "the legacy field layout must not decode as ABI-21"
         );
     }
 
@@ -7955,7 +7955,7 @@ impl KagemushaReceiverAcknowledgementV2 {
         })
     }
 
-    /// Verify the unchanged ACK leaf against an authoritative ABI-20 recipient bundle.
+    /// Verify the unchanged ACK leaf against an authoritative ABI-21 recipient bundle.
     pub fn validate_for_payment_v4(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -8009,7 +8009,7 @@ impl KagemushaReceiverAcknowledgementV2 {
         Ok(())
     }
 
-    /// Return canonical ACK bytes after ABI-20 payment validation.
+    /// Return canonical ACK bytes after ABI-21 payment validation.
     pub fn canonical_archive_for_payment_v4(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -8019,7 +8019,7 @@ impl KagemushaReceiverAcknowledgementV2 {
         Ok(to_bytes(self)?)
     }
 
-    /// Build the unchanged typed ACK result after ABI-20 payment validation.
+    /// Build the unchanged typed ACK result after ABI-21 payment validation.
     pub fn verified_result_v4(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -8074,20 +8074,20 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
     Ok(())
 }
 
-/// Domain separator for ABI-20 unsigned top-up authorization payloads.
+/// Domain separator for ABI-21 unsigned top-up authorization payloads.
 pub const KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-payload";
-/// Domain separator for ABI-20 finalized top-up anchor receipts.
+/// Domain separator for ABI-21 finalized top-up anchor receipts.
 pub const KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-anchor";
-/// Domain separator for an ABI-20 split transition binding.
+/// Domain separator for an ABI-21 split transition binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:split-binding";
-/// Domain separator for an ABI-20 redemption transition binding.
+/// Domain separator for an ABI-21 redemption transition binding.
 pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:redemption-transition";
-/// Domain separator for an ABI-20 recursive public statement.
+/// Domain separator for an ABI-21 recursive public statement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:public-statement";
-/// Exact finalized-anchor schema carried by an ABI-20 init request.
+/// Exact finalized-anchor schema carried by an ABI-21 init request.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -8142,7 +8142,7 @@ struct KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
 }
 
 impl KagemushaRecursiveSpendTopUpAnchorV4 {
-    /// Populate and validate the canonical ABI-20 receipt digest.
+    /// Populate and validate the canonical ABI-21 receipt digest.
     pub fn finalize_digest(mut self) -> Result<Self, KagemushaValidationError> {
         self.anchor_digest = self.compute_anchor_digest()?;
         self.validate_public_binding()?;
@@ -8202,7 +8202,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         Ok(())
     }
 
-    /// Return the stable compact identity retained by ABI-20 descendants.
+    /// Return the stable compact identity retained by ABI-21 descendants.
     pub fn compact_ref(
         &self,
     ) -> Result<KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaValidationError> {
@@ -8215,7 +8215,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
 }
 
 impl KagemushaRecursiveSpendTopUpUnsignedV4 {
-    /// Validate every ABI-20 top-up field before payer authorization is attached.
+    /// Validate every ABI-21 top-up field before payer authorization is attached.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
@@ -8270,7 +8270,7 @@ impl KagemushaRecursiveSpendTopUpUnsignedV4 {
 }
 
 impl KagemushaRecursiveSpendTopUpRequestV4 {
-    /// Construct and validate an ABI-20 online-to-offline request.
+    /// Construct and validate an ABI-21 online-to-offline request.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         asset: AssetId,
@@ -8327,7 +8327,7 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         self.authorization.validate_for_payload(unsigned.digest()?)
     }
 
-    /// Return the digest of every unsigned ABI-20 top-up field.
+    /// Return the digest of every unsigned ABI-21 top-up field.
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.unsigned_payload().digest()
     }
@@ -8341,7 +8341,7 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
 }
 
 impl KagemushaRecursiveSpendInitRequestV4 {
-    /// Validate finalized provenance and its exact authenticated ABI-20 release.
+    /// Validate finalized provenance and its exact authenticated ABI-21 release.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
         self.topup_finality_proof.validate_structure()?;
@@ -8486,7 +8486,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         )
     }
 
-    /// Return the V4-domain transition binding consumed by ABI-20 Step.
+    /// Return the V4-domain transition binding consumed by ABI-21 Step.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
@@ -8495,7 +8495,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         })
     }
 
-    /// Derive the deterministic conflict claims for one ABI-20 child.
+    /// Derive the deterministic conflict claims for one ABI-21 child.
     pub fn output_branch_claims(
         &self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -8647,7 +8647,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
 }
 
 impl KagemushaRecursiveSpendPublicStatementV4 {
-    /// Validate the canonical ABI-20 recursive-state statement.
+    /// Validate the canonical ABI-21 recursive-state statement.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.current_note.validate_public_binding()?;
         self.artifact_binding.validate()?;
@@ -8708,7 +8708,7 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
         Ok(())
     }
 
-    /// Return the V4-domain digest exposed by the ABI-20 Step instance.
+    /// Return the V4-domain digest exposed by the ABI-21 Step instance.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
@@ -8801,17 +8801,17 @@ mod kagemusha_v4_lifecycle_domain_tests {
         .expect("the first differing high limb is below the modulus");
     }
 }
-/// Domain separator for ABI-20 recursive bundle identity digests.
+/// Domain separator for ABI-21 recursive bundle identity digests.
 pub const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:recursive-spend-bundle";
-/// Domain separator for ABI-20 unsigned redemption authorization payloads.
+/// Domain separator for ABI-21 unsigned redemption authorization payloads.
 pub const KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:redeem-payload";
 /// Domain separator binding an accepted receiver request to its exact output bundle.
 pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:request-output-binding";
-/// Maximum canonical ABI-20 receiver-verification request size.
+/// Maximum canonical ABI-21 receiver-verification request size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
-/// Maximum canonical ABI-20 redemption request archive size.
+/// Maximum canonical ABI-21 redemption request archive size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -9173,7 +9173,7 @@ impl KagemushaRecursiveSpendSplitResultV4 {
 }
 
 impl KagemushaRecursiveSpendPeerPaymentV4 {
-    /// Project the recipient-only ABI-20 transport from a validated split result.
+    /// Project the recipient-only ABI-21 transport from a validated split result.
     pub fn from_split_result(
         result: &KagemushaRecursiveSpendSplitResultV4,
     ) -> Result<Self, KagemushaValidationError> {
@@ -9187,7 +9187,7 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(payment)
     }
 
-    /// Return the recipient peer-split transition embedded by the ABI-20 statement.
+    /// Return the recipient peer-split transition embedded by the ABI-21 statement.
     pub fn recipient_split_transition(
         &self,
     ) -> Result<&KagemushaRecursiveSpendPeerSplitTransitionV4, KagemushaValidationError> {
@@ -9217,7 +9217,7 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
 
-    /// Validate the recipient branch, membership state, and ABI-20 peer-size ceiling.
+    /// Validate the recipient branch, membership state, and ABI-21 peer-size ceiling.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let transition = self.recipient_split_transition()?;
         self.recipient_membership_witness
@@ -9898,7 +9898,7 @@ impl KagemushaRecursiveSpendVerifyRequestV4 {
 }
 
 impl KagemushaRecursiveSpendVerifyResultV4 {
-    /// Enforce the single successful ABI-20 receiver-acceptance contract.
+    /// Enforce the single successful ABI-21 receiver-acceptance contract.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.summary.amount.validate()?;
         self.summary.artifact_binding.validate()?;
@@ -9938,7 +9938,7 @@ impl KagemushaRecursiveSpendVerifyResultV4 {
 }
 
 impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
-    /// Validate the common full/partial ABI-20 redemption-builder input.
+    /// Validate the common full/partial ABI-21 redemption-builder input.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.bundle.validate_public_binding()?;
         self.redemption.validate_public_binding()?;

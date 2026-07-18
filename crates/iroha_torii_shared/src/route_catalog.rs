@@ -1052,10 +1052,6 @@ pub mod aliases {
     pub const RETAIL_RECIPIENT_ROUTE: RouteDescriptor =
         public_lookup("retail.recipient.route", "/v1/retail/recipients/route")
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Read one exact on-chain fee sponsor policy.
-    pub const FEE_SPONSOR_POLICY_BY_ID: RouteDescriptor =
-        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
@@ -1067,9 +1063,47 @@ pub mod aliases {
         BY_ACCOUNT,
         RETAIL_RECIPIENT_LOOKUP,
         RETAIL_RECIPIENT_ROUTE,
-        FEE_SPONSOR_POLICY_BY_ID,
         ASSET_RESOLVE,
     ];
+}
+
+/// Fee quoting and sponsor-program read descriptors.
+pub mod fees {
+    use super::{
+        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteProjections,
+    };
+
+    /// Canonical fee quote path.
+    pub const QUOTE_PATH: &str = "/v1/fees/quote";
+    /// Canonical exact sponsor-program lookup path.
+    pub const SPONSOR_PROGRAM_BY_ID_PATH: &str = "/v1/fee-sponsor-programs/by-id";
+
+    const fn account_signed_post(
+        stable_route_id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        RouteDescriptor::new(
+            stable_route_id,
+            HttpMethod::Post,
+            path,
+            ApiSurface::Public,
+            Listener::Torii,
+        )
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        .with_feature_gate(FeatureGate::Feature("app_api"))
+        .with_projections(RouteProjections::ALL)
+        .with_cors_options(true)
+    }
+
+    /// Quote the required signature-bound fee intent for one unsigned payload.
+    pub const QUOTE: RouteDescriptor = account_signed_post("fees.quote", QUOTE_PATH);
+    /// Read one exact on-chain sponsor program.
+    pub const SPONSOR_PROGRAM_BY_ID: RouteDescriptor =
+        account_signed_post("fee_sponsor_program.by_id", SPONSOR_PROGRAM_BY_ID_PATH);
+
+    /// Canonical first-release fee API catalog.
+    pub const ROUTES: &[RouteDescriptor] = &[QUOTE, SPONSOR_PROGRAM_BY_ID];
 }
 
 /// Operator `WebAuthn` credential-registration and login descriptors.
@@ -4091,8 +4125,9 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     aliases::BY_ACCOUNT,
     aliases::RETAIL_RECIPIENT_LOOKUP,
     aliases::RETAIL_RECIPIENT_ROUTE,
-    aliases::FEE_SPONSOR_POLICY_BY_ID,
     aliases::ASSET_RESOLVE,
+    fees::QUOTE,
+    fees::SPONSOR_PROGRAM_BY_ID,
     operator_authentication::REGISTRATION_OPTIONS,
     operator_authentication::REGISTRATION_VERIFY,
     operator_authentication::LOGIN_OPTIONS,
@@ -4955,14 +4990,15 @@ mod tests {
     }
 
     #[test]
-    fn account_alias_and_recipient_reads_declare_canonical_account_authentication() {
+    fn account_alias_recipient_and_fee_reads_declare_canonical_account_authentication() {
         for route in [
             aliases::RESOLVE,
             aliases::RESOLVE_INDEX,
             aliases::BY_ACCOUNT,
             aliases::RETAIL_RECIPIENT_LOOKUP,
             aliases::RETAIL_RECIPIENT_ROUTE,
-            aliases::FEE_SPONSOR_POLICY_BY_ID,
+            fees::QUOTE,
+            fees::SPONSOR_PROGRAM_BY_ID,
         ] {
             assert_eq!(
                 route.authentication(),
@@ -5103,6 +5139,7 @@ mod tests {
     fn converted_route_families_are_valid_and_exclude_retired_spellings() {
         let routes = aliases::ROUTES
             .iter()
+            .chain(fees::ROUTES)
             .chain(operator_authentication::ROUTES)
             .chain(governance_vrf::ROUTES)
             .chain(iso20022::ROUTES)
@@ -5115,6 +5152,7 @@ mod tests {
         for unsupported_path in [
             "/v1/aliases/resolve_index",
             "/v1/aliases/by_account",
+            "/v1/fee-sponsor-policies/by-id",
             "/v1/da/proof_policies",
             "/v1/da/proof_policy_snapshot",
             "/v1/da/pin_intents",

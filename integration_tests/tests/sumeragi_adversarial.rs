@@ -1703,11 +1703,16 @@ async fn fetch_sumeragi_status(client: &Client) -> Result<Value> {
 async fn submit_heavy_log(client: &Client, bytes: usize) -> Result<()> {
     let payload = "X".repeat(bytes);
     let client_clone = client.clone();
-    tokio::task::spawn_blocking(move || client_clone.submit(Log::new(Level::INFO, payload)))
-        .await
-        .wrap_err("join submit task")?
-        .map(|_| ())
-        .wrap_err("submit heavy log")
+    tokio::task::spawn_blocking(move || {
+        client_clone.submit(
+            Log::new(Level::INFO, payload),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err("join submit task")?
+    .map(|_| ())
+    .wrap_err("submit heavy log")
 }
 
 fn blocking_status(client: &Client) -> Result<Status> {

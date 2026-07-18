@@ -34,11 +34,14 @@ use super::{
 use crate::{
     ChainId,
     account::{AccountController, AccountId, MultisigPolicy},
+    asset::AssetDefinitionId,
     isi::InstructionBox,
     metadata::Metadata,
     name::Name,
+    nexus::FeeSponsorProgramId,
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+use iroha_primitives::numeric::Quantity;
 
 fn verify_typed_signature_for_signer<T: Encode>(
     signature: &SignatureOf<T>,
@@ -64,19 +67,102 @@ mod model {
     use super::*;
     use crate::account::AccountId;
 
-    /// Iroha transaction payload.
+    /// Fee system whose charge is bounded by a signed transaction limit.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+    pub enum FeeChargeKind {
+        /// Nexus admission and execution fee.
+        Nexus,
+        /// Pipeline gas charged for contract or IVM execution.
+        PipelineGas,
+    }
+
+    /// Signature-bound upper bound for one fee component and asset.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    #[allow(clippy::redundant_pub_crate)]
-    pub(crate) struct TransactionPayload {
+    #[norito(deny_unknown_fields)]
+    pub struct FeeChargeLimit {
+        /// Fee component constrained by this limit.
+        pub kind: FeeChargeKind,
+        /// Exact canonical asset definition in which the component may be charged.
+        pub asset_definition_id: AssetDefinitionId,
+        /// Maximum amount the signer authorizes for this component.
+        pub max_amount: Quantity,
+    }
+
+    /// Signature-bound limits for authority-paid fees.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct AuthorityFeePayment {
+        /// Canonically ordered per-component charge limits.
+        pub charge_limits: Vec<FeeChargeLimit>,
+        /// Maximum executable gas; required for contract and IVM transactions.
+        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(default)]
+        pub gas_limit: Option<NonZeroU64>,
+    }
+
+    /// Signature-bound limits and exact revision for sponsor-program fees.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct SponsorFeePayment {
+        /// Exact sponsor program selected before signing.
+        pub program_id: FeeSponsorProgramId,
+        /// Exact immutable program revision accepted by the signer.
+        pub program_revision: u64,
+        /// Canonically ordered per-component charge limits.
+        pub charge_limits: Vec<FeeChargeLimit>,
+        /// Maximum executable gas; required for contract and IVM transactions.
+        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(default)]
+        pub gas_limit: Option<NonZeroU64>,
+    }
+
+    /// Required signature-bound choice of fee funding source and limits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(
+        tag = "payer",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
+    pub enum FeePaymentIntent {
+        /// Charge the transaction authority directly.
+        Authority(AuthorityFeePayment),
+        /// Charge one exact revision of an on-chain sponsor program.
+        Sponsor(SponsorFeePayment),
+    }
+
+    /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct TransactionPayload {
         /// Unique id of the blockchain. Used for simple replay attack protection.
         pub chain: ChainId,
-        /// Account ID of transaction creator. The signatory component is
-        /// normalised during signing to match the public key derived from the
-        /// signing private key so callers do not need to keep duplicate copies.
+        /// Account ID of transaction creator. Signing rejects a key mismatch;
+        /// it never rewrites this signature-bound field.
         pub authority: AccountId,
         /// Creation timestamp (unix time in milliseconds).
         pub creation_time_ms: u64,
@@ -86,6 +172,8 @@ mod model {
         pub time_to_live_ms: Option<NonZeroU64>,
         /// Random value to make different hashes for transactions which occur repeatedly and simultaneously.
         pub nonce: Option<NonZeroU32>,
+        /// Explicit fee payer, assets, limits, and executable gas bound.
+        pub fee_payment: FeePaymentIntent,
         /// Store for additional information.
         pub metadata: Metadata,
     }
@@ -410,6 +498,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let fee_payment = decode_canonical_field::<FeePaymentIntent>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let metadata =
             decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
         if offset != bytes.len() {
@@ -424,6 +516,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
                 instructions,
                 time_to_live_ms,
                 nonce,
+                fee_payment,
                 metadata,
             },
             offset,
@@ -515,6 +608,9 @@ pub enum TransactionSignatureError {
     /// Signature algorithm is not allowed by configuration.
     #[error("signature algorithm {0} is not permitted by configuration")]
     AlgorithmNotPermitted(Algorithm),
+    /// The supplied private key does not control the exact payload authority.
+    #[error("transaction authority does not match the supplied signing key")]
+    AuthorityKeyMismatch,
     /// Signature verification failed for the provided payload and signatory.
     #[error("{0}")]
     CryptoError(String),
@@ -527,6 +623,9 @@ pub enum TransactionSignatureError {
     /// Transaction contains a signature from a non-member.
     #[error("multisig signature from unknown member")]
     UnknownMultisigSigner,
+    /// The signature-bound fee payment intent is malformed or ambiguous.
+    #[error("invalid fee payment intent: {0}")]
+    InvalidFeePaymentIntent(String),
     /// Collected multisig signatures do not satisfy the policy threshold.
     #[error("insufficient multisig weight: collected {collected}, required {required}")]
     InsufficientMultisigWeight {
@@ -550,6 +649,165 @@ pub const MULTISIG_SIGNING_UNSUPPORTED_REASON: &str =
 
 /// Domain separation tag for sealed transaction commitment hashing.
 pub const SEALED_TRANSACTION_COMMITMENT_DOMAIN: &[u8] = b"iroha.sealed_tx.v1";
+
+/// Structural error in a signature-bound fee payment intent.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum FeePaymentIntentError {
+    /// Sponsor revisions start at one; zero cannot identify an active revision.
+    #[error("sponsor program revision must be non-zero")]
+    ZeroProgramRevision,
+    /// Charge limits must be ordered by fee component.
+    #[error("charge limits are not in canonical fee-component order")]
+    NonCanonicalChargeLimitOrder,
+    /// A fee component may select exactly one asset and maximum amount.
+    #[error("duplicate charge limit for component {0:?}")]
+    DuplicateChargeKind(FeeChargeKind),
+    /// A signed maximum must authorize a positive amount.
+    #[error("charge limit for component {kind:?} and asset {asset_definition_id} is zero")]
+    ZeroChargeLimit {
+        /// Component carrying the zero limit.
+        kind: FeeChargeKind,
+        /// Asset selected by the invalid limit.
+        asset_definition_id: AssetDefinitionId,
+    },
+    /// Retired metadata keys must never coexist with the typed fee surface.
+    #[error("legacy transaction metadata key `{0}` is not supported")]
+    LegacyMetadataKey(String),
+}
+
+impl FeeChargeLimit {
+    /// Construct a signature-bound limit for one exact fee component and asset.
+    #[must_use]
+    pub const fn new(
+        kind: FeeChargeKind,
+        asset_definition_id: AssetDefinitionId,
+        max_amount: Quantity,
+    ) -> Self {
+        Self {
+            kind,
+            asset_definition_id,
+            max_amount,
+        }
+    }
+}
+
+impl FeePaymentIntent {
+    /// Construct an authority-paid intent.
+    #[must_use]
+    pub const fn authority(
+        charge_limits: Vec<FeeChargeLimit>,
+        gas_limit: Option<NonZeroU64>,
+    ) -> Self {
+        Self::Authority(AuthorityFeePayment {
+            charge_limits,
+            gas_limit,
+        })
+    }
+
+    /// Construct an exact sponsor-program intent.
+    #[must_use]
+    pub const fn sponsor(
+        program_id: FeeSponsorProgramId,
+        program_revision: u64,
+        charge_limits: Vec<FeeChargeLimit>,
+        gas_limit: Option<NonZeroU64>,
+    ) -> Self {
+        Self::Sponsor(SponsorFeePayment {
+            program_id,
+            program_revision,
+            charge_limits,
+            gas_limit,
+        })
+    }
+
+    /// Return the canonical per-component charge limits.
+    #[must_use]
+    pub fn charge_limits(&self) -> &[FeeChargeLimit] {
+        match self {
+            Self::Authority(payment) => &payment.charge_limits,
+            Self::Sponsor(payment) => &payment.charge_limits,
+        }
+    }
+
+    /// Return the signed executable gas limit, when applicable.
+    #[must_use]
+    pub const fn gas_limit(&self) -> Option<NonZeroU64> {
+        match self {
+            Self::Authority(payment) => payment.gas_limit,
+            Self::Sponsor(payment) => payment.gas_limit,
+        }
+    }
+
+    /// Return the exact sponsor program and revision, if sponsorship was selected.
+    #[must_use]
+    pub const fn sponsor_program(&self) -> Option<(&FeeSponsorProgramId, u64)> {
+        match self {
+            Self::Authority(_) => None,
+            Self::Sponsor(payment) => Some((&payment.program_id, payment.program_revision)),
+        }
+    }
+
+    /// Return whether two intents select the same payer and executable gas bound.
+    ///
+    /// Quote-to-sign clients use this before replacing the draft's charge
+    /// maxima, preventing a quote from substituting an authority/program,
+    /// immutable program revision, or gas authorization.
+    #[must_use]
+    pub fn has_same_payer_and_gas_bound(&self, other: &Self) -> bool {
+        let same_payer = match (self.sponsor_program(), other.sponsor_program()) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
+        same_payer && self.gas_limit() == other.gas_limit()
+    }
+
+    /// Validate canonical ordering, uniqueness, revision, and positive maxima.
+    ///
+    /// Empty limits are structurally valid because fee-free networks have no
+    /// applicable components. Admission rejects missing limits whenever a fee
+    /// component is enabled by the authoritative schedule.
+    pub fn validate(&self) -> Result<(), FeePaymentIntentError> {
+        if matches!(
+            self,
+            Self::Sponsor(SponsorFeePayment {
+                program_revision: 0,
+                ..
+            })
+        ) {
+            return Err(FeePaymentIntentError::ZeroProgramRevision);
+        }
+
+        let mut previous = None;
+        for limit in self.charge_limits() {
+            if limit.max_amount.is_zero() {
+                return Err(FeePaymentIntentError::ZeroChargeLimit {
+                    kind: limit.kind,
+                    asset_definition_id: limit.asset_definition_id.clone(),
+                });
+            }
+            if let Some(previous) = previous {
+                if limit.kind == previous {
+                    return Err(FeePaymentIntentError::DuplicateChargeKind(limit.kind));
+                }
+                if limit.kind < previous {
+                    return Err(FeePaymentIntentError::NonCanonicalChargeLimitOrder);
+                }
+            }
+            previous = Some(limit.kind);
+        }
+        Ok(())
+    }
+
+    fn validate_metadata(metadata: &Metadata) -> Result<(), FeePaymentIntentError> {
+        for key in ["fee_sponsor", "gas_limit", "gas_asset_id"] {
+            if metadata.get(key).is_some() {
+                return Err(FeePaymentIntentError::LegacyMetadataKey(key.to_owned()));
+            }
+        }
+        Ok(())
+    }
+}
 
 static TX_SEQUENCE_NAME: LazyLock<Name> =
     LazyLock::new(|| Name::from_str("tx_sequence").expect("tx_sequence is a valid metadata key"));
@@ -582,6 +840,12 @@ impl SignedTransaction {
     #[inline]
     pub fn metadata(&self) -> &Metadata {
         &self.payload.metadata
+    }
+
+    /// Return the exact signature-bound fee payment intent.
+    #[inline]
+    pub fn fee_payment_intent(&self) -> &FeePaymentIntent {
+        &self.payload.fee_payment
     }
 
     /// Multisig signature bundle attached to this transaction, if any.
@@ -773,6 +1037,11 @@ impl SignedTransaction {
     /// Returns an error if signature verification fails.
     #[inline]
     pub fn verify_signature(&self) -> Result<(), TransactionSignatureError> {
+        self.payload
+            .fee_payment
+            .validate()
+            .and_then(|()| FeePaymentIntent::validate_metadata(&self.payload.metadata))
+            .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))?;
         let TransactionSignature(signature) = &self.signature;
         match self.payload.authority.controller() {
             AccountController::Single(signatory) => {
@@ -1259,7 +1528,12 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
 }
 
 impl TransactionBuilder {
-    fn new_with_time(chain: ChainId, authority: AccountId, creation_time_ms: u64) -> Self {
+    fn new_with_time(
+        chain: ChainId,
+        authority: AccountId,
+        creation_time_ms: u64,
+        fee_payment: FeePaymentIntent,
+    ) -> Self {
         Self {
             payload: TransactionPayload {
                 chain,
@@ -1268,6 +1542,7 @@ impl TransactionBuilder {
                 nonce: None,
                 time_to_live_ms: None,
                 instructions: Vec::<InstructionBox>::new().into(),
+                fee_payment,
                 metadata: Metadata::default(),
             },
             attachments: None,
@@ -1282,6 +1557,7 @@ impl TransactionBuilder {
         chain_id: ChainId,
         authority: AccountId,
         time_source: &TimeSource,
+        fee_payment: FeePaymentIntent,
     ) -> Self {
         let creation_time_ms = time_source
             .get_unix_time()
@@ -1289,17 +1565,65 @@ impl TransactionBuilder {
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
 
-        Self::new_with_time(chain_id, authority, creation_time_ms)
+        Self::new_with_time(chain_id, authority, creation_time_ms, fee_payment)
     }
 
-    /// Construct [`Self`].
+    /// Construct [`Self`] with the exact signature-bound fee payment intent.
     #[inline]
-    pub fn new(chain_id: ChainId, authority: AccountId) -> Self {
-        Self::new_with_time_source(chain_id, authority, &TimeSource::new_system())
+    pub fn new(chain_id: ChainId, authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
+        Self::new_with_time_source(chain_id, authority, &TimeSource::new_system(), fee_payment)
     }
 }
 
 impl TransactionBuilder {
+    fn validate_payload_fee_payment(
+        payload: &TransactionPayload,
+    ) -> Result<(), TransactionSignatureError> {
+        payload
+            .fee_payment
+            .validate()
+            .and_then(|()| FeePaymentIntent::validate_metadata(&payload.metadata))
+            .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))
+    }
+
+    /// Reconstruct a transaction builder from one exact unsigned payload.
+    ///
+    /// Envelope-only proof attachments and multisig signatures are initially
+    /// empty and may be added explicitly before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload's fee intent or metadata violates the
+    /// canonical signature-bound fee policy.
+    pub fn from_payload(payload: TransactionPayload) -> Result<Self, TransactionSignatureError> {
+        Self::validate_payload_fee_payment(&payload)?;
+        Ok(Self {
+            payload,
+            attachments: None,
+            multisig_signatures: None,
+        })
+    }
+
+    /// Consume the builder and return its exact unsigned payload.
+    ///
+    /// Proof attachments and multisig signatures are envelope data and are not
+    /// part of the returned signature preimage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload's fee intent or metadata violates the
+    /// canonical signature-bound fee policy.
+    pub fn into_payload(self) -> Result<TransactionPayload, TransactionSignatureError> {
+        Self::validate_payload_fee_payment(&self.payload)?;
+        Ok(self.payload)
+    }
+
+    /// Borrow the exact unsigned payload currently held by this builder.
+    #[must_use]
+    pub const fn payload(&self) -> &TransactionPayload {
+        &self.payload
+    }
+
     /// Set instructions for this transaction
     pub fn with_instructions<I>(mut self, instructions: impl IntoIterator<Item = I>) -> Self
     where
@@ -1328,6 +1652,12 @@ impl TransactionBuilder {
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
+        self
+    }
+
+    /// Set the required signature-bound fee payer and charge limits.
+    pub fn with_fee_payment_intent(mut self, intent: FeePaymentIntent) -> Self {
+        self.payload.fee_payment = intent;
         self
     }
 
@@ -1441,26 +1771,25 @@ impl TransactionBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when the configured signature backend cannot sign the
-    /// normalized transaction payload with the supplied private key.
+    /// Returns an error when the supplied key does not control the exact
+    /// signature-bound authority or the signature backend cannot sign.
     pub fn try_sign(
         self,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
-        let mut payload = self.payload;
+        let payload = self.payload;
 
-        // Normalise the authority signatory so that the transaction carries a
-        // single canonical copy of the public key derived from the signing key.
-        #[cfg(not(feature = "ffi_import"))]
-        {
-            use iroha_crypto::PublicKey;
+        Self::validate_payload_fee_payment(&payload)?;
 
-            if matches!(payload.authority.controller(), AccountController::Single(_)) {
-                let derived_pk = PublicKey::from(private_key.clone());
-                if payload.authority.try_signatory() != Some(&derived_pk) {
-                    payload.authority = AccountId::new(derived_pk);
-                }
-            }
+        use iroha_crypto::PublicKey;
+
+        let expected = payload
+            .authority
+            .try_signatory()
+            .ok_or(TransactionSignatureError::UnsupportedMultisigAuthority)?;
+        let derived = PublicKey::from(private_key.clone());
+        if expected != &derived {
+            return Err(TransactionSignatureError::AuthorityKeyMismatch);
         }
 
         let signature = TransactionSignature(
@@ -1499,6 +1828,7 @@ impl TransactionBuilder {
         signers: impl IntoIterator<Item = &'a iroha_crypto::PrivateKey>,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
         let payload = self.payload;
+        Self::validate_payload_fee_payment(&payload)?;
         let mut bundle = self
             .multisig_signatures
             .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
@@ -1568,9 +1898,138 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "exact slice".into())])
-            .sign(&private_key)
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "exact slice".into())])
+        .sign(&private_key)
+    }
+
+    fn sample_fee_asset() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("valid fee domain"),
+            "xor".parse().expect("valid fee asset name"),
+        )
+    }
+
+    #[test]
+    fn fee_payment_intent_requires_canonical_positive_component_limits() {
+        let asset = sample_fee_asset();
+        let nexus =
+            FeeChargeLimit::new(FeeChargeKind::Nexus, asset.clone(), Quantity::from(10_u32));
+        let pipeline = FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset.clone(),
+            Quantity::from(20_u32),
+        );
+
+        FeePaymentIntent::authority(vec![nexus.clone(), pipeline.clone()], None)
+            .validate()
+            .expect("ordered positive fee limits are valid");
+
+        let err = FeePaymentIntent::authority(vec![pipeline, nexus.clone()], None)
+            .validate()
+            .expect_err("reversed component order must fail");
+        assert_eq!(err, FeePaymentIntentError::NonCanonicalChargeLimitOrder);
+
+        let err = FeePaymentIntent::authority(vec![nexus.clone(), nexus], None)
+            .validate()
+            .expect_err("duplicate component must fail");
+        assert_eq!(
+            err,
+            FeePaymentIntentError::DuplicateChargeKind(FeeChargeKind::Nexus)
+        );
+
+        let err = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                asset.clone(),
+                Quantity::zero(),
+            )],
+            None,
+        )
+        .validate()
+        .expect_err("zero maximum must fail");
+        assert_eq!(
+            err,
+            FeePaymentIntentError::ZeroChargeLimit {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: asset,
+            }
+        );
+    }
+
+    #[test]
+    fn fee_quote_selection_comparison_binds_payer_revision_and_gas() {
+        let authority = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100));
+        assert!(
+            authority.has_same_payer_and_gas_bound(&FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    sample_fee_asset(),
+                    Quantity::from(1_u32),
+                )],
+                NonZeroU64::new(100),
+            ))
+        );
+        assert!(
+            !authority.has_same_payer_and_gas_bound(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(101),
+            ))
+        );
+
+        let sponsor = sample_signed_transaction().authority().clone();
+        let first = FeePaymentIntent::sponsor(
+            FeeSponsorProgramId::new(sponsor.clone(), "wallet".parse().expect("program name")),
+            1,
+            Vec::new(),
+            None,
+        );
+        let same = FeePaymentIntent::sponsor(
+            FeeSponsorProgramId::new(sponsor.clone(), "wallet".parse().expect("program name")),
+            1,
+            Vec::new(),
+            None,
+        );
+        let other_revision = FeePaymentIntent::sponsor(
+            FeeSponsorProgramId::new(sponsor, "wallet".parse().expect("program name")),
+            2,
+            Vec::new(),
+            None,
+        );
+        assert!(first.has_same_payer_and_gas_bound(&same));
+        assert!(!first.has_same_payer_and_gas_bound(&other_revision));
+        assert!(!first.has_same_payer_and_gas_bound(&authority));
+    }
+
+    #[test]
+    fn legacy_fee_metadata_is_rejected_before_signing() {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("valid metadata key"),
+            Json::new("legacy".to_owned()),
+        );
+        let err = FeePaymentIntent::validate_metadata(&metadata)
+            .expect_err("legacy fee metadata must fail closed");
+        assert_eq!(
+            err,
+            FeePaymentIntentError::LegacyMetadataKey("fee_sponsor".to_owned())
+        );
+    }
+
+    #[test]
+    fn signed_transaction_exposes_signature_bound_fee_intent() {
+        let transaction = sample_signed_transaction();
+        assert_eq!(
+            transaction.fee_payment_intent(),
+            &FeePaymentIntent::authority(Vec::new(), None)
+        );
+        transaction
+            .verify_signature()
+            .expect("the signed fee intent must verify with the payload");
     }
 
     #[test]
@@ -1596,16 +2055,20 @@ mod tests {
             0x4b, 0x4f, 0x54, 0x4f,
         ])
         .expect("bounded argument record");
-        let mut transaction = TransactionBuilder::new(chain, authority)
-            .with_executable(Executable::ContractCall(
-                crate::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash: iroha_crypto::Hash::new(b"signed-contract-code"),
-                    entrypoint: "call".to_owned(),
-                    arguments: Some(arguments),
-                },
-            ))
-            .sign(&private_key);
+        let mut transaction = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(
+            crate::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash: iroha_crypto::Hash::new(b"signed-contract-code"),
+                entrypoint: "call".to_owned(),
+                arguments: Some(arguments),
+            },
+        ))
+        .sign(&private_key);
         let signed_hash = transaction.hash();
         transaction
             .verify_signature()
@@ -1667,9 +2130,13 @@ mod tests {
         attachment.envelope_hash = Some(iroha_crypto::Hash::new(&proof_bytes).into());
         let instruction: InstructionBox = crate::isi::zk::VerifyProof::new(attachment).into();
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([instruction])
-            .sign(&private_key);
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(&private_key);
         let bytes = tx.encode_versioned();
         let decoded = SignedTransaction::decode_all_versioned(&bytes)
             .expect("versioned VerifyProof transaction must decode");
@@ -1743,10 +2210,14 @@ mod tests {
 
         let authority = AccountId::new(public_key.clone());
 
-        let tx = TransactionBuilder::new(chain, authority.clone())
-            .with_instructions(core::iter::once(instruction))
-            .with_metadata(Metadata::default())
-            .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction))
+        .with_metadata(Metadata::default())
+        .sign(key_pair.private_key());
 
         assert_eq!(tx.authority().signatory(), key_pair.public_key());
 
@@ -1766,8 +2237,12 @@ mod tests {
         let chain: ChainId = "test-chain".parse().unwrap();
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let builder = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "external signature".into())]);
+        let builder = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external signature".into())]);
 
         let payload_bytes = builder.encode_payload();
         let payload_hash = builder.payload_hash();
@@ -1788,8 +2263,12 @@ mod tests {
         let chain: ChainId = "external-payload-roundtrip".parse().unwrap();
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "decode payload".into())]);
+        let mut builder = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "decode payload".into())]);
         builder.set_creation_time(Duration::from_millis(42));
         builder.set_nonce(NonZeroU32::new(7).unwrap());
 
@@ -1816,14 +2295,73 @@ mod tests {
     }
 
     #[test]
+    fn transaction_builder_payload_roundtrip_preserves_quote_to_sign_preimage() {
+        let chain: ChainId = "quote-sign-payload".parse().unwrap();
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let intent = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                sample_fee_asset(),
+                Quantity::from(10_u32),
+            )],
+            None,
+        );
+        let mut builder = TransactionBuilder::new(chain, authority, intent)
+            .with_instructions([Log::new(Level::INFO, "quote then sign".into())]);
+        builder.set_creation_time(Duration::from_millis(42));
+
+        let payload = builder.into_payload().expect("valid unsigned payload");
+        let expected = norito::codec::encode_adaptive(&payload);
+        let rebuilt = TransactionBuilder::from_payload(payload.clone())
+            .expect("quoted payload reconstructs a builder");
+        assert_eq!(rebuilt.encode_payload(), expected);
+
+        let signed = rebuilt
+            .try_sign(key_pair.private_key())
+            .expect("exact quoted payload signs");
+        assert_eq!(signed.payload(), &payload);
+        signed.verify_signature().expect("signature verifies");
+    }
+
+    #[test]
+    fn transaction_builder_from_payload_rejects_retired_fee_metadata() {
+        let chain: ChainId = "invalid-quoted-payload".parse().unwrap();
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut payload = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .into_payload()
+        .expect("default payload is structurally valid");
+        payload.metadata.insert(
+            "gas_limit".parse().expect("metadata key"),
+            Json::new(10_u64),
+        );
+
+        let error = TransactionBuilder::from_payload(payload)
+            .expect_err("retired fee metadata must fail before signing");
+        assert!(matches!(
+            error,
+            TransactionSignatureError::InvalidFeePaymentIntent(_)
+        ));
+    }
+
+    #[test]
     fn transaction_builder_try_sign_matches_compatibility_sign() {
         let chain: ChainId = "try-sign-chain".parse().unwrap();
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let make_builder = || {
-            let mut builder = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_instructions([Log::new(Level::INFO, "fallible tx signing".into())])
-                .with_metadata(Metadata::default());
+            let mut builder = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "fallible tx signing".into())])
+            .with_metadata(Metadata::default());
             builder.set_creation_time(Duration::from_millis(1_234));
             builder
         };
@@ -1856,7 +2394,12 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let signed_tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let signed_tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(&private_key);
         let signature = signed_tx.signature().clone();
 
         let encoded = norito::to_bytes(&signature).expect("encode signature");
@@ -2121,9 +2664,13 @@ mod tests {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
         let chain: ChainId = "mldsa-tx-signature-length".parse().expect("chain id");
         let authority = AccountId::new(key_pair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "mldsa tx".into())])
-            .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "mldsa tx".into())])
+        .sign(key_pair.private_key());
 
         tx.verify_signature()
             .expect("valid ML-DSA transaction signature verifies");
@@ -2199,9 +2746,13 @@ mod tests {
             ))),
         ];
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(ordered.clone())
-            .sign(&private_key);
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(ordered.clone())
+        .sign(&private_key);
 
         let bytes = norito::codec::encode_adaptive(&tx);
         let (decoded, used): (SignedTransaction, usize) =
@@ -2224,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_overwrites_mismatched_signatory_with_signing_key_public_part() {
+    fn sign_rejects_mismatched_signatory_without_rewriting_payload() {
         let chain: ChainId = "test-chain".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let stored_public_key: iroha_crypto::PublicKey =
@@ -2238,11 +2789,16 @@ mod tests {
         let key_pair = iroha_crypto::KeyPair::from_private_key(private_key).unwrap();
         let authority = AccountId::new(stored_public_key.clone());
 
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(key_pair.private_key());
-
         assert_ne!(authority.signatory(), key_pair.public_key());
-        assert_eq!(tx.authority().signatory(), key_pair.public_key());
-        assert!(tx.verify_signature().is_ok());
+        let error = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(key_pair.private_key())
+        .expect_err("signing must preserve and reject a mismatched authority");
+        assert_eq!(error, TransactionSignatureError::AuthorityKeyMismatch);
+        assert_eq!(authority.signatory(), &stored_public_key);
     }
 
     #[test]
@@ -2259,7 +2815,12 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(&private_key);
         let entry = TransactionEntrypoint::External(tx.clone());
         assert_eq!(HashOf::new(&entry), entry.hash());
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
@@ -2293,6 +2854,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
@@ -2338,6 +2900,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let member_sig = checked_transaction_payload_signature(signer.private_key(), &payload);
@@ -2363,9 +2926,13 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let mut tx = TransactionBuilder::new(chain, authority.clone())
-            .with_instructions([Log::new(Level::INFO, "single authority".into())])
-            .sign(keypair.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "single authority".into())])
+        .sign(keypair.private_key());
 
         // Attach a multisig bundle that does not correspond to the authority; single controllers
         // should ignore these entries during verification.
@@ -2395,8 +2962,12 @@ mod tests {
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
         let authority = AccountId::new_multisig(policy);
-        let builder = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "empty multisig".into())]);
+        let builder = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "empty multisig".into())]);
 
         let err = builder
             .try_sign_multisig(core::iter::empty::<&iroha_crypto::PrivateKey>())
@@ -2423,6 +2994,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
@@ -2464,6 +3036,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
@@ -2512,6 +3085,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
@@ -2559,8 +3133,12 @@ mod tests {
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .sign_multisig(vec![ed.private_key(), secp.private_key()]);
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign_multisig(vec![ed.private_key(), secp.private_key()]);
 
         assert_eq!(tx.signature_count(), 2);
         tx.verify_signature()
@@ -2585,6 +3163,7 @@ mod tests {
             instructions: Executable::Instructions(ConstVec::from(Vec::new())),
             time_to_live_ms: None,
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         };
         let signature = checked_transaction_payload_signature(signer.private_key(), &payload);
@@ -2708,9 +3287,13 @@ mod tests {
                 .unwrap();
         let authority = AccountId::new(public_key);
 
-        let tx = TransactionBuilder::new(chain, authority.clone())
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(&private_key);
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(Vec::new().into()))
+        .sign(&private_key);
         let entry = TransactionEntrypoint::External(tx);
         let json = norito::json::to_json(&entry).expect("serialize external entrypoint");
         let decoded: TransactionEntrypoint =
@@ -2768,7 +3351,11 @@ mod ttl_tests {
                 .parse()
                 .expect("public key"),
         );
-        let mut builder = TransactionBuilder::new(chain, authority);
+        let mut builder = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_ttl(Duration::from_millis(0));
         // Internally we approximate zero by 1ms to distinguish from None
         let ttl = builder
@@ -2800,9 +3387,13 @@ mod ttl_tests {
             iroha_primitives::json::Json::from(3_u64),
         );
 
-        let tx = TransactionBuilder::new(chain, account_id)
-            .with_metadata(metadata)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .sign(keypair.private_key());
 
         assert_eq!(tx.expires_at_height().expect("parse metadata"), Some(10));
         assert_eq!(tx.tx_sequence().expect("parse metadata"), Some(3));
@@ -2822,9 +3413,13 @@ mod ttl_tests {
             iroha_primitives::json::Json::new("not-a-number"),
         );
 
-        let tx = TransactionBuilder::new(chain, account_id)
-            .with_metadata(metadata)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .sign(keypair.private_key());
 
         assert!(tx.expires_at_height().is_err());
     }
@@ -2854,9 +3449,13 @@ mod fault_injection_tests {
     #[test]
     fn injects_into_ivm_bytecode_and_records_trailer() {
         let (chain, account_id, keypair) = sample_account();
-        let mut tx = TransactionBuilder::new(chain, account_id.clone())
-            .with_bytecode(IvmBytecode::from_compiled(vec![0xAA, 0xBB, 0xCC]))
-            .sign(keypair.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain,
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_bytecode(IvmBytecode::from_compiled(vec![0xAA, 0xBB, 0xCC]))
+        .sign(keypair.private_key());
 
         let original_hash = tx.hash();
         let original_bytes = match tx.instructions() {
@@ -2894,9 +3493,13 @@ mod fault_injection_tests {
     #[test]
     fn repeated_injection_appends_trailer_instructions() {
         let (chain, account_id, keypair) = sample_account();
-        let mut tx = TransactionBuilder::new(chain, account_id)
-            .with_bytecode(IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03, 0x04]))
-            .sign(keypair.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_bytecode(IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03, 0x04]))
+        .sign(keypair.private_key());
 
         let first: InstructionBox = Log {
             level: Level::WARN,
@@ -2959,10 +3562,14 @@ mod attachments_tests {
                 crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
             )]);
 
-        let tx: SignedTransaction = TransactionBuilder::new(chain, authority)
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .with_attachments(attachments)
-            .sign(&private_key);
+        let tx: SignedTransaction = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(Vec::new().into()))
+        .with_attachments(attachments)
+        .sign(&private_key);
 
         let bytes = norito::to_bytes(&tx).expect("encode");
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");

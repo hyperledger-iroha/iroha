@@ -971,7 +971,10 @@ pub async fn setup_runtime_governance_fixture(
     ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
         .wrap_err("seed governance domain registration lease")?;
     let register_domain_tx_hash = alice
-        .submit(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit(
+            Register::domain(Domain::new(gov_domain_id.clone())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit governance domain registration")?;
     wait_for_tx_applied(
         &http,
@@ -986,10 +989,13 @@ pub async fn setup_runtime_governance_fixture(
         .await
         .wrap_err("wait for governance domain registration")?;
     let register_asset_definition_tx_hash = alice
-        .submit(Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        ))
+        .submit(
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_def_id.clone())
+                    .with_name(asset_def_id.name().to_string()),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit governance numeric asset definition registration")?;
     wait_for_tx_applied(
         &http,
@@ -1015,12 +1021,15 @@ pub async fn setup_runtime_governance_fixture(
     .into();
     let manage_parliament_perm: Permission = CanManageParliament.into();
     let grant_permissions_tx_hash = alice
-        .submit_all([
-            Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
-            Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
-            Grant::account_permission(enact_perm, ALICE_ID.clone()),
-            Grant::account_permission(manage_parliament_perm, ALICE_ID.clone()),
-        ])
+        .submit_all(
+            [
+                Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
+                Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
+                Grant::account_permission(enact_perm, ALICE_ID.clone()),
+                Grant::account_permission(manage_parliament_perm, ALICE_ID.clone()),
+            ],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit governance proposal/enact permission grants to alice")?;
     wait_for_tx_applied(
         &http,
@@ -1059,10 +1068,13 @@ pub async fn setup_runtime_governance_fixture(
         + extra_runtime_budget;
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_quantity(
-            u64::try_from(total_fund).expect("total fund should fit u64"),
-            alice_asset_id.clone(),
-        ))
+        .submit(
+            Mint::asset_quantity(
+                u64::try_from(total_fund).expect("total fund should fit u64"),
+                alice_asset_id.clone(),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("mint governance balances for runtime-governance fixture setup")?;
     wait_for_tx_applied(
         &http,
@@ -1083,13 +1095,16 @@ pub async fn setup_runtime_governance_fixture(
     .await?;
 
     let funding_distribution_tx_hash = alice
-        .submit_all(citizens.iter().map(|(account_id, _)| {
-            Transfer::asset_quantity(
-                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-                u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
-                account_id.clone(),
-            )
-        }))
+        .submit_all(
+            citizens.iter().map(|(account_id, _)| {
+                Transfer::asset_quantity(
+                    AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                    u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
+                    account_id.clone(),
+                )
+            }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit citizen funding allocations for runtime-governance fixture")?;
     wait_for_tx_applied(
         &http,
@@ -1114,10 +1129,13 @@ pub async fn setup_runtime_governance_fixture(
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
         let tx_hash = citizen_client
-            .submit(RegisterCitizen {
-                owner: account_id.clone(),
-                amount: CITIZEN_BOND,
-            })
+            .submit(
+                RegisterCitizen {
+                    owner: account_id.clone(),
+                    amount: CITIZEN_BOND,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| format!("register citizen bond #{idx} ({account_id})"))?;
         wait_for_tx_applied(
             &http,
@@ -1155,14 +1173,17 @@ pub async fn setup_runtime_governance_fixture(
         .map(|(account_id, _)| account_id.clone())
         .collect();
     alice
-        .submit(PersistCouncilForEpoch {
-            epoch: 0,
-            members: council_members.clone(),
-            alternates: council_alternates,
-            verified: 0,
-            candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
-            derived_by: CouncilDerivationKind::Fallback,
-        })
+        .submit(
+            PersistCouncilForEpoch {
+                epoch: 0,
+                members: council_members.clone(),
+                alternates: council_alternates,
+                verified: 0,
+                candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
+                derived_by: CouncilDerivationKind::Fallback,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("persist fallback council for runtime-governance fixture")?;
     let first_council_member = council_members
         .first()
@@ -1282,7 +1303,7 @@ async fn cast_stage_approvals_from_snapshot(
                     body: *body,
                     proposal_id,
                     decision: ParliamentDecision::Approve,
-                })
+                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!(
                         "{context}: submit {body:?} signed approval ballot #{approval_idx} ({account_id})"
@@ -1384,11 +1405,14 @@ pub async fn enact_runtime_upgrade_round(
 
     let runtime_propose_tx_hash = fixture
         .alice
-        .submit(ProposeRuntimeUpgradeProposal {
-            manifest: runtime_manifest.clone(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-        })
+        .submit(
+            ProposeRuntimeUpgradeProposal {
+                manifest: runtime_manifest.clone(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| {
             format!("propose runtime upgrade referendum through governance ({round_label})")
         })?;
@@ -1418,13 +1442,16 @@ pub async fn enact_runtime_upgrade_round(
         .collect();
     fixture
         .alice
-        .submit_all(runtime_voters.iter().map(|(account_id, _)| {
-            let ballot_perm: Permission = CanSubmitGovernanceBallot {
-                referendum_id: runtime_referendum_id.clone(),
-            }
-            .into();
-            Grant::account_permission(ballot_perm, account_id.clone())
-        }))
+        .submit_all(
+            runtime_voters.iter().map(|(account_id, _)| {
+                let ballot_perm: Permission = CanSubmitGovernanceBallot {
+                    referendum_id: runtime_referendum_id.clone(),
+                }
+                .into();
+                Grant::account_permission(ballot_perm, account_id.clone())
+            }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("grant runtime referendum ballot permissions ({round_label})"))?;
 
     let runtime_transfer_amount =
@@ -1442,13 +1469,16 @@ pub async fn enact_runtime_upgrade_round(
         .collect::<Result<Vec<_>>>()?;
     fixture
         .alice
-        .submit_all(runtime_voters.iter().map(|(account_id, _)| {
-            Transfer::asset_quantity(
-                AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone()),
-                runtime_transfer_amount,
-                account_id.clone(),
-            )
-        }))
+        .submit_all(
+            runtime_voters.iter().map(|(account_id, _)| {
+                Transfer::asset_quantity(
+                    AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone()),
+                    runtime_transfer_amount,
+                    account_id.clone(),
+                )
+            }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("fund runtime referendum voters ({round_label})"))?;
     for (account_id, expected_balance) in runtime_expected_balances {
         wait_for_asset_balance(
@@ -1534,13 +1564,16 @@ pub async fn enact_runtime_upgrade_round(
     for (idx, (account_id, key_pair)) in runtime_voters.iter().enumerate() {
         let citizen_client = tuned_client_for_account(fixture, account_id, key_pair);
         citizen_client
-            .submit(CastPlainBallot {
-                referendum_id: runtime_referendum_id.clone(),
-                owner: account_id.clone(),
-                amount: BALLOT_LOCK,
-                duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: u8::from(idx >= THIRD_REFERENDUM_APPROVE_VOTERS),
-            })
+            .submit(
+                CastPlainBallot {
+                    referendum_id: runtime_referendum_id.clone(),
+                    owner: account_id.clone(),
+                    amount: BALLOT_LOCK,
+                    duration_blocks: BALLOT_DURATION_BLOCKS,
+                    direction: u8::from(idx >= THIRD_REFERENDUM_APPROVE_VOTERS),
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("cast runtime referendum ballot #{idx} ({account_id}) ({round_label})")
             })?;
@@ -1558,10 +1591,13 @@ pub async fn enact_runtime_upgrade_round(
 
     let runtime_finalize_tx_hash = fixture
         .alice
-        .submit(FinalizeReferendum {
-            referendum_id: runtime_referendum_id.clone(),
-            proposal_id: runtime_proposal_id,
-        })
+        .submit(
+            FinalizeReferendum {
+                referendum_id: runtime_referendum_id.clone(),
+                proposal_id: runtime_proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("finalize runtime referendum ({round_label})"))?;
     wait_for_tx_applied(
         &fixture.http,
@@ -1583,14 +1619,17 @@ pub async fn enact_runtime_upgrade_round(
 
     let runtime_enact_tx_hash = fixture
         .alice
-        .submit(EnactReferendum {
-            referendum_id: runtime_proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: runtime_proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("enact runtime referendum ({round_label})"))?;
     wait_for_tx_applied(
         &fixture.http,
@@ -1630,7 +1669,10 @@ pub async fn enact_runtime_upgrade_round(
         for tick_idx in 0..40_u64 {
             let tick_tx_hash = fixture
                 .alice
-                .submit(Mint::asset_quantity(1_u32, fixture.alice_asset_id.clone()))
+                .submit(
+                    Mint::asset_quantity(1_u32, fixture.alice_asset_id.clone()),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .wrap_err_with(|| {
                     format!(
                         "submit runtime activation tick transaction #{tick_idx} ({round_label})"

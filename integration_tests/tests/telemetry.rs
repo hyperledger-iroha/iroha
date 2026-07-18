@@ -165,9 +165,10 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     }
 
     // commit_time
-    network
-        .client()
-        .submit_blocking(Log::new(Level::INFO, "mewo".to_owned()))?;
+    network.client().submit_blocking(
+        Log::new(Level::INFO, "mewo".to_owned()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
 
     for client in network

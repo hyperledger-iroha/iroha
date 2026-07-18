@@ -40,15 +40,16 @@ use rustix::fs::{RenameFlags, renameat_with};
 use super::{
     AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX, AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
     AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, BlockStore, BlockStoreCommitMarker, BoundProgressDirectory,
-    BoundProgressPair, CERTIFIED_LANE_BLOCKS_DATA_FILE, CERTIFIED_LANE_BLOCKS_INDEX_FILE,
-    COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME, INDEX_FILE_NAME, Kura,
-    LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE,
-    LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE, LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
-    LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord,
-    RecoveredLaneBlockPayload, Result, create_dir_all_with_context, sync_dir,
+    BoundProgressNamespace, BoundProgressPair, BoundProgressRecoveryFailure,
+    CERTIFIED_LANE_BLOCKS_DATA_FILE, CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME,
+    DATA_FILE_NAME, Error, HASHES_FILE_NAME, INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE,
+    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LaneBlockApplicationReceiptArtifact,
+    LaneBlockApplicationReceiptArtifactFormat, LaneBlockExecutionInputArtifact,
+    LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord, RecoveredLaneBlockPayload,
+    Result, create_dir_all_with_context, sync_dir,
 };
 #[cfg(test)]
 use super::{
@@ -135,6 +136,7 @@ impl ProgressSidecarDurabilityFault {
 #[cfg(test)]
 std::thread_local! {
     static FAIL_ARCHIVED_RECEIPT_DURABILITY_ATTESTATION: std::cell::Cell<Option<ProgressSidecarDurabilityFault>> = const { std::cell::Cell::new(None) };
+    static SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY: std::cell::RefCell<Option<(String, PathBuf)>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -151,6 +153,39 @@ fn inject_archived_receipt_durability_fault_for_test() {
     {
         fault.inject();
     }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+fn substitute_progress_directory_after_recovery_for_test(kind: &str, displaced: PathBuf) {
+    SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY.with(|slot| {
+        let previous = slot.replace(Some((kind.to_owned(), displaced)));
+        assert!(
+            previous.is_none(),
+            "progress-directory substitution injection must be single-owner"
+        );
+    });
+}
+
+#[cfg(test)]
+fn maybe_substitute_progress_directory_after_recovery_for_test(kind: &str, lane_artifacts: &Path) {
+    let displaced = SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY.with(|slot| {
+        let mut injection = slot.borrow_mut();
+        if injection
+            .as_ref()
+            .is_some_and(|(target_kind, _)| target_kind == kind)
+        {
+            injection.take().map(|(_, displaced)| displaced)
+        } else {
+            None
+        }
+    });
+    let Some(displaced) = displaced else {
+        return;
+    };
+    fs::rename(lane_artifacts, &displaced)
+        .expect("displace progress directory at the injected refresh boundary");
+    fs::create_dir(lane_artifacts)
+        .expect("install substituted progress directory at the injected refresh boundary");
 }
 
 #[cfg(test)]
@@ -4879,8 +4914,51 @@ impl Kura {
                 }
                 continue;
             }
-            let lane_artifacts_guard =
-                Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
+            let (lane_data, lane_index) =
+                Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+            let (autonomous_data, autonomous_index) =
+                Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+            let (input_data, input_index) =
+                Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+            let (preflight_data, preflight_index) =
+                Self::lane_block_execution_preflight_paths_for_entry(&entry, &self.store_root);
+            let (certified_data, certified_index) =
+                Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+            let (receipt_data, receipt_index) =
+                Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+            let fixed_progress_pairs: [(&Path, &Path, &str); 6] = [
+                (
+                    &lane_data,
+                    &lane_index,
+                    "lane retirement lane-block artifact",
+                ),
+                (
+                    &autonomous_data,
+                    &autonomous_index,
+                    "lane retirement autonomous artifact",
+                ),
+                (&input_data, &input_index, "lane retirement execution input"),
+                (
+                    &preflight_data,
+                    &preflight_index,
+                    "lane retirement execution preflight",
+                ),
+                (
+                    &certified_data,
+                    &certified_index,
+                    "lane retirement certified lane block",
+                ),
+                (
+                    &receipt_data,
+                    &receipt_index,
+                    "lane retirement application receipt",
+                ),
+            ];
+            let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
+                &lane_artifacts,
+                &fixed_progress_pairs,
+                "first-release lane retirement",
+            )?;
             let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
                 &lane_artifacts_guard,
                 MAX_LANE_RETIREMENT_ARTIFACT_FILES,
@@ -4973,9 +5051,6 @@ impl Kura {
                     ));
                 }
             }
-
-            let (lane_data, lane_index) =
-                Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
             let lane_bound = self.open_geometry_bound_progress_sidecar(&lane_data, &lane_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
                 &lane_bound,
@@ -4984,8 +5059,6 @@ impl Kura {
                 &lane_index,
                 "lane retirement lane-block artifact",
             )?;
-            let (autonomous_data, autonomous_index) =
-                Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
             let autonomous_bound =
                 self.open_geometry_bound_progress_sidecar(&autonomous_data, &autonomous_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
@@ -5001,9 +5074,6 @@ impl Kura {
                     "retired autonomous lane sidecar is not valid first-release state",
                 ));
             }
-
-            let (input_data, input_index) =
-                Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
             let mut input_bound =
                 self.open_geometry_bound_progress_sidecar(&input_data, &input_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
@@ -5049,9 +5119,6 @@ impl Kura {
                     ));
                 }
             }
-
-            let (preflight_data, preflight_index) =
-                Self::lane_block_execution_preflight_paths_for_entry(&entry, &self.store_root);
             let mut preflight_bound =
                 self.open_geometry_bound_progress_sidecar(&preflight_data, &preflight_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
@@ -5097,9 +5164,6 @@ impl Kura {
                     ));
                 }
             }
-
-            let (certified_data, certified_index) =
-                Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
             let mut certified_bound =
                 self.open_geometry_bound_progress_sidecar(&certified_data, &certified_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
@@ -5153,9 +5217,6 @@ impl Kura {
                     "lane retirement certified lane block durability attestation failed",
                 ));
             }
-
-            let (receipt_data, receipt_index) =
-                Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
             let mut receipt_bound =
                 self.open_geometry_bound_progress_sidecar(&receipt_data, &receipt_index)?;
             self.ensure_geometry_progress_pair_uses_directory(
@@ -8192,6 +8253,115 @@ impl Kura {
         self.open_bound_progress_pair(data_path, index_path)
     }
 
+    /// Recover the fixed progress pairs before freezing the retirement namespace.
+    ///
+    /// Every recovery operation preserves one authenticated directory-object identity. Recovery
+    /// may legitimately change directory timestamps while promoting or removing a temp, so its
+    /// handle is rebound and same-object checked after each pair; the immutable scan receives a
+    /// final fresh handle only after the same identity proof.
+    fn recover_geometry_progress_pairs_before_snapshot(
+        &self,
+        lane_artifacts: &Path,
+        pairs: &[(&Path, &Path, &str)],
+        context: &str,
+    ) -> Result<BoundProgressDirectory> {
+        if !super::sumeragi_v2_validator_storage_supported() {
+            return Err(self.geometry_error_owned(
+                ErrorKind::Unsupported,
+                format!(
+                    "{context} requires the first-release Linux/macOS validator-storage contract"
+                ),
+            ));
+        }
+        if pairs.is_empty() {
+            return Err(self.geometry_error_owned(
+                ErrorKind::InvalidInput,
+                format!("{context} has no fixed progress-sidecar pairs"),
+            ));
+        }
+        let mut recovery_directory =
+            Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;
+        for &(data_path, index_path, kind) in pairs {
+            if data_path.parent() != Some(lane_artifacts)
+                || index_path.parent() != Some(lane_artifacts)
+            {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("{kind} is outside the authenticated lane-artifact directory"),
+                ));
+            }
+            let pair_namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+            self.ensure_geometry_progress_namespace_uses_directory(
+                &pair_namespace,
+                &recovery_directory,
+                data_path,
+                index_path,
+                kind,
+            )?;
+            if let Err(failure) = self
+                .recover_bound_progress_sidecar_artifacts_in_namespace_classified(
+                    &pair_namespace,
+                    data_path,
+                    index_path,
+                    kind,
+                )
+            {
+                let error_kind = match failure {
+                    BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock,
+                    BoundProgressRecoveryFailure::InvalidData => ErrorKind::InvalidData,
+                };
+                return Err(self.geometry_error_owned(
+                    error_kind,
+                    format!("{kind} recovery did not reach a durable fixed point"),
+                ));
+            }
+            if !Self::progress_mutation_namespace_unchanged(&pair_namespace) {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("{kind} namespace changed during progress recovery"),
+                ));
+            }
+            #[cfg(test)]
+            maybe_substitute_progress_directory_after_recovery_for_test(kind, lane_artifacts);
+            // Promotion or cleanup legitimately changes directory timestamps.
+            // Rebind the guard after each pair, while proving that the path
+            // still names the same directory object, so the next pair is not
+            // compared with stale mutation metadata.
+            let refreshed_directory =
+                Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;
+            if recovery_directory.expected_path != refreshed_directory.expected_path
+                || recovery_directory.canonical_path != refreshed_directory.canonical_path
+                || !Self::sidecar_metadata_same_object(
+                    &recovery_directory.metadata,
+                    &refreshed_directory.metadata,
+                )
+                || !self.geometry_bound_progress_directory_unchanged(&refreshed_directory)
+            {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("{kind} artifact directory changed during progress recovery"),
+                ));
+            }
+            recovery_directory = refreshed_directory;
+        }
+        let immutable_directory =
+            Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;
+        if recovery_directory.expected_path != immutable_directory.expected_path
+            || recovery_directory.canonical_path != immutable_directory.canonical_path
+            || !Self::sidecar_metadata_same_object(
+                &recovery_directory.metadata,
+                &immutable_directory.metadata,
+            )
+            || !self.geometry_bound_progress_directory_unchanged(&immutable_directory)
+        {
+            return Err(self.geometry_error_owned(
+                ErrorKind::InvalidData,
+                format!("{context} artifact namespace changed before its immutable scan"),
+            ));
+        }
+        Ok(immutable_directory)
+    }
+
     #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
     fn geometry_bound_progress_directory_snapshot(
         &self,
@@ -8342,6 +8512,19 @@ impl Kura {
             BoundProgressPair::Absent(namespace) => namespace,
             BoundProgressPair::Present(sidecar) => &sidecar.namespace,
         };
+        self.ensure_geometry_progress_namespace_uses_directory(
+            namespace, directory, data_path, index_path, context,
+        )
+    }
+
+    fn ensure_geometry_progress_namespace_uses_directory(
+        &self,
+        namespace: &BoundProgressNamespace,
+        directory: &BoundProgressDirectory,
+        data_path: &Path,
+        index_path: &Path,
+        context: &str,
+    ) -> Result<()> {
         let immediate = namespace.directories.first().ok_or_else(|| {
             self.geometry_error_owned(
                 ErrorKind::InvalidData,
@@ -13000,6 +13183,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             ChainId::from("geometry-durability-merge"),
             (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
             Level::INFO,
@@ -13411,13 +13595,16 @@ mod tests {
         let chain: ChainId = "geometry-retirement-autonomous"
             .parse()
             .expect("geometry retirement chain id");
-        let transaction =
-            TransactionBuilder::new(chain.clone(), (*SAMPLE_GENESIS_ACCOUNT_ID).clone())
-                .with_instructions([Log::new(
-                    Level::INFO,
-                    "geometry retirement payload".to_owned(),
-                )])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let transaction = TransactionBuilder::new(
+            chain.clone(),
+            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "geometry retirement payload".to_owned(),
+        )])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let source_hash = transaction.hash();
         let mut source_id = [0_u8; Hash::LENGTH];
         source_id.copy_from_slice(source_hash.as_ref());
@@ -13920,25 +14107,19 @@ mod tests {
                 "data-only",
                 AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
                 ErrorKind::InvalidData,
-                "retired autonomous lane sidecar is not valid first-release state",
+                "lane retirement autonomous artifact recovery did not reach a durable fixed point",
             ),
             (
                 "index-only",
                 AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
                 ErrorKind::InvalidData,
-                "retired autonomous lane sidecar is not valid first-release state",
+                "lane retirement autonomous artifact recovery did not reach a durable fixed point",
             ),
             (
                 "view-state",
                 "autonomous_view_00000000000000000001.norito",
                 ErrorKind::InvalidData,
                 "retired autonomous lane sidecar is not valid first-release state",
-            ),
-            (
-                "partial-temp",
-                "autonomous_blocks.norito.tmp",
-                ErrorKind::WouldBlock,
-                "lane retirement scan found an in-flight sidecar",
             ),
         ] {
             let temp = TempDir::new().expect("temporary directory");
@@ -13985,6 +14166,388 @@ mod tests {
                 );
             assert_geometry_io_error(&error, expected_kind, expected_message);
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
+        for (label, data_file) in [
+            ("ownership", LANE_ARTIFACTS_DATA_FILE),
+            ("autonomous", AUTONOMOUS_LANE_BLOCKS_DATA_FILE),
+            ("execution-input", LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE),
+            (
+                "execution-preflight",
+                LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+            ),
+            ("certified", CERTIFIED_LANE_BLOCKS_DATA_FILE),
+            (
+                "application-receipt",
+                LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+            ),
+        ] {
+            let temp = TempDir::new().expect("temporary directory");
+            let root = temp.path().join(label);
+            let (initial, extended) = retirement_test_configs();
+            let (extended_incarnations, extended_activations) = retirement_test_geometry();
+            let initial_incarnations =
+                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+            let initial_activations =
+                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+            let (kura, _, _) = open_published_retirement_kura(
+                &root,
+                &initial,
+                &extended,
+                &initial_incarnations,
+                &extended_incarnations,
+                &initial_activations,
+                &extended_activations,
+            );
+            let retiring_lane = LaneId::new(1);
+            let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+            let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+            let temp_path = artifact_dir.join(data_file).with_extension("norito.tmp");
+            fs::write(&temp_path, b"unpublished progress rewrite")
+                .expect("stage unpublished progress data temp");
+
+            kura.first_release_lane_retirement_admissible_for_test(
+                retiring_lane,
+                retiring_entry.dataspace_id,
+                extended_incarnations[&retiring_lane],
+            )
+            .unwrap_or_else(|error| {
+                panic!("{label} unpublished temp should be recoverable: {error:?}")
+            });
+            assert!(
+                !temp_path.exists(),
+                "{label} unpublished temp must be removed before the immutable scan"
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
+        for (label, data_file, kind) in [
+            (
+                "ownership",
+                LANE_ARTIFACTS_DATA_FILE,
+                "lane retirement lane-block artifact",
+            ),
+            (
+                "autonomous",
+                AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
+                "lane retirement autonomous artifact",
+            ),
+            (
+                "execution-input",
+                LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
+                "lane retirement execution input",
+            ),
+            (
+                "execution-preflight",
+                LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+                "lane retirement execution preflight",
+            ),
+            (
+                "certified",
+                CERTIFIED_LANE_BLOCKS_DATA_FILE,
+                "lane retirement certified lane block",
+            ),
+            (
+                "application-receipt",
+                LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+                "lane retirement application receipt",
+            ),
+        ] {
+            let temp = TempDir::new().expect("temporary directory");
+            let root = temp.path().join(label);
+            let (initial, extended) = retirement_test_configs();
+            let (extended_incarnations, extended_activations) = retirement_test_geometry();
+            let initial_incarnations =
+                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+            let initial_activations =
+                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+            let (kura, _, _) = open_published_retirement_kura(
+                &root,
+                &initial,
+                &extended,
+                &initial_incarnations,
+                &extended_incarnations,
+                &initial_activations,
+                &extended_activations,
+            );
+            let retiring_lane = LaneId::new(1);
+            let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+            let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+            let temp_data_path = artifact_dir.join(data_file).with_extension("norito.tmp");
+            fs::write(&temp_data_path, b"unpublished progress rewrite")
+                .expect("stage recoverable progress temp");
+            let sentinel_name = "refresh-identity-sentinel";
+            let sentinel: &[u8] = b"bound directory object must remain authoritative";
+            fs::write(artifact_dir.join(sentinel_name), sentinel)
+                .expect("write bound-directory identity sentinel");
+            let displaced = root.join("displaced-lane-artifacts");
+            substitute_progress_directory_after_recovery_for_test(kind, displaced.clone());
+
+            let error = kura
+                .first_release_lane_retirement_admissible_for_test(
+                    retiring_lane,
+                    retiring_entry.dataspace_id,
+                    extended_incarnations[&retiring_lane],
+                )
+                .expect_err("directory substitution must fail at the pair-refresh boundary");
+            assert_geometry_io_error(
+                &error,
+                ErrorKind::InvalidData,
+                &format!("{kind} artifact directory changed during progress recovery"),
+            );
+            assert!(
+                artifact_dir.is_dir(),
+                "replacement directory remains visible"
+            );
+            assert_eq!(
+                fs::read(displaced.join(sentinel_name)).expect("read displaced identity sentinel"),
+                sentinel,
+            );
+            assert!(
+                !displaced
+                    .join(data_file)
+                    .with_extension("norito.tmp")
+                    .exists(),
+                "{label} cleanup must finish before the refresh substitution"
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("retryable-pair-recovery");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            &root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        let data_path = artifact_dir.join(LANE_ARTIFACTS_DATA_FILE);
+        let index_path = artifact_dir.join(LANE_ARTIFACTS_INDEX_FILE);
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let payload: &[u8] = b"retryable ownership rewrite";
+        fs::write(&temp_data_path, payload).expect("stage retryable ownership payload");
+        fs::write(
+            &temp_index_path,
+            SidecarIndexEntry {
+                offset: 0,
+                len: u64::try_from(payload.len()).expect("test payload length"),
+            }
+            .to_bytes(),
+        )
+        .expect("stage retryable ownership index");
+        ProgressSidecarDurabilityFault::Data.inject();
+
+        let error = kura
+            .first_release_lane_retirement_admissible_for_test(
+                retiring_lane,
+                retiring_entry.dataspace_id,
+                extended_incarnations[&retiring_lane],
+            )
+            .expect_err("an interrupted recovery sync must remain retryable");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::WouldBlock,
+            "lane retirement lane-block artifact recovery did not reach a durable fixed point",
+        );
+        assert!(temp_data_path.is_file());
+        assert!(temp_index_path.is_file());
+
+        kura.first_release_lane_retirement_admissible_for_test(
+            retiring_lane,
+            retiring_entry.dataspace_id,
+            extended_incarnations[&retiring_lane],
+        )
+        .expect("retry must recover the same complete rewrite exactly once");
+        assert!(data_path.is_file());
+        assert!(index_path.is_file());
+        assert!(!temp_data_path.exists());
+        assert!(!temp_index_path.exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_recovers_complete_certified_rewrite_before_snapshot() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("complete-certified-rewrite");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            &root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+        let retiring_incarnation = extended_incarnations[&retiring_lane];
+        let _work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(retiring_entry, &root);
+        let data_before = fs::read(&data_path).expect("certified data before crash window");
+        let index_before = fs::read(&index_path).expect("certified index before crash window");
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        fs::rename(&data_path, &temp_data_path).expect("stage complete certified data temp");
+        fs::rename(&index_path, &temp_index_path).expect("stage complete certified index temp");
+
+        kura.first_release_lane_retirement_admissible_for_test(
+            retiring_lane,
+            retiring_entry.dataspace_id,
+            retiring_incarnation,
+        )
+        .expect("complete certified rewrite must recover before retirement admission");
+        assert_eq!(
+            fs::read(&data_path).expect("recovered certified data"),
+            data_before
+        );
+        assert_eq!(
+            fs::read(&index_path).expect("recovered certified index"),
+            index_before
+        );
+        assert!(!temp_data_path.exists());
+        assert!(!temp_index_path.exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_promotes_then_rejects_complete_autonomous_rewrite() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("complete-autonomous-rewrite");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            &root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        let data_path = artifact_dir.join(AUTONOMOUS_LANE_BLOCKS_DATA_FILE);
+        let index_path = artifact_dir.join(AUTONOMOUS_LANE_BLOCKS_INDEX_FILE);
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let data: &[u8] = b"complete stale autonomous payload";
+        fs::write(&temp_data_path, data).expect("stage complete autonomous data temp");
+        fs::write(
+            &temp_index_path,
+            SidecarIndexEntry {
+                offset: 0,
+                len: u64::try_from(data.len()).expect("autonomous test payload length"),
+            }
+            .to_bytes(),
+        )
+        .expect("stage complete autonomous index temp");
+
+        let error = kura
+            .first_release_lane_retirement_admissible_for_test(
+                retiring_lane,
+                retiring_entry.dataspace_id,
+                extended_incarnations[&retiring_lane],
+            )
+            .expect_err("authoritative autonomous state must still block first-release retirement");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "retired autonomous lane sidecar is not valid first-release state",
+        );
+        let promoted_data = fs::read(&data_path).expect("promoted autonomous data");
+        assert_eq!(promoted_data.as_slice(), data);
+        assert!(index_path.is_file());
+        assert!(!temp_data_path.exists());
+        assert!(!temp_index_path.exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn first_release_retirement_recovery_rejects_temp_symlink_without_external_writes() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("recovery-temp-symlink");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            &root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        let temp_data_path = artifact_dir
+            .join(CERTIFIED_LANE_BLOCKS_DATA_FILE)
+            .with_extension("norito.tmp");
+        let external = root.join("external-progress-sentinel");
+        let sentinel: &[u8] = b"must remain outside retirement recovery";
+        fs::write(&external, sentinel).expect("write external recovery sentinel");
+        symlink(&external, &temp_data_path).expect("install recovery temp symlink");
+
+        let error = kura
+            .first_release_lane_retirement_admissible_for_test(
+                retiring_lane,
+                retiring_entry.dataspace_id,
+                extended_incarnations[&retiring_lane],
+            )
+            .expect_err("a recovery temp symlink must fail closed");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "lane retirement certified lane block recovery did not reach a durable fixed point",
+        );
+        let external_after = fs::read(&external).expect("read external recovery sentinel");
+        assert_eq!(external_after.as_slice(), sentinel);
+        assert!(
+            fs::symlink_metadata(&temp_data_path)
+                .expect("recovery temp symlink retained")
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
@@ -14194,13 +14757,16 @@ mod tests {
         let chain: ChainId = "geometry-retirement-committed"
             .parse()
             .expect("geometry retirement committed chain");
-        let transaction =
-            TransactionBuilder::new(chain.clone(), (*SAMPLE_GENESIS_ACCOUNT_ID).clone())
-                .with_instructions([Log::new(
-                    Level::INFO,
-                    "geometry retirement committed participant work".to_owned(),
-                )])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let transaction = TransactionBuilder::new(
+            chain.clone(),
+            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "geometry retirement committed participant work".to_owned(),
+        )])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let source_hash = transaction.hash();
         let mut source_id = [0_u8; Hash::LENGTH];
         source_id.copy_from_slice(source_hash.as_ref());

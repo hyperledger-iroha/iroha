@@ -3,7 +3,7 @@
 Kagemusha is the single offline-cash protocol in the first release. It supports
 exact decimal amounts, sender change, offline multihop
 spending, and full or partial online redemption. There is no runtime product
-mode or alternative offline API. ABI 20 and the V4 chain, recursive, and
+mode or alternative offline API. ABI 21 and the V4 chain, recursive, and
 artifact carriers are the sole lifecycle surface. V2 names remain only for the
 unchanged amount, note-opening, authorization, membership, and finality leaf
 types that V4 embeds directly. The manifest and native capability schemas have
@@ -87,7 +87,7 @@ device authority, and submits it to Torii. Core atomically:
 6. persists the finalized top-up anchor and operation receipt.
 
 After finality the wallet creates the initial recursive bundle
-with the ABI-20 SDK's `initSpendV4`. The note is not available for offline use until both the chain
+with the ABI-21 SDK's `initSpendV4`. The note is not available for offline use until both the chain
 operation and local encrypted-state transition are durable.
 
 ## Offline transfer
@@ -143,7 +143,7 @@ notes. Pending, reserved, spent, quarantined, and redeeming notes are not
 silently reclassified.
 
 The authenticated V4 manifest binds source commit, chain, asset, scale,
-activation and withdrawal heights, exact bridge ABI 20, proof size, transcript,
+activation and withdrawal heights, exact bridge ABI 21, proof size, transcript,
 backend, and benchmark evidence. It contains exactly two Pasta-cycle profiles
 in Eq-then-Ep order. Each profile carries exactly four external artifacts:
 `ParamsIPA`, processed proving key, processed verifying key, and the final-key
@@ -195,7 +195,7 @@ separate operation and invalidates prior registrations, forcing re-registration.
 
 ## Production boundary
 
-Admission is selected by the transaction's exact authenticated ABI-20/V4
+Admission is selected by the transaction's exact authenticated ABI-21/V4
 release binding. Consensus must contain the release-qualified Eq/Ep records,
 the immutable startup catalog must authenticate the same release, and the
 production verifier must construct from that material. There is no process-wide
@@ -214,7 +214,7 @@ candidate change set. It may be changed only by the final signed promotion
 commit after the authenticated review, benchmark, physical-device, and
 role-threshold evidence has been added. Even after promotion it is not by
 itself an admission or readiness signal: runtime capability stays fail-closed
-until the exact authenticated ABI-20/V4 artifact set is installed, its live
+until the exact authenticated ABI-21/V4 artifact set is installed, its live
 inventory is revalidated, and both verifier and prover material construct
 successfully.
 Top-up and redemption change additionally require the governed selected
@@ -235,7 +235,7 @@ candidate commit invalidates that evidence and requires regeneration.
 Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
 the canonical clean unsigned candidate plus its exact ordered eight KRV4
-artifacts and calls the same ABI-20 prover/verifier/recursion implementation.
+artifacts and calls the same ABI-21 prover/verifier/recursion implementation.
 Its symbols, registry, JNI class, marker-bearing native library, and APK are
 distinct from production and are rejected by production packaging. The normal
 artifact install and proof entrypoints remain unavailable, and device evidence

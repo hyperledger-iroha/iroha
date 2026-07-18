@@ -814,8 +814,8 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::DefiOracleAttestation(_) => "DefiOracleAttestation",
         QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
-        QueryOutputBatchBox::FeeSponsorPolicy(_) => "FeeSponsorPolicy",
-        QueryOutputBatchBox::FeeSponsorPolicyId(_) => "FeeSponsorPolicyId",
+        QueryOutputBatchBox::FeeSponsorProgram(_) => "FeeSponsorProgram",
+        QueryOutputBatchBox::FeeSponsorProgramId(_) => "FeeSponsorProgramId",
     }
 }
 
@@ -1132,12 +1132,12 @@ mod tests {
             "DefiOracleAttestation"
         );
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::FeeSponsorPolicy(Vec::new())),
-            "FeeSponsorPolicy"
+            batch_label(&QueryOutputBatchBox::FeeSponsorProgram(Vec::new())),
+            "FeeSponsorProgram"
         );
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::FeeSponsorPolicyId(Vec::new())),
-            "FeeSponsorPolicyId"
+            batch_label(&QueryOutputBatchBox::FeeSponsorProgramId(Vec::new())),
+            "FeeSponsorProgramId"
         );
     }
 }

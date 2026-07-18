@@ -51,7 +51,10 @@ fn find_asset_total_quantity() -> Result<()> {
             .skip(1) // Alice has already been registered in genesis
             .map(|(_index, account_id)| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(register_accounts)?;
+        test_client.submit_all_blocking(
+            register_accounts,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         // Test for numeric assets value types
         test_total_quantity(
@@ -101,7 +104,10 @@ fn test_total_quantity(
         AssetDefinition::new(__asset_definition_id.clone(), asset_spec)
             .with_name(__asset_definition_id.name().to_string())
     };
-    test_client.submit_blocking(Register::asset_definition(asset_definition))?;
+    test_client.submit_blocking(
+        Register::asset_definition(asset_definition),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let account_count = accounts.len();
 
     let expected_initial_total = sum_value(initial_value, account_count)?;
@@ -176,7 +182,10 @@ fn test_total_quantity(
             .push(Mint::asset_quantity(quantity_to_mint.clone(), asset_id.clone()).into());
         mint_and_burn_assets.push(Burn::asset_quantity(quantity_to_burn.clone(), asset_id).into());
     }
-    test_client.submit_all_blocking(mint_and_burn_assets)?;
+    test_client.submit_all_blocking(
+        mint_and_burn_assets,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let observed_after_burn = wait_for_quantity(&get_quantity, &expected_after_burn, "mint+burn")?;
 
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
@@ -233,7 +242,10 @@ fn test_total_quantity(
     assert_eq!(expected_total_asset_quantity, &total_asset_quantity);
 
     // Unregister asset definition
-    test_client.submit_blocking(Unregister::asset_definition(definition_id.clone()))?;
+    test_client.submit_blocking(
+        Unregister::asset_definition(definition_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let mut removed = false;
     let mut last_value: Option<Numeric> = None;

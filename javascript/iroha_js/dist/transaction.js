@@ -175,6 +175,119 @@ function normalizeMetadataPayload(metadata, context) {
   );
 }
 
+function canonicalFeeUnsigned(value, context, { nonZero = false } = {}) {
+  let literal;
+  if (typeof value === "bigint") {
+    literal = value.toString(10);
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError(`${context} must be a safe integer, bigint, or decimal string`);
+    }
+    literal = String(value);
+  } else if (typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)) {
+    literal = value;
+  } else {
+    throw new TypeError(`${context} must be a canonical unsigned integer`);
+  }
+  const parsed = BigInt(literal);
+  if (parsed > 0xffff_ffff_ffff_ffffn || (nonZero && parsed === 0n)) {
+    throw new RangeError(`${context} is outside its canonical u64 range`);
+  }
+  return literal;
+}
+
+function canonicalFeeQuantity(value, context) {
+  if (typeof value === "number") {
+    throw new TypeError(`${context} must not use a JavaScript number`);
+  }
+  let literal;
+  if (typeof value === "string" || typeof value === "bigint") {
+    literal = String(value);
+  } else if (value && typeof value.toString === "function") {
+    literal = value.toString();
+  } else {
+    throw new TypeError(`${context} must be a canonical positive quantity`);
+  }
+  if (!/^(?:0|[1-9]\d*)(?:\.\d*[1-9])?$/u.test(literal) || literal === "0") {
+    throw new TypeError(`${context} must be a canonical positive quantity`);
+  }
+  return literal;
+}
+
+/**
+ * Convert the ergonomic JavaScript fee-payment shape into the exact Norito
+ * JSON representation accepted by the native signer.
+ */
+export function feePaymentIntentToNoritoJson(feePayment) {
+  const input = normalizePlainObject(feePayment, "feePayment");
+  if (input.payer !== "authority" && input.payer !== "sponsor") {
+    throw new TypeError("feePayment.payer must be authority or sponsor");
+  }
+  if (!Array.isArray(input.chargeLimits)) {
+    throw new TypeError("feePayment.chargeLimits must be an array");
+  }
+  let previousKind = -1;
+  const chargeLimits = input.chargeLimits.map((value, index) => {
+    const limit = normalizePlainObject(value, `feePayment.chargeLimits[${index}]`);
+    const kind = limit.kind === "nexus" ? 0 : limit.kind === "pipelineGas" ? 1 : -1;
+    if (kind < 0) {
+      throw new TypeError(
+        `feePayment.chargeLimits[${index}].kind must be nexus or pipelineGas`,
+      );
+    }
+    if (kind <= previousKind) {
+      throw new TypeError(
+        "feePayment.chargeLimits must be unique and ordered nexus before pipelineGas",
+      );
+    }
+    previousKind = kind;
+    const assetDefinitionId = normalizeTransactionAssetDefinitionId(
+      limit.assetDefinitionId,
+      `feePayment.chargeLimits[${index}].assetDefinitionId`,
+    );
+    return {
+      kind: { kind: kind === 0 ? "nexus" : "pipeline_gas", value: null },
+      asset_definition_id: assetDefinitionId,
+      max_amount: canonicalFeeQuantity(
+        limit.maxAmount,
+        `feePayment.chargeLimits[${index}].maxAmount`,
+      ),
+    };
+  });
+  const gasLimit =
+    input.gasLimit === undefined || input.gasLimit === null
+      ? null
+      : canonicalFeeUnsigned(input.gasLimit, "feePayment.gasLimit", {
+          nonZero: true,
+        });
+  const common = `"charge_limits":${JSON.stringify(chargeLimits)},"gas_limit":${gasLimit ?? "null"}`;
+  if (input.payer === "authority") {
+    if (input.programId !== undefined || input.programRevision !== undefined) {
+      throw new TypeError(
+        "authority feePayment must not include programId or programRevision",
+      );
+    }
+    return `{"payer":"authority","value":{${common}}}`;
+  }
+  if (typeof input.programId !== "string" || input.programId.trim() !== input.programId) {
+    throw new TypeError("feePayment.programId must be an exact sponsor/program string");
+  }
+  const slash = input.programId.indexOf("/");
+  if (slash <= 0 || slash === input.programId.length - 1) {
+    throw new TypeError("feePayment.programId must use sponsor/program");
+  }
+  const sponsor = input.programId.slice(0, slash);
+  const name = input.programId.slice(slash + 1);
+  const revision = canonicalFeeUnsigned(
+    input.programRevision,
+    "feePayment.programRevision",
+    { nonZero: true },
+  );
+  return `{"payer":"sponsor","value":{"program_id":{"sponsor":${JSON.stringify(
+    sponsor,
+  )},"name":${JSON.stringify(name)}},"program_revision":${revision},${common}}}`;
+}
+
 function normalizeJsonObjectPayload(value, context) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -389,6 +502,7 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
  *   chainId: string,
  *   authority: string,
  *   domainId: string,
+ *   feePayment: object,
  *   metadata?: object | string | null,
  *   creationTimeMs?: number,
  *   ttlMs?: number,
@@ -409,6 +523,7 @@ export function buildRegisterDomainTransaction(input) {
     chainId,
     authority,
     domainId,
+    feePayment,
     metadata = null,
     creationTimeMs = null,
     ttlMs = null,
@@ -430,6 +545,7 @@ export function buildRegisterDomainTransaction(input) {
     chainId,
     canonicalAuthority,
     domainId,
+    feePaymentIntentToNoritoJson(feePayment),
     metadataPayload,
     creationTimeMs,
     ttlMs,
@@ -457,6 +573,7 @@ export function buildRegisterDomainTransaction(input) {
  *   chainId: string,
  *   authority: string,
  *   instructions: Array<object | string>,
+ *   feePayment: object,
  *   metadata?: object | string | null,
  *   creationTimeMs?: number,
  *   ttlMs?: number,
@@ -476,6 +593,7 @@ export function buildTransaction(input) {
     chainId,
     authority,
     instructions,
+    feePayment,
     metadata = null,
     creationTimeMs = null,
     ttlMs = null,
@@ -500,6 +618,7 @@ export function buildTransaction(input) {
     chainId,
     canonicalAuthority,
     normalizedInstructions,
+    feePaymentIntentToNoritoJson(feePayment),
     metadataPayload,
     creationTimeMs,
     ttlMs,
@@ -524,6 +643,151 @@ export function buildTransaction(input) {
 }
 
 /**
+ * Build, but do not sign, the exact payload submitted to `/v1/fees/quote`.
+ * Only the returned payload's `fee_payment` field may be replaced before
+ * calling {@link signQuotedTransactionPayload}.
+ *
+ * @param {{
+ *   chainId: string,
+ *   authority: string,
+ *   instructions: Array<object | string>,
+ *   feePayment: object,
+ *   metadata?: object | string | null,
+ *   creationTimeMs?: number,
+ *   ttlMs?: number,
+ *   nonce?: number
+ * }} input
+ * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer}}
+ */
+export function buildTransactionPayload(input) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildTransactionPayload !== "function") {
+    throw new Error("native binding 'build_transaction_payload' is unavailable");
+  }
+  const {
+    chainId,
+    authority,
+    instructions,
+    feePayment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+  } = input;
+  const result = native.buildTransactionPayload(
+    chainId,
+    normalizeAuthority(authority),
+    serializeInstructionPayloads(instructions, "instructions"),
+    feePaymentIntentToNoritoJson(feePayment),
+    normalizeMetadataPayload(metadata, "transaction metadata"),
+    creationTimeMs,
+    ttlMs,
+    nonce,
+  );
+  const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
+  const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
+  const payloadHash = result?.payload_hash ?? result?.payloadHash ?? null;
+  if (typeof payloadJson !== "string" || !payloadBytes || !payloadHash) {
+    throw new Error(
+      "native binding 'build_transaction_payload' returned missing fields",
+    );
+  }
+  return {
+    payload: JSON.parse(payloadJson),
+    payloadJson,
+    payloadBytes: Buffer.from(payloadBytes),
+    payloadHash: Buffer.from(payloadHash),
+  };
+}
+
+/**
+ * Replace only the fee intent in an exact unsigned draft and sign the result.
+ * The native boundary rejects any quote that changes the selected authority
+ * payer or exact sponsor program and revision.
+ *
+ * @param {{
+ *   payload: object | {payload?: object, payloadJson?: string},
+ *   quotedFeePayment: object | string,
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   privateKeyAlgorithm?: string
+ * }} input
+ * @returns {{signedTransaction: Buffer, hash: Buffer}}
+ */
+export function signQuotedTransactionPayload(input) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.signQuotedTransactionPayload !== "function") {
+    throw new Error(
+      "native binding 'sign_quoted_transaction_payload' is unavailable",
+    );
+  }
+  const draft = input?.payload;
+  const payloadJson =
+    typeof draft?.payloadJson === "string"
+      ? draft.payloadJson
+      : JSON.stringify(draft?.payload ?? draft);
+  const quoted = input?.quotedFeePayment;
+  const quotedFeePaymentJson =
+    typeof quoted === "string"
+      ? quoted
+      : quoted && typeof quoted === "object" && "payer" in quoted && "value" in quoted
+        ? JSON.stringify(quoted)
+        : feePaymentIntentToNoritoJson(quoted);
+  const result = native.signQuotedTransactionPayload(
+    payloadJson,
+    quotedFeePaymentJson,
+    toBuffer(input?.privateKey),
+    input?.privateKeyAlgorithm ?? null,
+  );
+  const signed = result?.signed_transaction ?? result?.signedTransaction ?? null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
+  if (!signed || !hashBytes) {
+    throw new Error(
+      "native binding 'sign_quoted_transaction_payload' returned missing fields",
+    );
+  }
+  return {
+    signedTransaction: Buffer.from(signed),
+    hash: Buffer.from(hashBytes),
+  };
+}
+
+/**
+ * Guided fee flow: freeze one unsigned payload, quote it through Torii, replace
+ * only the fee limits, and sign the exact result.
+ *
+ * @param {ToriiClient} client
+ * @param {object} input {@link buildTransactionPayload} fields plus private key material
+ * @param {{canonicalAuth?: {accountId: string, privateKey: ArrayBufferView | ArrayBuffer | Buffer}, signal?: AbortSignal}} [options]
+ * @returns {Promise<{signedTransaction: Buffer, hash: Buffer, draft: object, quote: object}>}
+ */
+export async function quoteAndSignTransaction(client, input, options = {}) {
+  if (!client || typeof client.quoteFees !== "function") {
+    throw new TypeError("client must provide quoteFees(payload, options)");
+  }
+  const {
+    privateKey,
+    privateKeyAlgorithm = null,
+    ...draftInput
+  } = input ?? {};
+  const draft = buildTransactionPayload(draftInput);
+  const canonicalAuth = options.canonicalAuth ?? {
+    accountId: draftInput.authority,
+    privateKey,
+  };
+  const quote = await client.quoteFees(draft, {
+    canonicalAuth,
+    signal: options.signal,
+  });
+  const signed = signQuotedTransactionPayload({
+    payload: draft,
+    quotedFeePayment: quote.intent,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+  return { ...signed, draft, quote };
+}
+
+/**
  * Build an `ApplySccpRouteGovernance` instruction from one closed atomic action.
  * @param {object} action
  * @returns {{ApplySccpRouteGovernance: {action: object}}}
@@ -542,6 +806,7 @@ export function buildApplySccpRouteGovernanceInstruction(action) {
 export function buildApplySccpRouteGovernanceTransaction({
   chainId,
   authority,
+  feePayment,
   action,
   metadata = null,
   creationTimeMs = null,
@@ -554,6 +819,7 @@ export function buildApplySccpRouteGovernanceTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -597,6 +863,7 @@ export function buildRegisterSnsNameTransaction(input) {
  *   authority: string,
  *   proved: object | string,
  *   attachment: object | string,
+ *   feePayment: object,
  *   metadata?: object | string | null,
  *   creationTimeMs?: number,
  *   ttlMs?: number,
@@ -618,6 +885,7 @@ export function buildIvmProvedTransaction(input) {
     authority,
     proved,
     attachment,
+    feePayment,
     metadata = null,
     creationTimeMs = null,
     ttlMs = null,
@@ -641,6 +909,7 @@ export function buildIvmProvedTransaction(input) {
     canonicalAuthority,
     provedPayload,
     attachmentPayload,
+    feePaymentIntentToNoritoJson(feePayment),
     metadataPayload,
     creationTimeMs,
     ttlMs,
@@ -1843,14 +2112,27 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     record.payload === undefined
       ? undefined
       : snapshotJsonValue(record.payload, "input.payload");
-  const gasLimitValue = readExclusiveInputAlias(
+  for (const retired of ["gasLimit", "gas_limit", "gasAssetId", "gas_asset_id", "feeSponsor", "fee_sponsor"]) {
+    if (Object.prototype.hasOwnProperty.call(record, retired)) {
+      throw new TypeError(
+        `input.${retired} is retired; use the signature-bound feePayment field`,
+      );
+    }
+  }
+  const feePayment = readExclusiveInputAlias(
     record,
-    ["gasLimit", "gas_limit"],
-    "input.gasLimit",
+    ["feePayment", "fee_payment"],
+    "input.feePayment",
   );
+  // Serialize once before any proof-side effect so malformed or unbounded
+  // intents fail before simulation and proving work is started.
+  feePaymentIntentToNoritoJson(feePayment);
+  if (feePayment.gasLimit === undefined || feePayment.gasLimit === null) {
+    throw new TypeError("input.feePayment.gasLimit is required for an IVM transaction");
+  }
   const gasLimit = ToriiClient._normalizeUnsignedInteger(
-    gasLimitValue,
-    "input.gasLimit",
+    feePayment.gasLimit,
+    "input.feePayment.gasLimit",
     { allowZero: false },
   );
   const metadataInput = normalizeIvmProvedContractMetadata(record.metadata);
@@ -1903,32 +2185,12 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
           chainId,
           getTrustedValidationFeeVerificationContext(client),
         );
-  const gasAssetValue = readExclusiveInputAlias(
-    record,
-    ["gasAssetId", "gas_asset_id"],
-    "input.gasAssetId",
-  );
-  const feeSponsorValue = readExclusiveInputAlias(
-    record,
-    ["feeSponsor", "fee_sponsor"],
-    "input.feeSponsor",
-  );
-  const gasAssetId =
-    gasAssetValue === undefined || gasAssetValue === null
-      ? null
-      : normalizeAssetId(gasAssetValue, "gasAssetId");
-  const feeSponsor =
-    feeSponsorValue === undefined || feeSponsorValue === null
-      ? null
-      : normalizeAccountId(feeSponsorValue, "feeSponsor");
   const simulationRequest = {
     authority,
     ...(contractAddress === null ? {} : { contractAddress }),
     ...(contractAlias === null ? {} : { contractAlias }),
     ...(entrypoint === null ? {} : { entrypoint }),
     ...(payload === undefined ? {} : { payload }),
-    ...(gasAssetId === null ? {} : { gasAssetId }),
-    ...(feeSponsor === null ? {} : { feeSponsor }),
     gasLimit,
   };
   const requestOptions = signal === undefined ? {} : { signal };
@@ -2002,7 +2264,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     ...metadataInput,
     contract_address: simulation.contract_address,
     contract_entrypoint: simulation.entrypoint,
-    gas_limit: simulation.gas_limit,
     ...(validationFeeBinding === null ? {} : validationFeeBinding.metadata),
   };
   if (contractAlias !== null) {
@@ -2011,18 +2272,12 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   if (simulation.normalized_payload !== null) {
     metadata.contract_payload = simulation.normalized_payload;
   }
-  if (gasAssetId !== null) {
-    metadata.gas_asset_id = gasAssetId;
-  }
-  if (feeSponsor !== null) {
-    metadata.fee_sponsor = feeSponsor;
-  }
-
   const proofRequest = {
     vkRef,
     authority,
     metadata,
     bytecode: deployedBytecode,
+    gasLimit,
   };
   const derived = await client.deriveIvmProved(proofRequest, requestOptions);
   assertIvmProvedBytecodeBinding(
@@ -2113,6 +2368,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     authority,
     proved: proofJob.proved,
     attachment: proofJob.attachment,
+    feePayment,
     metadata,
     creationTimeMs,
     ttlMs,
@@ -2282,6 +2538,7 @@ export function buildPrecommitTriggerAction(options) {
 export function buildMintAssetTransaction({
   chainId,
   authority,
+  feePayment,
   assetHoldingId,
   assetId,
   quantity,
@@ -2299,6 +2556,7 @@ export function buildMintAssetTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2316,6 +2574,7 @@ export function buildMintAssetTransaction({
 export function buildBurnAssetTransaction({
   chainId,
   authority,
+  feePayment,
   assetHoldingId,
   assetId,
   quantity,
@@ -2333,6 +2592,7 @@ export function buildBurnAssetTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2349,6 +2609,7 @@ export function buildBurnAssetTransaction({
 export function buildBurnTriggerTransaction({
   chainId,
   authority,
+  feePayment,
   triggerId,
   repetitions,
   metadata = null,
@@ -2365,6 +2626,7 @@ export function buildBurnTriggerTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2381,6 +2643,7 @@ export function buildBurnTriggerTransaction({
 export function buildMintTriggerTransaction({
   chainId,
   authority,
+  feePayment,
   triggerId,
   repetitions,
   metadata = null,
@@ -2397,6 +2660,7 @@ export function buildMintTriggerTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2413,6 +2677,7 @@ export function buildMintTriggerTransaction({
 export function buildTransferAssetTransaction({
   chainId,
   authority,
+  feePayment,
   sourceAssetHoldingId,
   sourceAssetId,
   quantity,
@@ -2432,6 +2697,7 @@ export function buildTransferAssetTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2504,6 +2770,7 @@ function buildRegisterAccountInstructions({ account, transfers = [] }) {
 export function buildRegisterMultisigTransaction({
   chainId,
   authority,
+  feePayment,
   accountId,
   spec,
   metadata = null,
@@ -2517,6 +2784,7 @@ export function buildRegisterMultisigTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2712,6 +2980,7 @@ function normalizeTransferSpecs(value, context, options) {
 export function buildMintAndTransferTransaction({
   chainId,
   authority,
+  feePayment,
   mint,
   transfer,
   transfers,
@@ -2761,6 +3030,7 @@ export function buildMintAndTransferTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions,
     metadata,
     creationTimeMs,
@@ -2777,6 +3047,7 @@ export function buildMintAndTransferTransaction({
 export function buildRegisterDomainAndMintTransaction({
   chainId,
   authority,
+  feePayment,
   domain,
   mint,
   mints,
@@ -2806,6 +3077,7 @@ export function buildRegisterDomainAndMintTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions,
     metadata,
     creationTimeMs,
@@ -2822,6 +3094,7 @@ export function buildRegisterDomainAndMintTransaction({
 export function buildRegisterAccountAndTransferTransaction({
   chainId,
   authority,
+  feePayment,
   account,
   transfer,
   transfers,
@@ -2851,6 +3124,7 @@ export function buildRegisterAccountAndTransferTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions,
     metadata,
     creationTimeMs,
@@ -2867,6 +3141,7 @@ export function buildRegisterAccountAndTransferTransaction({
 export function buildTransferAssetDefinitionTransaction({
   chainId,
   authority,
+  feePayment,
   sourceAccountId,
   assetDefinitionId,
   destinationAccountId,
@@ -2885,6 +3160,7 @@ export function buildTransferAssetDefinitionTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -2901,6 +3177,7 @@ export function buildTransferAssetDefinitionTransaction({
 export function buildRegisterAssetDefinitionAndMintTransaction({
   chainId,
   authority,
+  feePayment,
   assetDefinition,
   mint,
   mints,
@@ -2940,6 +3217,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions,
     metadata,
     creationTimeMs,
@@ -2957,6 +3235,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction({
 export function buildRegisterAssetDefinitionMintAndTransferTransaction({
   chainId,
   authority,
+  feePayment,
   assetDefinition,
   mint,
   mints,
@@ -3026,6 +3305,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions,
     metadata,
     creationTimeMs,
@@ -3042,6 +3322,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
 export function buildTransferDomainTransaction({
   chainId,
   authority,
+  feePayment,
   sourceAccountId,
   domainId,
   destinationAccountId,
@@ -3060,6 +3341,7 @@ export function buildTransferDomainTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3076,6 +3358,7 @@ export function buildTransferDomainTransaction({
 export function buildTransferNftTransaction({
   chainId,
   authority,
+  feePayment,
   sourceAccountId,
   nftId,
   destinationAccountId,
@@ -3094,6 +3377,7 @@ export function buildTransferNftTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3110,6 +3394,7 @@ export function buildTransferNftTransaction({
 export function buildRegisterRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwa,
   rwaJson,
   metadata = null,
@@ -3123,6 +3408,7 @@ export function buildRegisterRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3139,6 +3425,7 @@ export function buildRegisterRwaTransaction({
 export function buildTransferRwaTransaction({
   chainId,
   authority,
+  feePayment,
   sourceAccountId,
   rwaId,
   quantity,
@@ -3159,6 +3446,7 @@ export function buildTransferRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3175,6 +3463,7 @@ export function buildTransferRwaTransaction({
 export function buildMergeRwasTransaction({
   chainId,
   authority,
+  feePayment,
   merge,
   mergeJson,
   metadata = null,
@@ -3188,6 +3477,7 @@ export function buildMergeRwasTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3204,6 +3494,7 @@ export function buildMergeRwasTransaction({
 export function buildRedeemRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   quantity,
   metadata = null,
@@ -3217,6 +3508,7 @@ export function buildRedeemRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3233,6 +3525,7 @@ export function buildRedeemRwaTransaction({
 export function buildFreezeRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   metadata = null,
   creationTimeMs = null,
@@ -3245,6 +3538,7 @@ export function buildFreezeRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3261,6 +3555,7 @@ export function buildFreezeRwaTransaction({
 export function buildUnfreezeRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   metadata = null,
   creationTimeMs = null,
@@ -3273,6 +3568,7 @@ export function buildUnfreezeRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3289,6 +3585,7 @@ export function buildUnfreezeRwaTransaction({
 export function buildHoldRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   quantity,
   metadata = null,
@@ -3302,6 +3599,7 @@ export function buildHoldRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3318,6 +3616,7 @@ export function buildHoldRwaTransaction({
 export function buildReleaseRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   quantity,
   metadata = null,
@@ -3331,6 +3630,7 @@ export function buildReleaseRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3347,6 +3647,7 @@ export function buildReleaseRwaTransaction({
 export function buildForceTransferRwaTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   quantity,
   destinationAccountId,
@@ -3365,6 +3666,7 @@ export function buildForceTransferRwaTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3381,6 +3683,7 @@ export function buildForceTransferRwaTransaction({
 export function buildSetRwaControlsTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   controls,
   controlsJson,
@@ -3399,6 +3702,7 @@ export function buildSetRwaControlsTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3415,6 +3719,7 @@ export function buildSetRwaControlsTransaction({
 export function buildSetRwaKeyValueTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   key,
   value,
@@ -3429,6 +3734,7 @@ export function buildSetRwaKeyValueTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3445,6 +3751,7 @@ export function buildSetRwaKeyValueTransaction({
 export function buildRemoveRwaKeyValueTransaction({
   chainId,
   authority,
+  feePayment,
   rwaId,
   key,
   metadata = null,
@@ -3458,6 +3765,7 @@ export function buildRemoveRwaKeyValueTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3474,6 +3782,7 @@ export function buildRemoveRwaKeyValueTransaction({
 export function buildCreateKaigiTransaction({
   chainId,
   authority,
+  feePayment,
   call,
   metadata = null,
   creationTimeMs = null,
@@ -3486,6 +3795,7 @@ export function buildCreateKaigiTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3502,6 +3812,7 @@ export function buildCreateKaigiTransaction({
 export function buildJoinKaigiTransaction({
   chainId,
   authority,
+  feePayment,
   join,
   metadata = null,
   creationTimeMs = null,
@@ -3514,6 +3825,7 @@ export function buildJoinKaigiTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3530,6 +3842,7 @@ export function buildJoinKaigiTransaction({
 export function buildLeaveKaigiTransaction({
   chainId,
   authority,
+  feePayment,
   leave,
   metadata = null,
   creationTimeMs = null,
@@ -3542,6 +3855,7 @@ export function buildLeaveKaigiTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -3558,6 +3872,7 @@ export function buildLeaveKaigiTransaction({
 export function buildEndKaigiTransaction({
   chainId,
   authority,
+  feePayment,
   end,
   metadata = null,
   creationTimeMs = null,
@@ -3570,6 +3885,7 @@ export function buildEndKaigiTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4194,6 +4510,7 @@ export function buildPrivateEndKaigiTransaction({
 export function buildRecordKaigiUsageTransaction({
   chainId,
   authority,
+  feePayment,
   usage,
   metadata = null,
   creationTimeMs = null,
@@ -4206,6 +4523,7 @@ export function buildRecordKaigiUsageTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4222,6 +4540,7 @@ export function buildRecordKaigiUsageTransaction({
 export function buildSetKaigiRelayManifestTransaction({
   chainId,
   authority,
+  feePayment,
   manifest,
   metadata = null,
   creationTimeMs = null,
@@ -4234,6 +4553,7 @@ export function buildSetKaigiRelayManifestTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4250,6 +4570,7 @@ export function buildSetKaigiRelayManifestTransaction({
 export function buildRegisterKaigiRelayTransaction({
   chainId,
   authority,
+  feePayment,
   relay,
   metadata = null,
   creationTimeMs = null,
@@ -4262,6 +4583,7 @@ export function buildRegisterKaigiRelayTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4278,6 +4600,7 @@ export function buildRegisterKaigiRelayTransaction({
 export function buildProposeDeployContractTransaction({
   chainId,
   authority,
+  feePayment,
   proposal,
   metadata = null,
   creationTimeMs = null,
@@ -4290,6 +4613,7 @@ export function buildProposeDeployContractTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4306,6 +4630,7 @@ export function buildProposeDeployContractTransaction({
 export function buildProposeSccpRouteGovernanceTransaction({
   chainId,
   authority,
+  feePayment,
   proposal,
   action,
   metadata = null,
@@ -4321,6 +4646,7 @@ export function buildProposeSccpRouteGovernanceTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4337,6 +4663,7 @@ export function buildProposeSccpRouteGovernanceTransaction({
 export function buildCastZkBallotTransaction({
   chainId,
   authority,
+  feePayment,
   ballot,
   metadata = null,
   creationTimeMs = null,
@@ -4349,6 +4676,7 @@ export function buildCastZkBallotTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4365,6 +4693,7 @@ export function buildCastZkBallotTransaction({
 export function buildCastPlainBallotTransaction({
   chainId,
   authority,
+  feePayment,
   ballot,
   metadata = null,
   creationTimeMs = null,
@@ -4377,6 +4706,7 @@ export function buildCastPlainBallotTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4393,6 +4723,7 @@ export function buildCastPlainBallotTransaction({
 export function buildEnactReferendumTransaction({
   chainId,
   authority,
+  feePayment,
   enactment,
   metadata = null,
   creationTimeMs = null,
@@ -4405,6 +4736,7 @@ export function buildEnactReferendumTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4421,6 +4753,7 @@ export function buildEnactReferendumTransaction({
 export function buildFinalizeReferendumTransaction({
   chainId,
   authority,
+  feePayment,
   finalization,
   metadata = null,
   creationTimeMs = null,
@@ -4433,6 +4766,7 @@ export function buildFinalizeReferendumTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4449,6 +4783,7 @@ export function buildFinalizeReferendumTransaction({
 export function buildPersistCouncilForEpochTransaction({
   chainId,
   authority,
+  feePayment,
   record,
   metadata = null,
   creationTimeMs = null,
@@ -4461,6 +4796,7 @@ export function buildPersistCouncilForEpochTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4474,6 +4810,7 @@ export function buildPersistCouncilForEpochTransaction({
 export function buildRegisterZkAssetTransaction({
   chainId,
   authority,
+  feePayment,
   registration,
   metadata = null,
   creationTimeMs = null,
@@ -4486,6 +4823,7 @@ export function buildRegisterZkAssetTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4499,6 +4837,7 @@ export function buildRegisterZkAssetTransaction({
 export function buildScheduleConfidentialPolicyTransitionTransaction({
   chainId,
   authority,
+  feePayment,
   transition,
   metadata = null,
   creationTimeMs = null,
@@ -4512,6 +4851,7 @@ export function buildScheduleConfidentialPolicyTransitionTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4525,6 +4865,7 @@ export function buildScheduleConfidentialPolicyTransitionTransaction({
 export function buildCancelConfidentialPolicyTransitionTransaction({
   chainId,
   authority,
+  feePayment,
   cancellation,
   metadata = null,
   creationTimeMs = null,
@@ -4538,6 +4879,7 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4551,6 +4893,7 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
 export function buildShieldTransaction({
   chainId,
   authority,
+  feePayment,
   shield,
   metadata = null,
   creationTimeMs = null,
@@ -4563,6 +4906,7 @@ export function buildShieldTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4576,6 +4920,7 @@ export function buildShieldTransaction({
 export function buildZkTransferTransaction({
   chainId,
   authority,
+  feePayment,
   transfer,
   metadata = null,
   creationTimeMs = null,
@@ -4588,6 +4933,7 @@ export function buildZkTransferTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4601,6 +4947,7 @@ export function buildZkTransferTransaction({
 export function buildUnshieldTransaction({
   chainId,
   authority,
+  feePayment,
   unshield,
   metadata = null,
   creationTimeMs = null,
@@ -4613,6 +4960,7 @@ export function buildUnshieldTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4626,6 +4974,7 @@ export function buildUnshieldTransaction({
 export function buildCreateElectionTransaction({
   chainId,
   authority,
+  feePayment,
   election,
   metadata = null,
   creationTimeMs = null,
@@ -4638,6 +4987,7 @@ export function buildCreateElectionTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4651,6 +5001,7 @@ export function buildCreateElectionTransaction({
 export function buildSubmitBallotTransaction({
   chainId,
   authority,
+  feePayment,
   ballot,
   metadata = null,
   creationTimeMs = null,
@@ -4663,6 +5014,7 @@ export function buildSubmitBallotTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4676,6 +5028,7 @@ export function buildSubmitBallotTransaction({
 export function buildFinalizeElectionTransaction({
   chainId,
   authority,
+  feePayment,
   finalization,
   metadata = null,
   creationTimeMs = null,
@@ -4688,6 +5041,7 @@ export function buildFinalizeElectionTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4704,6 +5058,7 @@ export function buildFinalizeElectionTransaction({
 export function buildRegisterSmartContractCodeTransaction({
   chainId,
   authority,
+  feePayment,
   manifest,
   metadata = null,
   creationTimeMs = null,
@@ -4716,6 +5071,7 @@ export function buildRegisterSmartContractCodeTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4732,6 +5088,7 @@ export function buildRegisterSmartContractCodeTransaction({
 export function buildRegisterSmartContractBytesTransaction({
   chainId,
   authority,
+  feePayment,
   codeHash,
   code,
   metadata = null,
@@ -4748,6 +5105,7 @@ export function buildRegisterSmartContractBytesTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,
@@ -4764,6 +5122,7 @@ export function buildRegisterSmartContractBytesTransaction({
 export function buildRemoveSmartContractBytesTransaction({
   chainId,
   authority,
+  feePayment,
   codeHash,
   reason = null,
   metadata = null,
@@ -4780,6 +5139,7 @@ export function buildRemoveSmartContractBytesTransaction({
   return buildTransaction({
     chainId,
     authority,
+    feePayment,
     instructions: [instruction],
     metadata,
     creationTimeMs,

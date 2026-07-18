@@ -12,8 +12,8 @@ pub mod receipt;
 pub mod signed;
 
 pub use executable::{
-    Executable, IvmBytecode, IvmProved, TransactionGasLimitError, insert_transaction_gas_limit,
-    parse_transaction_gas_limit, require_transaction_gas_limit, transaction_gas_limit_metadata_key,
+    Executable, IvmBytecode, IvmProved, TransactionGasLimitError, parse_transaction_gas_limit,
+    require_transaction_gas_limit,
 };
 pub use private_kaigi::{
     PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
@@ -23,8 +23,10 @@ pub use receipt::{
     TX_SUBMISSION_RECEIPT_DOMAIN, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
 };
 pub use signed::{
-    ExecutionStep, SignedTransaction, TransactionBuilder, TransactionEntrypoint, TransactionResult,
-    TransactionResultInner, TransactionSignature,
+    AuthorityFeePayment, ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
+    FeePaymentIntentError, SignedTransaction, SponsorFeePayment, TransactionBuilder,
+    TransactionEntrypoint, TransactionPayload, TransactionResult, TransactionResultInner,
+    TransactionSignature,
 };
 
 pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint};
@@ -32,13 +34,14 @@ pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntryp
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep, IvmBytecode, IvmProved,
-        PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep,
+        FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, IvmBytecode,
+        IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
         PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
-        SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
-        TransactionEntrypoint, TransactionGasLimitError, TransactionResult, TransactionResultInner,
-        TransactionSignature, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
-        error::prelude::*, insert_transaction_gas_limit, parse_transaction_gas_limit,
-        require_transaction_gas_limit, transaction_gas_limit_metadata_key,
+        SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint,
+        TransactionBuilder, TransactionEntrypoint, TransactionGasLimitError, TransactionPayload,
+        TransactionResult, TransactionResultInner, TransactionSignature,
+        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
+        parse_transaction_gas_limit, require_transaction_gas_limit,
     };
 }

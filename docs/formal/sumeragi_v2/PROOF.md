@@ -40,6 +40,10 @@ durable rules enforced by the reducer and WAL:
 Cryptographic authentication, collision resistance, deterministic execution,
 faithful durability acknowledgements, and the post-GST delivery and bounded
 work assumptions are the trusted contracts stated in the protocol document.
+The local-work contract is quantified only over validator hosts admitted by
+the first-release storage-platform gate. An unsupported-platform failure is
+not successful termination and cannot discharge application or
+successor-activation fairness.
 
 ## Quorum lemmas
 
@@ -297,7 +301,20 @@ recovery requests receive fresh live Serve nonces and occurrence-level FIFO
 ranks, so equal request values cannot collapse one another's starvation
 witness. These constructor families deliberately over-approximate reachable
 provenance; authenticated junk receives no temporal promise, and the composite
-rank obligation remains explicit proof debt.
+rank obligation remains explicit proof debt. A compact Stage-6 mutation pins
+the causal arithmetic: doubling the unique FIFO index makes removal of an
+earlier head strictly dominate a simultaneous zero-to-one local-source cursor
+reset, while multiplier one yields the exact equality counterexample. This is
+bounded regression evidence only; it neither opens blocked Completion causal
+capacity nor proves the temporal rank obligation. At the production projection
+boundary, the source-bound reverse/push-front kernel now has Verus proofs for
+continuation-before-tail order, stable first ownership, prior-owner exclusion,
+retention of every emitted fresh identity, unique fresh values, and conditional
+old-prefix/fresh-tail preservation. Those
+sequence theorems assume a faithful identity projection and a complete owner
+set; they do not prove the executable effect-to-TLA candidate mapping or the
+Completion-capacity product rank, so the ledger entry remains
+`specified_unproved`.
 The current view's absolute timeout has first priority. A periodic
 retransmission may precede already-admitted command work once, after which
 command debt gives the class-aware ingress the next non-timeout slot. Thus the
@@ -411,8 +428,11 @@ body matches those Rust expressions, nor a temporal theorem that the runtime or
 external body service is eventually invoked. The executable height-scoped
 acquisition owner now specifies immutable physical identity, mutable consumer
 rebind, exact completion classification, certified recovery, and retry. Its
-`EffectiveLockAcquisitionModelObligation` is still `specified_unproved`;
-exhaustive bounded TLC is counterexample search, not a deductive discharge.
+`EffectiveLockAcquisitionModelObligation` now has a complete source proof body
+which composes type closure, acquisition progress, and stable repeated
+delivery. It remains `specified_unproved` until a fresh pinned strict TLAPS run
+produces source-manifest-bound backend evidence; exhaustive bounded TLC and
+source inspection are not a deductive discharge.
 Ordinary-Rust map/hash/service projection, worker/request ownership, and
 post-GST fairness remain separately in
 `EffectiveLockBodyAcquisitionProductionRefinementObligation`, also ledgered
@@ -454,9 +474,20 @@ with pre-GST local work still queued. Its release-facing theorem now has a
 source proof body that deductively composes the six exact structure,
 rank-decrease, non-orphaning, outcome-stability, well-founded progress, and
 starvation results, but remains `specified_unproved` pending a fresh pinned
-strict TLAPS run of the complete module. The latter maps production startup
-and block-sync traces to the model. Historical recovery is an exact Async reducer path rather than a
-second consensus or receipt relation: an authenticated current voter serves an
+strict TLAPS run of the complete module. The latter is deliberately not a
+theorem about model state alone. Its exact statement conjuncts
+`ProductionSuccessorAndExactRecoveryTraceRefinement` with the indexed model
+invariant. That source predicate contains six unassigned booleans for Applied
+publication, Recovered publication, fail-closed startup failure, authenticated
+historical-certificate import, the ordinary historical body pipeline, and
+terminal application without activation. Source token/order checks,
+adversarial production tests, stale-token mutation tests, and source-manifest
+binding constrain those claims, but do not prove any of them. Consequently the
+already proved abstract successor invariant cannot discharge this production
+seam; only machine-checked cross-tool trace evidence for every claim may add a
+proof body or promote its ledger status. Historical recovery is an exact Async
+reducer path rather than a second consensus or receipt relation: an
+authenticated current voter serves an
 already canonical exact CommitQC, the Core imports that envelope into ordinary
 certificate delivery, and the reducer performs decision persistence, body
 recovery, store, validation, and application. Nonterminal
@@ -501,7 +532,7 @@ variable tuple, or alternate TLC fairness relation. The complete Core `Next`
 relation is not embedded in every `WF` target, because that redundant search
 causes TLC to test unrelated conflicting Core branches during `ENABLED`.
 This promotes only `async-fair-action-refinement` to `tlaps_proved`; the
-46-entry ledger still contains 15 `specified_unproved`, 6 `trusted_contract`,
+49-entry ledger still contains 18 `specified_unproved`, 6 `trusted_contract`,
 and 1 `out_of_scope` entries, so `machine_checked_completion` remains false.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
@@ -535,22 +566,42 @@ remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The current pre-network release inventory names 170 tests across fourteen Rust
+The formal gate also seals and executes a dedicated effect-capacity ownership
+matrix consisting of four models and nineteen configurations. Its eight
+repaired cases complete, while all eleven mutants fail at their named invariant
+or temporal witness; together they generate 117 states and reach 116 distinct
+states. The matrix exercises persisted TimeoutVote-Sign ownership at capacity
+two, deterministic Fetch preemption and decided-owner exclusion, fair
+non-preemptible retirement, reconstructible full-capacity Fetch rejection, and
+bounded retained-effect FIFO behavior. Crash/restart authority is explicitly
+delegated to `SumeragiV2CrashReplayMutation`. These are finite TLC regression
+witnesses, not a deductive proof or promotion, and therefore do not alter any
+proof-coverage status or `machine_checked_completion`.
+
+A separate source-sealed post-Decision timeout/TC matrix contains one model
+and eight configurations. The repaired deterministic trace completes with TLC
+status 0; seven single-seam mutants, covering all three constructors, both
+receive-pool branches, and both causal-successor branches, return status 12 at
+their exact named invariants. The source proof exposes
+`DecisionTimeoutFrontierInvariant` and exact node/generation-bound
+`DecisionRecoveryAuthority`, while the ledger records the full action
+induction and replay-to-current-`FetchBody` handoff as two independent
+`specified_unproved` obligations. A third independent sentinel keeps the
+Rust/Verus-to-TLA durable-owner, scheduler, and application trace mapping
+`specified_unproved`; abstract TLAPS success cannot promote production
+progress without it. The matrix is regression evidence only.
+
+The current pre-network release inventory names 204 tests across seventeen Rust
 modules. It includes exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
 `3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
-authenticated exact historical recovery, and watchdog classification. Cargo
-discovery found all
-162 then-required names among 6,744 tests with no missing or ignored release
-test before the four replay-FIFO/refinement regressions raised the inventory to
-166 and the two effective-lock acquisition regressions raised it to 168. Two
-same-runtime-step Decision reconciliation regressions now raise it to 170; the
-authoritative ingress module was green at 30/30. The preceding mutable-source
-discovery found all 168 then-required names among 6,750 library tests with none
-missing or ignored, and direct exact execution was green at 168/168. Fresh
-170-name discovery/execution and the clean committed, detached, source-sealed
-serial release leg remain pending. An
+authenticated exact historical recovery, retained effect-capacity ownership,
+post-decision timeout/TC quiescence, and watchdog classification. The preceding
+mutable-source discovery and direct execution evidence covered the earlier
+168-name inventory. Fresh 204-name
+discovery/execution and the clean committed, detached, source-sealed serial
+release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.

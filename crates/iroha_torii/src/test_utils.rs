@@ -66,8 +66,6 @@ pub struct ContractCallOptions<'a> {
     pub entrypoint: &'a str,
     /// Serialized JSON payload passed to the contract call.
     pub payload: Option<&'a norito::json::Value>,
-    /// Gas-paying asset identifier to attach to the request.
-    pub gas_asset_id: Option<&'a str>,
     /// Upper bound on gas consumption for the call.
     pub gas_limit: u64,
 }
@@ -411,9 +409,13 @@ pub fn enqueue_locally_signed_contract_deployment(
         expected_previous_contract_address: None,
     }));
 
-    let transaction = TransactionBuilder::new(chain_id.clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(key_pair.private_key());
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(key_pair.private_key());
     queue
         .push(
             AcceptedTransaction::new_unchecked(Cow::Owned(transaction)),
@@ -444,10 +446,13 @@ pub fn contract_call_request_json(
     if let Some(value) = options.payload {
         entries.push(crate::json_entry("payload", value.clone()));
     }
-    if let Some(asset) = options.gas_asset_id {
-        entries.push(crate::json_entry("gas_asset_id", asset));
-    }
-    entries.push(crate::json_entry("gas_limit", options.gas_limit));
+    entries.push(crate::json_entry(
+        "fee_payment",
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(options.gas_limit),
+        ),
+    ));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
 }
@@ -1440,12 +1445,16 @@ mod tests {
             events,
         ));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), authority)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "queued transaction fixture".to_owned(),
-            )])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "queued transaction fixture".to_owned(),
+        )])
+        .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
 

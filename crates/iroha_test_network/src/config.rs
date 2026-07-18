@@ -1847,13 +1847,17 @@ mod tests {
                     Some(AccountAliasDomain::new(ivm_domain.name().clone())),
                     DataSpaceId::UNIVERSAL,
                 )));
-        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
-            .with_instructions([
-                InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
-                InstructionBox::from(Register::account(gas_account)),
-            ])
-            .try_sign(genesis_key_pair.private_key())
-            .expect("checked genesis test transaction signing succeeds");
+        let tx = TransactionBuilder::new(
+            chain_id,
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
+            InstructionBox::from(Register::account(gas_account)),
+        ])
+        .try_sign(genesis_key_pair.private_key())
+        .expect("checked genesis test transaction signing succeeds");
         let block = GenesisBlock(SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),

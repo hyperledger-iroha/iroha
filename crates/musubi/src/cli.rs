@@ -40,6 +40,7 @@ use iroha_data_model::{
     },
     smart_contract::ContractAlias,
     sorafs::pin_registry::ManifestDigest,
+    transaction::FeePaymentIntent,
 };
 use ivm::kotodama::{
     compiler::CompilerOptions,
@@ -164,9 +165,58 @@ struct ClientArgs {
     /// Wait for transaction commit or rejection
     #[arg(long)]
     wait: bool,
+    /// Explicit signature-bound fee payer for mutation commands.
+    #[arg(long, value_enum)]
+    fee_payer: Option<FeePayerArg>,
+    /// Exact sponsor program (`<canonical-I105>/<name>`).
+    #[arg(long, value_name = "PROGRAM_ID")]
+    fee_program: Option<String>,
+    /// Exact immutable sponsor program revision.
+    #[arg(long, value_name = "NONZERO_U64")]
+    fee_program_revision: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum FeePayerArg {
+    Authority,
+    Sponsor,
 }
 
 impl ClientArgs {
+    fn fee_payment(&self) -> Result<FeePaymentIntent> {
+        match self.fee_payer {
+            Some(FeePayerArg::Authority) => {
+                if self.fee_program.is_some() || self.fee_program_revision.is_some() {
+                    bail!("--fee-program and --fee-program-revision require --fee-payer sponsor");
+                }
+                Ok(FeePaymentIntent::authority(Vec::new(), None))
+            }
+            Some(FeePayerArg::Sponsor) => {
+                let program_id = self
+                    .fee_program
+                    .as_deref()
+                    .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program"))?
+                    .parse()
+                    .wrap_err("invalid --fee-program")?;
+                let revision = self
+                    .fee_program_revision
+                    .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program-revision"))?;
+                if revision == 0 {
+                    bail!("--fee-program-revision must be greater than zero");
+                }
+                Ok(FeePaymentIntent::sponsor(
+                    program_id,
+                    revision,
+                    Vec::new(),
+                    None,
+                ))
+            }
+            None => bail!(
+                "mutation commands require --fee-payer authority or --fee-payer sponsor with an exact program and revision"
+            ),
+        }
+    }
+
     fn load(&self) -> Result<(Client, iroha_data_model::account::AccountId)> {
         let load_path = self.config.as_ref().map_or_else(
             || LoadPath::Default(PathBuf::from("client.toml")),
@@ -183,10 +233,11 @@ impl ClientArgs {
         I: Into<iroha_data_model::isi::InstructionBox>,
     {
         let (client, _) = self.load()?;
+        let fee_payment = self.fee_payment()?;
         let hash = if self.wait {
-            client.submit_blocking(instruction)?
+            client.submit_blocking(instruction, fee_payment)?
         } else {
-            client.submit(instruction)?
+            client.submit(instruction, fee_payment)?
         };
         println!("transaction_hash = {hash}");
         Ok(())
@@ -824,6 +875,7 @@ impl PublishArgs {
         println!("exports = {}", manifest.exports.len());
         println!("dry_run = {}", self.dry_run);
         if !self.dry_run {
+            let fee_payment = self.client.fee_payment()?;
             let (client, account) = self.client.load()?;
             if self.upload {
                 let files = generated_sorafs
@@ -844,12 +896,10 @@ impl PublishArgs {
                     .wrap_err("failed to upload Musubi source archive through SoraFS storage pin endpoint")?;
                 println!("sorafs_storage_pin_uploaded = true");
             }
-            let pin_hash = client.submit_blocking(RegisterPinManifest::new(
-                generated_sorafs.manifest_bytes.clone(),
-                0,
-                None,
-                None,
-            ))?;
+            let pin_hash = client.submit_blocking(
+                RegisterPinManifest::new(generated_sorafs.manifest_bytes.clone(), 0, None, None),
+                fee_payment.clone(),
+            )?;
             println!("sorafs_pin_transaction_hash = {pin_hash}");
             let release = release_from_manifest(
                 &manifest,
@@ -863,9 +913,9 @@ impl PublishArgs {
                 .validate_publishable()
                 .map_err(|err| eyre!("{}", err.reason()))?;
             let hash = if self.client.wait {
-                client.submit_blocking(PublishMusubiRelease::new(release))?
+                client.submit_blocking(PublishMusubiRelease::new(release), fee_payment)?
             } else {
-                client.submit(PublishMusubiRelease::new(release))?
+                client.submit(PublishMusubiRelease::new(release), fee_payment)?
             };
             println!("transaction_hash = {hash}");
         }
@@ -3322,6 +3372,33 @@ mod tests {
         },
         source::TextRange,
     };
+
+    #[test]
+    fn mutation_fee_payment_requires_explicit_consistent_payer() {
+        let authority = ClientArgs {
+            config: None,
+            wait: false,
+            fee_payer: Some(FeePayerArg::Authority),
+            fee_program: None,
+            fee_program_revision: None,
+        };
+        assert!(matches!(
+            authority.fee_payment(),
+            Ok(FeePaymentIntent::Authority(_))
+        ));
+
+        let missing_program = ClientArgs {
+            fee_payer: Some(FeePayerArg::Sponsor),
+            ..authority
+        };
+        assert!(
+            missing_program
+                .fee_payment()
+                .expect_err("sponsor payer needs exact program")
+                .to_string()
+                .contains("--fee-program")
+        );
+    }
 
     #[test]
     fn build_diagnostic_reports_remain_pure_json_and_sarif_documents() {

@@ -24,9 +24,9 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case let .invalidArchive(field):
             return "Invalid Kagemusha recursive spend Norito archive: \(field)."
         case .nativeBridgeUnavailable:
-            return "The ABI-20 Kagemusha recursive spend bridge is unavailable."
+            return "The ABI-21 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
-            return "Kagemusha recursive spend V4 is unavailable until the ABI-20 proof backend is promoted."
+            return "Kagemusha recursive spend V4 is unavailable until the ABI-21 proof backend is promoted."
         case .finalityTrustUnavailable:
             return "Kagemusha top-up finality is unavailable until the authenticated release trust root is wired and recursive init consumes its result."
         case .hardwareAssertionUnavailable:
@@ -35,7 +35,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
     }
 }
 
-/// Exact capability record returned by the explicitly versioned ABI-20/V4
+/// Exact capability record returned by the explicitly versioned ABI-21/V4
 /// bridge. Older capability archives cannot be reinterpreted as permission to
 /// invoke this prover.
 public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
@@ -152,7 +152,7 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 20
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 21
     public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
@@ -273,7 +273,7 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaReceiverAcknowledgementVerifyResultV2")
     public static let redeemRequestWireName = "iroha.torii.v1.offline.redeem.request"
 
-    // Canonical ABI-20 data-model carriers.
+    // Canonical ABI-21 data-model carriers.
     public static let bundleWireNameV4 = wire("KagemushaRecursiveSpendBundleV4")
     public static let topUpAnchorWireNameV4 =
         wire("KagemushaRecursiveSpendTopUpAnchorV4")
@@ -406,11 +406,11 @@ public enum KagemushaRecursiveSpend {
     public static let maximumIosAppAttestAssertionObjectBytesV2 = 8 * 1024
     /// Exact protocol ceiling for App Attest authenticator data.
     public static let maximumIosAppAttestAuthenticatorDataBytesV2 = 4 * 1024
-    /// Consensus ceiling for one canonical recipient-only ABI-20 peer archive.
+    /// Consensus ceiling for one canonical recipient-only ABI-21 peer archive.
     /// Text and individual QR/APDU frames retain smaller independent bounds.
     public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024
     public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4
-    /// Maximum canonical ABI-20 promoted-release marker accepted by native install.
+    /// Maximum canonical ABI-21 promoted-release marker accepted by native install.
     public static let maximumPromotionRecordBytesV4 = 1_024 * 1_024
     /// Exact Rust `KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4`.
     public static let maximumTopUpProvenanceArchiveBytesV4 =
@@ -548,7 +548,7 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    /// Match the ABI-20/V4 cross-platform artifact identifier contract byte
+    /// Match the ABI-21/V4 cross-platform artifact identifier contract byte
     /// for byte. This is deliberately stricter than general portable text.
     static func requirePortableArtifactIdentifier(
         _ value: String,
@@ -1806,7 +1806,7 @@ public struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendabl
     }
 }
 
-/// Installed ABI-20/V4 generation bound to its authenticated manifest.
+/// Installed ABI-21/V4 generation bound to its authenticated manifest.
 public struct KagemushaRecursiveSpendInstalledArtifactSetV4: Equatable, Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
@@ -2367,7 +2367,7 @@ private typealias KagemushaV4TwoArchiveTimeOutFn = @convention(c) (
 ) -> Int32
 #endif
 
-/// ABI-20 lifecycle calls resolve explicitly suffixed V4 symbols without a
+/// ABI-21 lifecycle calls resolve explicitly suffixed V4 symbols without a
 /// legacy recursive-lifecycle fallback.
 extension NoritoNativeBridge {
     func kagemushaRecursiveSpendCapabilitiesV4() throws -> Data? {

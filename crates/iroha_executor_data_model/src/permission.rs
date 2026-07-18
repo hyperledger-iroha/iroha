@@ -664,46 +664,26 @@ pub mod nexus {
     }
 
     permission! {
-        /// Permission to charge Nexus fees to a named policy owned by the sponsor account.
-        pub struct CanUseFeeSponsor {
-            /// Sponsor account that may be debited for fees.
+        /// Permission to manage fee sponsor programs owned by one sponsor account.
+        pub struct CanManageFeeSponsorProgram {
+            /// Sponsor account whose programs may be created and revised.
             pub sponsor: AccountId,
-            /// Sponsor-local policy name that must allow the transaction.
-            pub policy: Name,
         }
     }
 
     permission! {
-        /// Permission for one exact account to charge a sponsor policy.
-        pub struct CanUseFeeSponsorForAccount {
-            /// Sponsor account that may be debited for fees.
-            pub sponsor: AccountId,
-            /// Sponsor-local policy name that must allow the transaction.
-            pub policy: Name,
-            /// Exact beneficiary account that may hold and exercise this permission.
-            pub beneficiary: AccountId,
-            /// Exact account-alias domain used to authorize enrollment.
-            pub domain: DomainId,
+        /// Permission to enroll or unenroll beneficiaries in one exact sponsor program.
+        pub struct CanEnrollFeeSponsorProgram {
+            /// Exact program whose enrollment set may be managed.
+            pub program_id: FeeSponsorProgramId,
         }
     }
 
     permission! {
-        /// Permission for a domain registrar to enroll its accounts in one sponsor policy.
-        pub struct CanEnrollFeeSponsorPolicyForAccountDomain {
-            /// Sponsor account that may be debited for fees.
-            pub sponsor: AccountId,
-            /// Sponsor-local policy name whose enrollment may be delegated.
-            pub policy: Name,
-            /// Exact account-alias domain whose accounts may be enrolled.
-            pub domain: DomainId,
-        }
-    }
-
-    permission! {
-        /// Permission to manage fee sponsor policies owned by the specified sponsor account.
-        pub struct CanManageFeeSponsorPolicy {
-            /// Sponsor account whose policies may be managed.
-            pub sponsor: AccountId,
+        /// Permission to withdraw assets from one exact sponsor-program vault.
+        pub struct CanWithdrawFeeSponsorProgram {
+            /// Exact program whose paused or closing vault may be withdrawn.
+            pub program_id: FeeSponsorProgramId,
         }
     }
 }

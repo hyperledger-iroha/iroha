@@ -60,6 +60,26 @@ export interface NexusKotodamaQuantity {
   toString(): string;
 }
 
+export interface NexusFeeChargeLimit {
+  kind: "nexus" | "pipelineGas";
+  assetDefinitionId: string;
+  maxAmount: NexusKotodamaQuantity | string | bigint;
+}
+
+export type NexusFeePayment =
+  | {
+      payer: "authority";
+      chargeLimits: readonly NexusFeeChargeLimit[];
+      gasLimit?: number | string | bigint | null;
+    }
+  | {
+      payer: "sponsor";
+      programId: string;
+      programRevision: number | string | bigint;
+      chargeLimits: readonly NexusFeeChargeLimit[];
+      gasLimit?: number | string | bigint | null;
+    };
+
 export interface NexusTransferInput {
   chainId?: string;
   authority?: string;
@@ -76,6 +96,7 @@ export interface NexusTransferInput {
   creationTimeMs?: number | null;
   ttlMs?: number | null;
   nonce?: number | null;
+  feePayment: NexusFeePayment;
   signingPublicKey?: Buffer | Uint8Array | ArrayBuffer | string | null;
 }
 

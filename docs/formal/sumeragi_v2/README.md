@@ -108,10 +108,13 @@ ledger.
   post-install durable lock, effect-carried lock, and immediately following
   recovery fetch must agree on the effective maximum lock. The executable
   acquisition owner makes the body-rebind and recovery state machine explicit,
-  but its deductive `EffectiveLockAcquisitionModelObligation` remains
-  `specified_unproved`. Proving that every production executor, runtime,
-  worker, request, byte, and queue owner refines and fairly services that model
-  remains the separate
+  and `EffectiveLockAcquisitionModelObligation` now has a complete deductive
+  source proof body covering type closure, acquisition progress, and stable
+  repeated delivery. It remains `specified_unproved` until that exact body
+  passes the pinned strict TLAPS runner and receives source-manifest-bound
+  backend evidence; SANY parsing and bounded TLC are not a discharge. Proving
+  that every production executor, runtime, worker, request, byte, and queue
+  owner refines and fairly services that model remains the separate
   `EffectiveLockBodyAcquisitionProductionRefinementObligation`, also
   `specified_unproved`.
   Generation-scoped vote delivery is ledgered `tlaps_proved`. The one-height
@@ -336,7 +339,7 @@ frames, all 18 action classifications, both quantifier inventories, the typed
 claim, and the exact dedicated theorem inventory. The finite TLC specs and
 deductive specs share the same `AsyncAllVars` and `AsyncFairnessAt`; no
 TLC-only fairness relation exists. This promotes only the fair-action
-refinement entry: the 46-entry ledger still has 15 `specified_unproved`
+refinement entry: the 49-entry ledger still has 18 `specified_unproved`
 obligations and keeps `machine_checked_completion: false`.
 
 The target statement is exactly: after GST, with a responsive dual quorum and
@@ -395,6 +398,17 @@ stability, progress, and starvation theorems. It remains ledgered
 `specified_unproved` until the complete module passes the pinned strict TLAPS
 runner; source composition and SANY parsing are not a machine-checked
 discharge.
+The separate production-refinement seam is also intentionally stronger than
+the already proved abstract successor invariant. Its release theorem conjuncts
+`ProductionSuccessorAndExactRecoveryTraceRefinement`, an exact six-boolean
+inventory for Applied and Recovered publication, fail-closed startup failure,
+authenticated historical-certificate import, the ordinary historical body
+pipeline, and terminal application without activation. Those booleans are
+unassigned: source-order checks, adversarial Rust tests, stale-token mutations,
+and source-manifest binding constrain the corresponding traces but do not
+prove refinement. The theorem therefore has no proof body and remains
+`specified_unproved` until machine-checked cross-tool trace evidence establishes
+all six claims; the abstract model theorem cannot be reused as its discharge.
 The chain refinement now models an indexed family of authoritative
 `AsyncSpecAt` instances and exposes the exact
 `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. The conditional
@@ -438,7 +452,16 @@ concrete deadline-debt decrease, or protected-rank decrease/exit. Its remaining
 stage, packet, and zero-deadline cases are still `specified_unproved`. Durable
 progress-witness preservation, strict protected-service-rank decrease, and
 starvation freedom intentionally remain `specified_unproved`; adding the
-vocabulary is not machine proof.
+vocabulary is not machine proof. The release-facing witness now uses
+`AsyncDurableCommitProgressWitness`: when a responsive crash clears
+`signVotes`, only the exact recovery phase, node, and generation may carry the
+durable Commit until WAL replay reconstructs an ordinary carrier. The source
+decomposition covers that Commit carrier and protected deferred ownership;
+historical TC-lock reconstruction and exact decision-pipeline preservation
+remain explicit proof gaps inside the same proofless obligation. A bounded
+mutation shows that the volatile-only witness fails on the crash transition
+while the exact authority-aware witness survives repaired replay; it is a
+counterexample regression, not deductive discharge.
 
 ## Evidence and release gate
 
@@ -467,26 +490,37 @@ corridor. A proofless release theorem is accepted only at its exact pinned
 module and symbol while the ledger records it as `specified_unproved`.
 Every validation mode rejects `machine_checked_completion=true` while any such
 entry remains. Promotion order is also explicit: async type closure depends on
-proved runner scheduler preservation, deadlock freedom depends on proved type
-closure, starvation freedom depends on the proved service-rank theorem, and
+proved runner scheduler preservation; the post-Decision timeout frontier and
+Decision restart-recovery obligations depend on type closure; the aggregate
+progress witness depends on both; deadlock freedom depends on proved type
+closure; starvation freedom depends on the proved service-rank theorem; and
 genesis handoff and indexed height liveness each depend on proved
 rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 171 named tests
-across 14 Rust modules. The inventory includes five native-AMX lane-work
+Before network startup, the executable wrapper inventories 204 named tests
+across 17 Rust modules. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
-recovery, and the exact
+recovery, post-decision timeout/TC quiescence, and the exact
 `3N+1`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. It also runs exact mocked contracts for active Git
-operation rejection, detached source sealing, the 128-run matrix launcher, the
+operation rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
 promotion, and the aggregate release receipt. These execution contracts are
 not deductive proof. Strict proof completion, the complete PR corridor, the
 source-bound chaos run, and the 24-hour Taira-profile soak remain pending.
+
+The formal mutation gate also runs one source-sealed post-Decision model with
+eight configurations. The repaired trace completes with status 0. Seven
+single-seam mutants—one for each of the three control guards, two receive-pool
+admission branches, and two causal-successor branches—must fail at their named
+invariant with status 12. This finite matrix binds the executable model to the
+reducer/source-fidelity contract but does not discharge either new
+`specified_unproved` temporal obligation or the independent production-trace
+refinement sentinel required by the aggregate progress witness.
 
 Production release execution accepts only a clean committed HEAD and must be
 entered through the operator-authenticated out-of-tree bootstrap under a
@@ -503,8 +537,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 33 pre-network legs and the exact
-171-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 36 pre-network legs and the exact
+204-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -567,14 +601,47 @@ explicit scheduler mutation/repair pairs:
 8. producer-first local admission versus sticky causal debt and the alternating
    local-source cursor.
 
-The protected-rank follow-up checks four additional adversarial families:
+The protected-rank follow-up checks five additional adversarial families:
 
 9. four causal-capacity refill lassos versus sticky class-specific debt, plus
    the exact duplicate fast path;
 10. blind causal-successor replacement versus scheduler-wide exact coalescing;
 11. recurring Commit-certificate discovery inside `RunNode` versus its own
     fairly scheduled auxiliary action; and
-12. indexing every physical I/O job versus indexing only Consensus owners.
+12. indexing every physical I/O job versus indexing only Consensus owners; and
+13. a multiplier-one causal FIFO rank versus the doubled FIFO position that
+    strictly dominates a simultaneous local-source cursor reset.
+
+The last family is an intentionally two-state Stage-6 arithmetic slice. With
+`<<Earlier, Target>>` and Causal preferred, removing `Earlier` while resetting
+the cursor to Producer changes the fixed rank from `2 * 2 + 0 = 4` to
+`2 * 1 + 1 = 3`. The multiplier-one mutation remains at two and produces the
+pinned invariant counterexample. This establishes only the local FIFO/cursor
+calculation; it does not prove that Completion causal capacity eventually
+opens and does not discharge or promote the temporal service-rank obligation.
+The executable continuation kernel is additionally source-bound to a Verus
+sequence projection: reverse/push-front preserves continuation-before-tail,
+and the projected scheduler filter excludes prior owners, retains every fresh
+emitted identity exactly once in stable order, and conditionally appends them
+after an unchanged old queue.
+The condition is material: the supplied owner set must include the old queue
+and every scheduler owner. No theorem yet maps concrete effect identities and
+that complete owner union to TLA+ candidates, so this evidence remains
+unpromoted.
+
+The gate next runs the separately source-sealed effect-capacity ownership
+matrix: four compact models, nineteen exact configurations, and one standalone
+runner. Eight repaired configurations finish with TLC status 0; eleven mutants
+must fail with their pinned invariant or temporal status. Across the complete
+matrix TLC generates 117 states and finds 116 distinct states. The cases cover
+the two-Fetch/full-capacity TimeoutVote-Sign prefix, protected and terminating
+owner retirement, reconstructible full-capacity Fetch rejection, stable
+`(class, work_id)` preemption with decided-owner exclusion, and retained-suffix
+FIFO/bound/overtaking/Decision filtering. Crash/restart reconstruction is
+explicitly delegated to `SumeragiV2CrashReplayMutation`; it is not silently
+abstracted as part of these live-process models. This exhaustive finite matrix
+is mutation and regression evidence only. It supplies no deductive liveness
+proof, changes no proof-ledger status, and promotes no obligation.
 
 An exhaustive one-validator ownership configuration separately checks
 `AsyncProgressOwnershipInvariant` over 42,817 generated states (6,208 distinct,

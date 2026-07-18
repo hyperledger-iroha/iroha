@@ -69,11 +69,15 @@ fn build_transaction(
     time_source: &TimeSource,
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
-    let tx =
-        TransactionBuilder::new_with_time_source(chain_id.clone(), authority.clone(), time_source)
-            .with_instructions(instructions)
-            .with_metadata(Metadata::default())
-            .sign(keypair.private_key());
+    let tx = TransactionBuilder::new_with_time_source(
+        chain_id.clone(),
+        authority.clone(),
+        time_source,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .with_metadata(Metadata::default())
+    .sign(keypair.private_key());
     let default_limits = TransactionParameters::default();
     let params = TransactionParameters::with_max_signatures(
         nonzero!(16_u64),

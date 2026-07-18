@@ -62,7 +62,7 @@ impl QueuedSoracloudRuntimeMutationSink {
         _state: Arc<State>,
         _authority: AccountId,
         _key_pair: KeyPair,
-        _gas_asset_id: Option<String>,
+        _submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
     ) -> Self {
         Self
     }

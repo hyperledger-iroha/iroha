@@ -21,10 +21,6 @@ pub(crate) mod test_override {
         static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
             RefCell::new(Vec::new())
         };
-        static ACCOUNT_DOMAIN_BINDINGS: RefCell<Option<Vec<(
-            crate::data_model::account::AccountId,
-            crate::data_model::domain::DomainId,
-        )>>> = const { RefCell::new(None) };
     }
 
     pub fn permissions() -> Vec<crate::data_model::permission::Permission> {
@@ -37,38 +33,6 @@ pub(crate) mod test_override {
         PERMISSIONS.with(|current| {
             let mut current = current.borrow_mut();
             core::mem::replace(&mut *current, permissions)
-        })
-    }
-
-    pub fn account_domain_binding(
-        account: &crate::data_model::account::AccountId,
-        domain: &crate::data_model::domain::DomainId,
-    ) -> Option<bool> {
-        ACCOUNT_DOMAIN_BINDINGS.with(|bindings| {
-            bindings.borrow().as_ref().map(|bindings| {
-                bindings
-                    .iter()
-                    .any(|binding| binding == &(account.clone(), domain.clone()))
-            })
-        })
-    }
-
-    pub fn replace_account_domain_bindings(
-        bindings: Option<
-            Vec<(
-                crate::data_model::account::AccountId,
-                crate::data_model::domain::DomainId,
-            )>,
-        >,
-    ) -> Option<
-        Vec<(
-            crate::data_model::account::AccountId,
-            crate::data_model::domain::DomainId,
-        )>,
-    > {
-        ACCOUNT_DOMAIN_BINDINGS.with(|current| {
-            let mut current = current.borrow_mut();
-            core::mem::replace(&mut *current, bindings)
         })
     }
 }
@@ -240,10 +204,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForAccountDomain},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForUaid},
-    iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorPolicyForAccountDomain},
-    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
-    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsorForAccount},
-    iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorPolicy},
+    iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
+    iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
+    iroha_executor_data_model::permission::nexus::{CanWithdrawFeeSponsorProgram},
 }
 
 mod query {
@@ -529,9 +492,9 @@ mod settlement {
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
-        CanEnrollFeeSponsorPolicyForAccountDomain, CanManageFeeSponsorPolicy,
-        CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
-        CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+        CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
+        CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
+        CanWithdrawFeeSponsorProgram,
     };
 
     use super::*;
@@ -706,171 +669,99 @@ mod nexus {
         }
     }
 
-    #[derive(Debug, Clone)]
-    struct SponsorAccount<'a> {
-        sponsor: &'a AccountId,
+    fn ensure_sponsor_program_delegation_authority(
+        sponsor: &AccountId,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        if authority == sponsor
+            || (CanManageFeeSponsorProgram {
+                sponsor: sponsor.clone(),
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "only the sponsor or its fee-program manager may delegate this permission".to_owned(),
+        ))
     }
 
-    impl PassCondition for SponsorAccount<'_> {
-        fn validate(&self, authority: &AccountId, _host: &Iroha, _context: &Context) -> Result {
-            if authority == self.sponsor {
+    impl ValidateGrantRevoke for CanManageFeeSponsorProgram {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() || authority == &self.sponsor {
                 return Ok(());
             }
             Err(ValidationFail::NotPermitted(
-                "only the sponsor account may grant or revoke fee sponsorship".to_owned(),
+                "only the sponsor account may delegate fee-program management".to_owned(),
             ))
         }
-    }
-
-    impl<'a> From<&'a CanUseFeeSponsor> for SponsorAccount<'a> {
-        fn from(value: &'a CanUseFeeSponsor) -> Self {
-            Self {
-                sponsor: &value.sponsor,
-            }
-        }
-    }
-
-    impl<'a> From<&'a CanManageFeeSponsorPolicy> for SponsorAccount<'a> {
-        fn from(value: &'a CanManageFeeSponsorPolicy) -> Self {
-            Self {
-                sponsor: &value.sponsor,
-            }
-        }
-    }
-
-    impl ValidateGrantRevoke for CanManageFeeSponsorPolicy {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
 
         fn validate_revoke(
             &self,
             authority: &AccountId,
             context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
-    }
-
-    impl ValidateGrantRevoke for CanUseFeeSponsor {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
-
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
-    }
-
-    impl<'a> From<&'a CanEnrollFeeSponsorPolicyForAccountDomain> for SponsorAccount<'a> {
-        fn from(value: &'a CanEnrollFeeSponsorPolicyForAccountDomain) -> Self {
-            Self {
-                sponsor: &value.sponsor,
-            }
-        }
-    }
-
-    impl ValidateGrantRevoke for CanEnrollFeeSponsorPolicyForAccountDomain {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            if context.curr_block.is_genesis() {
-                return Ok(());
-            }
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
-
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
+            _host: &Iroha,
         ) -> Result {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-            SponsorAccount::from(self).validate(authority, host, context)
-        }
-    }
-
-    fn beneficiary_is_bound_to_account_domain(
-        beneficiary: &AccountId,
-        domain: &DomainId,
-        host: &Iroha,
-    ) -> bool {
-        #[cfg(test)]
-        if let Some(is_bound) = test_override::account_domain_binding(beneficiary, domain) {
-            return is_bound;
-        }
-
-        host.query_single(FindAliasesByAccountId::new(
-            beneficiary.clone(),
-            Some(domain.dataspace().to_string()),
-            Some(domain.name().to_string()),
-        ))
-        .is_ok_and(|aliases| !aliases.is_empty())
-    }
-
-    fn ensure_fee_sponsor_account_grant_authority(
-        permission: &CanUseFeeSponsorForAccount,
-        authority: &AccountId,
-        host: &Iroha,
-        require_current_domain_binding: bool,
-    ) -> Result {
-        if authority != &permission.sponsor {
-            let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-                sponsor: permission.sponsor.clone(),
-                policy: permission.policy.clone(),
-                domain: permission.domain.clone(),
-            };
-            if !enrollment.is_owned_by(authority, host) {
-                return Err(ValidationFail::NotPermitted(
-                    "Current authority does not hold the exact account-domain sponsor enrollment permission"
-                        .to_owned(),
-                ));
+            if authority == &self.sponsor {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "only the sponsor account may revoke fee-program management".to_owned(),
+                ))
             }
         }
-        if require_current_domain_binding
-            && !beneficiary_is_bound_to_account_domain(
-                &permission.beneficiary,
-                &permission.domain,
-                host,
-            )
-        {
-            return Err(ValidationFail::NotPermitted(
-                "Fee sponsor beneficiary is not bound to the delegated account domain".to_owned(),
-            ));
-        }
-        Ok(())
     }
 
-    impl ValidateGrantRevoke for CanUseFeeSponsorForAccount {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            if context.curr_block.is_genesis() {
-                return Ok(());
-            }
-            ensure_fee_sponsor_account_grant_authority(self, authority, host, true)
-        }
+    macro_rules! impl_program_scoped_delegation {
+        ($permission:ty) => {
+            impl ValidateGrantRevoke for $permission {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    if context.curr_block.is_genesis() {
+                        return Ok(());
+                    }
+                    ensure_sponsor_program_delegation_authority(
+                        &self.program_id.sponsor,
+                        authority,
+                        host,
+                    )
+                }
 
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            if context.curr_block.is_genesis() {
-                return Ok(());
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    if context.curr_block.is_genesis() {
+                        return Ok(());
+                    }
+                    ensure_sponsor_program_delegation_authority(
+                        &self.program_id.sponsor,
+                        authority,
+                        host,
+                    )
+                }
             }
-            // A registrar must remain able to revoke a previously enrolled account after
-            // its alias is unbound. Requiring a live binding here would strand a usable
-            // account-scoped token precisely when offboarding needs to invalidate it.
-            ensure_fee_sponsor_account_grant_authority(self, authority, host, false)
-        }
+        };
     }
+
+    impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
+    impl_program_scoped_delegation!(CanWithdrawFeeSponsorProgram);
 }
 
 mod sorafs {
@@ -2257,9 +2148,9 @@ mod tests {
         asset::CanMintAssetWithDefinition,
         domain::CanRegisterDomain,
         nexus::{
-            CanEnrollFeeSponsorPolicyForAccountDomain, CanManageFeeSponsorPolicy,
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
-            CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsorForAccount,
+            CanPublishSpaceDirectoryManifestForUaid, CanWithdrawFeeSponsorProgram,
         },
         peer::CanManagePeers,
         query::CanReadRestrictedDataspace,
@@ -2277,9 +2168,9 @@ mod tests {
             Iroha,
             data_model::{
                 block::BlockHeader,
-                nexus::{DataSpaceId, UniversalAccountId},
+                nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, DomainId, Json, Name, RoleId},
+                prelude::{AccountId, AssetDefinitionId, DomainId, Json, RoleId},
             },
         },
     };
@@ -2321,6 +2212,14 @@ mod tests {
                 .parse()
                 .unwrap();
         AccountId::new(public_key)
+    }
+
+    fn make_fee_sponsor_program_id(sponsor: AccountId, name: &str) -> FeeSponsorProgramId {
+        FeeSponsorProgramId::new(
+            sponsor,
+            name.parse()
+                .expect("fee sponsor program name must be valid"),
+        )
     }
 
     #[test]
@@ -2541,18 +2440,18 @@ mod tests {
     }
 
     #[test]
-    fn fee_sponsor_policy_manager_is_typed_and_only_the_sponsor_may_delegate_it() {
+    fn fee_sponsor_program_manager_is_typed_and_only_the_sponsor_may_delegate_it() {
         let sponsor = make_account_id();
         let outsider = make_other_account_id();
         let context = make_context(&sponsor, 2);
-        let permission = CanManageFeeSponsorPolicy {
+        let permission = CanManageFeeSponsorProgram {
             sponsor: sponsor.clone(),
         };
         let raw: PermissionObject = permission.clone().into();
 
         assert!(matches!(
             AnyPermission::try_from(&raw),
-            Ok(AnyPermission::CanManageFeeSponsorPolicy(parsed)) if parsed == permission
+            Ok(AnyPermission::CanManageFeeSponsorProgram(parsed)) if parsed == permission
         ));
         assert!(
             permission
@@ -2827,215 +2726,105 @@ mod tests {
     }
 
     #[test]
-    fn sponsor_enrollment_holder_can_revoke_exact_token_after_alias_unbinding() {
+    fn fee_program_manager_can_delegate_exact_enrollment_and_withdrawal_scopes() {
         let sponsor = make_account_id();
-        let registrar = make_other_account_id();
-        let beneficiary = make_third_account_id();
-        let context = make_context(&registrar, 2);
-        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
-        let policy: Name = "retail".parse().expect("retail policy");
-        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: policy.clone(),
-            domain: domain.clone(),
+        let manager = make_other_account_id();
+        let context = make_context(&manager, 2);
+        let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
+        let enrollment = CanEnrollFeeSponsorProgram {
+            program_id: program_id.clone(),
         };
-        let exact = CanUseFeeSponsorForAccount {
-            sponsor,
-            policy,
-            beneficiary,
-            domain,
-        };
-        let previous = test_override::replace_permissions(vec![PermissionObject::from(enrollment)]);
+        let withdrawal = CanWithdrawFeeSponsorProgram { program_id };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanManageFeeSponsorProgram { sponsor },
+        )]);
 
-        let result = exact.validate_revoke(&registrar, &context, &Iroha);
-
-        test_override::replace_permissions(previous);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn sponsor_grant_requires_live_binding_but_revoke_allows_offboarding() {
-        let sponsor = make_account_id();
-        let beneficiary = make_third_account_id();
-        let context = make_context(&sponsor, 2);
-        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
-        let exact = CanUseFeeSponsorForAccount {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail policy"),
-            beneficiary: beneficiary.clone(),
-            domain: domain.clone(),
-        };
-        let previous_bindings =
-            test_override::replace_account_domain_bindings(Some(vec![(beneficiary, domain)]));
-
-        assert!(exact.validate_grant(&sponsor, &context, &Iroha).is_ok());
-
-        test_override::replace_account_domain_bindings(Some(Vec::new()));
-        assert!(matches!(
-            exact.validate_grant(&sponsor, &context, &Iroha),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(exact.validate_revoke(&sponsor, &context, &Iroha).is_ok());
-
-        test_override::replace_account_domain_bindings(previous_bindings);
-    }
-
-    #[test]
-    fn sponsor_enrollment_holder_cannot_grant_without_current_domain_binding() {
-        let sponsor = make_account_id();
-        let registrar = make_other_account_id();
-        let beneficiary = make_third_account_id();
-        let context = make_context(&registrar, 2);
-        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
-        let policy: Name = "retail".parse().expect("retail policy");
-        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: policy.clone(),
-            domain: domain.clone(),
-        };
-        let exact = CanUseFeeSponsorForAccount {
-            sponsor,
-            policy,
-            beneficiary,
-            domain,
-        };
-        let previous = test_override::replace_permissions(vec![PermissionObject::from(enrollment)]);
-        let previous_bindings = test_override::replace_account_domain_bindings(Some(Vec::new()));
-
-        let result = exact.validate_grant(&registrar, &context, &Iroha);
-
-        test_override::replace_account_domain_bindings(previous_bindings);
-        test_override::replace_permissions(previous);
-        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
-    }
-
-    #[test]
-    fn enrollment_permission_bootstraps_at_genesis_but_is_sponsor_only_afterwards() {
-        let sponsor = make_account_id();
-        let registrar = make_other_account_id();
-        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail policy"),
-            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
-        };
-        let genesis = make_context(&registrar, 1);
-        let post_genesis = make_context(&registrar, 2);
-
-        assert!(
-            enrollment
-                .validate_grant(&registrar, &genesis, &Iroha)
-                .is_ok(),
-            "genesis must be able to bootstrap the HBL/UBL enrollment delegation"
-        );
-        assert!(
-            enrollment
-                .validate_revoke(&registrar, &genesis, &Iroha)
-                .is_ok(),
-            "genesis cleanup must use the same bootstrap semantics"
-        );
-        assert!(matches!(
-            enrollment.validate_grant(&registrar, &post_genesis, &Iroha),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(matches!(
-            enrollment.validate_revoke(&registrar, &post_genesis, &Iroha),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(
-            enrollment
-                .validate_grant(&sponsor, &make_context(&sponsor, 2), &Iroha)
-                .is_ok(),
-            "the sponsor retains post-genesis enrollment delegation authority"
-        );
-    }
-
-    #[test]
-    fn hbl_registrar_cannot_enroll_ubl_other_policy_or_unbound_beneficiary() {
-        let sponsor = make_account_id();
-        let registrar = make_other_account_id();
-        let beneficiary = make_third_account_id();
-        let other_beneficiary = sponsor.clone();
-        let context = make_context(&registrar, 2);
-        let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
-        let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL account domain");
-        let retail: Name = "retail".parse().expect("retail policy");
-        let held = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: retail.clone(),
-            domain: hbl_domain.clone(),
-        };
-        let valid = CanUseFeeSponsorForAccount {
-            sponsor: sponsor.clone(),
-            policy: retail.clone(),
-            beneficiary: beneficiary.clone(),
-            domain: hbl_domain.clone(),
-        };
-        let cross_fi = CanUseFeeSponsorForAccount {
-            domain: ubl_domain,
-            ..valid.clone()
-        };
-        let cross_policy = CanUseFeeSponsorForAccount {
-            policy: "wholesale".parse().expect("wholesale policy"),
-            ..valid.clone()
-        };
-        let unbound_beneficiary = CanUseFeeSponsorForAccount {
-            beneficiary: other_beneficiary,
-            ..valid.clone()
-        };
-        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
-        let previous_bindings =
-            test_override::replace_account_domain_bindings(Some(vec![(beneficiary, hbl_domain)]));
-
-        let valid_result = valid.validate_grant(&registrar, &context, &Iroha);
-        let cross_fi_result = cross_fi.validate_grant(&registrar, &context, &Iroha);
-        let cross_policy_result = cross_policy.validate_grant(&registrar, &context, &Iroha);
-        let unbound_result = unbound_beneficiary.validate_grant(&registrar, &context, &Iroha);
-
-        test_override::replace_account_domain_bindings(previous_bindings);
-        test_override::replace_permissions(previous);
-        assert!(valid_result.is_ok());
-        for result in [cross_fi_result, cross_policy_result, unbound_result] {
-            assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+        for result in [
+            enrollment.validate_grant(&manager, &context, &Iroha),
+            enrollment.validate_revoke(&manager, &context, &Iroha),
+            withdrawal.validate_grant(&manager, &context, &Iroha),
+            withdrawal.validate_revoke(&manager, &context, &Iroha),
+        ] {
+            assert!(result.is_ok(), "program manager must delegate exact scopes");
         }
+
+        test_override::replace_permissions(previous);
     }
 
     #[test]
-    fn sponsor_enrollment_scope_is_exact_across_policy_and_domain() {
-        let sponsor = make_account_id();
-        let registrar = make_other_account_id();
-        let beneficiary = make_third_account_id();
-        let context = make_context(&registrar, 2);
-        let held = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail policy"),
-            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+    fn fee_program_delegation_is_exact_to_the_program_sponsor() {
+        let first_sponsor = make_account_id();
+        let second_sponsor = make_third_account_id();
+        let manager = make_other_account_id();
+        let context = make_context(&manager, 2);
+        let first = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(first_sponsor.clone(), "retail"),
         };
-        let cross_fi = CanUseFeeSponsorForAccount {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail policy"),
-            beneficiary: beneficiary.clone(),
-            domain: DomainId::try_new("ubl", "sbp").expect("UBL account domain"),
+        let second = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(second_sponsor, "retail"),
         };
-        let cross_policy = CanUseFeeSponsorForAccount {
-            sponsor,
-            policy: "wholesale".parse().expect("wholesale policy"),
-            beneficiary,
-            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
-        };
-        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanManageFeeSponsorProgram {
+                sponsor: first_sponsor,
+            },
+        )]);
 
-        let cross_fi_result = cross_fi.validate_revoke(&registrar, &context, &Iroha);
-        let cross_policy_result = cross_policy.validate_revoke(&registrar, &context, &Iroha);
+        assert!(first.validate_grant(&manager, &context, &Iroha).is_ok());
+        assert!(matches!(
+            second.validate_grant(&manager, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
 
         test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn exact_fee_program_enrollment_holder_cannot_redelegate_it() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let context = make_context(&registrar, 2);
+        let token = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(sponsor, "retail"),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(token.clone())]);
+
         assert!(matches!(
-            cross_fi_result,
+            token.validate_grant(&registrar, &context, &Iroha),
             Err(ValidationFail::NotPermitted(_))
         ));
-        assert!(matches!(
-            cross_policy_result,
-            Err(ValidationFail::NotPermitted(_))
-        ));
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn genesis_can_seed_fee_program_permissions() {
+        let sponsor = make_account_id();
+        let genesis_authority = make_other_account_id();
+        let context = make_context(&genesis_authority, 1);
+        let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
+        let permissions = [
+            AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor }),
+            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram {
+                program_id: program_id.clone(),
+            }),
+            AnyPermission::CanWithdrawFeeSponsorProgram(CanWithdrawFeeSponsorProgram {
+                program_id,
+            }),
+        ];
+
+        for permission in permissions {
+            assert!(
+                permission
+                    .validate_grant(&genesis_authority, &context, &Iroha)
+                    .is_ok()
+            );
+            assert!(
+                permission
+                    .validate_revoke(&genesis_authority, &context, &Iroha)
+                    .is_ok()
+            );
+        }
     }
 
     #[test]
@@ -3056,22 +2845,20 @@ mod tests {
     }
 
     #[test]
-    fn sponsor_enrollment_permission_json_uses_canonical_account_and_dot_fqn() {
+    fn sponsor_program_permissions_json_use_exact_program_id() {
         let sponsor = make_account_id();
-        let token = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor.clone(),
-            policy: "retail".parse().expect("retail policy"),
-            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        let token = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(sponsor, "retail"),
         };
 
         let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
 
         assert_eq!(
             payload,
-            format!(r#"{{"sponsor":"{sponsor}","policy":"retail","domain":"hbl.sbp"}}"#),
+            format!(r#"{{"program_id":"{}"}}"#, token.program_id),
         );
         assert_eq!(
-            norito::json::from_str::<CanEnrollFeeSponsorPolicyForAccountDomain>(&payload)
+            norito::json::from_str::<CanEnrollFeeSponsorProgram>(&payload)
                 .expect("deserialize enrollment permission"),
             token,
         );

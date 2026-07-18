@@ -1463,7 +1463,11 @@ mod tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, account);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
@@ -1513,7 +1517,11 @@ mod tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, account);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "pong".to_owned())])

@@ -271,7 +271,10 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
     }
 
     let request = test_domain_register_request(domain, &client.account)?;
-    match client.submit_blocking(RegisterSnsName::new(request)) {
+    match client.submit_blocking(
+        RegisterSnsName::new(request),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         Ok(_) => {
             if wait_for_domain_registration_lease(client, domain)? {
                 Ok(())
@@ -333,7 +336,10 @@ fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainI
     }
 
     if !registrations.is_empty() {
-        match client.submit_all_blocking(registrations) {
+        match client.submit_all_blocking(
+            registrations,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => {}
             Err(err) if is_duplicate_sns_selector_error(&err) => {
                 for domain in domains {
@@ -424,7 +430,10 @@ pub fn ensure_domain_registration_leases_for_network_executable(
 /// Register a runtime domain after provisioning its required SNS lease.
 pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
     ensure_domain_registration_lease(client, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
+    client.submit_blocking(
+        Register::domain(domain),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -436,7 +445,10 @@ pub fn submit_register_domain_with_network_lease(
     domain: NewDomain,
 ) -> Result<()> {
     ensure_domain_registration_lease_for_network(network, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
+    client.submit_blocking(
+        Register::domain(domain),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -4660,6 +4672,7 @@ fn normalize_genesis_consensus_handshake(
         chain_id,
         authority,
         &time_source,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(param_instructions)
     .try_sign(genesis_key_pair.private_key())

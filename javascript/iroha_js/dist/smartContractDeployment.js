@@ -34,7 +34,7 @@ const BECH32M_CONSTANT = 0x2bc830a3;
 const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 const CURRENT_IVM_ABI_VERSION = 1;
-const CURRENT_DATA_MODEL_VERSION = 1;
+const CURRENT_DATA_MODEL_VERSION = 2;
 const CURRENT_SIGNED_TRANSACTION_SCHEMA_HASH_HEX =
   "7ab5ff9c572efb316deac478f19209c5";
 
@@ -783,6 +783,7 @@ async function submitDeploymentStep({
   creationTimeMs,
   ttlMs,
   nonce,
+  feePayment,
   metadata,
 }) {
   const payloadBytes = buildBrowserInstructionTransactionPayload({
@@ -793,6 +794,7 @@ async function submitDeploymentStep({
     creationTimeMs,
     ttlMs,
     nonce,
+    feePayment,
     metadata,
   });
   const signable = validateBrowserInstructionTransactionSignable({
@@ -861,6 +863,14 @@ export async function deploySmartContractBrowser(options) {
       "deployment options.readDeploymentState must call the authenticated deployment-state endpoint",
     );
   }
+  if (
+    source.feePayment === undefined &&
+    typeof source.feePaymentForStep !== "function"
+  ) {
+    throw new TypeError(
+      "deployment options require feePayment or a feePaymentForStep callback",
+    );
+  }
   const chainId = requireExactString(source.chainId, "chainId");
   const chainDiscriminant = normalizeUnsigned(
     source.chainDiscriminant,
@@ -922,6 +932,10 @@ export async function deploySmartContractBrowser(options) {
   const results = [];
   let sequence = 0;
   const submit = async (step) => {
+    const stepFeePayment =
+      typeof source.feePaymentForStep === "function"
+        ? await source.feePaymentForStep(step)
+        : source.feePayment;
     const stepMetadata =
       typeof source.metadataForStep === "function"
         ? await source.metadataForStep(step)
@@ -944,6 +958,7 @@ export async function deploySmartContractBrowser(options) {
       creationTimeMs: stepCreationTime,
       ttlMs: source.ttlMs ?? null,
       nonce: stepNonce,
+      feePayment: stepFeePayment,
       metadata: stepMetadata ?? null,
     });
     results.push(result);

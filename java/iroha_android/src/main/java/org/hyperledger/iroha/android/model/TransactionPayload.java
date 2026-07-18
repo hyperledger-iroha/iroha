@@ -24,6 +24,7 @@ public final class TransactionPayload {
   private final Executable executable;
   private final Optional<Long> timeToLiveMs;
   private final Optional<Integer> nonce;
+  private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
 
   private TransactionPayload(final Builder builder) {
@@ -33,6 +34,7 @@ public final class TransactionPayload {
     this.executable = builder.executable;
     this.timeToLiveMs = builder.timeToLiveMs;
     this.nonce = builder.nonce;
+    this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
     this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(builder.metadata));
   }
 
@@ -60,6 +62,10 @@ public final class TransactionPayload {
     return nonce;
   }
 
+  public FeePaymentIntent feePayment() {
+    return feePayment;
+  }
+
   public Map<String, JsonValue> metadata() {
     return metadata;
   }
@@ -72,6 +78,7 @@ public final class TransactionPayload {
         .setExecutable(executable)
         .setTimeToLiveMs(timeToLiveMs.orElse(null))
         .setNonce(nonce.orElse(null))
+        .setFeePayment(feePayment)
         .setMetadata(metadata);
   }
 
@@ -88,6 +95,7 @@ public final class TransactionPayload {
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
     private Optional<Integer> nonce = Optional.empty();
+    private FeePaymentIntent feePayment;
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
 
     public Builder setChainId(final String chainId) {
@@ -143,6 +151,11 @@ public final class TransactionPayload {
       return this;
     }
 
+    public Builder setFeePayment(final FeePaymentIntent feePayment) {
+      this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
+      return this;
+    }
+
     public Builder putMetadata(final String key, final String value) {
       return putMetadata(key, JsonValue.string(Objects.requireNonNull(value, "metadata value")));
     }
@@ -183,6 +196,9 @@ public final class TransactionPayload {
     }
 
     public TransactionPayload build() {
+      if (feePayment == null) {
+        throw new IllegalStateException("feePayment must be set explicitly");
+      }
       return new TransactionPayload(this);
     }
 

@@ -12,6 +12,19 @@ The first-release target is therefore conditional:
 This remains the conditional protocol target and paper argument until the
 proof ledger reports `machine_checked_completion: true`.
 
+For the first release, a “responsive validator” is a voting Sumeragi v2 node
+running on the validator-storage platform contract implemented and exercised
+by the release corridor: Linux or macOS with stable filesystem object
+identities, descriptor-relative no-follow rename and unlink operations, and
+durable POSIX file and directory `fsync`. The source-bound corridor is
+platform-pinned to Linux x86_64 and macOS arm64; published production validator
+artifacts are Linux. Other platforms are restricted to non-voting observer or
+development use and are outside the validator-liveness quantifier; complete
+observer application and lane-retirement behavior there is not
+release-certified. A platform which cannot perform progress-sidecar promotion,
+lane-geometry movement, or authenticated archive deletion fails
+voting-validator startup and cannot satisfy “terminating local work.”
+
 The formal liveness contract makes both quantifier boundaries explicit. An
 undecided execution must either decide before another rotation is needed or
 reach a view in which the responsive honest scheduled leader itself is active;
@@ -115,6 +128,24 @@ data, index, sidecar, and root binding and fail closed on drift. Pending
 alternate QCs and proofs of possession are fully authenticated and validated
 before the corresponding same-proposal owner can be retired, so invalid
 alternates cannot erase the remaining progress witness.
+
+Ordinary progress-sidecar appends publish a bounded, canonical Norito intent
+before mutating either main file. The intent binds the exact data suffix by a
+domain-separated digest and carries bounded old/new index windows, allowing
+restart to roll an exact postimage forward or restore the exact preimage.
+Unpublished builds are discarded, while malformed, conflicting, non-regular,
+or multiply linked authorities fail closed. Recovery preserves a separate
+retryable-I/O classification, so an interrupted open, read, metadata, or
+durability operation does not masquerade as permanent corruption. Lane
+retirement runs the same descriptor-bound recovery for all six fixed progress
+pairs before freezing its immutable directory snapshot, so a crash residue
+cannot be mistaken for either live work or an admissible empty lane.
+
+The release claim is platform-scoped, not a portable-filesystem claim. Windows
+and other non-Unix progress promotion and authenticated lane-archive garbage
+collection remain unsupported. Those fail-closed errors do not count as
+terminating local work, and no unsupported-platform validator release receipt
+may be emitted.
 
 The serialized runtime and adapter each reserve completion and progress
 capacity. Their cyclic `completion -> progress -> normal` service order keeps
@@ -303,6 +334,14 @@ best-effort datagrams cannot starve consensus traffic.
 - the bounded worker-to-executor `EffectCompletion` handoff, including its
   depth, capacity, oldest retained age, and service debt, so completed local I/O
   cannot remain invisible behind a full runtime completion lane;
+- the bounded reducer-to-executor `EffectDispatch` causal suffix, including its
+  depth, fixed source bound, and oldest retained age. This reserved FIFO is
+  attempted before another runtime transition and therefore publishes zero
+  scheduler-skip debt; pending-work exhaustion is diagnosed through the exact
+  body, validation, application, or local-control owner instead. A full-capacity
+  body Fetch remains reducer-owned reconstruction debt rather than entering
+  this FIFO, so an unresponsive Byzantine body source cannot sit ahead of a
+  durable signing intent;
 - the last semantic transition, its age, the height no-progress age, and every
   reducer ignore-reason count.
 
@@ -408,7 +447,7 @@ The following focused checks were recorded through 2026-07-17:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, and three-corridor ingress additions. The current
-source-bound inventory contains 185 exact tests across 16 modules, including
+source-bound inventory contains 204 exact tests across 17 modules, including
 the authoritative outer-ingress, historical block-sync, and Kura
 progress-witness durability modules. It must
 still run as one clean committed, detached, source-sealed release leg before it
@@ -460,7 +499,7 @@ consumer while a missing body waits for durable recovery and retries.
 
 The strict counts in the following paragraphs are retained historical submodule
 evidence, not current aggregate source-manifest-bound release evidence. The
-46-entry proof ledger now reports 24 `tlaps_proved`, 15
+49-entry proof ledger now reports 24 `tlaps_proved`, 18
 `specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entry, with
 `machine_checked_completion: false`. The added successor-activation entry pins
 the finite queue-to-publication rank for responsive validators and remains
@@ -496,7 +535,7 @@ misclassification, claim or theorem weakening, unreviewed helper theorems, and
 any TLC-only duplicate variable or fairness relation. The full Core `Next`
 disjunction is intentionally kept out of individual fairness targets to avoid
 re-evaluating unrelated Core branches. This closes only the fair-action
-refinement entry; it does not complete the 15 remaining deductive obligations.
+refinement entry; it does not complete the 18 remaining deductive obligations.
 This is not the complete protected-rank proof: progress-relevant Normal
 proposal/Prepare work and a productive, decreasing deadlock theorem are still
 missing, so no ledger status is promoted. Formal entrypoints now share a
@@ -519,20 +558,24 @@ PR corridor is not claimed green here until its source-bound run finishes.
 
 ## Deterministic and production gates
 
-The PR corridor runs four fixed seeds for the four-validator genesis, restart,
-timeout-rotation, and same-subject locked-body re-proposal with ordered release
-of captured quorum evidence, together with adversarial reducer simulations and
-model-trace replay. The explicit releases are increasing captured subsequences,
-not FIFO prefixes; only the final drain is a FIFO fence. That fourth leg does
-not cover distinct-subject PrepareQCs; a separate adversarial scenario for that
-obligation remains outstanding:
+The PR corridor runs four fixed seeds for each of five four-validator scenarios:
+genesis, restart, timeout rotation, same-subject locked-body re-proposal, and a
+causally staged distinct-subject PrepareQC split. The distinct-subject schedule
+isolates subject A at the actual view-zero leader, advances the other three
+validators with no-high-QC timeout evidence, certifies subject B at two
+receivers, and only then delivers stale A evidence to a fourth receiver. This
+constructs a 2+2 split over highest PrepareQC references without pretending
+that two disjoint honest locks are possible. Explicit releases are increasing
+captured subsequences, not FIFO prefixes; only the final drain is a FIFO fence.
+The new fifth leg is statically validated but still requires its focused Cargo
+and real-network execution before it reduces release debt:
 
 ```bash
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 185 exact production
-liveness tests and executes all 16 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 202 exact production
+liveness tests and executes all 17 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
@@ -564,8 +607,14 @@ was green at 168/168. Two same-runtime-step Decision reconciliation tests raised
 the inventory to 170, and the exact timeout-path classifier regression raised
 it to 171. Eleven Kura progress-witness durability regressions, two lane-geometry
 durability regressions, and the lane-work alternate-certificate retirement
-regression now raise the current inventory to 185 tests across 16 modules. That
-set needs fresh discovery and execution plus
+regression raised the inventory to 185 tests across 16 modules. Six exact
+lane-retirement recovery/substitution regressions and the lane-work plus runner
+platform-role gates raised the inventory to 193. The isolated-runner timing
+contract which proves the view-zero wait covers its deadline without masking
+view-one observation raised the inventory to 194. Six bounded effect-dispatch
+and preemption regressions, one source-faithful serialized runtime trace, plus
+its canonical watchdog lane regression raise the current inventory to 202. That set needs fresh
+discovery and execution plus
 its clean source-sealed release rerun; the full PR corridor is not claimed
 passed.
 
@@ -609,7 +658,7 @@ unique invocation directory preserves earlier and failed runs instead of
 deleting them. `invocation.tsv` records the source identity, fixed run count,
 and internal harness deadlines; `summary.tsv` binds every command row to that
 source digest and records the SHA-256 of that run's full Cargo log. The
-aggregate receipt re-hashes all 128 logs and independently requires one exact
+aggregate receipt re-hashes all 160 logs and independently requires one exact
 `--nocapture` scenario/seed diagnostic followed by its standalone `ok`, one
 `running 1 test`, and one passing libtest summary per row. The seed completion
 also binds exact HEAD, tree, and `Cargo.lock`, not only the sealed source
@@ -673,7 +722,7 @@ membership cycles must execute, a cleanup leave does not count as a scheduled
 cycle, churn work may consume at most 25% of elapsed time, and an in-flight
 bounded churn action may overrun the workload deadline by at most 15 minutes.
 The strict formal release gate runs before the 32-seed matrix, so an incomplete
-proof ledger or stale backend evidence fails before 128 real-network attempts.
+proof ledger or stale backend evidence fails before 160 real-network attempts.
 The PR profile retains its four-seed matrix followed by the fast formal harness.
 
 The strict formal command is captured through `tee` in a unique
@@ -800,10 +849,10 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 35 pre-network corridor legs and
-their exact 185-test inventory, semantic test names/counts, commands, logs, and
+evidence directory. That receipt binds the 36 pre-network corridor legs and
+their exact 204-test inventory, semantic test names/counts, commands, logs, and
 resolved tool identities; the formal completion, pinned harness lock, formal
-toolchain, proof ledger/evidence/log; all 128 matrix logs; the chaos
+toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
 completion/log; and the exact-identity Taira completion/canonical JSON/full run
 log. It independently revalidates matrix, chaos, and Taira libtest markers and
 runs the Taira evidence checker against the archived canonical JSON.

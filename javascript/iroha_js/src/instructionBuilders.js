@@ -11465,6 +11465,155 @@ function normalizeMultisigProposeInstructionInput(value, context) {
   return assertPlainObject(value, context);
 }
 
+function rejectRetiredFeeRequestFields(source, context) {
+  for (const field of [
+    "gasAssetId",
+    "gas_asset_id",
+    "feeSponsor",
+    "fee_sponsor",
+    "gasLimit",
+    "gas_limit",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${field} is retired; use feePayment`,
+        `${context}.${field}`,
+      );
+    }
+  }
+}
+
+function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } = {}) {
+  const intent = assertPlainObject(value, context);
+  assertAllowedFields(intent, new Set(["payer", "value"]), context);
+  const payer = assertExactNonBlankString(intent.payer, `${context}.payer`);
+  if (payer !== "authority" && payer !== "sponsor") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.payer must be authority or sponsor`,
+      `${context}.payer`,
+    );
+  }
+  const rawValue = assertPlainObject(intent.value, `${context}.value`);
+  const allowedValueFields = new Set(["charge_limits", "gas_limit"]);
+  if (payer === "sponsor") {
+    allowedValueFields.add("program_id");
+    allowedValueFields.add("program_revision");
+  }
+  assertAllowedFields(rawValue, allowedValueFields, `${context}.value`);
+  if (!Array.isArray(rawValue.charge_limits)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.charge_limits must be an array`,
+      `${context}.value.charge_limits`,
+    );
+  }
+  let previousKind = -1;
+  const chargeLimits = Array.from(rawValue.charge_limits, (entry, index) => {
+    if (!Object.prototype.hasOwnProperty.call(rawValue.charge_limits, index)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.value.charge_limits must not contain holes`,
+        `${context}.value.charge_limits[${index}]`,
+      );
+    }
+    const itemContext = `${context}.value.charge_limits[${index}]`;
+    const item = assertPlainObject(entry, itemContext);
+    assertAllowedFields(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      itemContext,
+    );
+    const taggedKind = assertPlainObject(item.kind, `${itemContext}.kind`);
+    assertAllowedFields(
+      taggedKind,
+      new Set(["kind", "value"]),
+      `${itemContext}.kind`,
+    );
+    const kind = assertExactNonBlankString(
+      taggedKind.kind,
+      `${itemContext}.kind.kind`,
+    );
+    const kindIndex = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
+    if (kindIndex < 0 || taggedKind.value !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
+        `${itemContext}.kind`,
+      );
+    }
+    if (kindIndex <= previousKind) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
+        `${context}.value.charge_limits`,
+      );
+    }
+    previousKind = kindIndex;
+    const maxAmount = asNumericQuantity(item.max_amount, `${itemContext}.max_amount`);
+    if (NumericV1.decodeQuantityJson(maxAmount).mantissa <= 0n) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${itemContext}.max_amount must be greater than zero`,
+        `${itemContext}.max_amount`,
+      );
+    }
+    return {
+      kind: { kind, value: null },
+      asset_definition_id: normalizeAssetId(
+        item.asset_definition_id,
+        `${itemContext}.asset_definition_id`,
+      ),
+      max_amount: maxAmount,
+    };
+  });
+  const gasLimit =
+    rawValue.gas_limit === undefined || rawValue.gas_limit === null
+      ? null
+      : asPositiveInteger(rawValue.gas_limit, `${context}.value.gas_limit`);
+  if (requireGasLimit && gasLimit === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.gas_limit is required for contract execution`,
+      `${context}.value.gas_limit`,
+    );
+  }
+  const normalizedValue = { charge_limits: chargeLimits, gas_limit: gasLimit };
+  if (payer === "sponsor") {
+    const programId = assertPlainObject(
+      rawValue.program_id,
+      `${context}.value.program_id`,
+    );
+    assertAllowedFields(
+      programId,
+      new Set(["sponsor", "name"]),
+      `${context}.value.program_id`,
+    );
+    const sponsor = normalizeAccountId(
+      programId.sponsor,
+      `${context}.value.program_id.sponsor`,
+    );
+    const name = assertExactNonBlankString(
+      programId.name,
+      `${context}.value.program_id.name`,
+    );
+    if (name.normalize("NFC") !== name || /[\s@#$\/]/u.test(name)) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.value.program_id.name must be a canonical Iroha Name`,
+        `${context}.value.program_id.name`,
+      );
+    }
+    normalizedValue.program_id = { sponsor, name };
+    normalizedValue.program_revision = asPositiveInteger(
+      rawValue.program_revision,
+      `${context}.value.program_revision`,
+    );
+  }
+  return { payer, value: normalizedValue };
+}
+
 /**
  * Build a normalized payload for `ToriiClient.proposeMultisig(...)`.
  * @param {object} options
@@ -11473,6 +11622,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 export function buildMultisigProposeRequest(options) {
   const source = assertPlainObject(options, "multisigPropose");
   rejectValidationFeeSnakeCaseInputs(source, "multisigPropose");
+  rejectRetiredFeeRequestFields(source, "multisigPropose");
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
@@ -11494,13 +11644,10 @@ export function buildMultisigProposeRequest(options) {
       ),
     ),
   };
-  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "multisigPropose.feeSponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigPropose.feePayment",
+  );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, "multisigPropose.publicKeyHex");
@@ -11598,6 +11745,7 @@ export function buildMultisigProposeRequest(options) {
  */
 export function buildMultisigContractCallProposeRequest(options) {
   const source = assertPlainObject(options, "multisigContractCallPropose");
+  rejectRetiredFeeRequestFields(source, "multisigContractCallPropose");
   const selector = normalizeMultisigAccountSelectorInput(
     source,
     "multisigContractCallPropose",
@@ -11634,24 +11782,11 @@ export function buildMultisigContractCallProposeRequest(options) {
           },
   };
 
-  const gasAssetId = source.gasAssetId ?? source.gas_asset_id;
-  if (gasAssetId !== undefined && gasAssetId !== null) {
-    payload.gas_asset_id = normalizeAssetId(
-      gasAssetId,
-      "multisigContractCallPropose.gasAssetId",
-    );
-  }
-  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "multisigContractCallPropose.feeSponsor",
-    );
-  }
-  const gasLimit = source.gasLimit ?? source.gas_limit;
-  if (gasLimit !== undefined && gasLimit !== null) {
-    payload.gas_limit = asPositiveInteger(gasLimit, "multisigContractCallPropose.gasLimit");
-  }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigContractCallPropose.feePayment",
+    { requireGasLimit: true },
+  );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(
@@ -11718,6 +11853,7 @@ function normalizeContractTargetSelectorInput(source, context) {
  */
 export function buildMultisigContractCallApproveRequest(options) {
   const source = assertPlainObject(options, "multisigContractCallApprove");
+  rejectRetiredFeeRequestFields(source, "multisigContractCallApprove");
   const selector = normalizeMultisigAccountSelectorInput(
     source,
     "multisigContractCallApprove",
@@ -11778,6 +11914,10 @@ export function buildMultisigContractCallApproveRequest(options) {
   if (privateKey !== null) {
     payload.private_key = privateKey;
   }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigContractCallApprove.feePayment",
+  );
   return payload;
 }
 

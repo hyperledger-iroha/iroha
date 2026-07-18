@@ -192,6 +192,20 @@
       "status": "specified_unproved"
     },
     {
+      "id": "post-decision-timeout-exclusion",
+      "requirement": "Once a node has a durable Decision in the current context, no pending timeout write, pending TC install, or timeout-signature owner remains; BeginTimeout, FormTC, and BeginInstallTC are structurally disabled; authenticated TimeoutVote and TC envelopes are consumed without repopulating volatile receipt pools; and the asynchronous causal adapter emits no post-Decision FormTC or BeginInstallTC successor. Pending Decision persistence carries the historical timeout-work exclusion needed by PersistDecision. The initialization and direct Core/source lemmas are present, but the full state/action induction and temporal Async decomposition remain proofless until the pinned strict backend discharges them",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "PostDecisionTimeoutExclusionObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "decision-recovery-across-restart",
+      "requirement": "Durable Decisions are unique by node and context; a responsive crash replaces every lost volatile Decision-pipeline owner with exact node-and-generation recovery authority; restart advances that authority to the new generation; and replay retires it only after reconstructing the exact current-consumer FetchBody frontier, after which ordinary body recovery, validation, and application ownership is preserved. Crash and restart source lemmas are present, but uniqueness, replay handoff, and all-stage inductive preservation remain proofless",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "DecisionRecoveryAcrossRestartObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "async-fair-action-refinement",
       "requirement": "At every state satisfying the Core and scheduler type invariants, each of the exact 18 weak-fairness targets is one fully framed AsyncNext transition; the proof must project runner command execution to a typed Core Next arm without conjoining the global Core disjunction to every fairness ENABLED query",
       "module": "SumeragiV2AsyncFairnessRefinementProofs",
@@ -206,8 +220,15 @@
       "status": "tlaps_proved"
     },
     {
+      "id": "progress-witness-production-refinement",
+      "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, and successor activation refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state, reset and admission lifetimes agree, scheduler service ranks preserve production FIFO/capacity semantics, and application completion reconstructs the next-height activation witness. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProgressWitnessProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "progress-witness-preservation",
-      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition",
+      "requirement": "Every active durable locked Commit intent retains a concrete signing, retransmission, receipt, certificate, decision, or exact node-and-generation crash/replay authority until WAL reconstruction; every durable decision retains an exact body-recovery, validation, application, completion, or exact node-and-generation Decision-recovery witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition. Commit crash authority discharges only the durable Commit carrier, Decision recovery authority retires only into an exact current-consumer FetchBody owner, and neither authority may substitute for the still-unproved historical-lock or ordinary decision-pipeline preservation cases",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessObligation",
       "status": "specified_unproved"
@@ -221,7 +242,7 @@
     },
     {
       "id": "protected-service-rank",
-      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress and the frozen admitted class remains protected after view movement",
+      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; the Stage-6 causal rank uses a doubled causal FIFO position plus the local-source distance so removal of an earlier head strictly dominates a possible cursor reset; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress and the frozen admitted class remains protected after view movement. Source-bound Verus sequence theorems preserve continuation-before-tail order and, conditional on faithful identities plus a complete prior-owner set, retain every fresh emitted identity exactly once in stable tail order. The bounded FIFO/cursor and inverted-owner/order mutations are regression evidence only: the production effect-to-TLA identity/owner mapping, Completion causal-capacity descent, and the full temporal obligation remain unproved",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServiceRankProgressObligation",
       "status": "specified_unproved"
@@ -263,7 +284,7 @@
     },
     {
       "id": "successor-activation-exact-recovery-production-refinement",
-      "requirement": "Production successor startup refines the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path, with terminal observers applying without height advance or successor activation",
+      "requirement": "Six explicit, unassigned external trace claims must connect production to the indexed model: Applied successor publication, Recovered successor publication, fail-closed startup failure, authenticated historical-certificate import, the ordinary historical body/store/validate/apply pipeline, and terminal application without successor activation. Production successor startup must refine the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path. Source-order checks, adversarial production tests, and source-manifest binding constrain these six claims but do not prove them; the obligation remains proofless specified_unproved debt until machine-checked cross-tool trace evidence establishes every claim",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
       "status": "specified_unproved"

@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -39,7 +40,10 @@ use ivm::kotodama::driver::{
 };
 use reqwest::StatusCode;
 
-use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
+use crate::{
+    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override,
+    wait_for_transaction_status,
+};
 
 // Canonical argument preparation reserves the bounded 1 MiB HEAP before
 // decoding; keep the default above that floor with room for a small call.
@@ -264,13 +268,7 @@ pub struct DevCallArgs {
     /// Contract entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
-    /// Optional gas asset id forwarded to transaction metadata.
-    #[arg(long)]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account charged for gas/fees when supported.
-    #[arg(long)]
-    pub fee_sponsor: Option<String>,
-    /// Gas limit metadata forwarded to the contract call. Defaults to the manifest profile value.
+    /// Signature-bound gas limit. Defaults to the manifest profile value.
     #[arg(long)]
     pub gas_limit: Option<u64>,
     #[command(flatten)]
@@ -394,8 +392,6 @@ struct ContractAppManifestHajimariCall {
     entrypoint: String,
     payload: Option<toml::Value>,
     gas_limit: u64,
-    gas_asset_id: Option<String>,
-    fee_sponsor: Option<String>,
 }
 
 #[derive(Debug)]
@@ -646,8 +642,6 @@ fn parse_contract_manifest_hajimari_call(
         entrypoint: toml_required_string(table, "entrypoint", &context)?,
         payload: table.get("payload").cloned(),
         gas_limit: toml_required_u64(table, "gas_limit", &context)?,
-        gas_asset_id: toml_optional_string(table, "gas_asset_id", &context)?,
-        fee_sponsor: toml_optional_string(table, "fee_sponsor", &context)?,
     })
 }
 
@@ -954,8 +948,6 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
                 "entrypoint": (call.entrypoint),
                 "payload": (call.payload.map(toml_to_json_value).transpose()?),
                 "gas_limit": (call.gas_limit),
-                "gas_asset_id": (call.gas_asset_id),
-                "fee_sponsor": (call.fee_sponsor),
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1193,12 +1185,6 @@ impl DevCallArgs {
             self.private_key.as_deref(),
             self.scaffold_only,
         )?;
-        let fee_sponsor = self
-            .fee_sponsor
-            .as_deref()
-            .map(|value| crate::resolve_account_id(context, value))
-            .transpose()
-            .wrap_err("failed to resolve --fee-sponsor")?;
         let contract_alias = resolve_contract_manifest_alias(
             &contract.alias,
             manifest.default_dataspace.as_deref(),
@@ -1210,6 +1196,10 @@ impl DevCallArgs {
         let gas_limit = self.gas_limit.unwrap_or_else(|| {
             dev_profile_default_gas_limit(manifest.profiles.get(&self.manifest.profile))
         });
+        let fee_payment = apply_cli_gas_limit_override(
+            context.transaction_fee_payment()?,
+            Some(gas_limit),
+        )?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -1218,9 +1208,7 @@ impl DevCallArgs {
             &self.entrypoint,
             payload.as_ref(),
             None,
-            self.gas_asset_id.as_deref(),
-            fee_sponsor.as_ref(),
-            gas_limit,
+            &fee_payment,
         )?;
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
@@ -1345,6 +1333,10 @@ impl DevSmokeArgs {
                             case.id
                         )
                     })?;
+                    let fee_payment = apply_cli_gas_limit_override(
+                        context.transaction_fee_payment()?,
+                        Some(case.gas_limit),
+                    )?;
                     let submit = client.post_contract_call_json(
                         &authority,
                         Some(private_key),
@@ -1353,9 +1345,7 @@ impl DevSmokeArgs {
                         &case.entrypoint,
                         case.payload.as_ref(),
                         None,
-                        None,
-                        None,
-                        case.gas_limit,
+                        &fee_payment,
                     )?;
                     if self.wait.is_enabled() {
                         let tx_hash = extract_submitted_transaction_hash(&submit)
@@ -2414,13 +2404,7 @@ pub struct CallArgs {
     /// Contract entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
-    /// Optional gas asset id forwarded to transaction metadata.
-    #[arg(long)]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account charged for gas/fees when supported.
-    #[arg(long)]
-    pub fee_sponsor: Option<String>,
-    /// Gas limit metadata forwarded to the contract call.
+    /// Signature-bound gas limit forwarded to the contract call.
     #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     #[command(flatten)]
@@ -2445,12 +2429,6 @@ impl Run for CallArgs {
                 self.scaffold_only,
             )?
         };
-        let fee_sponsor = self
-            .fee_sponsor
-            .as_deref()
-            .map(|value| crate::resolve_account_id(context, value))
-            .transpose()
-            .wrap_err("failed to resolve --fee-sponsor")?;
         let target = resolve_contract_target(self.target)?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
@@ -2463,8 +2441,6 @@ impl Run for CallArgs {
                 target.contract_alias.as_ref(),
                 &self.entrypoint,
                 payload.as_ref(),
-                self.gas_asset_id.as_deref(),
-                fee_sponsor.as_ref(),
                 self.gas_limit,
             )?;
             context.print_data(&value)?;
@@ -2477,13 +2453,15 @@ impl Run for CallArgs {
                 target.contract_alias.as_ref(),
                 &self.entrypoint,
                 payload.as_ref(),
-                self.gas_asset_id.as_deref(),
-                fee_sponsor.as_ref(),
                 self.gas_limit,
             )?)
         } else {
             None
         };
+        let fee_payment = apply_cli_gas_limit_override(
+            context.transaction_fee_payment()?,
+            Some(self.gas_limit),
+        )?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -2492,9 +2470,7 @@ impl Run for CallArgs {
             &self.entrypoint,
             payload.as_ref(),
             None,
-            self.gas_asset_id.as_deref(),
-            fee_sponsor.as_ref(),
-            self.gas_limit,
+            &fee_payment,
         )?;
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
@@ -5345,7 +5321,7 @@ mod tests {
     }
 
     #[test]
-    fn simulate_emits_gas_limit_metadata_key() {
+    fn simulate_emits_typed_fee_gas_bound_without_legacy_metadata() {
         let key_pair = fixture_key_pair(1);
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
@@ -5366,12 +5342,15 @@ mod tests {
             .get("metadata_keys")
             .and_then(norito::json::Value::as_array)
             .expect("metadata_keys");
-        let has_gas_limit = metadata_keys
-            .iter()
-            .any(|value| value.as_str() == Some("gas_limit"));
         assert!(
-            has_gas_limit,
-            "metadata_keys missing gas_limit: {metadata_keys:?}"
+            metadata_keys.is_empty(),
+            "simulation must not emit legacy fee metadata: {metadata_keys:?}"
+        );
+        assert_eq!(
+            output
+                .get("fee_gas_limit")
+                .and_then(norito::json::Value::as_u64),
+            Some(42)
         );
     }
 
@@ -5915,13 +5894,14 @@ mod tests {
             block.commit().expect("commit contract deployment");
         }
 
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_limit").expect("static gas_limit key"),
-            iroha_primitives::json::Json::from(DEFAULT_CONTRACT_GAS_LIMIT),
-        );
-        let tx = TransactionBuilder::new(ctx.config().chain.clone(), authority.clone())
-            .with_metadata(metadata)
+        let tx = TransactionBuilder::new(
+            ctx.config().chain.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(DEFAULT_CONTRACT_GAS_LIMIT),
+            ),
+        )
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address: contract_address.clone(),
                 expected_code_hash: code_hash,
@@ -6243,7 +6223,7 @@ pub struct SimulateArgs {
     /// Base64-encoded generic program (mutually exclusive with --code-file).
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
-    /// Required `gas_limit` metadata to include in the simulated transaction
+    /// Required executable gas bound in the typed fee payment intent.
     #[arg(long)]
     pub gas_limit: u64,
 }
@@ -6268,13 +6248,15 @@ impl Run for SimulateArgs {
             }
         };
 
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_limit")?,
-            iroha_primitives::json::Json::from(self.gas_limit),
-        );
+        let gas_limit = NonZeroU64::new(self.gas_limit)
+            .ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
+        let metadata = Metadata::default();
         let chain_id = context.config().chain.clone();
-        let tx = TransactionBuilder::new(chain_id, authority.clone())
+        let tx = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), Some(gas_limit)),
+        )
             .with_metadata(metadata.clone())
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(code.clone())))
             .try_sign(&private_key)
@@ -6330,6 +6312,10 @@ impl Run for SimulateArgs {
         summary_json.insert(
             "metadata_keys".to_string(),
             norito::json::to_value(&metadata_keys)?,
+        );
+        summary_json.insert(
+            "fee_gas_limit".to_string(),
+            norito::json::to_value(&gas_limit.get())?,
         );
         let summary_json = norito::json::Value::Object(summary_json);
         context.print_data(&summary_json)?;

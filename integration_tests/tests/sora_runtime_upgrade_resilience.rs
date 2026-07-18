@@ -132,11 +132,14 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
 
     let overlapping_tx_hash = fixture
         .alice
-        .submit(ProposeRuntimeUpgradeProposal {
-            manifest: overlapping_manifest,
-            window: None,
-            mode: Some(VotingMode::Plain),
-        })
+        .submit(
+            ProposeRuntimeUpgradeProposal {
+                manifest: overlapping_manifest,
+                window: None,
+                mode: Some(VotingMode::Plain),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit overlapping runtime-upgrade proposal")?;
     sora_runtime_governance::wait_for_tx_rejected(
         &fixture.http,

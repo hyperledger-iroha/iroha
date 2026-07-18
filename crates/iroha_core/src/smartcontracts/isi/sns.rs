@@ -1,13 +1,11 @@
 //! SNS-backed ownership query and lease instruction handlers.
 
 use iroha_data_model::{
-    asset::AssetBalancePolicy,
     isi::{
         account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
         error::{InstructionExecutionError, InvalidParameterError},
     },
     metadata::Metadata,
-    nexus::DataSpaceId,
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
     sns::{
         GovernanceHookV1, NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId,
@@ -189,132 +187,23 @@ fn account_controller_for(
         })
 }
 
-fn dataspace_id_for_asset_alias_segment(
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace_alias: &str,
-) -> Option<DataSpaceId> {
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-}
-
-fn global_payment_asset_home_dataspace_id(
-    state_transaction: &StateTransaction<'_, '_>,
-    definition_id: &iroha_data_model::asset::AssetDefinitionId,
-) -> Result<Option<DataSpaceId>, Error> {
-    let definition = state_transaction
-        .world
-        .asset_definition(definition_id)
-        .map_err(Error::from)?;
-    if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-        return Ok(None);
-    }
-
-    let dataspace_alias = definition
-        .alias()
-        .as_ref()
-        .map(|alias| alias.dataspace_segment().to_owned())
-        .or_else(|| {
-            definition
-                .id()
-                .try_domain()
-                .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
-
-    Ok(match dataspace_alias {
-        Some(alias) => {
-            dataspace_id_for_asset_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-        }
-        None => Some(DataSpaceId::UNIVERSAL),
-    })
-}
-
-fn should_externally_settle_sns_quote(
-    quote: &crate::sns::LeaseQuote,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<bool, Error> {
-    if quote.charge_amount.is_zero()
-        || !state_transaction.nexus.fees.sponsorship_enabled
-        || !state_transaction.nexus.fees.external_settlement_enabled
-    {
-        return Ok(false);
-    }
-
-    let Some(configured_fee_asset_id) = crate::block::parse_asset_definition_literal_with_world(
-        state_transaction.world(),
-        &state_transaction.nexus.fees.fee_asset_id,
-        state_transaction.block_unix_timestamp_ms(),
-    ) else {
-        return Ok(false);
-    };
-    if configured_fee_asset_id != quote.payment_asset_definition_id {
-        return Ok(false);
-    }
-
-    let Some(route_dataspace) = state_transaction
-        .current_dataspace_id
-        .or(state_transaction.world.current_dataspace_id)
-    else {
-        return Ok(false);
-    };
-    let Some(home_dataspace) = global_payment_asset_home_dataspace_id(
-        state_transaction,
-        &quote.payment_asset_definition_id,
-    )?
-    else {
-        return Ok(false);
-    };
-
-    Ok(route_dataspace != home_dataspace)
-}
-
-fn account_alias_lease_payer_matches_dataspace_sponsor(
-    payer: &AccountId,
-    quote: &crate::sns::LeaseQuote,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<bool, Error> {
-    if !should_externally_settle_sns_quote(quote, state_transaction)? {
-        return Ok(false);
-    }
-    let Some(route_dataspace) = state_transaction
-        .current_dataspace_id
-        .or(state_transaction.world.current_dataspace_id)
-    else {
-        return Ok(false);
-    };
-    Ok(crate::state::dataspace_fee_sponsor_matches(
-        state_transaction.world(),
-        &state_transaction.nexus.dataspace_catalog,
-        &state_transaction.nexus.dataspace_fee_sponsors,
-        route_dataspace,
-        payer,
-        state_transaction.block_unix_timestamp_ms(),
-    ))
-}
-
 fn ensure_account_alias_lease_payer_allowed(
     payer: &AccountId,
     authority: &AccountId,
-    quote: &crate::sns::LeaseQuote,
+    _quote: &crate::sns::LeaseQuote,
     instruction_name: &str,
-    state_transaction: &StateTransaction<'_, '_>,
+    _state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    if payer == authority
-        || account_alias_lease_payer_matches_dataspace_sponsor(payer, quote, state_transaction)?
-    {
+    if payer == authority {
         return Ok(());
     }
 
-    Err(InstructionExecutionError::InvalidParameter(
-        InvalidParameterError::SmartContract(
-            format!(
-                "{instruction_name} payment payer must match transaction authority or configured dataspace fee sponsor"
-            )
-            .into(),
-        ),
+    Err(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            format!("{instruction_name} payment payer must match transaction authority").into(),
+        ))
+        .into(),
     )
-    .into())
 }
 
 impl Execute for AcquireAccountAliasLease {
@@ -460,10 +349,6 @@ fn charge_sns_quote(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<iroha_data_model::sns::PaymentProofV1, Error> {
-    if should_externally_settle_sns_quote(quote, state_transaction)? {
-        return Ok(crate::sns::payment_proof_for_quote(quote, payer));
-    }
-
     let charge = quote.charge_amount.clone();
     Transfer::asset_quantity(
         AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
@@ -1759,8 +1644,6 @@ mod tests {
         {
             let mut nexus = state.nexus.write();
             nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.external_settlement_enabled = true;
             nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
                 DataSpaceMetadata::default(),
                 DataSpaceMetadata {

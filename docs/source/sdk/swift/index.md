@@ -236,7 +236,7 @@ rejected. The request models enforce Torii's exact route limits: 512 KiB for
 top-up and 48 MiB for redemption.
 A `200` readiness response may legitimately contain `ready: false`; `503`
 means Torii could not evaluate readiness. Readiness is a closed snapshot-bound
-object. It carries exact bridge ABI 20, maximum hop count, canonical asset and
+object. It carries exact bridge ABI 21, maximum hop count, canonical asset and
 scale, evaluated block height/hash, active transfer, top-up-shield, unshield,
 recursive StepEq and StepEp verifier records, a required nullable
 `artifactSet`, backend-construction state, recursive-lineage support, readiness,

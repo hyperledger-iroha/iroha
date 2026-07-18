@@ -730,9 +730,13 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::Canary,
     });
 
-    let tx = TransactionBuilder::new(chain, account)
-        .with_instructions([Log::new(Level::INFO, "client submit e2e".to_owned())])
-        .sign(key_pair.private_key());
+    let tx = TransactionBuilder::new(
+        chain,
+        account,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "client submit e2e".to_owned())])
+    .sign(key_pair.private_key());
     let expected_hash = tx.hash();
 
     let actual_hash = tokio::task::spawn_blocking(move || client.submit_transaction(&tx))

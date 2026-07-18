@@ -58,7 +58,7 @@ public sealed record class ToriiKagemushaActiveVerifier
 }
 
 /// <summary>
-/// Authenticated ABI-20/manifest-V4 release selected by Torii.
+/// Authenticated ABI-21/manifest-V4 release selected by Torii.
 /// </summary>
 public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
 {
@@ -88,7 +88,7 @@ public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
 }
 
 /// <summary>
-/// Snapshot-bound ABI-20/V4 Kagemusha readiness projection.
+/// Snapshot-bound ABI-21/V4 Kagemusha readiness projection.
 /// </summary>
 public sealed record class ToriiKagemushaReadinessV4
 {
@@ -283,7 +283,7 @@ public sealed record class ToriiKagemushaOperationStatus
 
 internal static class ToriiKagemushaTransport
 {
-    internal const int BridgeAbiVersion = 20;
+    internal const int BridgeAbiVersion = 21;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;

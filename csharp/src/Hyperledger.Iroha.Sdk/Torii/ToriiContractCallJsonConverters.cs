@@ -16,7 +16,6 @@ internal static class ToriiContractCallJson
         }
 
         ToriiSseEventJson.RequireExactTokenText(response.Dataspace, $"{context}.dataspace");
-        ToriiSseEventJson.RequireExactTokenText(response.ContractId, $"{context}.contract_id");
         ToriiSseEventJson.RequireOptionalExactTokenText(response.ContractAddress, $"{context}.contract_address");
         ToriiSseEventJson.RequireExactSizedHex(response.CodeHashHex, $"{context}.code_hash_hex", 32);
         ToriiSseEventJson.RequireExactSizedHex(response.AbiHashHex, $"{context}.abi_hash_hex", 32);
@@ -30,6 +29,69 @@ internal static class ToriiContractCallJson
         ValidateOptionalBase64(response.SignedTransactionBase64, $"{context}.signed_transaction_b64");
         ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
         ToriiSseEventJson.RequireOptionalExactTokenText(response.Entrypoint, $"{context}.entrypoint");
+        if (response.TransactionTimeToLiveMilliseconds is 0)
+        {
+            throw new JsonException($"{context}.transaction_ttl_ms must be positive when present.");
+        }
+
+        if (response.EntrypointHashHex is not null)
+        {
+            ToriiSseEventJson.RequireExactSizedHex(
+                response.EntrypointHashHex,
+                $"{context}.entrypoint_hash_hex",
+                32);
+        }
+
+        ValidateOperationReceipt(response.OperationReceipt, $"{context}.operation_receipt");
+    }
+
+    private static void ValidateOperationReceipt(ToriiOperationReceipt receipt, string context)
+    {
+        if (receipt is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        ToriiSseEventJson.RequireExactTokenText(receipt.OperationKind, $"{context}.operation_kind");
+        ToriiSseEventJson.RequireExactTokenText(receipt.Status, $"{context}.status");
+        ToriiSseEventJson.RequireExactTokenText(receipt.Transport, $"{context}.transport");
+        ToriiSseEventJson.RequireExactTokenText(receipt.Dataspace, $"{context}.dataspace");
+        ToriiSseEventJson.RequireOptionalExactTokenText(receipt.ContractAlias, $"{context}.contract_alias");
+        ToriiSseEventJson.RequireOptionalExactTokenText(receipt.ContractAddress, $"{context}.contract_address");
+        if (receipt.CodeHashHex is not null)
+        {
+            ToriiSseEventJson.RequireExactSizedHex(receipt.CodeHashHex, $"{context}.code_hash_hex", 32);
+        }
+
+        if (receipt.AbiHashHex is not null)
+        {
+            ToriiSseEventJson.RequireExactSizedHex(receipt.AbiHashHex, $"{context}.abi_hash_hex", 32);
+        }
+
+        ValidateOptionalTransactionHashHex(receipt.TransactionHashHex, $"{context}.tx_hash_hex");
+        ToriiSseEventJson.RequireOptionalExactTokenText(receipt.Entrypoint, $"{context}.entrypoint");
+        if (receipt.EntrypointHashHex is not null)
+        {
+            ToriiSseEventJson.RequireExactSizedHex(
+                receipt.EntrypointHashHex,
+                $"{context}.entrypoint_hash_hex",
+                32);
+        }
+
+        if (receipt.GasLimit is null or 0)
+        {
+            throw new JsonException($"{context}.gas_limit must be positive.");
+        }
+
+        if (receipt.FeePayment is null)
+        {
+            throw new JsonException($"{context}.fee_payment is required.");
+        }
+
+        ToriiSseEventJson.RequireExactSizedHex(
+            receipt.PayloadDigestHex,
+            $"{context}.payload_digest_hex",
+            32);
     }
 
     internal static void WriteContractCallResponse(

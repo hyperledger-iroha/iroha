@@ -864,6 +864,7 @@ def build_signed_transaction(
     authority: str,
     private_key: bytes,
     *,
+    fee_payment: Mapping[str, Any],
     instructions: Iterable[Instruction] = (),
     creation_time_ms: Optional[int] = None,
     ttl_ms: Optional[int] = None,
@@ -882,6 +883,10 @@ def build_signed_transaction(
         literal: canonical I105 only).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
+    fee_payment:
+        Required Norito JSON-compatible ``FeePaymentIntent`` mapping. The
+        payer, exact sponsor revision, charge assets and maxima, and gas bound
+        are included in the transaction signature.
     instructions:
         Iterable of `Instruction` instances to append.
     creation_time_ms:
@@ -899,7 +904,10 @@ def build_signed_transaction(
         ``proof_bytes``, and ``verifying_key_name``.
     """
 
-    builder = TransactionBuilder(chain_id, authority)
+    if not isinstance(fee_payment, Mapping):
+        raise TypeError("fee_payment must be a FeePaymentIntent mapping")
+    fee_payment_json = json.dumps(dict(fee_payment), separators=(",", ":"))
+    builder = TransactionBuilder(chain_id, authority, fee_payment_json)
     if creation_time_ms is not None:
         builder.set_creation_time_ms(int(creation_time_ms))
     if ttl_ms is not None:

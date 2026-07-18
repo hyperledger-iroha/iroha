@@ -62,10 +62,30 @@ CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID = "7EAD8EFYV3tk2BtyQaGhqhATjFy7"
 CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID = "7EAD8EFYUx1bhNP18PQmxXsySxi6"
 
 
+def _authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": gas_limit},
+    }
+
+
+def _sponsor_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "payer": "sponsor",
+        "value": {
+            "program_id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+            "program_revision": 3,
+            "charge_limits": [],
+            "gas_limit": gas_limit,
+        },
+    }
+
+
 def _contract_operation_receipt(
     *,
     entrypoint: str = "ping",
     gas_limit: int = 5000,
+    fee_payment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
         "operation_kind": "contract_call",
@@ -81,8 +101,7 @@ def _contract_operation_receipt(
         "entrypoint_hash_hex": "55" * 32,
         "gas_limit": gas_limit,
         "gas_used": 17,
-        "gas_asset_id": "xor#wonderland",
-        "fee_sponsor": CANONICAL_OWNER,
+        "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
         "payload_digest_hex": "66" * 32,
     }
 
@@ -2178,6 +2197,157 @@ def test_list_peers_returns_typed_records() -> None:
     ]
 
 
+def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
+    session = RecordingSession()
+    quote = {
+        "intent": _authority_fee_payment(),
+        "observation": {
+            "ledger_time_ms": 10,
+            "next_block_height": 4,
+            "route_dataspace_id": 0,
+        },
+        "components": [],
+        "capacities": [],
+        "decision": {"status": "accepted", "value": {"debit_source": {}}},
+    }
+    session.queue(StubResponse(payload=quote))
+    signed_messages: List[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda message: signed_messages.append(message) or b"signature",
+        timestamp_ms=123,
+        nonce="fee-quote-nonce",
+    )
+    client = ToriiClient("http://node.test", session=session)
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": _authority_fee_payment()}
+
+    assert client.quote_fees(draft, canonical_auth=auth) == quote
+
+    call = session.calls[0]
+    assert call["url"] == "http://node.test/v1/fees/quote"
+    assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
+    assert call["headers"]["X-Iroha-Nonce"] == "fee-quote-nonce"
+    assert len(signed_messages) == 1
+
+
+def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id="another-account",
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(ValueError, match="must equal the exact payload authority"):
+        client.quote_fees(
+            {"authority": CANONICAL_OWNER},
+            canonical_auth=auth,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "requested, quoted",
+    [
+        (_authority_fee_payment(100), _authority_fee_payment(101)),
+        (_sponsor_fee_payment(100), _authority_fee_payment(100)),
+        (
+            _sponsor_fee_payment(100),
+            {
+                **_sponsor_fee_payment(100),
+                "value": {
+                    **_sponsor_fee_payment(100)["value"],
+                    "program_revision": 4,
+                },
+            },
+        ),
+    ],
+)
+def test_fee_quote_rejects_substituted_selection(
+    requested: Dict[str, Any],
+    quoted: Dict[str, Any],
+) -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "intent": quoted,
+                "observation": {},
+                "components": [],
+                "capacities": [],
+                "decision": {},
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(RuntimeError, match="changed the requested payer"):
+        client.quote_fees(
+            {"authority": CANONICAL_OWNER, "fee_payment": requested},
+            canonical_auth=auth,
+        )
+
+
+def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+                "lifecycle": "active",
+            }
+        )
+    )
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+        timestamp_ms=124,
+        nonce="program-lookup-nonce",
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.get_fee_sponsor_program(
+        f"{CANONICAL_OWNER}/retail",
+        canonical_auth=auth,
+    )
+
+    assert result["lifecycle"] == "active"
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "program_id": f"{CANONICAL_OWNER}/retail"
+    }
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+
+
+def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "id": {"sponsor": CANONICAL_OWNER, "name": "other"},
+                "lifecycle": "active",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(RuntimeError, match="does not match the requested program"):
+        client.get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=auth,
+        )
+
+
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     session = RecordingSession()
@@ -2233,8 +2403,7 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         contract_alias="router::universal",
         entrypoint="ping",
         payload={"value": 1, "labels": ["alpha"]},
-        gas_asset_id="xor#wonderland",
-        gas_limit=5000,
+        fee_payment=_authority_fee_payment(5000),
     )
 
     assert isinstance(result, ContractCallResponse)
@@ -2256,8 +2425,7 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "contract_alias": "router::universal",
         "entrypoint": "ping",
         "payload": {"value": 1, "labels": ["alpha"]},
-        "gas_asset_id": "xor#wonderland",
-        "gas_limit": 5000,
+        "fee_payment": _authority_fee_payment(5000),
     }
 
 
@@ -2295,7 +2463,8 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
                 "entrypoint": boundary["entrypoint"],
                 "operation_receipt": _contract_operation_receipt(
                     entrypoint=boundary["entrypoint"],
-                    gas_limit=boundary["gas_limit"],
+                    gas_limit=boundary["fee_payment"]["value"]["gas_limit"],
+                    fee_payment=boundary["fee_payment"],
                 ),
             },
         )
@@ -2308,7 +2477,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         contract_alias=boundary["contract_alias"],
         entrypoint=boundary["entrypoint"],
         payload=boundary["payload"],
-        gas_limit=boundary["gas_limit"],
+        fee_payment=boundary["fee_payment"],
     )
 
     submitted = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -2318,13 +2487,13 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         "contract_alias": boundary["contract_alias"],
         "entrypoint": boundary["entrypoint"],
         "payload": boundary["payload"],
-        "gas_limit": boundary["gas_limit"],
+        "fee_payment": boundary["fee_payment"],
     }
     assert "argument_record" not in submitted
     assert "argument_record_norito_hex" not in submitted
 
 
-def test_call_contract_posts_fee_sponsor_and_rejects_adversarial_sponsor() -> None:
+def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_sponsor() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -2351,22 +2520,22 @@ def test_call_contract_posts_fee_sponsor_and_rejects_adversarial_sponsor() -> No
         contract_alias="router::is",
         entrypoint="ping",
         payload={},
-        gas_limit=5000,
-        fee_sponsor=CANONICAL_OWNER,
+        fee_payment=_sponsor_fee_payment(5000),
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["fee_sponsor"] == CANONICAL_OWNER
+    assert payload["fee_payment"] == _sponsor_fee_payment(5000)
     assert payload["contract_alias"] == "router::is"
 
-    with pytest.raises(ValueError, match="call_contract.fee_sponsor"):
+    adversarial = _sponsor_fee_payment(5000)
+    adversarial["value"]["program_id"]["sponsor"] = "bad sponsor"
+    with pytest.raises(ValueError, match="call_contract.fee_payment.*sponsor"):
         client.call_contract(
             authority=CANONICAL_OWNER,
             private_key="00" * 32,
             contract_alias="router::is",
             entrypoint="ping",
-            gas_limit=5000,
-            fee_sponsor="bad sponsor",
+            fee_payment=adversarial,
         )
 
 
@@ -2381,16 +2550,16 @@ def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_di
                 private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint=entrypoint,
-                gas_limit=1,
+                fee_payment=_authority_fee_payment(1),
             )
-    for gas_limit in (0, -1):
-        with pytest.raises(ValueError, match="call_contract.gas_limit must be positive"):
+    for gas_limit in (None, 0, -1):
+        with pytest.raises(ValueError, match="call_contract.fee_payment.*gas_limit"):
             client.call_contract(
                 authority=CANONICAL_OWNER,
                 private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint="ping",
-                gas_limit=gas_limit,
+                fee_payment=_authority_fee_payment(gas_limit),
             )
 
     assert session.calls == []
@@ -2437,7 +2606,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         signer_account_id=CANONICAL_OWNER,
         instructions=[instruction],
         creation_time_ms=123,
-        fee_sponsor=CANONICAL_OWNER,
+        fee_payment=_sponsor_fee_payment(),
     )
 
     assert isinstance(result, MultisigResponse)
@@ -2456,7 +2625,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "instructions": [base64.b64encode(instruction).decode("ascii")],
         "multisig_account_alias": "cbdc@banka",
         "creation_time_ms": 123,
-        "fee_sponsor": CANONICAL_OWNER,
+        "fee_payment": _sponsor_fee_payment(),
     }
 
 
@@ -2474,6 +2643,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
     kwargs = {
         "signer_account_id": CANONICAL_OWNER,
         "instructions": [b"\x01"],
+        "fee_payment": _authority_fee_payment(),
     }
     with pytest.raises(ValueError, match="exactly one"):
         client.propose_multisig(
@@ -2488,18 +2658,21 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=b"\x01\x02",
+            fee_payment=_authority_fee_payment(),
         )
     with pytest.raises(ValueError, match="must not be empty"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[],
+            fee_payment=_authority_fee_payment(),
         )
     with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             signature_b64="not base64",
         )
     canonical_signature = _canonical_signature_base64_fixture()
@@ -2512,6 +2685,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
                 multisig_account_alias="cbdc@banka",
                 signer_account_id=CANONICAL_OWNER,
                 instructions=[b"\x01"],
+                fee_payment=_authority_fee_payment(),
                 signature_b64=signature_b64,
             )
     with pytest.raises(RuntimeError, match="64 hex"):
@@ -2519,6 +2693,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             public_key_hex="aa",
         )
     with pytest.raises(ValueError, match="non-negative"):
@@ -2526,6 +2701,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             creation_time_ms=-1,
         )
 
@@ -2546,6 +2722,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     for resolved_account_id in (
@@ -2568,6 +2745,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
                 multisig_account_alias="cbdc@banka",
                 signer_account_id=CANONICAL_OWNER,
                 instructions=[b"\x01"],
+                fee_payment=_authority_fee_payment(),
             )
 
     session = RecordingSession()
@@ -2586,6 +2764,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2604,6 +2783,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2622,6 +2802,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2640,6 +2821,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2658,6 +2840,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -2671,7 +2854,7 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
             contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             contract_alias="router::universal",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
 
@@ -2685,7 +2868,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
             private_key="00" * 32,
             contract_address=" tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
     with pytest.raises(ValueError, match="call_contract\\.contract_alias must not contain surrounding whitespace"):
@@ -2694,7 +2877,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
             private_key="00" * 32,
             contract_alias="router::universal ",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
     assert session.calls == []
@@ -3150,7 +3333,7 @@ def test_contract_helpers_against_mock_server() -> None:
             contract_address=contract_address,
             entrypoint="ping",
             payload={"value": 1},
-            gas_limit=5000,
+            fee_payment=_authority_fee_payment(5000),
         )
         governed = client.get_governance_contract(contract_address)
 
@@ -3276,7 +3459,7 @@ def test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound() ->
         _get_sumeragi_status(payload)
 
 
-def test_get_sumeragi_status_accepts_all_nine_liveness_queue_kinds() -> None:
+def test_get_sumeragi_status_accepts_all_ten_liveness_queue_kinds() -> None:
     payload = _sumeragi_v2_status_payload()
     queue_template = payload["liveness"]["queues"][0]
     queue_kinds = [
@@ -3289,6 +3472,7 @@ def test_get_sumeragi_status_accepts_all_nine_liveness_queue_kinds() -> None:
         "runtime_completion",
         "effect_completion",
         "network_ingress",
+        "effect_dispatch",
     ]
     payload["liveness"]["queues"] = [
         {
@@ -4468,13 +4652,7 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
                     "per_byte_fee": "0",
                     "per_instruction_fee": "0",
                     "per_gas_unit_fee": "0",
-                    "sponsorship_enabled": False,
-                    "sponsor_max_fee": "0",
-                    "sponsor_verified_balance_safety_floor": "0",
-                    "canonical_sponsor_account_id": None,
-                    "fee_receipts_activation_height": 7,
-                    "external_settlement_enabled": False,
-                    "burn_from_unix_timestamp_ms": 0,
+                    "sponsor_vault_custody_account_id": "vault@system",
                     "settlement_mode": "direct",
                     "successful_claim_fee_exempt_authorities": ["authority@system"],
                 },
@@ -4502,6 +4680,7 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     assert preflight.pipeline.signature_batch_max_ed25519 == 64
     assert preflight.queue.queued == 1
     assert preflight.fees.base_fee == "0"
+    assert preflight.fees.sponsor_vault_custody_account_id == "vault@system"
     assert preflight.fees.successful_claim_fee_exempt_authorities == ["authority@system"]
     assert preflight.is_status_stalled(status) is True
     assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
@@ -5573,26 +5752,26 @@ def _offline_recursive_v4_unavailable_blockers() -> List[Dict[str, str]]:
     return [
         {
             "code": "recursive_v4_registry_unavailable",
-            "message": "No active atomic ABI-20 V4 release is installed.",
+            "message": "No active atomic ABI-21 V4 release is installed.",
         },
         {
             "code": "recursive_step_eq_verifier_unavailable",
-            "message": "The authenticated ABI-20 V4 StepEq verifier is unavailable.",
+            "message": "The authenticated ABI-21 V4 StepEq verifier is unavailable.",
         },
         {
             "code": "recursive_step_ep_verifier_unavailable",
-            "message": "The authenticated ABI-20 V4 StepEp verifier is unavailable.",
+            "message": "The authenticated ABI-21 V4 StepEp verifier is unavailable.",
         },
         {
             "code": "proof_backend_unavailable",
-            "message": "The authenticated ABI-20 V4 proof backend is unavailable.",
+            "message": "The authenticated ABI-21 V4 proof backend is unavailable.",
         },
     ]
 
 
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "required_bridge_abi_version": 20,
+        "required_bridge_abi_version": 21,
         "max_hops": 8,
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
         "asset_scale": 4,
@@ -5820,7 +5999,7 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     readiness = client.get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
-    assert readiness.required_bridge_abi_version == 20
+    assert readiness.required_bridge_abi_version == 21
     assert readiness.max_hops == 8
     assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
@@ -5867,7 +6046,7 @@ def test_kagemusha_readiness_accepts_authenticated_v4_artifacts_when_backend_fai
                 blockers=[
                     {
                         "code": "proof_backend_unavailable",
-                        "message": "The authenticated ABI-20 V4 backend could not be constructed.",
+                        "message": "The authenticated ABI-21 V4 backend could not be constructed.",
                     },
                     _offline_recursive_lineage_blocker(),
                 ],
@@ -6525,7 +6704,7 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert status.result.kind == "top_up"
     typed_anchor = status.result.result.anchor
     assert isinstance(typed_anchor, OfflineTopUpAnchor)
-    # ABI-20 promotes the finalized anchor and its authenticated artifact
+    # ABI-21 promotes the finalized anchor and its authenticated artifact
     # binding atomically to the V4 wire contract.
     assert typed_anchor.version == 4
     assert typed_anchor.amount.scale == 4

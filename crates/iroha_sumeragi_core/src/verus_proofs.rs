@@ -66,6 +66,405 @@ pub open spec fn machine_u64_max() -> int {
 }
 
 // ---------------------------------------------------------------------------
+// Production persisted-continuation ordering / abstract causal FIFO seam
+// ---------------------------------------------------------------------------
+
+/// Mathematical result of the production `rev()` plus `push_front` loop.
+///
+/// `continuation.reverse()` is the order visited by the iterator and the
+/// second reverse is the effect of pushing every visited item to the front.
+/// The old pending tail is never reordered. This models the exact generic
+/// helper called by `V2Adapter::drive_effects`, not a second effect executor.
+pub open spec fn production_reverse_push_front(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+) -> Seq<int> {
+    continuation.reverse().reverse().add(old_tail)
+}
+
+/// The production synchronous expansion is exactly continuation-before-tail
+/// FIFO order. In particular, replacing the production reverse iterator with
+/// forward iteration would leave only the first reverse and violate this
+/// relation for every non-palindromic continuation.
+pub proof fn production_reverse_push_front_refines_fifo(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+)
+    ensures
+        production_reverse_push_front(old_tail, continuation)
+            =~= continuation.add(old_tail),
+{
+    assert(continuation.reverse().reverse() =~= continuation);
+}
+
+/// Stable first-owner filter used at the production/TLA+ projection boundary.
+///
+/// Integers stand for exact projected causal-candidate identities. `owned`
+/// must be the union of every production scheduler owner (admitted, deferred,
+/// causal, outstanding I/O, ready, and local worker state). Consequently this
+/// function is deliberately conditional on faithful identity and ownership
+/// extraction; `drive_effects` itself does not perform scheduler-wide
+/// coalescing.
+///
+/// TODO: replace this conditional integer/set projection with the
+/// machine-checked production effect-to-TLA candidate identity/ownership map
+/// and its Completion-capacity product-rank proof before promoting the
+/// temporal liveness obligation.
+pub open spec fn production_fresh_causal_successors(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors(owned, remaining)
+        } else {
+            seq![candidate].add(production_fresh_causal_successors(
+                owned.insert(candidate),
+                remaining,
+            ))
+        }
+    }
+}
+
+/// Standard subsequence relation used to state that first-owner filtering
+/// preserves the source order. Combined with the exact filter body and output
+/// uniqueness, this excludes either reversing or prepending recursive output.
+pub open spec fn production_stable_subsequence(
+    subsequence: Seq<int>,
+    source: Seq<int>,
+) -> bool
+    decreases source.len(),
+{
+    if subsequence.len() == 0 {
+        true
+    } else if source.len() == 0 {
+        false
+    } else if subsequence.first() == source.first() {
+        production_stable_subsequence(subsequence.drop_first(), source.drop_first())
+    } else {
+        production_stable_subsequence(subsequence, source.drop_first())
+    }
+}
+
+/// Every retained successor is absent from the complete prior-owner set.
+pub proof fn production_fresh_causal_successors_excludes_prior_owners(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        forall|index: int|
+            0 <= index < production_fresh_causal_successors(owned, successors).len()
+                ==> !owned.contains(
+                    production_fresh_causal_successors(owned, successors)[index],
+                ),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_excludes_prior_owners(owned, remaining);
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_excludes_prior_owners(next_owned, remaining);
+            assert forall|index: int|
+                0 <= index < seq![candidate].add(tail).len()
+                    implies !owned.contains(seq![candidate].add(tail)[index]) by {
+                if index != 0 {
+                    assert(0 <= index - 1 < tail.len());
+                    assert(seq![candidate].add(tail)[index] == tail[index - 1]);
+                    assert(!next_owned.contains(tail[index - 1]));
+                }
+            }
+        }
+    }
+}
+
+/// Every emitted identity that was not already owned is retained. Together
+/// with prior-owner exclusion, uniqueness, and stable-subsequence order, this
+/// prevents an implementation that silently drops all fresh successors.
+pub proof fn production_fresh_causal_successors_keeps_every_fresh_value(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        forall|candidate: int|
+            successors.contains(candidate) && !owned.contains(candidate)
+                ==> production_fresh_causal_successors(owned, successors)
+                    .contains(candidate),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        assert(successors =~= seq![candidate].add(remaining));
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_keeps_every_fresh_value(owned, remaining);
+            assert forall|value: int|
+                successors.contains(value) && !owned.contains(value)
+                    implies production_fresh_causal_successors(owned, remaining)
+                        .contains(value) by {
+                assert(value != candidate);
+                assert(remaining.contains(value));
+            }
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_keeps_every_fresh_value(
+                next_owned,
+                remaining,
+            );
+            assert forall|value: int|
+                successors.contains(value) && !owned.contains(value)
+                    implies seq![candidate].add(tail).contains(value) by {
+                if value == candidate {
+                    assert(seq![candidate].contains(value));
+                } else {
+                    assert(remaining.contains(value));
+                    assert(!next_owned.contains(value));
+                    assert(tail.contains(value));
+                }
+            }
+        }
+    }
+}
+
+/// Stable first ownership emits each projected identity at most once.
+pub proof fn production_fresh_causal_successors_has_unique_values(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        production_fresh_causal_successors(owned, successors).no_duplicates(),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_has_unique_values(owned, remaining);
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_has_unique_values(next_owned, remaining);
+            production_fresh_causal_successors_excludes_prior_owners(next_owned, remaining);
+            assert(seq![candidate].no_duplicates());
+            assert forall|left: int, right: int|
+                0 <= left < seq![candidate].len() && 0 <= right < tail.len()
+                    implies seq![candidate][left] != tail[right] by {
+                assert(left == 0);
+                assert(seq![candidate][left] == candidate);
+                assert(next_owned.contains(candidate));
+                assert(!next_owned.contains(tail[right]));
+            }
+            vstd::seq_lib::lemma_no_dup_in_concat(seq![candidate], tail);
+        }
+    }
+}
+
+/// The exact first-owner output is a stable subsequence of emitted identities.
+pub proof fn production_fresh_causal_successors_preserves_first_owner_order(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        production_stable_subsequence(
+            production_fresh_causal_successors(owned, successors),
+            successors,
+        ),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            let filtered = production_fresh_causal_successors(owned, remaining);
+            production_fresh_causal_successors_preserves_first_owner_order(
+                owned,
+                remaining,
+            );
+            production_fresh_causal_successors_excludes_prior_owners(owned, remaining);
+            if filtered.len() != 0 {
+                assert(!owned.contains(filtered.first()));
+                assert(filtered.first() != candidate);
+            }
+        } else {
+            production_fresh_causal_successors_preserves_first_owner_order(
+                owned.insert(candidate),
+                remaining,
+            );
+        }
+    }
+}
+
+/// Abstract causal FIFO after one completely expanded production effect batch.
+///
+/// The production adapter drains its private expansion queue synchronously.
+/// The refinement then projects the stable emitted sequence, coalesces exact
+/// scheduler-wide owners once, and appends the fresh sequence to the abstract
+/// queue tail, matching `FreshCommandSuccessors`/`AppendCausalSuccessors`.
+pub open spec fn production_async_causal_fifo_after_batch(
+    old_queue: Seq<int>,
+    owned: Set<int>,
+    emitted: Seq<int>,
+) -> Seq<int> {
+    old_queue.add(production_fresh_causal_successors(owned, emitted))
+}
+
+/// Under a faithful scheduler-owner projection, a batch preserves the old
+/// causal prefix and appends a disjoint, unique, stable first-owner suffix.
+/// This theorem does not identify concrete `Effect` values with TLA+ values.
+pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
+    old_queue: Seq<int>,
+    owned: Set<int>,
+    emitted: Seq<int>,
+)
+    requires
+        old_queue.no_duplicates(),
+        old_queue.to_set().subset_of(owned),
+    ensures
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            =~= old_queue.add(production_fresh_causal_successors(owned, emitted)),
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .take(old_queue.len() as int)
+            =~= old_queue,
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .skip(old_queue.len() as int)
+            =~= production_fresh_causal_successors(owned, emitted),
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .no_duplicates(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    let fresh = production_fresh_causal_successors(owned, emitted);
+    production_fresh_causal_successors_excludes_prior_owners(owned, emitted);
+    production_fresh_causal_successors_has_unique_values(owned, emitted);
+    assert forall|left: int, right: int|
+        0 <= left < old_queue.len() && 0 <= right < fresh.len()
+            implies old_queue[left] != fresh[right] by {
+        old_queue.lemma_index_contains(left);
+        assert(old_queue.to_set().contains(old_queue[left]));
+        assert(owned.contains(old_queue[left]));
+        assert(!owned.contains(fresh[right]));
+    }
+    vstd::seq_lib::lemma_no_dup_in_concat(old_queue, fresh);
+    assert_seqs_equal!(
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .take(old_queue.len() as int)
+            == old_queue
+    );
+    assert_seqs_equal!(
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .skip(old_queue.len() as int)
+            == fresh
+    );
+}
+
+/// Deliberately inverted owner predicate used only by the concrete mutation
+/// witness below.
+pub open spec fn production_inverted_owner_filter_mutant(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            seq![candidate].add(production_inverted_owner_filter_mutant(
+                owned.insert(candidate),
+                remaining,
+            ))
+        } else {
+            production_inverted_owner_filter_mutant(owned, remaining)
+        }
+    }
+}
+
+/// The inverted predicate retains the prior owner and drops the fresh value.
+pub proof fn production_inverted_owner_filter_mutant_is_rejected()
+    ensures
+        production_inverted_owner_filter_mutant(
+            Set::<int>::empty().insert(1int),
+            seq![1int, 2int],
+        ) =~= seq![1int],
+        production_fresh_causal_successors(
+            Set::<int>::empty().insert(1int),
+            seq![1int, 2int],
+        ) =~= seq![2int],
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+    reveal_with_fuel(production_inverted_owner_filter_mutant, 3);
+    reveal_with_fuel(production_fresh_causal_successors, 3);
+}
+
+/// Deliberately appends each first owner after its recursive suffix, reversing
+/// every all-fresh batch.
+pub open spec fn production_reversed_fresh_order_mutant(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_reversed_fresh_order_mutant(owned, remaining)
+        } else {
+            production_reversed_fresh_order_mutant(
+                owned.insert(candidate),
+                remaining,
+            ).add(seq![candidate])
+        }
+    }
+}
+
+/// Recursive append reverses the reviewed three-element stable batch.
+pub proof fn production_reversed_fresh_order_mutant_is_rejected()
+    ensures
+        production_reversed_fresh_order_mutant(
+            Set::<int>::empty(),
+            seq![1int, 2int, 3int],
+        ) =~= seq![3int, 2int, 1int],
+        production_fresh_causal_successors(
+            Set::<int>::empty(),
+            seq![1int, 2int, 3int],
+        ) =~= seq![1int, 2int, 3int],
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+    reveal_with_fuel(production_reversed_fresh_order_mutant, 4);
+    reveal_with_fuel(production_fresh_causal_successors, 4);
+}
+
+// ---------------------------------------------------------------------------
 // Production timer/FIFO scheduling kernel
 // ---------------------------------------------------------------------------
 

@@ -331,11 +331,15 @@ impl StrictReplayFixture {
             pops,
         );
 
-        let transaction = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-            .with_instructions([SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::MaxClockDriftMs(100),
-            ))])
-            .sign(genesis_key.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::MaxClockDriftMs(100),
+        ))])
+        .sign(genesis_key.private_key());
         let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
             .as_millis()
             .try_into()

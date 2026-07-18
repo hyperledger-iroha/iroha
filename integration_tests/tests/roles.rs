@@ -86,7 +86,10 @@ fn register_empty_role() -> Result<()> {
     let role_id = "root".parse().expect("Valid");
     let register_role = Register::role(Role::new(role_id, ALICE_ID.clone()));
 
-    test_client.submit(register_role)?;
+    test_client.submit(
+        register_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -112,7 +115,10 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
 
     // Registering Mouse
     let register_mouse = Register::account(Account::new(mouse_id.clone()));
-    test_client.submit_blocking(register_mouse)?;
+    test_client.submit_blocking(
+        register_mouse,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
@@ -121,22 +127,31 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
             account: mouse_id.clone(),
         });
     let register_role = Register::role(role);
-    test_client.submit_blocking(register_role)?;
+    test_client.submit_blocking(
+        register_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Transfer domain ownership to Mouse so Alice no longer has implicit owner privileges.
     let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), wonderland, mouse_id.clone());
-    test_client.submit_blocking(transfer_domain)?;
+    test_client.submit_blocking(
+        transfer_domain,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Metadata edits must fail before the permission is granted.
     let metadata_key = "key".parse::<Name>()?;
     let metadata_value = "value".parse::<Json>()?;
     let err = test_client
-        .submit_blocking(SetKeyValue::account(
-            mouse_id.clone(),
-            metadata_key.clone(),
-            metadata_value.clone(),
-        ))
+        .submit_blocking(
+            SetKeyValue::account(
+                mouse_id.clone(),
+                metadata_key.clone(),
+                metadata_value.clone(),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("metadata update without permission should be rejected");
     assert!(
         err_chain_contains(&err, "Not permitted")
@@ -147,14 +162,21 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
 
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(network.chain_id(), mouse_id.clone())
-        .with_instructions([grant_role])
-        .sign(mouse_keypair.private_key());
+    let grant_role_tx = TransactionBuilder::new(
+        network.chain_id(),
+        mouse_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([grant_role])
+    .sign(mouse_keypair.private_key());
     test_client.submit_transaction_blocking(&grant_role_tx)?;
 
     // Alice modifies Mouse's metadata
     let set_key_value = SetKeyValue::account(mouse_id, metadata_key, metadata_value);
-    test_client.submit_blocking(set_key_value)?;
+    test_client.submit_blocking(
+        set_key_value,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Making request to find Alice's roles
     let found_role_ids = test_client
@@ -179,18 +201,27 @@ fn unregistered_role_removed_from_account() -> Result<()> {
 
     // Registering Mouse
     let register_mouse = Register::account(Account::new(mouse_id.clone()));
-    test_client.submit_blocking(register_mouse)?;
+    test_client.submit_blocking(
+        register_mouse,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Register root role
     let register_role = Register::role(
         Role::new(role_id.clone(), alice_id.clone())
             .add_permission(CanModifyAccountMetadata { account: alice_id }),
     );
-    test_client.submit_blocking(register_role)?;
+    test_client.submit_blocking(
+        register_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Grant root role to Mouse
     let grant_role = Grant::account_role(role_id.clone(), mouse_id.clone());
-    test_client.submit_blocking(grant_role)?;
+    test_client.submit_blocking(
+        grant_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that Mouse has root role
     let found_mouse_roles = test_client
@@ -200,7 +231,10 @@ fn unregistered_role_removed_from_account() -> Result<()> {
 
     // Unregister root role
     let unregister_role = Unregister::role(role_id.clone());
-    test_client.submit_blocking(unregister_role)?;
+    test_client.submit_blocking(
+        unregister_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that Mouse doesn't have the root role
     let found_mouse_roles = test_client
@@ -224,7 +258,10 @@ fn role_with_invalid_permissions_is_not_accepted() -> Result<()> {
     let role = Role::new(role_id, ALICE_ID.clone()).add_permission(CanControlDomainLives);
 
     let err = test_client
-        .submit_blocking(Register::role(role))
+        .submit_blocking(
+            Register::role(role),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("Submitting role with non-existing permission should fail");
 
     if let Some(rejection_reason) = err.downcast_ref::<TransactionRejectionReason>() {
@@ -284,7 +321,10 @@ fn role_permissions_are_deduplicated() {
         .add_permission(allow_alice_to_transfer_rose_2);
 
     test_client
-        .submit_blocking(Register::role(role))
+        .submit_blocking(
+            Register::role(role),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to register role");
 
     let role = wait_for_role(&test_client, &role_id, "role registration");
@@ -309,24 +349,37 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     // Registering Mouse
     let register_mouse = Register::account(Account::new(mouse_id.clone()));
-    test_client.submit_blocking(register_mouse)?;
+    test_client.submit_blocking(
+        register_mouse,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role = Role::new(role_id.clone(), mouse_id.clone());
     let register_role = Register::role(role);
-    test_client.submit_blocking(register_role)?;
+    test_client.submit_blocking(
+        register_role,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Transfer domain ownership to Mouse
     let domain_id = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), domain_id, mouse_id.clone());
-    test_client.submit_blocking(transfer_domain)?;
+    test_client.submit_blocking(
+        transfer_domain,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(network.chain_id(), mouse_id.clone())
-        .with_instructions([grant_role])
-        .sign(mouse_keypair.private_key());
+    let grant_role_tx = TransactionBuilder::new(
+        network.chain_id(),
+        mouse_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([grant_role])
+    .sign(mouse_keypair.private_key());
     test_client.submit_transaction_blocking(&grant_role_tx)?;
 
     let set_key_value =
@@ -351,13 +404,20 @@ fn grant_revoke_role_permissions() -> Result<()> {
             })
     );
     let _ = test_client
-        .submit_blocking(set_key_value.clone())
+        .submit_blocking(
+            set_key_value.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("shouldn't be able to modify metadata");
 
     // Alice can modify Mouse's metadata after permission is granted to role
-    let grant_role_permission_tx = TransactionBuilder::new(network.chain_id(), mouse_id.clone())
-        .with_instructions([grant_role_permission])
-        .sign(mouse_keypair.private_key());
+    let grant_role_permission_tx = TransactionBuilder::new(
+        network.chain_id(),
+        mouse_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([grant_role_permission])
+    .sign(mouse_keypair.private_key());
     test_client.submit_transaction_blocking(&grant_role_permission_tx)?;
     assert!(
         test_client
@@ -365,12 +425,19 @@ fn grant_revoke_role_permissions() -> Result<()> {
             .execute_all()?
             .contains(&role_id)
     );
-    test_client.submit_blocking(set_key_value.clone())?;
+    test_client.submit_blocking(
+        set_key_value.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Alice can't modify Mouse's metadata after permission is removed from role
-    let revoke_role_permission_tx = TransactionBuilder::new(network.chain_id(), mouse_id)
-        .with_instructions([revoke_role_permission])
-        .sign(mouse_keypair.private_key());
+    let revoke_role_permission_tx = TransactionBuilder::new(
+        network.chain_id(),
+        mouse_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([revoke_role_permission])
+    .sign(mouse_keypair.private_key());
     test_client.submit_transaction_blocking(&revoke_role_permission_tx)?;
     assert!(
         !test_client
@@ -383,7 +450,10 @@ fn grant_revoke_role_permissions() -> Result<()> {
             })
     );
     let _ = test_client
-        .submit_blocking(set_key_value)
+        .submit_blocking(
+            set_key_value,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("shouldn't be able to modify metadata");
 
     Ok(())
@@ -413,22 +483,32 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let alice_id = ALICE_ID.clone();
 
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
-    test_client.submit_blocking(Register::role(Role::new(role_id.clone(), alice_id.clone())))?;
+    test_client.submit_blocking(
+        Register::role(Role::new(role_id.clone(), alice_id.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let perm: Permission = CanModifyAccountMetadata {
         account: alice_id.clone(),
     }
     .into();
-    test_client.submit_blocking(Grant::role_permission(perm.clone(), role_id.clone()))?;
+    test_client.submit_blocking(
+        Grant::role_permission(perm.clone(), role_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let revoke_role_permission = Revoke::role_permission(perm.clone(), role_id.clone());
     let grant_role_permission = Grant::role_permission(perm.clone(), role_id.clone());
-    let tx = TransactionBuilder::new(network.chain_id(), alice_id.clone())
-        .with_instructions([
-            InstructionBox::from(revoke_role_permission),
-            InstructionBox::from(grant_role_permission),
-        ])
-        .sign(ALICE_KEYPAIR.private_key());
+    let tx = TransactionBuilder::new(
+        network.chain_id(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        InstructionBox::from(revoke_role_permission),
+        InstructionBox::from(grant_role_permission),
+    ])
+    .sign(ALICE_KEYPAIR.private_key());
     test_client.submit_transaction_blocking(&tx)?;
 
     let status = test_client.get_status()?;

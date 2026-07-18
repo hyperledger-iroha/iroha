@@ -50,6 +50,38 @@ It uses the local snapshot repository when it exists and otherwise uses the
 in-repo project dependency. Set `irohaAndroidVersion` to match the
 published coordinates when consuming from Maven.
 
+## Fee quotes and sponsorship
+
+Every transaction payload requires a typed `FeePaymentIntent`. Authority-paid
+and exact sponsor-program selections are explicit:
+
+```java
+import java.util.Collections;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+
+FeePaymentIntent authorityPaid =
+    FeePaymentIntent.authority(Collections.emptyList());
+FeePaymentIntent sponsored =
+    FeePaymentIntent.sponsor(
+        new FeeSponsorProgramId(sponsorAccountId, "wallet_payments"),
+        3L,
+        Collections.emptyList());
+```
+
+An empty charge-limit list is only an initial quote draft. Freeze the complete
+unsigned payload, put `requested.toJsonMap()` in its required `fee_payment`
+field, and call `HttpClientTransport.quoteFees(unsignedPayload, canonicalAuth)`.
+Verify that the quote retained the payer, exact sponsor program/revision, and
+gas bound; replace only `fee_payment` with the returned intent before signing
+and submitting the same payload. Use
+`HttpClientTransport.getFeeSponsorProgram(programId, canonicalAuth)` to inspect
+one exact lifecycle record before selecting its revision. Contract/IVM drafts
+require a positive gas bound in the intent.
+
+The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
+rejected. Sponsor rejection never falls back to the authority.
+
 ## Account addresses
 
 ```java
@@ -71,7 +103,7 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ## Kagemusha proof artifacts and device registration
 
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 20, streams the eight authenticated V4 proof artifacts into an atomic
+requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
 `buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone

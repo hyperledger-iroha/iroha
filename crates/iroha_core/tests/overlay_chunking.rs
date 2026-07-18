@@ -49,9 +49,13 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
             .into(),
         );
     }
-    let tx = TransactionBuilder::new(ChainId::from("chain"), account_id.clone())
-        .with_executable(Executable::from_iter(instrs))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        ChainId::from("chain"),
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::from_iter(instrs))
+    .sign(kp.private_key());
 
     // Build and apply a block with this transaction
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));

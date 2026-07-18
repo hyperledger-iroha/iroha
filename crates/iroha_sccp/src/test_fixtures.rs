@@ -732,8 +732,11 @@ fn exact_sccp_fixture_block(
     let transaction_key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519)
         .expect("exact SCCP fixture transaction key");
     let authority = AccountId::new(transaction_key.public_key().clone());
-    let mut transaction_builder =
-        TransactionBuilder::new(ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1), authority);
+    let mut transaction_builder = TransactionBuilder::new(
+        ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     transaction_builder.set_creation_time(Duration::from_millis(1_700_000_000_001));
     let transaction = transaction_builder
         .with_executable(Executable::IvmProved(IvmProved {

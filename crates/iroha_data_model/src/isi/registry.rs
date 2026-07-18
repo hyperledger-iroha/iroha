@@ -71,9 +71,17 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<crate::isi::staking::ClaimPublicLaneRewards>,
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
-    InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
-    InstructionRegistry::register_slice::<nexus::UpsertFeeSponsorPolicy>,
-    InstructionRegistry::register_slice::<nexus::RemoveFeeSponsorPolicy>,
+    InstructionRegistry::register_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>,
+    InstructionRegistry::register_slice::<nexus::CreateFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::StageFeeSponsorProgramRevision>,
+    InstructionRegistry::register_slice::<nexus::ActivateFeeSponsorProgramRevision>,
+    InstructionRegistry::register_slice::<nexus::PauseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::BeginCloseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::CloseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::EnrollFeeSponsorBeneficiary>,
+    InstructionRegistry::register_slice::<nexus::UnenrollFeeSponsorBeneficiary>,
+    InstructionRegistry::register_slice::<nexus::FundFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::WithdrawFeeSponsorProgram>,
     InstructionRegistry::register_slice::<bridge::ApplySccpRouteGovernance>,
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
@@ -330,6 +338,16 @@ const ALL_REGISTRARS: &[Registrar] = &[
 pub fn default() -> InstructionRegistry {
     let registry = apply_registrars(ALL_REGISTRARS.iter().copied());
     with_stable_ids(registry)
+}
+
+/// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
+///
+/// Sponsor-program revision validation uses this fail-closed lookup before an
+/// immutable native-instruction selector can be staged.
+#[must_use]
+pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
+    static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
+    DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
 }
 
 /// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].
@@ -638,13 +656,35 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<nexus::RegisterVerifiedLaneRelay>(
         "nexus::RegisterVerifiedLaneRelay",
     );
-    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedNexusFeeBudget>(
-        "nexus::RegisterVerifiedNexusFeeBudget",
+    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>(
+        "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
     );
     registry = registry
-        .register_with_id_slice::<nexus::UpsertFeeSponsorPolicy>("nexus::UpsertFeeSponsorPolicy");
+        .register_with_id_slice::<nexus::CreateFeeSponsorProgram>("nexus::CreateFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::StageFeeSponsorProgramRevision>(
+        "nexus::StageFeeSponsorProgramRevision",
+    );
+    registry = registry.register_with_id_slice::<nexus::ActivateFeeSponsorProgramRevision>(
+        "nexus::ActivateFeeSponsorProgramRevision",
+    );
     registry = registry
-        .register_with_id_slice::<nexus::RemoveFeeSponsorPolicy>("nexus::RemoveFeeSponsorPolicy");
+        .register_with_id_slice::<nexus::PauseFeeSponsorProgram>("nexus::PauseFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::BeginCloseFeeSponsorProgram>(
+        "nexus::BeginCloseFeeSponsorProgram",
+    );
+    registry = registry
+        .register_with_id_slice::<nexus::CloseFeeSponsorProgram>("nexus::CloseFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::EnrollFeeSponsorBeneficiary>(
+        "nexus::EnrollFeeSponsorBeneficiary",
+    );
+    registry = registry.register_with_id_slice::<nexus::UnenrollFeeSponsorBeneficiary>(
+        "nexus::UnenrollFeeSponsorBeneficiary",
+    );
+    registry = registry
+        .register_with_id_slice::<nexus::FundFeeSponsorProgram>("nexus::FundFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::WithdrawFeeSponsorProgram>(
+        "nexus::WithdrawFeeSponsorProgram",
+    );
     registry
 }
 
@@ -858,6 +898,17 @@ mod tests {
                 panic!("wire id collision: {wire_id} registered for {previous} and {name}");
             }
         }
+    }
+
+    #[test]
+    fn sponsor_program_wire_id_lookup_is_clean_break() {
+        assert!(is_instruction_wire_id_registered(
+            "nexus::CreateFeeSponsorProgram"
+        ));
+        assert!(is_instruction_wire_id_registered("iroha.transfer"));
+        assert!(!is_instruction_wire_id_registered(
+            "nexus::UpsertFeeSponsorPolicy"
+        ));
     }
 
     #[test]

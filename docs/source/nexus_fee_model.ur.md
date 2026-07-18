@@ -25,11 +25,21 @@ gas ڈیبٹس کو Nexus فیس ماڈل کے ساتھ reconcile کر سکیں�
   `liquidity_profile` (`tier1`, `tier2`, یا `tier3`)، اور `volatility_class` (`stable`,
   `elevated`, `dislocated`) شامل ہیں۔ یہ flags settlement router کو feed ہوتے ہیں تاکہ
   حاصل شدہ XOR quote lane کے canonical TWAP اور haircut tier کے مطابق ہو۔
-- IVM لین دین کو فیس ایکسپوژر محدود کرنے کے لئے `gas_limit` (`u64`, > 0) میٹاڈیٹا شامل کرنا لازم ہے۔
-  `/v1/contracts/call` اینڈپوائنٹ واضح طور پر `gas_limit` مانگتا ہے، اور غلط اقدار مسترد ہوتی ہیں۔
-- جب کوئی لین دین `fee_sponsor` میٹاڈیٹا سیٹ کرتا ہے تو اسپانسر کو کالر کو
-  `CanUseFeeSponsor { sponsor }` دینا ہوتا ہے۔ غير مجاز اسپانسرشپ کی کوششیں مسترد کی جاتی ہیں اور
-  ریکارڈ ہوتی ہیں۔
+- ہر لین دین میں typed اور دستخط سے منسلک لازمی `fee_payment`
+  (`FeePaymentIntent`) ہونا چاہیے۔ یہ payer کے طور پر authority یا ایک عین
+  sponsor program اور اس کی ناقابل تبدیلی revision منتخب کرتا ہے، اور دستخط
+  شدہ component maxima کے ساتھ ضرورت کے وقت مثبت gas bound شامل کرتا ہے۔
+  پرانے میٹاڈیٹا keys `fee_sponsor`، `gas_limit` اور `gas_asset_id` مسترد ہوتے ہیں۔
+- دستخط سے پہلے quote لیں: عین unsigned payload بنائیں، اس کی authority سے
+  `POST /v1/fees/quote` authenticate کروائیں، تجویز کردہ intent جانچیں،
+  صرف `payload.fee_payment` بدلیں، پھر اسی payload پر دستخط کر کے submit
+  کریں۔ Quote reservation نہیں بلکہ observation ہے؛ admission موجودہ حالت
+  دوبارہ جانچتا ہے۔
+- Direct settlement authority یا ایک عین sponsor program دونوں کو قبول کرتا
+  ہے۔ Receipt-lane (`lane_relay_burn`) settlement صرف عین sponsor کے لئے
+  ہے: authority کی ادا کردہ Nexus fees
+  `relay_capacity_unavailable` کے ساتھ مسترد ہوتی ہیں، کیونکہ authority
+  balance authenticated receipt source lock نہیں ہے۔
 - ہر وہ transaction جو gas ادا کرتی ہے `LaneSettlementReceipt` ریکارڈ کرتی ہے۔ ہر receipt میں
   caller فراہم کردہ source identifier، local micro-amount، فوری طور پر واجب الادا XOR، haircut کے بعد
   متوقع XOR، حاصل شدہ safety margin (`xor_variance`)، اور block timestamp ملّی سیکنڈ میں محفوظ ہوتے ہیں۔

@@ -82,6 +82,7 @@ enabled = true
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY"
 allowed_permissions = []
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
 
 [torii.faucet]
 enabled = true
@@ -164,7 +165,9 @@ start_grace_ms = 30000
 stop_grace_ms = 10000
 
 [soracloud_runtime.submission]
-gas_asset_id = "xor#universal"
+fee_payer = "sponsor"
+fee_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+fee_program_revision = 1
 
 [soracloud_runtime.egress]
 default_allow = false
@@ -228,14 +231,13 @@ allowed_circuits = ["ivm-execution-v1"]
 
 [pipeline.gas]
 tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-# `gas_asset_id` transaction metadata is canonicalized to the Base58 asset
-# definition id before execution. The live XOR alias `xor#universal` resolves to
-# this id on Taira.
+# Fee quoting selects this canonical Base58 asset for the signature-bound
+# pipeline-gas component. The live `xor#universal` alias resolves to this id.
 accepted_assets = ["6TEAJqbb8oEPmLncoNiMRbLEK6tw"]
 [[pipeline.gas.units_per_gas]]
 asset = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 # Nexus fees already charge gas via [nexus.fees].per_gas_unit_fee; this admits
-# explicit gas metadata without applying a second pipeline gas transfer.
+# signature-bound gas in `FeePaymentIntent` without a second pipeline transfer.
 units_per_gas = 0
 twap_local_per_xor = "1"
 liquidity_profile = "tier1"
@@ -300,8 +302,7 @@ base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
 per_gas_unit_fee = "0.00005"
-sponsorship_enabled = true
-sponsor_max_fee = "0"
+sponsor_vault_custody_account_id = "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
 
 [[nexus.lane_catalog]]
 index = 0
@@ -336,6 +337,7 @@ metadata = { "scheduler.teu_capacity" = "25000000" }
 alias = "universal"
 id = 0
 description = "Single-lane data space"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
 
 [[nexus.dataspace_catalog]]
 alias = "governance"
@@ -354,8 +356,7 @@ alias = "is"
 id = 6647857470246403404
 manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
 description = "External PoC data space"
-fee_sponsor_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-fee_sponsor_policy = "default"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
 
 [nexus.governance]
 default_module = "parliament"

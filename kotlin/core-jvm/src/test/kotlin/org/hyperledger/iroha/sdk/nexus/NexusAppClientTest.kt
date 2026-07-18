@@ -14,6 +14,7 @@ import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -25,7 +26,7 @@ class NexusAppClientTest {
     fun `transfer input requires canonical quantity strings`() {
         listOf(" ", "+1", "01", "1e0", "-1", "1.0", "1.2300").forEach { quantity ->
             assertFailsWith<IllegalArgumentException> {
-                NexusTransferInput("asset", quantity, "destination")
+                NexusTransferInput("asset", quantity, "destination", TEST_FEE_PAYMENT)
             }
         }
         assertEquals(
@@ -34,6 +35,7 @@ class NexusAppClientTest {
                 "asset",
                 KotodamaQuantity.parseCanonical("1.25"),
                 "destination",
+                TEST_FEE_PAYMENT,
             ).quantity,
         )
     }
@@ -537,11 +539,13 @@ class NexusAppClientTest {
             "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
         private const val DESTINATION_ACCOUNT_ID =
             "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
+        private val TEST_FEE_PAYMENT = FeePaymentIntent.authority(emptyList())
 
         private fun sampleInput(): NexusTransferInput = NexusTransferInput(
             sourceAssetId = "$ASSET_DEFINITION_ID#$ACCOUNT_ID",
             quantity = "12.34",
             destinationAccountId = DESTINATION_ACCOUNT_ID,
+            feePayment = TEST_FEE_PAYMENT,
             creationTimeMs = 1_700_000_000_000L,
             ttlMs = 30_000L,
             nonce = 7,

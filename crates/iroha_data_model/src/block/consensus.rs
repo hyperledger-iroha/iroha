@@ -15,9 +15,9 @@ use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
 use crate::{
-    account::AccountId,
+    asset::AssetDefinitionId,
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    nexus::{DataSpaceId, FeeDebitSource, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     transaction::TransactionSubmissionReceipt,
 };
@@ -1949,14 +1949,27 @@ pub struct NexusFeeReceipt {
     pub lane_id: LaneId,
     /// DPN block height that finalized the source transaction.
     pub block_height: u64,
-    /// Sponsor or payer Nexus account charged for the public XOR burn.
-    pub payer_account_id: AccountId,
-    /// Fee asset selector; for DPN settlement this is fixed to `xor#universal`.
-    pub fee_asset_id: String,
+    /// Exact account or sponsor-program vault charged by settlement.
+    pub debit_source: FeeDebitSource,
+    /// Canonical fee asset definition charged by settlement.
+    pub fee_asset_id: AssetDefinitionId,
+    /// Immutable sponsor-program revision charged by this receipt, when sponsored.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub program_revision: Option<u64>,
+    /// Proof-bound cross-lane spend lease, when relay settlement is used.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub lease_id: Option<Hash>,
     /// Computed fee amount to burn on Nexus.
     pub fee_amount: Quantity,
     /// Fee schedule inputs needed to recompute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
+}
+
+impl NexusFeeReceipt {
+    /// Clean-break receipt version carrying typed debit sources and canonical assets.
+    pub const VERSION: u16 = 2;
 }
 
 /// Phase certified by a native AMX participant committee.
@@ -4402,8 +4415,10 @@ mod tests {
         dataspace_id: DataSpaceId,
         lane_id: LaneId,
         block_height: u64,
-        payer_account_id: AccountId,
-        fee_asset_id: String,
+        debit_source: FeeDebitSource,
+        fee_asset_id: AssetDefinitionId,
+        program_revision: Option<u64>,
+        lease_id: Option<Hash>,
         fee_amount: Numeric,
         schedule: NexusFeeScheduleInputs,
     }
@@ -4462,17 +4477,21 @@ mod tests {
 
     fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
         NexusFeeReceipt {
-            version: 1,
+            version: NexusFeeReceipt::VERSION,
             source_id,
             dataspace_id: DataSpaceId::new(7),
             lane_id: LaneId::new(1),
             block_height: 42,
-            payer_account_id: crate::account::AccountId::new(
+            debit_source: FeeDebitSource::Account(crate::account::AccountId::new(
                 checked_random_keypair_with_algorithm(Algorithm::Ed25519)
                     .public_key()
                     .clone(),
-            ),
-            fee_asset_id: "xor#universal".to_owned(),
+            )),
+            fee_asset_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id"),
+            program_revision: None,
+            lease_id: None,
             fee_amount: "0.001".parse().expect("quantity"),
             schedule: NexusFeeScheduleInputs {
                 tx_bytes_len: 100,
@@ -4510,8 +4529,10 @@ mod tests {
             dataspace_id: valid.dataspace_id,
             lane_id: valid.lane_id,
             block_height: valid.block_height,
-            payer_account_id: valid.payer_account_id,
+            debit_source: valid.debit_source,
             fee_asset_id: valid.fee_asset_id,
+            program_revision: valid.program_revision,
+            lease_id: valid.lease_id,
             fee_amount: Numeric::new(-1_i32, 0),
             schedule: valid.schedule,
         };
@@ -4519,6 +4540,34 @@ mod tests {
         assert!(
             NexusFeeReceipt::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a fee receipt amount"
+        );
+    }
+
+    #[test]
+    fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
+        let mut receipt = sample_nexus_fee_receipt([0x5A; 32]);
+        receipt.debit_source =
+            FeeDebitSource::SponsorProgram(crate::nexus::FeeSponsorProgramId::new(
+                crate::account::AccountId::new(
+                    checked_random_keypair_with_algorithm(Algorithm::Ed25519)
+                        .public_key()
+                        .clone(),
+                ),
+                "retail".parse().expect("program name"),
+            ));
+        receipt.program_revision = Some(4);
+        receipt.lease_id = Some(Hash::new(b"receipt-spend-lease"));
+
+        let bytes = receipt.encode();
+        assert_eq!(
+            NexusFeeReceipt::decode(&mut bytes.as_slice()).expect("decode sponsored receipt"),
+            receipt
+        );
+        let json = norito::json::to_json(&receipt).expect("serialize sponsored receipt");
+        assert_eq!(
+            norito::json::from_str::<NexusFeeReceipt>(&json)
+                .expect("deserialize sponsored receipt"),
+            receipt
         );
     }
 

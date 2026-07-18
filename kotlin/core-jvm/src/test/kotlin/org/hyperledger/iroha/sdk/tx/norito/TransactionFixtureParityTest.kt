@@ -5,6 +5,8 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -59,13 +61,19 @@ class TransactionFixtureParityTest {
     }
 
     @Test
-    fun `typed metadata fixture preserves gas limit as json number`() {
+    fun `typed fee payment fixture preserves pipeline gas limits`() {
         val fixture = AndroidFixtureSupport.loadPayloadFixtures()
-            .single { it.name == "typed_metadata_gas_limit" }
+            .single { it.name == "typed_fee_payment_gas_limit" }
         val payload = fixture.materializePayload(adapter)
 
-        assertEquals(JsonValue.string("xor#universal"), payload.metadata["gas_asset_id"])
-        assertEquals(JsonValue.number(1000), payload.metadata["gas_limit"])
+        val feePayment = assertIs<FeePaymentIntent.Authority>(payload.feePayment)
+        assertEquals(1000L, feePayment.gasLimit)
+        val charge = feePayment.chargeLimits.single()
+        assertEquals(FeeChargeKind.PIPELINE_GAS, charge.kind)
+        assertEquals("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", charge.assetDefinitionId)
+        assertEquals("1000", charge.maxAmount)
+        assertEquals(null, payload.metadata["gas_asset_id"])
+        assertEquals(null, payload.metadata["gas_limit"])
         assertEquals(JsonValue.bool(true), payload.metadata["checked"])
     }
 

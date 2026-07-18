@@ -17,6 +17,7 @@ use crate::{
             RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
             TransferNameRequestV1, UpdateControllersRequestV1,
         },
+        transaction::FeePaymentIntent,
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
@@ -111,8 +112,12 @@ impl<'a> SnsApi<'a> {
     /// # Errors
     ///
     /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn register(&self, payload: &RegisterNameRequestV1) -> Result<RegisterNameResponseV1> {
-        self.register_with_metadata(payload, Metadata::default())
+    pub fn register(
+        &self,
+        payload: &RegisterNameRequestV1,
+        fee_payment: FeePaymentIntent,
+    ) -> Result<RegisterNameResponseV1> {
+        self.register_with_metadata(payload, fee_payment, Metadata::default())
     }
 
     /// Submit a consensus transaction to register a name with transaction metadata.
@@ -123,12 +128,14 @@ impl<'a> SnsApi<'a> {
     pub fn register_with_metadata(
         &self,
         payload: &RegisterNameRequestV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<RegisterNameResponseV1> {
         let namespace = SnsNamespacePath::from_suffix_id(payload.selector.suffix_id)?;
         let literal = payload.selector.normalized_label().to_owned();
         self.client.submit_blocking_with_metadata(
             crate::data_model::isi::sns::RegisterSnsName::new(payload.clone()),
+            fee_payment,
             metadata,
         )?;
         let name_record = self.get_committed_name(namespace, &literal)?;
@@ -240,8 +247,15 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &RenewNameRequestV1,
+        fee_payment: FeePaymentIntent,
     ) -> Result<NameRecordV1> {
-        self.renew_with_metadata(namespace, literal, payload, Metadata::default())
+        self.renew_with_metadata(
+            namespace,
+            literal,
+            payload,
+            fee_payment,
+            Metadata::default(),
+        )
     }
 
     /// Submit a consensus transaction to renew a name with transaction metadata.
@@ -254,6 +268,7 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &RenewNameRequestV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<NameRecordV1> {
         let previous = self.get_name(namespace, literal)?;
@@ -263,6 +278,7 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ),
+            fee_payment,
             metadata,
         )?;
         self.get_committed_name_matching(
@@ -283,8 +299,15 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &TransferNameRequestV1,
+        fee_payment: FeePaymentIntent,
     ) -> Result<NameRecordV1> {
-        self.transfer_with_metadata(namespace, literal, payload, Metadata::default())
+        self.transfer_with_metadata(
+            namespace,
+            literal,
+            payload,
+            fee_payment,
+            Metadata::default(),
+        )
     }
 
     /// Submit a consensus transaction to transfer a name with transaction metadata.
@@ -297,6 +320,7 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &TransferNameRequestV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<NameRecordV1> {
         self.client.submit_blocking_with_metadata(
@@ -305,6 +329,7 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ),
+            fee_payment,
             metadata,
         )?;
         self.get_committed_name_matching(
@@ -325,8 +350,15 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &UpdateControllersRequestV1,
+        fee_payment: FeePaymentIntent,
     ) -> Result<NameRecordV1> {
-        self.update_controllers_with_metadata(namespace, literal, payload, Metadata::default())
+        self.update_controllers_with_metadata(
+            namespace,
+            literal,
+            payload,
+            fee_payment,
+            Metadata::default(),
+        )
     }
 
     /// Submit a consensus transaction to replace name controllers with transaction metadata.
@@ -339,6 +371,7 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &UpdateControllersRequestV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<NameRecordV1> {
         self.client.submit_blocking_with_metadata(
@@ -347,6 +380,7 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ),
+            fee_payment,
             metadata,
         )?;
         self.get_committed_name(namespace, literal)
@@ -362,8 +396,15 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &FreezeNameRequestV1,
+        fee_payment: FeePaymentIntent,
     ) -> Result<NameRecordV1> {
-        self.freeze_with_metadata(namespace, literal, payload, Metadata::default())
+        self.freeze_with_metadata(
+            namespace,
+            literal,
+            payload,
+            fee_payment,
+            Metadata::default(),
+        )
     }
 
     /// Submit a consensus transaction to freeze a name with transaction metadata.
@@ -376,6 +417,7 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &FreezeNameRequestV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<NameRecordV1> {
         self.client.submit_blocking_with_metadata(
@@ -384,6 +426,7 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ),
+            fee_payment,
             metadata,
         )?;
         self.get_committed_name(namespace, literal)
@@ -399,8 +442,15 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &GovernanceHookV1,
+        fee_payment: FeePaymentIntent,
     ) -> Result<NameRecordV1> {
-        self.unfreeze_with_metadata(namespace, literal, payload, Metadata::default())
+        self.unfreeze_with_metadata(
+            namespace,
+            literal,
+            payload,
+            fee_payment,
+            Metadata::default(),
+        )
     }
 
     /// Submit a consensus transaction to unfreeze a name with transaction metadata.
@@ -413,6 +463,7 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &GovernanceHookV1,
+        fee_payment: FeePaymentIntent,
         metadata: Metadata,
     ) -> Result<NameRecordV1> {
         self.client.submit_blocking_with_metadata(
@@ -421,6 +472,7 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ),
+            fee_payment,
             metadata,
         )?;
         self.get_committed_name(namespace, literal)

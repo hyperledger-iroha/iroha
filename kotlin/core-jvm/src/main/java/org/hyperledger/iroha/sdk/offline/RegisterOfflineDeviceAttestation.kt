@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.lang.Math.addExact
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -12,7 +13,7 @@ import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 
-/** Canonical one-instruction transaction for the ABI-20 device-attestation path. */
+/** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 class RegisterOfflineDeviceAttestation(
     val chainId: String,
     val authority: String,
@@ -20,6 +21,7 @@ class RegisterOfflineDeviceAttestation(
     val creationTimeMs: Long,
     val timeToLiveMs: Long? = null,
     val nonce: Int? = null,
+    val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
     private val metadataSnapshot = metadata.toMap()
@@ -59,6 +61,7 @@ class RegisterOfflineDeviceAttestation(
         executable = Executable.instructions(listOf(instruction())),
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
+        feePayment = feePayment,
         metadata = metadataSnapshot,
     )
 
@@ -72,6 +75,7 @@ class RegisterOfflineDeviceAttestation(
                 payload.creationTimeMs == expected.creationTimeMs &&
                 payload.timeToLiveMs == expected.timeToLiveMs &&
                 payload.nonce == expected.nonce &&
+                payload.feePayment == expected.feePayment &&
                 payload.metadata == expected.metadata &&
                 instructions != null &&
                 instructions.instructions.size == 1 &&

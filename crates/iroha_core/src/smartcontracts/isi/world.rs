@@ -41,6 +41,9 @@ pub mod isi {
         asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         governance::CanEnactGovernance,
+        nexus::{
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
+        },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         smart_contract::CanRegisterSmartContractCode,
         zk_ace::CanManageZkAceIdentityForAccount,
@@ -92,9 +95,12 @@ pub mod isi {
         name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-            DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet,
-            LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
-            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest,
+            DomainEndorsementRecord, FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim,
+            LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
+            VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+            VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
+            fee_sponsor_vault_allocation_claim_digest, fee_sponsor_vault_source_state_root,
+            lane_relay_fastpq_claim_digest,
         },
         parameter::Parameter,
         prelude::*,
@@ -172,6 +178,92 @@ pub mod isi {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message.into().into(),
         ))
+    }
+
+    #[derive(crate::json_macros::JsonDeserialize)]
+    struct GovernedGasRate {
+        asset: String,
+        units_per_gas: u64,
+        twap_local_per_xor: Option<String>,
+        liquidity_profile: Option<String>,
+        volatility_class: Option<String>,
+    }
+
+    fn validate_governed_pipeline_gas_parameter(
+        custom: &iroha_data_model::parameter::CustomParameter,
+    ) -> Result<(), Error> {
+        let parameter_id = iroha_data_model::parameter::CustomParameterId(
+            "ivm_gas_units_per_gas"
+                .parse()
+                .expect("static pipeline gas parameter id"),
+        );
+        if custom.id() != &parameter_id {
+            return Ok(());
+        }
+
+        let rates = custom
+            .payload()
+            .try_into_any_norito::<Vec<GovernedGasRate>>()
+            .map_err(|_| {
+                invalid_smart_contract_parameter(
+                    "ivm_gas_units_per_gas must be a list of gas-rate objects",
+                )
+            })?;
+        let mut assets = BTreeSet::new();
+        for rate in rates {
+            let asset = AssetDefinitionId::parse_address_literal(&rate.asset).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid ivm_gas_units_per_gas asset `{}`: {error}",
+                    rate.asset
+                ))
+            })?;
+            if rate.asset != asset.canonical_address() {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "ivm_gas_units_per_gas asset `{}` is not a canonical asset definition address",
+                    rate.asset
+                )));
+            }
+            if !assets.insert(asset) {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "ivm_gas_units_per_gas contains duplicate asset `{}`",
+                    rate.asset
+                )));
+            }
+            // A zero rate is an intentional convention for signature-bound gas that is
+            // settled by the Nexus component rather than a second pipeline transfer.
+            let _units_per_gas = rate.units_per_gas;
+            if let Some(value) = rate.twap_local_per_xor.as_deref() {
+                let twap = Numeric::from_str(value).map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid ivm_gas_units_per_gas twap `{value}` for asset `{}`: {error}",
+                        rate.asset
+                    ))
+                })?;
+                if twap <= Numeric::zero() {
+                    return Err(invalid_smart_contract_parameter(format!(
+                        "invalid ivm_gas_units_per_gas twap `{value}` for asset `{}`: value must be positive",
+                        rate.asset
+                    )));
+                }
+            }
+            if let Some(value) = rate.liquidity_profile.as_deref()
+                && iroha_config::parameters::actual::GasLiquidity::from_str(value).is_err()
+            {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "invalid ivm_gas_units_per_gas liquidity `{value}` for asset `{}`",
+                    rate.asset
+                )));
+            }
+            if let Some(value) = rate.volatility_class.as_deref()
+                && iroha_config::parameters::actual::GasVolatility::from_str(value).is_err()
+            {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "invalid ivm_gas_units_per_gas volatility `{value}` for asset `{}`",
+                    rate.asset
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn parse_trigger_callback_alias_namespace(
@@ -589,35 +681,126 @@ pub mod isi {
         Ok(record)
     }
 
-    fn verified_nexus_fee_budget_state_key(
-        sponsor: &AccountId,
-        fee_asset_id: &str,
+    fn verified_fee_sponsor_vault_allocation_state_key(
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        asset_definition_id: &AssetDefinitionId,
+        lease_id: &CryptoHash,
     ) -> Result<Name, Error> {
-        let key = VerifiedNexusFeeBudgetRecord::state_key_for(sponsor, fee_asset_id);
+        let key = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            program_id,
+            asset_definition_id,
+            lease_id,
+        );
         Name::from_str(&key).map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "invalid verified Nexus fee budget state key".into(),
+                "invalid verified fee sponsor vault allocation state key".into(),
             ))
             .into()
         })
     }
 
-    fn encode_verified_nexus_fee_budget_record_state(
-        record: &VerifiedNexusFeeBudgetRecord,
+    fn encode_verified_fee_sponsor_vault_allocation_state(
+        record: &VerifiedFeeSponsorVaultAllocation,
     ) -> Result<Vec<u8>, String> {
         let json = Json::try_new(record.clone())
-            .map_err(|err| format!("verified Nexus fee budget JSON encode failed: {err}"))?;
+            .map_err(|err| format!("verified fee sponsor vault JSON encode failed: {err}"))?;
         norito::to_bytes(&json)
-            .map_err(|err| format!("verified Nexus fee budget state encode failed: {err}"))
+            .map_err(|err| format!("verified fee sponsor vault state encode failed: {err}"))
     }
 
-    fn decode_verified_nexus_fee_budget_record_state(
+    fn decode_verified_fee_sponsor_vault_allocation_state(
         payload: &[u8],
-    ) -> Result<VerifiedNexusFeeBudgetRecord, String> {
+    ) -> Result<VerifiedFeeSponsorVaultAllocation, String> {
         let json: Json = norito::decode_from_bytes(payload)
-            .map_err(|err| format!("verified Nexus fee budget JSON decode failed: {err}"))?;
+            .map_err(|err| format!("verified fee sponsor vault JSON decode failed: {err}"))?;
         norito::json::from_slice(json.get().as_bytes())
-            .map_err(|err| format!("verified Nexus fee budget JSON materialization failed: {err}"))
+            .map_err(|err| format!("verified fee sponsor vault JSON materialization failed: {err}"))
+    }
+
+    fn fee_sponsor_vault_allocation_usage(
+        world: &impl crate::state::WorldReadOnly,
+        lease_id: &CryptoHash,
+        settled: bool,
+    ) -> Result<Quantity, String> {
+        let raw = if settled {
+            VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(lease_id)
+        } else {
+            VerifiedFeeSponsorVaultAllocation::usage_state_key_for(lease_id)
+        };
+        let key = Name::from_str(&raw)
+            .map_err(|_| "invalid verified fee sponsor allocation usage key".to_owned())?;
+        world.smart_contract_state().get(&key).map_or_else(
+            || Ok(Quantity::zero()),
+            |payload| {
+                norito::decode_from_bytes(payload).map_err(|err| {
+                    format!("verified fee sponsor allocation usage decode failed: {err}")
+                })
+            },
+        )
+    }
+
+    fn locked_fee_sponsor_vault_capacity(
+        world: &impl crate::state::WorldReadOnly,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        asset_definition_id: &AssetDefinitionId,
+        at_height: u64,
+    ) -> Result<Quantity, String> {
+        let mut locked = Quantity::zero();
+        for (key, payload) in world.smart_contract_state().iter() {
+            if !key
+                .to_string()
+                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+            {
+                continue;
+            }
+            let record = decode_verified_fee_sponsor_vault_allocation_state(payload)?;
+            if &record.program_id != program_id
+                || &record.asset_definition_id != asset_definition_id
+                || record.expires_at_height < at_height
+            {
+                continue;
+            }
+            let executed = fee_sponsor_vault_allocation_usage(world, &record.lease_id, false)?;
+            let settled = fee_sponsor_vault_allocation_usage(world, &record.lease_id, true)?;
+            let spent = core::cmp::max(executed, settled);
+            let remaining = record
+                .verified_allocation
+                .checked_sub(&spent)
+                .map_err(|_| {
+                    format!(
+                        "verified fee sponsor allocation `{}` is overspent",
+                        record.lease_id
+                    )
+                })?;
+            locked = locked.checked_add(&remaining).map_err(|_| {
+                "verified fee sponsor allocation lock arithmetic overflow".to_owned()
+            })?;
+        }
+        Ok(locked)
+    }
+
+    fn fee_sponsor_program_has_unsettled_relay_usage(
+        world: &impl crate::state::WorldReadOnly,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+    ) -> Result<bool, String> {
+        for (key, payload) in world.smart_contract_state().iter() {
+            if !key
+                .to_string()
+                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+            {
+                continue;
+            }
+            let record = decode_verified_fee_sponsor_vault_allocation_state(payload)?;
+            if &record.program_id != program_id {
+                continue;
+            }
+            let executed = fee_sponsor_vault_allocation_usage(world, &record.lease_id, false)?;
+            let settled = fee_sponsor_vault_allocation_usage(world, &record.lease_id, true)?;
+            if executed > settled {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn protected_contract_namespaces(
@@ -16816,8 +16999,8 @@ pub mod isi {
         }
     }
 
-    impl Execute for nexus::RegisterVerifiedNexusFeeBudget {
-        #[metrics(+"register_verified_nexus_fee_budget")]
+    impl Execute for nexus::RegisterVerifiedFeeSponsorVaultAllocation {
+        #[metrics(+"register_verified_fee_sponsor_vault_allocation")]
         fn execute(
             self,
             _authority: &AccountId,
@@ -16825,200 +17008,267 @@ pub mod isi {
         ) -> Result<(), Error> {
             if !state_transaction.nexus.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "verified Nexus fee budget registration requires nexus.enabled=true".into(),
+                    "verified fee sponsor vault allocation requires nexus.enabled=true".into(),
                 ));
             }
-
-            let sponsor = self.sponsor_account_id().clone();
-            if state_transaction.world.accounts.get(&sponsor).is_none() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unknown Nexus fee budget sponsor `{sponsor}`"
-                    )),
-                )
-                .into());
+            if *self.program_revision() == 0 {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation revision must be non-zero",
+                ));
             }
-
-            let fee_asset_id = self.fee_asset_id().trim().to_owned();
-            if fee_asset_id != state_transaction.nexus.fees.fee_asset_id.as_str() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "verified Nexus fee budget asset `{fee_asset_id}` does not match configured nexus.fees.fee_asset_id `{}`",
-                        state_transaction.nexus.fees.fee_asset_id
-                    )),
-                )
-                .into());
+            let program_id = self.program_id().clone();
+            let revision_key =
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), *self.program_revision());
+            let program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation references an unknown program",
+                    )
+                })?;
+            if program.lifecycle != iroha_data_model::nexus::FeeSponsorProgramLifecycle::Active
+                || program.active_revision != Some(*self.program_revision())
+                || state_transaction
+                    .world
+                    .fee_sponsor_program_revisions
+                    .get(&revision_key)
+                    .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation requires the exact active program revision",
+                ));
             }
-            let manifest_root = *self.manifest_root();
-            if manifest_root.iter().all(|byte| *byte == 0) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget manifest_root cannot be zeroed".into(),
-                    ),
-                )
-                .into());
+            let definition = state_transaction
+                .world
+                .asset_definitions
+                .get(self.asset_definition_id())
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation references an unknown fee asset",
+                    )
+                })?;
+            ensure_global_fee_sponsor_asset(definition, "verified fee sponsor vault allocation")?;
+            if self.verified_allocation().is_zero() {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation must be positive",
+                ));
+            }
+            let vault_key = iroha_data_model::nexus::FeeSponsorVaultKey {
+                program_id: program_id.clone(),
+                asset_definition_id: self.asset_definition_id().clone(),
+            };
+            let vault = state_transaction
+                .world
+                .fee_sponsor_vaults
+                .get(&vault_key)
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation references an unfunded vault",
+                    )
+                })?;
+            if *self.source_height() == 0
+                || self
+                    .source_state_root()
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+                || self.lease_id().as_ref().iter().all(|byte| *byte == 0)
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation has an invalid source height, state root, or lease id",
+                ));
+            }
+            let expected_source_state_root = fee_sponsor_vault_source_state_root(
+                &program_id,
+                *self.program_revision(),
+                self.asset_definition_id(),
+                &vault.balance,
+                *self.source_dataspace_id(),
+                *self.source_height(),
+            );
+            if *self.source_state_root() != expected_source_state_root {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation source snapshot does not match the authoritative vault",
+                ));
+            }
+            let verified_at_height = state_transaction.block_height();
+            if *self.expires_at_height() < verified_at_height {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault allocation expired at height {}",
+                    self.expires_at_height()
+                )));
+            }
+            if self.manifest_root().iter().all(|byte| *byte == 0) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation manifest root cannot be zeroed",
+                ));
             }
 
             let proof_blob = self.proof_blob().clone();
             if proof_blob.payload.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof payload is empty".into(),
-                    ),
-                )
-                .into());
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault allocation proof payload is empty",
+                ));
             }
-            let verified_at_height = state_transaction.block_height();
             if let Some(expiry_slot) = proof_blob.expiry_slot
                 && verified_at_height > expiry_slot
             {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "verified Nexus fee budget proof expired at slot {expiry_slot}"
-                    )),
-                )
-                .into());
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault allocation proof expired at slot {expiry_slot}",
+                )));
             }
-
             let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "verified Nexus fee budget proof envelope decode failed: {err}"
-                        )),
-                    )
+                    invalid_fee_sponsor_program(format!(
+                        "verified fee sponsor vault allocation proof decode failed: {err}",
+                    ))
                 })?;
-            if proof_envelope.dsid != DataSpaceId::UNIVERSAL
-                || proof_envelope.manifest_root != manifest_root
+            if proof_envelope.dsid != *self.source_dataspace_id()
+                || proof_envelope.manifest_root != *self.manifest_root()
             {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof must bind universal dataspace and declared manifest_root"
-                            .into(),
-                    ),
-                )
-                .into());
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof source dataspace or manifest root mismatch",
+                ));
             }
             if let Some(committed_amount) = proof_envelope.committed_amount {
                 let expected = self
-                    .verified_balance()
+                    .verified_allocation()
                     .as_numeric()
                     .try_mantissa_u128()
                     .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "committed Nexus fee budget amount requires a non-negative u128 mantissa"
-                                .into(),
-                        ),
-                    )
+                        invalid_fee_sponsor_program(
+                            "verified fee sponsor vault allocation is outside the u128 proof domain",
+                        )
                     })?;
-                if self.verified_balance().scale() != 0 || committed_amount != expected {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verified Nexus fee budget committed_amount mismatch".into(),
-                        ),
-                    )
-                    .into());
+                if self.verified_allocation().scale() != 0 || committed_amount != expected {
+                    return Err(invalid_fee_sponsor_program(
+                        "verified fee sponsor vault committed amount mismatch",
+                    ));
                 }
             }
 
-            let Some(binding) = proof_envelope.fastpq_binding.clone() else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof is missing fastpq_binding".into(),
-                    ),
-                )
-                .into());
+            let claim = FeeSponsorVaultAllocationClaim {
+                program_id: program_id.clone(),
+                program_revision: *self.program_revision(),
+                asset_definition_id: self.asset_definition_id().clone(),
+                verified_allocation: self.verified_allocation().clone(),
+                source_dataspace_id: *self.source_dataspace_id(),
+                source_height: *self.source_height(),
+                source_state_root: *self.source_state_root(),
+                expires_at_height: *self.expires_at_height(),
+                lease_id: *self.lease_id(),
             };
-            if binding.source_dsid != DataSpaceId::UNIVERSAL.as_u64() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof source_dsid mismatch".into(),
-                    ),
+            let binding = proof_envelope.fastpq_binding.clone().ok_or_else(|| {
+                invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof is missing fastpq_binding",
                 )
-                .into());
-            }
-            if binding.verified_effect_type != "nexus_fee_budget" {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof effect must be nexus_fee_budget".into(),
-                    ),
-                )
-                .into());
-            }
-            let expected_claim_digest =
-                nexus_fee_budget_claim_digest(&sponsor, &fee_asset_id, self.verified_balance());
-            if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof claim_digest mismatch".into(),
-                    ),
-                )
-                .into());
-            }
-            let Some(effect) = binding.effect_binding.as_ref() else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof is missing effect_binding".into(),
-                    ),
-                )
-                .into());
-            };
-            if effect.destination_account_id.as_deref() != Some(sponsor.to_string().as_str())
-                || effect.source_asset_definition_id.as_deref() != Some(fee_asset_id.as_str())
+            })?;
+            if binding.source_dsid != self.source_dataspace_id().as_u64()
+                || binding.verified_effect_type != "fee_sponsor_vault_allocation"
             {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget proof effect_binding mismatch".into(),
-                    ),
-                )
-                .into());
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof has the wrong source or effect type",
+                ));
+            }
+            let expected_claim_digest = fee_sponsor_vault_allocation_claim_digest(&claim);
+            if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof claim digest mismatch",
+                ));
+            }
+            if binding
+                .effect_binding
+                .as_ref()
+                .and_then(|effect| effect.source_asset_definition_id.as_deref())
+                != Some(self.asset_definition_id().to_string().as_str())
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "verified fee sponsor vault proof asset binding mismatch",
+                ));
             }
 
             let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
                 .map_err(|err| {
                     InstructionExecutionError::InvariantViolation(
-                        format!("verified Nexus fee budget FASTPQ verification failed: {err}")
+                        format!("verified fee sponsor vault FASTPQ verification failed: {err}",)
                             .into(),
                     )
                 })?;
-            let proof_payload_hash = CryptoHash::new(&proof_blob.payload);
-            let record = VerifiedNexusFeeBudgetRecord::new(
-                sponsor.clone(),
-                fee_asset_id.clone(),
-                self.verified_balance().clone(),
-                proof_payload_hash,
+            let record = VerifiedFeeSponsorVaultAllocation::new(
+                program_id.clone(),
+                *self.program_revision(),
+                self.asset_definition_id().clone(),
+                self.verified_allocation().clone(),
+                *self.source_dataspace_id(),
+                *self.source_height(),
+                *self.source_state_root(),
+                *self.expires_at_height(),
+                *self.lease_id(),
+                CryptoHash::new(&proof_blob.payload),
                 verified_fastpq.statement_digest,
                 verified_fastpq.proof_digest,
                 verified_at_height,
-                manifest_root,
+                *self.manifest_root(),
                 binding,
             );
-            let key = verified_nexus_fee_budget_state_key(&sponsor, &fee_asset_id)?;
-            let encoded =
-                encode_verified_nexus_fee_budget_record_state(&record).map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(err),
-                    )
-                })?;
-            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
-                let decoded =
-                    decode_verified_nexus_fee_budget_record_state(existing).map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!("stored {err}")),
-                        )
-                    })?;
-                if decoded == record {
-                    return Ok(());
+            let key = verified_fee_sponsor_vault_allocation_state_key(
+                &program_id,
+                self.asset_definition_id(),
+                self.lease_id(),
+            )?;
+            let encoded = encode_verified_fee_sponsor_vault_allocation_state(&record)
+                .map_err(invalid_fee_sponsor_program)?;
+
+            for (existing_key, payload) in state_transaction.world.smart_contract_state.iter() {
+                if !existing_key
+                    .to_string()
+                    .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+                {
+                    continue;
                 }
-                if decoded.verified_at_height >= record.verified_at_height {
+                let existing = decode_verified_fee_sponsor_vault_allocation_state(payload)
+                    .map_err(invalid_fee_sponsor_program)?;
+                if existing.lease_id == record.lease_id && existing != record {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "conflicting or stale verified Nexus fee budget already exists".into(),
+                        "fee sponsor vault spend lease id is already bound to another allocation"
+                            .into(),
                     )
                     .into());
                 }
             }
-
+            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+                let existing = decode_verified_fee_sponsor_vault_allocation_state(existing)
+                    .map_err(invalid_fee_sponsor_program)?;
+                if existing == record {
+                    return Ok(());
+                }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "conflicting verified fee sponsor vault allocation already exists".into(),
+                )
+                .into());
+            }
+            let locked = locked_fee_sponsor_vault_capacity(
+                &state_transaction.world,
+                &program_id,
+                self.asset_definition_id(),
+                verified_at_height,
+            )
+            .map_err(invalid_fee_sponsor_program)?;
+            let required = locked
+                .checked_add(self.verified_allocation())
+                .map_err(|_| {
+                    invalid_fee_sponsor_program(
+                        "verified fee sponsor vault allocation lock arithmetic overflow",
+                    )
+                })?;
+            if required > vault.balance {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault allocations exceed source capacity: requires {required}, available {}",
+                    vault.balance
+                )));
+            }
             state_transaction
                 .world
                 .smart_contract_state
@@ -17027,195 +17277,924 @@ pub mod isi {
         }
     }
 
-    fn permission_manages_fee_sponsor_policy(
-        state_transaction: &StateTransaction<'_, '_>,
-        permission: &Permission,
-        sponsor: &AccountId,
-    ) -> bool {
-        permission.name() == "CanManageFeeSponsorPolicy"
-            && crate::state::parse_permission_account_field(
-                &state_transaction.world,
-                &state_transaction.nexus.dataspace_catalog,
-                permission.payload(),
-                "sponsor",
-                state_transaction.block_unix_timestamp_ms(),
-            )
-            .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
+    fn invalid_fee_sponsor_program(message: impl Into<String>) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.into().into(),
+        ))
     }
 
-    fn can_manage_fee_sponsor_policy(
-        state_transaction: &StateTransaction<'_, '_>,
-        authority: &AccountId,
-        sponsor: &AccountId,
-    ) -> bool {
-        if authority.subject_id() == sponsor.subject_id() {
-            return true;
+    fn ensure_global_fee_sponsor_asset(
+        definition: &AssetDefinition,
+        operation: &str,
+    ) -> Result<(), Error> {
+        if definition.balance_scope_policy() == AssetBalancePolicy::Global {
+            return Ok(());
         }
 
-        if state_transaction
+        // TODO: Carry balance scope through sponsor vault keys, queue reservations, relay leases,
+        // and settlement accounting before permitting DataspaceRestricted sponsorship.
+        Err(invalid_fee_sponsor_program(format!(
+            "{operation} requires global-balance fee assets; `{}` is DataspaceRestricted",
+            definition.id()
+        )))
+    }
+
+    fn ensure_fee_sponsor_program_owner(
+        authority: &AccountId,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let delegated = state_transaction
             .world
             .account_permissions
             .get(authority)
             .is_some_and(|permissions| {
                 permissions.iter().any(|permission| {
-                    permission_manages_fee_sponsor_policy(state_transaction, permission, sponsor)
+                    CanManageFeeSponsorProgram::try_from(permission).is_ok_and(|token| {
+                        token.sponsor.subject_id() == program_id.sponsor.subject_id()
+                    })
                 })
             })
-        {
-            return true;
+            || state_transaction
+                .world
+                .account_roles_iter(authority)
+                .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+                .any(|role| {
+                    role.permissions.iter().any(|permission| {
+                        CanManageFeeSponsorProgram::try_from(permission).is_ok_and(|token| {
+                            token.sponsor.subject_id() == program_id.sponsor.subject_id()
+                        })
+                    })
+                });
+        if authority != &program_id.sponsor && !delegated {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("authority `{authority}` cannot manage fee sponsor program `{program_id}`")
+                    .into(),
+            ));
         }
-
-        state_transaction
-            .world
-            .account_roles_iter(authority)
-            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-            .any(|role| {
-                role.permissions.iter().any(|permission| {
-                    permission_manages_fee_sponsor_policy(state_transaction, permission, sponsor)
-                })
-            })
-    }
-
-    fn validate_fee_sponsor_policy(
-        policy: &iroha_data_model::nexus::FeeSponsorPolicy,
-    ) -> Result<(), Error> {
-        if policy.enabled
-            && !policy
-                .rules
-                .iter()
-                .any(|rule| rule.effect == iroha_data_model::nexus::FeeSponsorRuleEffect::Allow)
-        {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "enabled fee sponsor policy must contain at least one allow rule".into(),
-                ),
-            )
-            .into());
-        }
-
-        for (rule_index, rule) in policy.rules.iter().enumerate() {
-            for wire_id in &rule.instruction_wire_ids {
-                if wire_id.trim().is_empty() {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "fee sponsor policy rule {rule_index} contains an empty instruction wire id"
-                        )),
-                    )
-                    .into());
-                }
-            }
-            if !rule.asset_transfer_definition_ids.is_empty()
-                && (rule.executable_kinds
-                    != BTreeSet::from([
-                        iroha_data_model::nexus::FeeSponsorExecutableKind::Instructions,
-                    ])
-                    || rule.instruction_wire_ids
-                        != BTreeSet::from([
-                            iroha_data_model::isi::transfer::TransferBox::WIRE_ID.to_owned()
-                        ])
-                    || !rule.contract_selectors.is_empty())
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "fee sponsor policy rule {rule_index} asset-transfer selector requires exactly the instructions executable kind and iroha.transfer wire id with no contract selectors"
-                    )),
-                )
-                .into());
-            }
-            for (selector_index, selector) in rule.contract_selectors.iter().enumerate() {
-                if selector
-                    .entrypoints
-                    .iter()
-                    .any(|entrypoint| entrypoint.trim().is_empty())
-                {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "fee sponsor policy rule {rule_index} contract selector {selector_index} contains an empty entrypoint"
-                        )),
-                    )
-                    .into());
-                }
-            }
-        }
-
         Ok(())
     }
 
-    impl Execute for nexus::UpsertFeeSponsorPolicy {
-        #[metrics(+"upsert_fee_sponsor_policy")]
+    fn ensure_fee_sponsor_enrollment_authority(
+        authority: &AccountId,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if ensure_fee_sponsor_program_owner(authority, program_id, state_transaction).is_ok() {
+            return Ok(());
+        }
+        let allowed = state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| {
+                permissions.iter().any(|permission| {
+                    CanEnrollFeeSponsorProgram::try_from(permission)
+                        .is_ok_and(|token| &token.program_id == program_id)
+                })
+            })
+            || state_transaction
+                .world
+                .account_roles_iter(authority)
+                .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+                .any(|role| {
+                    role.permissions.iter().any(|permission| {
+                        CanEnrollFeeSponsorProgram::try_from(permission)
+                            .is_ok_and(|token| &token.program_id == program_id)
+                    })
+                });
+        if allowed {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "authority `{authority}` cannot manage enrollments for fee sponsor program `{program_id}`"
+                )
+                .into(),
+            ))
+        }
+    }
+
+    fn ensure_fee_sponsor_withdrawal_authority(
+        authority: &AccountId,
+        program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if ensure_fee_sponsor_program_owner(authority, program_id, state_transaction).is_ok() {
+            return Ok(());
+        }
+        let allowed = state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| {
+                permissions.iter().any(|permission| {
+                    CanWithdrawFeeSponsorProgram::try_from(permission)
+                        .is_ok_and(|token| &token.program_id == program_id)
+                })
+            })
+            || state_transaction
+                .world
+                .account_roles_iter(authority)
+                .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+                .any(|role| {
+                    role.permissions.iter().any(|permission| {
+                        CanWithdrawFeeSponsorProgram::try_from(permission)
+                            .is_ok_and(|token| &token.program_id == program_id)
+                    })
+                });
+        if allowed {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "authority `{authority}` cannot withdraw from fee sponsor program `{program_id}`"
+                )
+                .into(),
+            ))
+        }
+    }
+
+    fn validate_fee_sponsor_revision(
+        revision: &iroha_data_model::nexus::FeeSponsorProgramRevision,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::nexus::{FeeSponsorRuleEffect, FeeSponsorRuleSelector};
+
+        revision
+            .validate()
+            .map_err(|error| invalid_fee_sponsor_program(error.to_string()))?;
+        if revision.revision == 0 {
+            return Err(invalid_fee_sponsor_program(
+                "fee sponsor program revision must be non-zero",
+            ));
+        }
+        if revision.rules.is_empty()
+            || !revision
+                .rules
+                .iter()
+                .any(|rule| rule.effect == FeeSponsorRuleEffect::Allow)
+        {
+            return Err(invalid_fee_sponsor_program(
+                "fee sponsor program revision must contain an allow rule",
+            ));
+        }
+        let mut rule_ids = BTreeSet::new();
+        for rule in &revision.rules {
+            if !rule_ids.insert(rule.id.clone()) {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "duplicate fee sponsor rule id `{}`",
+                    rule.id
+                )));
+            }
+            if rule.selectors.is_empty() {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor rule `{}` has no selectors",
+                    rule.id
+                )));
+            }
+            for selector in &rule.selectors {
+                match selector {
+                    FeeSponsorRuleSelector::NativeInstruction(selector) => {
+                        if selector.wire_id.trim().is_empty()
+                            || !iroha_data_model::isi::registry::is_instruction_wire_id_registered(
+                                &selector.wire_id,
+                            )
+                        {
+                            return Err(invalid_fee_sponsor_program(format!(
+                                "fee sponsor rule `{}` references unknown instruction wire id `{}`",
+                                rule.id, selector.wire_id
+                            )));
+                        }
+                        if let Some(asset_definition_id) = &selector.asset_definition_id
+                            && state_transaction
+                                .world
+                                .asset_definitions
+                                .get(asset_definition_id)
+                                .is_none()
+                        {
+                            return Err(invalid_fee_sponsor_program(format!(
+                                "fee sponsor rule `{}` references unknown asset definition `{asset_definition_id}`",
+                                rule.id
+                            )));
+                        }
+                    }
+                    FeeSponsorRuleSelector::ContractCall(selector) => {
+                        if state_transaction
+                            .world
+                            .contract_instances
+                            .get(&selector.contract_address)
+                            != Some(&selector.code_hash)
+                        {
+                            return Err(invalid_fee_sponsor_program(format!(
+                                "fee sponsor rule `{}` contract selector does not match a live address/code binding",
+                                rule.id
+                            )));
+                        }
+                        if selector
+                            .entrypoints
+                            .iter()
+                            .any(|entrypoint| entrypoint.trim().is_empty())
+                        {
+                            return Err(invalid_fee_sponsor_program(format!(
+                                "fee sponsor rule `{}` contains an empty contract entrypoint",
+                                rule.id
+                            )));
+                        }
+                    }
+                    FeeSponsorRuleSelector::Ivm(_) | FeeSponsorRuleSelector::IvmProved(_) => {}
+                }
+            }
+        }
+
+        if revision.asset_budgets.is_empty() {
+            return Err(invalid_fee_sponsor_program(
+                "fee sponsor program revision must contain an asset budget",
+            ));
+        }
+        let mut previous_asset = None;
+        for budget in &revision.asset_budgets {
+            if previous_asset
+                .as_ref()
+                .is_some_and(|previous| previous >= &budget.asset_definition_id)
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor asset budgets must be uniquely sorted by asset definition",
+                ));
+            }
+            previous_asset = Some(budget.asset_definition_id.clone());
+            let definition = state_transaction
+                .world
+                .asset_definitions
+                .get(&budget.asset_definition_id)
+                .ok_or_else(|| {
+                    invalid_fee_sponsor_program(format!(
+                        "fee sponsor budget references unknown asset definition `{}`",
+                        budget.asset_definition_id
+                    ))
+                })?;
+            ensure_global_fee_sponsor_asset(definition, "fee sponsor program revision")?;
+            if budget.per_transaction.is_zero()
+                || budget.per_block.is_zero()
+                || budget.per_program_epoch.is_zero()
+                || budget.per_beneficiary_epoch.is_zero()
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor budget for `{}` contains a zero spending limit",
+                    budget.asset_definition_id
+                )));
+            }
+            if budget.per_transaction > budget.per_block
+                || budget.per_transaction > budget.per_program_epoch
+                || budget.per_transaction > budget.per_beneficiary_epoch
+                || budget.per_beneficiary_epoch > budget.per_program_epoch
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor budget limits for `{}` are internally inconsistent",
+                    budget.asset_definition_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn fee_sponsor_asset_scope(
+        definition: &AssetDefinition,
+        dataspace: iroha_data_model::nexus::DataSpaceId,
+    ) -> AssetBalanceScope {
+        match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => AssetBalanceScope::Dataspace(dataspace),
+        }
+    }
+
+    impl Execute for nexus::CreateFeeSponsorProgram {
+        #[metrics(+"create_fee_sponsor_program")]
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "fee sponsor policy management requires nexus.enabled=true".into(),
+            use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
+
+            let program = self.program().clone();
+            ensure_fee_sponsor_program_owner(authority, &program.id, state_transaction)?;
+            if state_transaction
+                .world
+                .accounts
+                .get(&program.id.sponsor)
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "unknown fee sponsor account `{}`",
+                    program.id.sponsor
+                )));
+            }
+            if program.lifecycle != FeeSponsorProgramLifecycle::Staged
+                || program.active_revision.is_some()
+                || program.staged_revision.is_some()
+                || program.scheduled_activation.is_some()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor programs must be created staged with no revisions",
                 ));
             }
-
-            let policy = self.policy().clone();
-            let sponsor = policy.id.sponsor.clone();
-            if state_transaction.world.accounts.get(&sponsor).is_none() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unknown fee sponsor policy sponsor `{sponsor}`"
-                    )),
-                )
-                .into());
-            }
-            if !can_manage_fee_sponsor_policy(state_transaction, authority, &sponsor) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "authority `{authority}` cannot manage fee sponsor policies for `{sponsor}`"
-                    )
-                    .into(),
+            if state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program.id)
+                .is_some()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program already exists or is a closed tombstone",
                 ));
             }
-            validate_fee_sponsor_policy(&policy)?;
-
             state_transaction
                 .world
-                .fee_sponsor_policies
-                .insert(policy.id.clone(), policy);
+                .fee_sponsor_programs
+                .insert(program.id.clone(), program);
             Ok(())
         }
     }
 
-    impl Execute for nexus::RemoveFeeSponsorPolicy {
-        #[metrics(+"remove_fee_sponsor_policy")]
+    impl Execute for nexus::StageFeeSponsorProgramRevision {
+        #[metrics(+"stage_fee_sponsor_program_revision")]
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "fee sponsor policy management requires nexus.enabled=true".into(),
+            use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
+
+            let revision = self.revision().clone();
+            ensure_fee_sponsor_program_owner(authority, &revision.program_id, state_transaction)?;
+            let mut program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&revision.program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if matches!(
+                program.lifecycle,
+                FeeSponsorProgramLifecycle::Closing | FeeSponsorProgramLifecycle::Closed
+            ) {
+                return Err(invalid_fee_sponsor_program(
+                    "closing or closed fee sponsor program cannot stage revisions",
                 ));
             }
+            if program.staged_revision.is_some() || program.scheduled_activation.is_some() {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program already has a staged revision",
+                ));
+            }
+            if state_transaction
+                .world
+                .fee_sponsor_program_revisions
+                .get(&FeeSponsorProgramRevisionKey::new(
+                    revision.program_id.clone(),
+                    revision.revision,
+                ))
+                .is_some()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program revision is immutable and already exists",
+                ));
+            }
+            if program
+                .active_revision
+                .is_some_and(|active| revision.revision <= active)
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "staged fee sponsor program revision must increase monotonically",
+                ));
+            }
+            validate_fee_sponsor_revision(&revision, state_transaction)?;
+            state_transaction
+                .world
+                .fee_sponsor_program_revisions
+                .insert(
+                    FeeSponsorProgramRevisionKey::new(
+                        revision.program_id.clone(),
+                        revision.revision,
+                    ),
+                    revision.clone(),
+                );
+            program.staged_revision = Some(revision.revision);
+            state_transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program.id.clone(), program);
+            Ok(())
+        }
+    }
 
-            let id = self.id().clone();
-            if state_transaction.world.accounts.get(&id.sponsor).is_none() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unknown fee sponsor policy sponsor `{}`",
-                        id.sponsor
-                    )),
+    impl Execute for nexus::ActivateFeeSponsorProgramRevision {
+        #[metrics(+"activate_fee_sponsor_program_revision")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::{
+                FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramLifecycle,
+            };
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
+            if *self.activate_at_height() < state_transaction.block_height() {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor revision activation height cannot precede executing block height {}",
+                    state_transaction.block_height()
+                )));
+            }
+            let mut program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if program.staged_revision != Some(*self.revision()) {
+                return Err(invalid_fee_sponsor_program(
+                    "requested fee sponsor revision is not staged",
+                ));
+            }
+            if matches!(
+                program.lifecycle,
+                FeeSponsorProgramLifecycle::Closing | FeeSponsorProgramLifecycle::Closed
+            ) {
+                return Err(invalid_fee_sponsor_program(
+                    "closing or closed fee sponsor program cannot activate",
+                ));
+            }
+            let revision = state_transaction
+                .world
+                .fee_sponsor_program_revisions
+                .get(&FeeSponsorProgramRevisionKey::new(
+                    program_id.clone(),
+                    *self.revision(),
+                ))
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("staged revision record is missing"))?;
+            for budget in &revision.asset_budgets {
+                let vault_key = iroha_data_model::nexus::FeeSponsorVaultKey {
+                    program_id: program_id.clone(),
+                    asset_definition_id: budget.asset_definition_id.clone(),
+                };
+                let minimum = budget
+                    .reserve_floor
+                    .checked_add(&budget.per_transaction)
+                    .map_err(|_| {
+                        invalid_fee_sponsor_program("fee sponsor readiness sum overflow")
+                    })?;
+                let balance = state_transaction
+                    .world
+                    .fee_sponsor_vaults
+                    .get(&vault_key)
+                    .map_or_else(Quantity::zero, |vault| vault.balance.clone());
+                if balance < minimum {
+                    return Err(invalid_fee_sponsor_program(format!(
+                        "fee sponsor vault `{}` requires at least {minimum} before activation; available {balance}",
+                        budget.asset_definition_id
+                    )));
+                }
+            }
+            let has_enrollment = state_transaction
+                .world
+                .fee_sponsor_enrollments
+                .iter()
+                .any(|(key, _)| key.program_id == program_id);
+            let is_route_default = state_transaction
+                .nexus
+                .dataspace_fee_sponsor_program_ids
+                .values()
+                .any(|default| default == &program_id);
+            if !has_enrollment
+                && (revision.eligibility == FeeSponsorEligibility::EnrolledOnly
+                    || !is_route_default)
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program has no eligible beneficiary or exact route-default binding",
+                ));
+            }
+            if *self.activate_at_height() == state_transaction.block_height() {
+                program.active_revision = Some(revision.revision);
+                program.staged_revision = None;
+                program.scheduled_activation = None;
+                program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            } else {
+                program.scheduled_activation = Some(FeeSponsorProgramActivation {
+                    revision: revision.revision,
+                    activate_at_height: *self.activate_at_height(),
+                });
+            }
+            state_transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id, program);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::PauseFeeSponsorProgram {
+        #[metrics(+"pause_fee_sponsor_program")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
+            let mut program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if program.lifecycle != FeeSponsorProgramLifecycle::Active {
+                return Err(invalid_fee_sponsor_program(
+                    "only an active fee sponsor program can be paused",
+                ));
+            }
+            program.lifecycle = FeeSponsorProgramLifecycle::Paused;
+            program.scheduled_activation = None;
+            state_transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id, program);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::BeginCloseFeeSponsorProgram {
+        #[metrics(+"begin_close_fee_sponsor_program")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
+            let mut program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if program.lifecycle != FeeSponsorProgramLifecycle::Paused {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program must be paused before closing",
+                ));
+            }
+            program.lifecycle = FeeSponsorProgramLifecycle::Closing;
+            program.staged_revision = None;
+            program.scheduled_activation = None;
+            state_transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id, program);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::CloseFeeSponsorProgram {
+        #[metrics(+"close_fee_sponsor_program")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
+            let mut program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if program.lifecycle != FeeSponsorProgramLifecycle::Closing {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program must be closing before final closure",
+                ));
+            }
+            if state_transaction
+                .world
+                .fee_sponsor_enrollments
+                .iter()
+                .any(|(key, _)| key.program_id == program_id)
+                || state_transaction
+                    .world
+                    .fee_sponsor_vaults
+                    .iter()
+                    .any(|(key, vault)| key.program_id == program_id && !vault.balance.is_zero())
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program cannot close until enrollments and vaults are empty",
+                ));
+            }
+            if fee_sponsor_program_has_unsettled_relay_usage(&state_transaction.world, &program_id)
+                .map_err(invalid_fee_sponsor_program)?
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program cannot close while relay receipts remain unsettled",
+                ));
+            }
+            program.lifecycle = FeeSponsorProgramLifecycle::Closed;
+            program.active_revision = None;
+            program.staged_revision = None;
+            program.scheduled_activation = None;
+            state_transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id, program);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::EnrollFeeSponsorBeneficiary {
+        #[metrics(+"enroll_fee_sponsor_beneficiary")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::{
+                FeeSponsorEnrollment, FeeSponsorEnrollmentKey, FeeSponsorProgramLifecycle,
+            };
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_enrollment_authority(authority, &program_id, state_transaction)?;
+            let program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if program.lifecycle == FeeSponsorProgramLifecycle::Closed {
+                return Err(invalid_fee_sponsor_program(
+                    "closed fee sponsor program cannot enroll beneficiaries",
+                ));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(self.beneficiary())
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "unknown fee sponsor beneficiary `{}`",
+                    self.beneficiary()
+                )));
+            }
+            let key = FeeSponsorEnrollmentKey {
+                program_id,
+                beneficiary: self.beneficiary().clone(),
+            };
+            if state_transaction
+                .world
+                .fee_sponsor_enrollments
+                .get(&key)
+                .is_none()
+            {
+                state_transaction.world.fee_sponsor_enrollments.insert(
+                    key.clone(),
+                    FeeSponsorEnrollment {
+                        key,
+                        enrolled_at_height: state_transaction.block_height(),
+                    },
+                );
+            }
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::UnenrollFeeSponsorBeneficiary {
+        #[metrics(+"unenroll_fee_sponsor_beneficiary")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_enrollment_authority(authority, &program_id, state_transaction)?;
+            if state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program("fee sponsor program not found"));
+            }
+            state_transaction.world.fee_sponsor_enrollments.remove(
+                iroha_data_model::nexus::FeeSponsorEnrollmentKey {
+                    program_id,
+                    beneficiary: self.beneficiary().clone(),
+                },
+            );
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::FundFeeSponsorProgram {
+        #[metrics(+"fund_fee_sponsor_program")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::{
+                FeeSponsorProgramLifecycle, FeeSponsorVault, FeeSponsorVaultKey,
+            };
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
+            if self.amount().is_zero() {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor vault funding amount must be positive",
+                ));
+            }
+            let program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if matches!(
+                program.lifecycle,
+                FeeSponsorProgramLifecycle::Closing | FeeSponsorProgramLifecycle::Closed
+            ) {
+                return Err(invalid_fee_sponsor_program(
+                    "closing or closed fee sponsor program cannot be funded",
+                ));
+            }
+            let definition = state_transaction
+                .world
+                .asset_definitions
+                .get(self.asset_definition_id())
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
+            ensure_global_fee_sponsor_asset(&definition, "fee sponsor vault funding")?;
+            if state_transaction
+                .world
+                .accounts
+                .get(
+                    &state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id,
                 )
-                .into());
-            }
-            if !can_manage_fee_sponsor_policy(state_transaction, authority, &id.sponsor) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "authority `{authority}` cannot manage fee sponsor policies for `{}`",
-                        id.sponsor
-                    )
-                    .into(),
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "configured sponsor vault custody account is not registered",
                 ));
             }
+            let dataspace = state_transaction
+                .current_dataspace_id
+                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+            let source = AssetId::with_scope(
+                self.asset_definition_id().clone(),
+                program_id.sponsor.clone(),
+                fee_sponsor_asset_scope(&definition, dataspace),
+            );
+            Transfer::<Asset, Quantity, Account>::asset_quantity(
+                source,
+                self.amount().clone(),
+                state_transaction
+                    .nexus
+                    .fees
+                    .sponsor_vault_custody_account_id
+                    .clone(),
+            )
+            .execute(authority, state_transaction)?;
 
-            state_transaction.world.fee_sponsor_policies.remove(id);
+            let key = FeeSponsorVaultKey {
+                program_id: program_id.clone(),
+                asset_definition_id: self.asset_definition_id().clone(),
+            };
+            let balance = state_transaction
+                .world
+                .fee_sponsor_vaults
+                .get(&key)
+                .map_or_else(Quantity::zero, |vault| vault.balance.clone())
+                .checked_add(self.amount())
+                .map_err(|_| invalid_fee_sponsor_program("fee sponsor vault balance overflow"))?;
+            state_transaction
+                .world
+                .fee_sponsor_vaults
+                .insert(key.clone(), FeeSponsorVault { key, balance });
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::WithdrawFeeSponsorProgram {
+        #[metrics(+"withdraw_fee_sponsor_program")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use iroha_data_model::nexus::{FeeSponsorProgramLifecycle, FeeSponsorVaultKey};
+
+            let program_id = self.program_id().clone();
+            ensure_fee_sponsor_withdrawal_authority(authority, &program_id, state_transaction)?;
+            if self.amount().is_zero() {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor vault withdrawal amount must be positive",
+                ));
+            }
+            let program = state_transaction
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            if !matches!(
+                program.lifecycle,
+                FeeSponsorProgramLifecycle::Paused | FeeSponsorProgramLifecycle::Closing
+            ) {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program must be paused or closing before withdrawal",
+                ));
+            }
+            if program.scheduled_activation.is_some() {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor program cannot withdraw while activation is scheduled",
+                ));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(self.destination())
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(
+                    "fee sponsor vault withdrawal destination is not registered",
+                ));
+            }
+            let definition = state_transaction
+                .world
+                .asset_definitions
+                .get(self.asset_definition_id())
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
+            let key = FeeSponsorVaultKey {
+                program_id: program_id.clone(),
+                asset_definition_id: self.asset_definition_id().clone(),
+            };
+            let mut vault = state_transaction
+                .world
+                .fee_sponsor_vaults
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault is not funded"))?;
+            let remaining = vault
+                .balance
+                .checked_sub(self.amount())
+                .map_err(|_| invalid_fee_sponsor_program("fee sponsor vault is insufficient"))?;
+            let locked = locked_fee_sponsor_vault_capacity(
+                &state_transaction.world,
+                &program_id,
+                self.asset_definition_id(),
+                state_transaction.block_height(),
+            )
+            .map_err(invalid_fee_sponsor_program)?;
+            if remaining < locked {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor vault withdrawal would consume {locked} of unexpired relay allocation capacity"
+                )));
+            }
+            vault.balance = remaining;
+            let dataspace = state_transaction
+                .current_dataspace_id
+                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+            let source = AssetId::with_scope(
+                self.asset_definition_id().clone(),
+                state_transaction
+                    .nexus
+                    .fees
+                    .sponsor_vault_custody_account_id
+                    .clone(),
+                fee_sponsor_asset_scope(&definition, dataspace),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_fee_sponsor_custody_transfer(
+                state_transaction,
+                authority,
+                source,
+                self.destination().clone(),
+                self.amount().clone(),
+            )?;
+            if vault.balance.is_zero() {
+                state_transaction.world.fee_sponsor_vaults.remove(key);
+            } else {
+                state_transaction
+                    .world
+                    .fee_sponsor_vaults
+                    .insert(key, vault);
+            }
             Ok(())
         }
     }
@@ -17934,6 +18913,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             if let Parameter::Custom(custom) = self.inner() {
+                validate_governed_pipeline_gas_parameter(custom)?;
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
                 ) {
@@ -18203,10 +19183,7 @@ pub mod isi {
             },
             events::data::{DataEvent, prelude::BridgeEvent},
             isi::{
-                Grant, Revoke, consensus_keys,
-                nexus::{
-                    RemoveFeeSponsorPolicy, SetLaneRelayEmergencyValidators, UpsertFeeSponsorPolicy,
-                },
+                Grant, Revoke, consensus_keys, nexus::SetLaneRelayEmergencyValidators,
                 verifying_keys,
             },
             metadata::Metadata,
@@ -18214,9 +19191,7 @@ pub mod isi {
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-                FeeSponsorContractSelector, FeeSponsorExecutableKind, FeeSponsorPolicy,
-                FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, LaneCatalog, LaneConfig,
-                LaneId,
+                LaneCatalog, LaneConfig, LaneId,
             },
             permission::Permission,
             proof::{
@@ -18253,6 +19228,418 @@ pub mod isi {
         fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
             KeyPair::try_random_with_algorithm(algorithm)
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
+        }
+
+        fn fee_sponsor_revision_fixture(
+            program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+            asset_definition_id: AssetDefinitionId,
+            revision: u64,
+        ) -> iroha_data_model::nexus::FeeSponsorProgramRevision {
+            use iroha_data_model::nexus::{
+                FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
+                FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
+                FeeSponsorRuleSelector,
+            };
+
+            FeeSponsorProgramRevision {
+                program_id,
+                revision,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![FeeSponsorRule {
+                    id: "allow_ivm".parse().expect("rule name"),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![FeeSponsorRuleSelector::Ivm(FeeSponsorIvmSelector {
+                        code_hash: Hash::new(b"fee-sponsor-global-scope-test"),
+                    })],
+                }],
+                asset_budgets: vec![FeeSponsorAssetBudget {
+                    asset_definition_id,
+                    per_transaction: Quantity::from(1_u32),
+                    per_block: Quantity::from(10_u32),
+                    per_program_epoch: Quantity::from(100_u32),
+                    per_beneficiary_epoch: Quantity::from(5_u32),
+                    reserve_floor: Quantity::zero(),
+                    epoch_length_blocks: NonZeroU64::new(100).expect("nonzero epoch"),
+                }],
+            }
+        }
+
+        #[test]
+        fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
+            use iroha_data_model::{
+                isi::nexus::{
+                    FundFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
+                    StageFeeSponsorProgramRevision,
+                },
+                nexus::{
+                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
+                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, ProofBlob,
+                },
+            };
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.nexus.enabled = true;
+
+            let authority = ALICE_ID.clone();
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let definition = AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name("restricted fee asset".to_owned())
+                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                .build(&authority);
+            stx.world
+                .asset_definitions
+                .insert(asset_definition_id.clone(), definition);
+
+            let program_id = FeeSponsorProgramId::new(
+                authority.clone(),
+                "restricted_asset".parse().expect("program name"),
+            );
+            let revision_one =
+                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1);
+            stx.world.fee_sponsor_program_revisions.insert(
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+                revision_one,
+            );
+            let mut program = FeeSponsorProgram::new(program_id.clone());
+            program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            program.active_revision = Some(1);
+            stx.world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+
+            let stage_error = StageFeeSponsorProgramRevision {
+                revision: fee_sponsor_revision_fixture(
+                    program_id.clone(),
+                    asset_definition_id.clone(),
+                    2,
+                ),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("restricted fee asset revision must fail");
+            assert!(stage_error.to_string().contains("requires global-balance"));
+            assert!(
+                stx.world
+                    .fee_sponsor_program_revisions
+                    .get(&FeeSponsorProgramRevisionKey::new(program_id.clone(), 2))
+                    .is_none()
+            );
+
+            let fund_error = FundFeeSponsorProgram {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                amount: Quantity::from(1_u32),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("restricted fee asset funding must fail");
+            assert!(fund_error.to_string().contains("requires global-balance"));
+
+            let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
+                program_id,
+                program_revision: 1,
+                asset_definition_id,
+                verified_allocation: Quantity::from(1_u32),
+                source_dataspace_id: DataSpaceId::new(1),
+                source_height: 1,
+                source_state_root: Hash::new(b"source-state-root"),
+                expires_at_height: 10,
+                lease_id: Hash::new(b"restricted-fee-asset-lease"),
+                manifest_root: [1; 32],
+                proof_blob: ProofBlob {
+                    payload: vec![1],
+                    expiry_slot: None,
+                },
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("restricted fee asset allocation must fail");
+            assert!(
+                allocation_error
+                    .to_string()
+                    .contains("requires global-balance")
+            );
+        }
+
+        #[test]
+        fn set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate() {
+            use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let parameter_id = CustomParameterId(
+                "ivm_gas_units_per_gas"
+                    .parse()
+                    .expect("gas rate parameter id"),
+            );
+
+            let invalid_payloads = [
+                (
+                    "invalid twap",
+                    Json::from(norito::json!([{
+                        "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                        "units_per_gas": 1,
+                        "twap_local_per_xor": "not-a-number",
+                        "liquidity_profile": "tier1",
+                        "volatility_class": "stable"
+                    }])),
+                    "invalid ivm_gas_units_per_gas twap",
+                ),
+                (
+                    "noncanonical asset",
+                    Json::from(norito::json!([{
+                        "asset": " 66owaQmAQMuHxPzxUN3bqZ6FJfDa ",
+                        "units_per_gas": 1,
+                        "twap_local_per_xor": "1",
+                        "liquidity_profile": "tier1",
+                        "volatility_class": "stable"
+                    }])),
+                    "not a canonical asset definition address",
+                ),
+                (
+                    "duplicate asset",
+                    Json::from(norito::json!([
+                        {
+                            "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                            "units_per_gas": 1,
+                            "twap_local_per_xor": "1",
+                            "liquidity_profile": "tier1",
+                            "volatility_class": "stable"
+                        },
+                        {
+                            "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                            "units_per_gas": 2,
+                            "twap_local_per_xor": "1",
+                            "liquidity_profile": "tier2",
+                            "volatility_class": "elevated"
+                        }
+                    ])),
+                    "duplicate asset",
+                ),
+            ];
+
+            for (label, payload, expected) in invalid_payloads {
+                let error = SetParameter::new(Parameter::Custom(CustomParameter::new(
+                    parameter_id.clone(),
+                    payload,
+                )))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(label);
+                assert!(
+                    error.to_string().contains(expected),
+                    "unexpected {label} error: {error}"
+                );
+                assert!(
+                    stx.world
+                        .parameters
+                        .get()
+                        .custom()
+                        .get(&parameter_id)
+                        .is_none()
+                );
+            }
+
+            let zero_rate = CustomParameter::new(
+                parameter_id.clone(),
+                Json::from(norito::json!([{
+                    "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                    "units_per_gas": 0,
+                    "twap_local_per_xor": "1",
+                    "liquidity_profile": "tier1",
+                    "volatility_class": "stable"
+                }])),
+            );
+            SetParameter::new(Parameter::Custom(zero_rate.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("zero rate remains valid for Nexus-settled signature-bound gas");
+            assert_eq!(
+                stx.world.parameters.get().custom().get(&parameter_id),
+                Some(&zero_rate)
+            );
+        }
+
+        fn fee_sponsor_relay_allocation_fixture(
+            program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+            asset_definition_id: AssetDefinitionId,
+            allocation: Quantity,
+            dataspace_id: DataSpaceId,
+            lease_id: Hash,
+            expires_at_height: u64,
+        ) -> VerifiedFeeSponsorVaultAllocation {
+            VerifiedFeeSponsorVaultAllocation::new(
+                program_id,
+                1,
+                asset_definition_id,
+                allocation,
+                dataspace_id,
+                1,
+                Hash::new(b"fee-sponsor-source-state"),
+                expires_at_height,
+                lease_id,
+                Hash::new(b"fee-sponsor-proof-payload"),
+                *Hash::new(b"fee-sponsor-statement").as_ref(),
+                Hash::new(b"fee-sponsor-proof"),
+                1,
+                *Hash::new(b"fee-sponsor-manifest").as_ref(),
+                iroha_data_model::nexus::AxtFastpqBinding {
+                    parameter: "fastpq-lane-balanced".to_owned(),
+                    source_dsid: dataspace_id.as_u64(),
+                    source_dataspace: format!("dataspace-{}", dataspace_id.as_u64()),
+                    source_receipt_id: "fee-sponsor-allocation".to_owned(),
+                    source_tx_commitment: "aa".repeat(32),
+                    claim_type: "authorization".to_owned(),
+                    claim_digest: "bb".repeat(32),
+                    witness_commitment: "cc".repeat(32),
+                    policy_commitment: "dd".repeat(32),
+                    verified_effect_type: "fee_sponsor_vault_allocation".to_owned(),
+                    corridor: "fee-sponsor".to_owned(),
+                    verifier_id: "fastpq".to_owned(),
+                    verifier_version: "v1".to_owned(),
+                    target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+                    effect_binding: None,
+                },
+            )
+        }
+
+        fn insert_fee_sponsor_relay_allocation(
+            world: &mut World,
+            record: &VerifiedFeeSponsorVaultAllocation,
+        ) {
+            let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+                &record.program_id,
+                &record.asset_definition_id,
+                &record.lease_id,
+            )
+            .parse()
+            .expect("fee sponsor allocation state key");
+            let json = Json::try_new(record.clone()).expect("fee sponsor allocation JSON");
+            world.smart_contract_state.insert(
+                key,
+                norito::to_bytes(&json).expect("fee sponsor allocation state"),
+            );
+        }
+
+        #[test]
+        fn fee_sponsor_relay_locks_partition_one_vault_without_overlap() {
+            let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+                AccountId::new(checked_keypair().public_key().clone()),
+                "relay-lock".parse().expect("program name"),
+            );
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let first_lease = Hash::new(b"fee-sponsor-first-dataspace");
+            let second_lease = Hash::new(b"fee-sponsor-second-dataspace");
+            let mut world = World::default();
+            for record in [
+                fee_sponsor_relay_allocation_fixture(
+                    program_id.clone(),
+                    asset_definition_id.clone(),
+                    Quantity::from(6_u32),
+                    DataSpaceId::new(1),
+                    first_lease,
+                    10,
+                ),
+                fee_sponsor_relay_allocation_fixture(
+                    program_id.clone(),
+                    asset_definition_id.clone(),
+                    Quantity::from(4_u32),
+                    DataSpaceId::new(2),
+                    second_lease,
+                    10,
+                ),
+            ] {
+                insert_fee_sponsor_relay_allocation(&mut world, &record);
+            }
+            let usage_key: Name =
+                VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&first_lease)
+                    .parse()
+                    .expect("fee sponsor usage key");
+            world.smart_contract_state.insert(
+                usage_key,
+                norito::to_bytes(&Quantity::from(2_u32)).expect("fee sponsor usage"),
+            );
+            let world = world.block();
+
+            assert_eq!(
+                locked_fee_sponsor_vault_capacity(&world, &program_id, &asset_definition_id, 5,)
+                    .expect("locked capacity"),
+                Quantity::from(8_u32),
+                "live leases across two dataspaces lock only their aggregate remainder"
+            );
+            assert_eq!(
+                locked_fee_sponsor_vault_capacity(&world, &program_id, &asset_definition_id, 11,)
+                    .expect("expired capacity"),
+                Quantity::zero(),
+                "expired leases release their unspent remainder before refresh"
+            );
+        }
+
+        #[test]
+        fn fee_sponsor_close_detects_unsettled_relay_usage() {
+            let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+                AccountId::new(checked_keypair().public_key().clone()),
+                "relay-close".parse().expect("program name"),
+            );
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let lease_id = Hash::new(b"fee-sponsor-unsettled-lease");
+            let record = fee_sponsor_relay_allocation_fixture(
+                program_id.clone(),
+                asset_definition_id,
+                Quantity::from(5_u32),
+                DataSpaceId::new(1),
+                lease_id,
+                10,
+            );
+            let mut world = World::default();
+            insert_fee_sponsor_relay_allocation(&mut world, &record);
+            for (settled, amount) in [(false, 3_u32), (true, 2_u32)] {
+                let key: Name = if settled {
+                    VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(&lease_id)
+                } else {
+                    VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&lease_id)
+                }
+                .parse()
+                .expect("fee sponsor usage key");
+                world.smart_contract_state.insert(
+                    key,
+                    norito::to_bytes(&Quantity::from(amount)).expect("fee sponsor usage"),
+                );
+            }
+            let world = world.block();
+
+            assert!(
+                fee_sponsor_program_has_unsettled_relay_usage(&world, &program_id)
+                    .expect("unsettled relay usage")
+            );
         }
 
         fn canonical_test_sccp_payload_bytes(payload: &iroha_sccp::SccpPayloadV1) -> Vec<u8> {
@@ -23276,6 +24663,7 @@ seiyaku GovernanceLifecycle {
             let transaction = TransactionBuilder::new(
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
                 ALICE_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
@@ -23398,22 +24786,6 @@ seiyaku GovernanceLifecycle {
             Register::account(new_account_in_domain(account_id))
                 .execute(&ALICE_ID, stx)
                 .expect("register wonderland account");
-        }
-
-        fn fee_sponsor_policy_id(sponsor: &AccountId, name: &str) -> FeeSponsorPolicyId {
-            FeeSponsorPolicyId::new(
-                sponsor.clone(),
-                Name::from_str(name).expect("static fee sponsor policy name"),
-            )
-        }
-
-        fn allow_all_fee_sponsor_policy(sponsor: &AccountId, name: &str) -> FeeSponsorPolicy {
-            let mut policy = FeeSponsorPolicy::new(fee_sponsor_policy_id(sponsor, name));
-            policy.enabled = true;
-            policy
-                .rules
-                .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
-            policy
         }
 
         fn restricted_shield_fixture(
@@ -27715,312 +29087,6 @@ seiyaku GovernanceLifecycle {
                 .account_roles_iter(&ALICE_ID)
                 .any(|rid| rid == &role_id);
             assert!(has_role, "owner must be auto‑granted the new role");
-        }
-
-        #[test]
-        fn fee_sponsor_policy_management_and_queries_are_sponsor_scoped() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
-
-            let (sponsor_id, _) = gen_account_in("wonderland");
-            let (other_sponsor_id, _) = gen_account_in("wonderland");
-            let (delegate_id, _) = gen_account_in("wonderland");
-            let (role_delegate_id, _) = gen_account_in("wonderland");
-            let (outsider_id, _) = gen_account_in("wonderland");
-            for account_id in [
-                &sponsor_id,
-                &other_sponsor_id,
-                &delegate_id,
-                &role_delegate_id,
-                &outsider_id,
-            ] {
-                register_wonderland_account(&mut stx, account_id);
-            }
-
-            let default_policy = allow_all_fee_sponsor_policy(&sponsor_id, "default");
-            let default_policy_id = default_policy.id.clone();
-            let err = UpsertFeeSponsorPolicy {
-                policy: default_policy.clone(),
-            }
-            .execute(&outsider_id, &mut stx)
-            .expect_err("unprivileged account must not manage sponsor policies");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("cannot manage fee sponsor policies"),
-                "unexpected outsider error: {msg}"
-            );
-
-            UpsertFeeSponsorPolicy {
-                policy: default_policy.clone(),
-            }
-            .execute(&sponsor_id, &mut stx)
-            .expect("sponsor may manage its own policy");
-
-            let manage_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanManageFeeSponsorPolicy {
-                    sponsor: sponsor_id.clone(),
-                }
-                .into();
-            Grant::account_permission(manage_permission.clone(), delegate_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant direct fee sponsor policy management permission");
-
-            let mut transfer_policy = allow_all_fee_sponsor_policy(&sponsor_id, "native_transfers");
-            transfer_policy.rules[0]
-                .executable_kinds
-                .insert(FeeSponsorExecutableKind::Instructions);
-            transfer_policy.rules[0]
-                .instruction_wire_ids
-                .insert("Transfer".to_owned());
-            UpsertFeeSponsorPolicy {
-                policy: transfer_policy.clone(),
-            }
-            .execute(&delegate_id, &mut stx)
-            .expect("directly delegated account may manage sponsor policy");
-
-            let role_id: RoleId = "FEE_POLICY_OPS".parse().expect("role id");
-            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register fee policy ops role");
-            Grant::role_permission(manage_permission, role_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant role fee sponsor policy management permission");
-            Grant::account_role(role_id, role_delegate_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant role to delegated manager");
-
-            let role_policy = allow_all_fee_sponsor_policy(&sponsor_id, "role_managed");
-            UpsertFeeSponsorPolicy {
-                policy: role_policy.clone(),
-            }
-            .execute(&role_delegate_id, &mut stx)
-            .expect("role-delegated account may manage sponsor policy");
-
-            let other_policy = allow_all_fee_sponsor_policy(&other_sponsor_id, "default");
-            UpsertFeeSponsorPolicy {
-                policy: other_policy.clone(),
-            }
-            .execute(&other_sponsor_id, &mut stx)
-            .expect("other sponsor may manage its own policy");
-
-            let by_id_query = iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyById {
-                id: default_policy_id.clone(),
-            };
-            let found = crate::smartcontracts::ValidSingularQuery::execute(&by_id_query, &stx)
-                .expect("find fee sponsor policy by id");
-            assert_eq!(found, default_policy);
-
-            let policy_ids = crate::smartcontracts::ValidQuery::execute(
-                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds,
-                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicyId>::PASS,
-                &stx,
-            )
-            .expect("find fee sponsor policy ids")
-            .collect::<BTreeSet<_>>();
-            assert_eq!(
-                policy_ids,
-                BTreeSet::from([
-                    default_policy_id.clone(),
-                    fee_sponsor_policy_id(&sponsor_id, "native_transfers"),
-                    fee_sponsor_policy_id(&sponsor_id, "role_managed"),
-                    other_policy.id.clone(),
-                ])
-            );
-
-            let sponsor_policy_ids = crate::smartcontracts::ValidQuery::execute(
-                iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor {
-                    sponsor: sponsor_id.clone(),
-                },
-                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicy>::PASS,
-                &stx,
-            )
-            .expect("find fee sponsor policies by sponsor")
-            .map(|policy| policy.id)
-            .collect::<BTreeSet<_>>();
-            assert_eq!(
-                sponsor_policy_ids,
-                BTreeSet::from([default_policy_id, transfer_policy.id, role_policy.id,])
-            );
-
-            let all_policy_count = crate::smartcontracts::ValidQuery::execute(
-                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies,
-                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicy>::PASS,
-                &stx,
-            )
-            .expect("find fee sponsor policies")
-            .count();
-            assert_eq!(all_policy_count, 4);
-        }
-
-        #[test]
-        fn fee_sponsor_policy_upsert_rejects_invalid_policy_shapes() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = false;
-
-            let (sponsor_id, _) = gen_account_in("wonderland");
-            register_wonderland_account(&mut stx, &sponsor_id);
-
-            let disabled_err = UpsertFeeSponsorPolicy {
-                policy: allow_all_fee_sponsor_policy(&sponsor_id, "disabled_config"),
-            }
-            .execute(&sponsor_id, &mut stx)
-            .expect_err("nexus-disabled policy management must fail");
-            let disabled_msg = smart_contract_instruction_error_message(disabled_err);
-            assert!(
-                disabled_msg.contains("requires nexus.enabled=true"),
-                "unexpected nexus-disabled error: {disabled_msg}"
-            );
-            stx.nexus.enabled = true;
-
-            let mut no_allow =
-                FeeSponsorPolicy::new(fee_sponsor_policy_id(&sponsor_id, "no_allow"));
-            no_allow.enabled = true;
-            no_allow
-                .rules
-                .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Deny));
-
-            let mut empty_wire_id = allow_all_fee_sponsor_policy(&sponsor_id, "empty_wire_id");
-            empty_wire_id.rules[0]
-                .instruction_wire_ids
-                .insert(" ".to_owned());
-
-            let mut empty_entrypoint =
-                allow_all_fee_sponsor_policy(&sponsor_id, "empty_entrypoint");
-            let mut selector = FeeSponsorContractSelector::default();
-            selector.entrypoints.insert(String::new());
-            empty_entrypoint.rules[0].contract_selectors.push(selector);
-
-            let mut malformed_asset_transfer_selector =
-                allow_all_fee_sponsor_policy(&sponsor_id, "malformed_asset_selector");
-            malformed_asset_transfer_selector.rules[0]
-                .asset_transfer_definition_ids
-                .insert(AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").expect("fixture domain"),
-                    "pkr".parse().expect("fixture asset name"),
-                ));
-
-            let (unknown_sponsor_id, _) = gen_account_in("wonderland");
-            let unknown_sponsor_policy =
-                allow_all_fee_sponsor_policy(&unknown_sponsor_id, "unknown_sponsor");
-
-            for (policy, expected) in [
-                (no_allow, "must contain at least one allow rule"),
-                (empty_wire_id, "empty instruction wire id"),
-                (empty_entrypoint, "empty entrypoint"),
-                (
-                    malformed_asset_transfer_selector,
-                    "asset-transfer selector requires exactly the instructions executable kind and iroha.transfer wire id",
-                ),
-                (unknown_sponsor_policy, "unknown fee sponsor policy sponsor"),
-            ] {
-                let err = UpsertFeeSponsorPolicy { policy }
-                    .execute(&sponsor_id, &mut stx)
-                    .expect_err("invalid fee sponsor policy must fail");
-                let msg = smart_contract_instruction_error_message(err);
-                assert!(
-                    msg.contains(expected),
-                    "expected `{expected}` in invalid policy error, got: {msg}"
-                );
-            }
-
-            assert!(
-                stx.world.fee_sponsor_policies.is_empty(),
-                "rejected policies must not be persisted"
-            );
-
-            let mut exact_asset_transfer =
-                allow_all_fee_sponsor_policy(&sponsor_id, "exact_asset_transfer");
-            exact_asset_transfer.rules[0].executable_kinds =
-                BTreeSet::from([FeeSponsorExecutableKind::Instructions]);
-            exact_asset_transfer.rules[0].instruction_wire_ids =
-                BTreeSet::from([iroha_data_model::isi::transfer::TransferBox::WIRE_ID.to_owned()]);
-            exact_asset_transfer.rules[0]
-                .asset_transfer_definition_ids
-                .insert(AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").expect("fixture domain"),
-                    "pkr".parse().expect("fixture asset name"),
-                ));
-            let exact_id = exact_asset_transfer.id.clone();
-            UpsertFeeSponsorPolicy {
-                policy: exact_asset_transfer,
-            }
-            .execute(&sponsor_id, &mut stx)
-            .expect("an exact native asset-transfer selector must be accepted");
-            assert!(stx.world.fee_sponsor_policies.get(&exact_id).is_some());
-        }
-
-        #[test]
-        fn fee_sponsor_policy_remove_requires_management_authority() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
-
-            let (sponsor_id, _) = gen_account_in("wonderland");
-            let (delegate_id, _) = gen_account_in("wonderland");
-            let (outsider_id, _) = gen_account_in("wonderland");
-            for account_id in [&sponsor_id, &delegate_id, &outsider_id] {
-                register_wonderland_account(&mut stx, account_id);
-            }
-
-            let policy = allow_all_fee_sponsor_policy(&sponsor_id, "removable");
-            let policy_id = policy.id.clone();
-            UpsertFeeSponsorPolicy { policy }
-                .execute(&sponsor_id, &mut stx)
-                .expect("sponsor may upsert removable policy");
-
-            let err = RemoveFeeSponsorPolicy {
-                id: policy_id.clone(),
-            }
-            .execute(&outsider_id, &mut stx)
-            .expect_err("outsider must not remove sponsor policy");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("cannot manage fee sponsor policies"),
-                "unexpected remove authorization error: {msg}"
-            );
-            assert!(
-                stx.world.fee_sponsor_policies.get(&policy_id).is_some(),
-                "unauthorized removal must leave policy intact"
-            );
-
-            let manage_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanManageFeeSponsorPolicy {
-                    sponsor: sponsor_id.clone(),
-                }
-                .into();
-            Grant::account_permission(manage_permission, delegate_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant direct fee sponsor policy management permission");
-
-            RemoveFeeSponsorPolicy {
-                id: policy_id.clone(),
-            }
-            .execute(&delegate_id, &mut stx)
-            .expect("delegated account may remove sponsor policy");
-            assert!(
-                stx.world.fee_sponsor_policies.get(&policy_id).is_none(),
-                "authorized removal must delete policy"
-            );
         }
 
         #[test]
@@ -37546,16 +38612,16 @@ seiyaku GovernanceLifecycle {
             }
         }
 
-        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies {
-            #[metrics(+"find_fee_sponsor_policies")]
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms {
+            #[metrics(+"find_fee_sponsor_programs")]
             fn execute(
                 self,
-                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicy>,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorProgram>,
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = Self::Item>, Error> {
                 Ok(state_ro
                     .world()
-                    .fee_sponsor_policies()
+                    .fee_sponsor_programs()
                     .iter()
                     .map(|(_, policy)| policy)
                     .filter(move |policy| filter.applies(policy))
@@ -37563,16 +38629,16 @@ seiyaku GovernanceLifecycle {
             }
         }
 
-        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds {
-            #[metrics(+"find_fee_sponsor_policy_ids")]
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds {
+            #[metrics(+"find_fee_sponsor_program_ids")]
             fn execute(
                 self,
-                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicyId>,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorProgramId>,
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = Self::Item>, Error> {
                 Ok(state_ro
                     .world()
-                    .fee_sponsor_policies()
+                    .fee_sponsor_programs()
                     .iter()
                     .map(|(id, _)| id)
                     .filter(move |id| filter.applies(id))
@@ -37580,17 +38646,17 @@ seiyaku GovernanceLifecycle {
             }
         }
 
-        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor {
-            #[metrics(+"find_fee_sponsor_policies_by_sponsor")]
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor {
+            #[metrics(+"find_fee_sponsor_programs_by_sponsor")]
             fn execute(
                 self,
-                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicy>,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorProgram>,
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = Self::Item>, Error> {
                 let sponsor = self.sponsor;
                 Ok(state_ro
                     .world()
-                    .fee_sponsor_policies()
+                    .fee_sponsor_programs()
                     .iter()
                     .filter(move |(id, _)| id.sponsor == sponsor)
                     .map(|(_, policy)| policy)
@@ -37599,18 +38665,18 @@ seiyaku GovernanceLifecycle {
             }
         }
 
-        impl ValidSingularQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyById {
-            #[metrics(+"find_fee_sponsor_policy_by_id")]
+        impl ValidSingularQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramById {
+            #[metrics(+"find_fee_sponsor_program_by_id")]
             fn execute(
                 &self,
                 state_ro: &impl StateReadOnly,
-            ) -> Result<iroha_data_model::nexus::FeeSponsorPolicy, Error> {
+            ) -> Result<iroha_data_model::nexus::FeeSponsorProgram, Error> {
                 state_ro
                     .world()
-                    .fee_sponsor_policies()
+                    .fee_sponsor_programs()
                     .get(&self.id)
                     .cloned()
-                    .ok_or_else(|| Error::Conversion("FeeSponsorPolicy not found".to_string()))
+                    .ok_or_else(|| Error::Conversion("FeeSponsorProgram not found".to_string()))
             }
         }
 

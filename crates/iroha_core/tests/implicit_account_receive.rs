@@ -124,13 +124,17 @@ fn transfer_to_missing_account_creates_account_by_default() {
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            10_u32,
-            dest.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        10_u32,
+        dest.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
@@ -173,13 +177,17 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            10_u32,
-            dest.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        10_u32,
+        dest.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
@@ -214,12 +222,16 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([
-            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest.clone()),
-            Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest.clone()),
-        ])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest.clone()),
+        Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest.clone()),
+    ])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
@@ -248,12 +260,16 @@ fn transaction_quota_limits_implicit_accounts() {
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([
-            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
-            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest2.clone()),
-        ])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
+        Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest2.clone()),
+    ])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_100_000));
@@ -299,22 +315,30 @@ fn block_quota_limits_creations_across_transactions() {
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
-    let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            10_u32,
-            dest1.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        10_u32,
+        dest1.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
 
-    let tx2 = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            3_u32,
-            dest2.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        3_u32,
+        dest2.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
 
     let mut state_block = state.block(block_header(1, 1_700_000_200_000));
@@ -360,13 +384,17 @@ fn missing_default_role_rejects_in_pipeline() {
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(11);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            5_u32,
-            dest.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        5_u32,
+        dest.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_400_000));
@@ -403,13 +431,17 @@ fn implicit_account_can_spend_without_roles() {
     let chain_id = state.chain_id.clone();
     let (bob_id, bob_kp) = seeded_account(5);
 
-    let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            7_u32,
-            bob_id.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        7_u32,
+        bob_id.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
 
     let mut block1 = state.block(block_header(1, 1_700_000_500_000));
@@ -422,13 +454,17 @@ fn implicit_account_can_spend_without_roles() {
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(7_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(13_u32));
 
-    let tx2 = TransactionBuilder::new(chain_id, bob_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            bob_asset_id.clone(),
-            5_u32,
-            alice_id.clone(),
-        )])
-        .sign(bob_kp.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id,
+        bob_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        bob_asset_id.clone(),
+        5_u32,
+        alice_id.clone(),
+    )])
+    .sign(bob_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
 
     let mut block2 = state.block(block_header(2, 1_700_000_600_000));
@@ -452,12 +488,16 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([
-            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
-            Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest2.clone()),
-        ])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
+        Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest2.clone()),
+    ])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
@@ -502,12 +542,16 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
-    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([
-            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest1.clone()),
-            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest2.clone()),
-        ])
-        .sign(alice_kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest1.clone()),
+        Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest2.clone()),
+    ])
+    .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
 
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));

@@ -881,12 +881,21 @@ fn alias_paths() -> Map {
         Value::Object(retail_recipient_route_operation()),
     );
     paths.insert(
-        "/v1/fee-sponsor-policies/by-id".to_owned(),
-        Value::Object(fee_sponsor_policy_by_id_operation()),
-    );
-    paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
         Value::Object(asset_alias_resolve_operation()),
+    );
+    paths
+}
+
+fn fee_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/fees/quote".to_owned(),
+        Value::Object(fee_quote_operation()),
+    );
+    paths.insert(
+        "/v1/fee-sponsor-programs/by-id".to_owned(),
+        Value::Object(fee_sponsor_program_by_id_operation()),
     );
     paths
 }
@@ -1190,7 +1199,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-20 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-21 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
                 .to_owned(),
         ),
     );
@@ -2978,7 +2987,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Assets",
             "Prepare or submit one numeric asset transfer.",
-            "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
+            "Prepare a strictly bound, versioned detached-signature scaffold with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
             "#/components/schemas/AssetTransferRequest",
             "#/components/schemas/AssetTransferResponse",
             Vec::new(),
@@ -2989,8 +2998,8 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Call a deployed contract.",
-            "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
-            "#/components/schemas/JsonValue",
+            "Prepare or submit a contract entrypoint by canonical address or on-chain alias. Requests carry a typed fee_payment intent; retired fee_sponsor, gas_asset_id, and metadata gas_limit fields are rejected. SDK clients quote the exact prepared payload before signing.",
+            "#/components/schemas/ContractCallRequest",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3000,8 +3009,8 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Simulate a deployed contract call.",
-            "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
-            "#/components/schemas/JsonValue",
+            "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics. Simulation accepts only an execution gas_limit and never selects a fee payer.",
+            "#/components/schemas/ContractCallSimulateRequest",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -9792,6 +9801,7 @@ fn kaigi_relays_events_responses() -> Map {
 
 fn paths_section() -> Map {
     let mut paths = alias_paths();
+    paths.extend(fee_paths());
     paths.extend(time_paths());
     paths.extend(ledger_paths());
     paths.extend(da_paths());
@@ -9975,7 +9985,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/aliases/resolve-index"
                     | "/v1/retail/recipients/lookup"
                     | "/v1/retail/recipients/route"
-                    | "/v1/fee-sponsor-policies/by-id"
+                    | "/v1/fee-sponsor-programs/by-id"
+                    | "/v1/fees/quote"
                     | "/v1/assets/aliases/resolve"
                     | "/v1/assets/definitions/query"
                     | "/v1/assets/holders/query"
@@ -10705,7 +10716,7 @@ fn retail_recipient_route_operation() -> Map {
     methods
 }
 
-fn fee_sponsor_policy_by_id_operation() -> Map {
+fn fee_sponsor_program_by_id_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -10713,19 +10724,19 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Read one exact configured fee sponsor policy.".to_owned()),
+        Value::String("Read one exact on-chain fee sponsor program.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Signed lookup for an exact on-chain policy selected by dataspace fee-sponsor \
-             configuration. Unconfigured policies are not disclosed and enumeration is unsupported."
+            "Account-signed lookup for one canonical sponsor/program identifier. The response \
+             exposes the program lifecycle and revision pointers without compatibility policy fields."
                 .to_owned(),
         ),
     );
     operation.insert(
         "operationId".into(),
-        Value::String("feeSponsorPolicyById".to_owned()),
+        Value::String("feeSponsorProgramById".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -10734,16 +10745,16 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
     operation.insert(
         "requestBody".into(),
         Value::Object(json_request_body(
-            "#/components/schemas/FeeSponsorPolicyByIdRequest",
+            "#/components/schemas/FeeSponsorProgramByIdRequest",
         )),
     );
-    let mut responses = single_json_response("#/components/schemas/FeeSponsorPolicy");
+    let mut responses = single_json_response("#/components/schemas/FeeSponsorProgram");
     for (status, description) in [
-        ("400", "Malformed or noncanonical policy identifier."),
         (
-            "404",
-            "The policy is absent or not selected by dataspace configuration.",
+            "400",
+            "Malformed or noncanonical sponsor-program identifier.",
         ),
+        ("404", "The exact sponsor program is absent."),
     ] {
         responses.insert(
             status.to_owned(),
@@ -10754,8 +10765,73 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
         "401".to_owned(),
         canonical_request_auth_required_response(
             "Canonical request signing is required.",
-            "fee_sponsor_policy_signature_required",
-            "Stable code returned when canonical request authentication is required for an exact fee-sponsor policy lookup.",
+            "fee_sponsor_program_signature_required",
+            "Stable code returned when canonical request authentication is required for an exact sponsor-program lookup.",
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn fee_quote_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Quote an unsigned transaction's exact fee intent.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Evaluates the exact unsigned TransactionPayload at a committed ledger observation. \
+             Empty or stale charge limits are replaced by Core's deterministic fixed-point limits; \
+             payer selection, sponsor program, revision, and gas bound are preserved. The returned \
+             intent must be inserted into the otherwise unchanged payload before signing."
+                .to_owned(),
+        ),
+    );
+    operation.insert("operationId".into(), Value::String("quoteFees".to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/FeeQuoteRequest")),
+    );
+    let mut responses = single_json_response("#/components/schemas/FeeQuoteResponse");
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed or noncanonical payload; details.fee contains invalid_fee_intent.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        canonical_request_auth_required_response(
+            "Canonical request signing is required.",
+            "fee_quote_signature_required",
+            "Stable code returned when canonical request authentication is required for fee quoting.",
+        ),
+    );
+    responses.insert(
+        "422".to_owned(),
+        json_response(
+            "The payload or selected payer is not admissible; details.fee contains the stable rejection.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "The node's authoritative fee configuration cannot produce a quote.",
+            error_schema_reference(),
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -11892,7 +11968,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "state_boundary": { "$ref": "#/components/schemas/OfflineRecursiveStateBoundary" },
                     "proof": { "$ref": "#/components/schemas/OfflineOpaqueProof" }
                 },
-                "description": "Authenticated ABI-20/V4 Eq/Ep proof-pair envelope."
+                "description": "Authenticated ABI-21/V4 Eq/Ep proof-pair envelope."
             }),
         ),
         (
@@ -11909,7 +11985,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                         "items": { "type": "integer", "format": "uint32", "minimum": 0 }
                     }
                 },
-                "description": "Exact canonical ABI-20 operation row independently carried by the bundle."
+                "description": "Exact canonical ABI-21 operation row independently carried by the bundle."
             }),
         ),
         (
@@ -14082,10 +14158,11 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
         "SccpBridgeProofPrepareRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["authority", "destination_proof_b64"],
+            "required": ["authority", "fee_payment", "destination_proof_b64"],
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "signature_b64": {
                     "type": "null",
                     "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null."
@@ -14111,12 +14188,13 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "authority", "signature_b64", "transaction_payload_b64",
+                "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
                 "destination_proof_b64", "creation_time_ms"
             ],
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "signature_b64": {
                     "$ref": "#/components/schemas/SccpCanonicalBase64",
                     "maxLength": 21848,
@@ -14147,17 +14225,18 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
                 { "$ref": "#/components/schemas/SccpBridgeProofPrepareRequest" },
                 { "$ref": "#/components/schemas/SccpBridgeProofSignedRequest" }
             ],
-            "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp."
+            "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp."
         }),
     );
     schemas.insert(
         "SccpBridgeMessagePrepareRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["authority", "native_proof_b64"],
+            "required": ["authority", "fee_payment", "native_proof_b64"],
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "signature_b64": {
                     "type": "null",
                     "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null."
@@ -14183,12 +14262,13 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "authority", "signature_b64", "transaction_payload_b64", "native_proof_b64",
+                "authority", "fee_payment", "signature_b64", "transaction_payload_b64", "native_proof_b64",
                 "creation_time_ms"
             ],
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "signature_b64": {
                     "$ref": "#/components/schemas/SccpCanonicalBase64",
                     "maxLength": 21848,
@@ -14219,7 +14299,7 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
                 { "$ref": "#/components/schemas/SccpBridgeMessagePrepareRequest" },
                 { "$ref": "#/components/schemas/SccpBridgeMessageSignedRequest" }
             ],
-            "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp."
+            "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp."
         }),
     );
     schemas.insert(
@@ -16082,12 +16162,13 @@ fn openapi_schemas() -> Map {
         "ZkIvmDeriveRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["vk_ref", "authority", "bytecode"],
+            "required": ["vk_ref", "authority", "fee_payment", "bytecode"],
             "additionalProperties": false,
-            "description": "Body is limited to 8 MiB before extraction. metadata must carry gas_limit.",
+            "description": "Body is limited to 8 MiB before extraction. fee_payment must be structurally valid and carry gas_limit; retired fee metadata keys are rejected.",
             "properties": {
                 "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
                 "authority": { "type": "string", "minLength": 1 },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "metadata": { "type": "object", "additionalProperties": true },
                 "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 }
             }
@@ -16106,12 +16187,13 @@ fn openapi_schemas() -> Map {
         "ZkIvmProveRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["vk_ref", "authority", "bytecode"],
+            "required": ["vk_ref", "authority", "fee_payment", "bytecode"],
             "additionalProperties": false,
-            "description": "Body is limited to 8 MiB before extraction. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
+            "description": "Body is limited to 8 MiB before extraction. fee_payment must be structurally valid and carry gas_limit; retired fee metadata keys are rejected. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
             "properties": {
                 "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
                 "authority": { "type": "string", "minLength": 1 },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "metadata": { "type": "object", "additionalProperties": true },
                 "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 },
                 "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" }
@@ -17553,7 +17635,7 @@ fn openapi_schemas() -> Map {
                     "format": "uint16",
                     "minimum": 4,
                     "maximum": 4,
-                    "description": "Exact ABI-20/V4 chain-request wire version."
+                    "description": "Exact ABI-21/V4 chain-request wire version."
                 },
                 "asset": {
                     "type": "string",
@@ -17591,7 +17673,7 @@ fn openapi_schemas() -> Map {
                     "format": "uint16",
                     "minimum": 4,
                     "maximum": 4,
-                    "description": "Exact ABI-20/V4 chain-request wire version."
+                    "description": "Exact ABI-21/V4 chain-request wire version."
                 },
                 "bundle": {
                     "$ref": "#/components/schemas/OfflineSpendBundle",
@@ -17815,7 +17897,7 @@ fn openapi_schemas() -> Map {
                     "not": {
                         "const": "0000000000000000000000000000000000000000000000000000000000000000"
                     },
-                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-20 V4 release manifest."
+                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-21 V4 release manifest."
                 },
                 "release_policy_sha256": {
                     "type": "string",
@@ -17825,7 +17907,7 @@ fn openapi_schemas() -> Map {
                     "not": {
                         "const": "0000000000000000000000000000000000000000000000000000000000000000"
                     },
-                    "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-20 V4 release policy."
+                    "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-21 V4 release policy."
                 },
                 "release_attestation_sha256": {
                     "type": "string",
@@ -17835,7 +17917,7 @@ fn openapi_schemas() -> Map {
                     "not": {
                         "const": "0000000000000000000000000000000000000000000000000000000000000000"
                     },
-                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-20 V4 release attestation."
+                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-21 V4 release attestation."
                 },
                 "activation_height": {
                     "type": "integer",
@@ -17854,7 +17936,7 @@ fn openapi_schemas() -> Map {
                     "format": "uint32",
                     "minimum": 1,
                     "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4),
-                    "description": "Authenticated upper bound for one canonical ABI-20 V4 proof-pair payload."
+                    "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload."
                 },
                 "asset_scale": {
                     "type": "integer",
@@ -17864,7 +17946,7 @@ fn openapi_schemas() -> Map {
                     "description": "Authoritative fixed asset scale authenticated by this release."
                 }
             },
-            "description": "Exact authenticated ABI-20 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts."
+            "description": "Exact authenticated ABI-21 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts."
         }),
     );
     schemas.insert(
@@ -17888,7 +17970,7 @@ fn openapi_schemas() -> Map {
                     "format": "uint32",
                     "minimum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
                     "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
-                    "description": "Exact native bridge ABI required by the authenticated ABI-20 V4 recursive release."
+                    "description": "Exact native bridge ABI required by the authenticated ABI-21 V4 recursive release."
                 },
                 "max_hops": {
                     "type": "integer",
@@ -17949,29 +18031,29 @@ fn openapi_schemas() -> Map {
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active ABI-20 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+                    "description": "Authoritative active ABI-21 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
                 },
                 "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active ABI-20 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+                    "description": "Authoritative active ABI-21 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
                 },
                 "artifact_set": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineAuthenticatedArtifactSet" },
                         { "type": "null" }
                     ],
-                    "description": "Exact authenticated ABI-20 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
+                    "description": "Exact authenticated ABI-21 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
-                    "description": "Whether the exact authenticated ABI-20 V4 artifacts constructed the production recursive verifier backend at this snapshot."
+                    "description": "Whether the exact authenticated ABI-21 V4 artifacts constructed the production recursive verifier backend at this snapshot."
                 },
                 "recursive_lineage_supported": {
                     "type": "boolean",
-                    "description": "Whether the exact authenticated ABI-20 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot."
+                    "description": "Whether the exact authenticated ABI-21 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot."
                 },
                 "ready": {
                     "type": "boolean",
@@ -18311,7 +18393,7 @@ fn openapi_schemas() -> Map {
                 },
                 "fees": {
                     "type": "object",
-                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsor_vault_custody_account_id", "settlement_mode", "successful_claim_fee_exempt_authorities"],
                     "additionalProperties": false,
                     "properties": {
                         "fee_asset_id": { "type": "string" },
@@ -18320,13 +18402,7 @@ fn openapi_schemas() -> Map {
                         "per_byte_fee": { "$ref": "#/components/schemas/JsonValue" },
                         "per_instruction_fee": { "$ref": "#/components/schemas/JsonValue" },
                         "per_gas_unit_fee": { "$ref": "#/components/schemas/JsonValue" },
-                        "sponsorship_enabled": { "type": "boolean" },
-                        "sponsor_max_fee": { "$ref": "#/components/schemas/JsonValue" },
-                        "sponsor_verified_balance_safety_floor": { "$ref": "#/components/schemas/JsonValue" },
-                        "canonical_sponsor_account_id": { "type": ["string", "null"] },
-                        "fee_receipts_activation_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                        "external_settlement_enabled": { "type": "boolean" },
-                        "burn_from_unix_timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "sponsor_vault_custody_account_id": { "type": "string" },
                         "settlement_mode": { "type": "string" },
                         "successful_claim_fee_exempt_authorities": {
                             "type": "array",
@@ -19888,103 +19964,251 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "FeeSponsorPolicyByIdRequest".to_owned(),
+        "FeeSponsorProgramId".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["sponsor_account_id", "policy_name"],
+            "required": ["sponsor", "name"],
             "additionalProperties": false,
             "properties": {
-                "sponsor_account_id": {
+                "sponsor": {
                     "type": "string",
                     "description": "Canonical bare I105 sponsor account identifier."
                 },
-                "policy_name": {"type": "string"}
+                "name": {"type": "string", "minLength": 1}
             }
         }),
     );
     schemas.insert(
-        "FeeSponsorPolicy".to_owned(),
+        "FeeSponsorProgramByIdRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["id", "enabled", "rules"],
+            "required": ["program_id"],
             "additionalProperties": false,
             "properties": {
-                "id": {
+                "program_id": {
+                    "type": "string",
+                    "minLength": 3,
+                    "description": "Canonical sponsor/program literal."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeSponsorProgram".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id", "lifecycle"],
+            "additionalProperties": false,
+            "properties": {
+                "id": {"$ref": "#/components/schemas/FeeSponsorProgramId"},
+                "lifecycle": {
                     "type": "object",
-                    "required": ["sponsor", "name"],
+                    "required": ["state", "value"],
                     "additionalProperties": false,
                     "properties": {
-                        "sponsor": {"type": "string"},
-                        "name": {"type": "string"}
+                        "state": {
+                            "type": "string",
+                            "enum": ["staged", "paused", "active", "closing", "closed"]
+                        },
+                        "value": {"type": "null"}
                     }
                 },
-                "enabled": {"type": "boolean"},
-                "max_fee": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/Quantity" },
-                        { "type": "null" }
-                    ],
-                    "description": "Canonical non-negative Quantity string."
+                "active_revision": {"type": "integer", "format": "uint64", "minimum": 1},
+                "staged_revision": {"type": "integer", "format": "uint64", "minimum": 1},
+                "scheduled_activation": {
+                    "type": "object",
+                    "required": ["revision", "activate_at_height"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "revision": {"type": "integer", "format": "uint64", "minimum": 1},
+                        "activate_at_height": {"type": "integer", "format": "uint64", "minimum": 1}
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeChargeKind".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]},
+                "value": {"type": "null"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeChargeLimit".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "asset_definition_id", "max_amount"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {"$ref": "#/components/schemas/FeeChargeKind"},
+                "asset_definition_id": {"type": "string"},
+                "max_amount": {"$ref": "#/components/schemas/Quantity"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeePaymentIntent".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["payer", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "payer": {"const": "authority"},
+                        "value": {
+                            "type": "object",
+                            "required": ["charge_limits"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "charge_limits": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/FeeChargeLimit"}
+                                },
+                                "gas_limit": {"type": "integer", "format": "uint64", "minimum": 1}
+                            }
+                        }
+                    }
                 },
-                "rules": {
+                {
+                    "type": "object",
+                    "required": ["payer", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "payer": {"const": "sponsor"},
+                        "value": {
+                            "type": "object",
+                            "required": ["program_id", "program_revision", "charge_limits"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "program_id": {"$ref": "#/components/schemas/FeeSponsorProgramId"},
+                                "program_revision": {"type": "integer", "format": "uint64", "minimum": 1},
+                                "charge_limits": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/FeeChargeLimit"}
+                                },
+                                "gas_limit": {"type": "integer", "format": "uint64", "minimum": 1}
+                            }
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "TransactionPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["chain", "authority", "creation_time_ms", "instructions", "fee_payment", "metadata"],
+            "additionalProperties": false,
+            "properties": {
+                "chain": {"type": "string"},
+                "authority": {"type": "string"},
+                "creation_time_ms": {"type": "integer", "format": "uint64"},
+                "instructions": {
+                    "type": "object",
+                    "description": "Canonical Norito JSON Executable variant."
+                },
+                "time_to_live_ms": {"type": "integer", "format": "uint64", "minimum": 1},
+                "nonce": {"type": "integer", "format": "uint32", "minimum": 1},
+                "fee_payment": {"$ref": "#/components/schemas/FeePaymentIntent"},
+                "metadata": {"type": "object"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeQuoteRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload"],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {"$ref": "#/components/schemas/TransactionPayload"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeQuoteComponent".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "asset_definition_id", "max_amount"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {"$ref": "#/components/schemas/FeeChargeKind"},
+                "asset_definition_id": {"type": "string"},
+                "max_amount": {"$ref": "#/components/schemas/Quantity"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeQuoteCapacity".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset_definition_id", "vault_balance", "reserve_floor", "block_remaining", "program_epoch_remaining", "beneficiary_epoch_remaining"],
+            "additionalProperties": false,
+            "properties": {
+                "asset_definition_id": {"type": "string"},
+                "vault_balance": {"$ref": "#/components/schemas/Quantity"},
+                "reserve_floor": {"$ref": "#/components/schemas/Quantity"},
+                "block_remaining": {"$ref": "#/components/schemas/Quantity"},
+                "program_epoch_remaining": {"$ref": "#/components/schemas/Quantity"},
+                "beneficiary_epoch_remaining": {"$ref": "#/components/schemas/Quantity"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeQuoteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["intent", "observation", "components", "capacities", "decision"],
+            "additionalProperties": false,
+            "properties": {
+                "intent": {"$ref": "#/components/schemas/FeePaymentIntent"},
+                "observation": {
+                    "type": "object",
+                    "required": ["ledger_time_ms", "next_block_height", "route_dataspace_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "ledger_time_ms": {"type": "integer", "format": "uint64"},
+                        "next_block_height": {"type": "integer", "format": "uint64", "minimum": 1},
+                        "route_dataspace_id": {"type": "integer", "format": "uint64", "minimum": 0}
+                    }
+                },
+                "components": {
                     "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["effect", "dataspaces", "executable_kinds", "instruction_wire_ids", "asset_transfer_definition_ids", "contract_selectors"],
-                        "additionalProperties": false,
-                        "properties": {
-                            "effect": {
-                                "type": "object",
-                                "required": ["effect", "value"],
-                                "additionalProperties": false,
-                                "properties": {
-                                    "effect": {"type": "string", "enum": ["allow", "deny"]},
-                                    "value": {"nullable": true, "enum": [null]}
-                                }
-                            },
-                            "max_fee": {
-                                "anyOf": [
-                                    { "$ref": "#/components/schemas/Quantity" },
-                                    { "type": "null" }
-                                ],
-                                "description": "Optional canonical non-negative rule-level Quantity fee cap."
-                            },
-                            "dataspaces": {
-                                "type": "array",
-                                "items": {"type": "integer", "minimum": 0}
-                            },
-                            "executable_kinds": {
-                                "type": "array",
-                                "items": {
+                    "items": {"$ref": "#/components/schemas/FeeQuoteComponent"}
+                },
+                "capacities": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/FeeQuoteCapacity"}
+                },
+                "decision": {
+                    "type": "object",
+                    "required": ["status", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": {"const": "accepted"},
+                        "value": {
+                            "type": "object",
+                            "required": ["debit_source"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "debit_source": {
                                     "type": "object",
                                     "required": ["kind", "value"],
                                     "additionalProperties": false,
                                     "properties": {
-                                        "kind": {"type": "string", "enum": ["instructions", "contract_call", "ivm", "ivm_proved"]},
-                                        "value": {"nullable": true, "enum": [null]}
+                                        "kind": {"type": "string", "enum": ["account", "sponsor_program"]},
+                                        "value": {}
                                     }
-                                }
-                            },
-                            "instruction_wire_ids": {"type": "array", "items": {"type": "string"}},
-                            "asset_transfer_definition_ids": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string",
-                                    "description": "Canonical Base58 UUIDv4-backed asset definition id."
-                                }
-                            },
-                            "contract_selectors": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "required": ["entrypoints"],
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "contract_alias": {"type": "string"},
-                                        "contract_address": {"type": "string"},
-                                        "entrypoints": {"type": "array", "items": {"type": "string"}}
-                                    }
-                                }
+                                },
+                                "program_revision": {"type": "integer", "format": "uint64", "minimum": 1}
                             }
                         }
                     }
@@ -21690,6 +21914,7 @@ fn openapi_schemas() -> Map {
                 "asset_balance_scope",
                 "amount",
                 "destination",
+                "fee_payment",
                 "creation_time_ms",
                 "transaction_ttl_ms"
             ],
@@ -21731,12 +21956,7 @@ fn openapi_schemas() -> Map {
                     "maxLength": 256,
                     "description": "At most 256 UTF-8 bytes and free of Unicode control characters."
                 },
-                "fee_sponsor": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 512,
-                    "description": "Exact canonical I105 fee-sponsor account."
-                },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "creation_time_ms": {
                     "type": "integer",
                     "format": "uint64",
@@ -21776,6 +21996,50 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "ContractCallRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "entrypoint", "fee_payment"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {"type": "string", "description": "Canonical transaction authority."},
+                "public_key_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "signature_b64": {"type": "string", "minLength": 1},
+                "contract_address": {"type": "string"},
+                "contract_alias": {"type": "string"},
+                "entrypoint": {"type": "string", "minLength": 1},
+                "payload": {"$ref": "#/components/schemas/JsonValue"},
+                "creation_time_ms": {"type": "integer", "format": "uint64"},
+                "transaction_ttl_ms": {"type": "integer", "format": "uint64", "minimum": 1},
+                "fee_payment": {"$ref": "#/components/schemas/FeePaymentIntent"}
+            },
+            "oneOf": [
+                {"required": ["contract_address"], "not": {"required": ["contract_alias"]}},
+                {"required": ["contract_alias"], "not": {"required": ["contract_address"]}}
+            ]
+        }),
+    );
+    schemas.insert(
+        "ContractCallSimulateRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "entrypoint", "gas_limit"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {"type": "string"},
+                "contract_address": {"type": "string"},
+                "contract_alias": {"type": "string"},
+                "entrypoint": {"type": "string", "minLength": 1},
+                "payload": {"$ref": "#/components/schemas/JsonValue"},
+                "gas_limit": {"type": "integer", "format": "uint64", "minimum": 1}
+            },
+            "oneOf": [
+                {"required": ["contract_address"], "not": {"required": ["contract_alias"]}},
+                {"required": ["contract_alias"], "not": {"required": ["contract_address"]}}
+            ]
+        }),
+    );
+    schemas.insert(
         "AssetTransferIntent".to_owned(),
         norito::json!({
             "type": "object",
@@ -21786,6 +22050,7 @@ fn openapi_schemas() -> Map {
                 "asset_balance_scope",
                 "amount",
                 "destination",
+                "fee_payment",
                 "creation_time_ms",
                 "transaction_ttl_ms"
             ],
@@ -21798,7 +22063,7 @@ fn openapi_schemas() -> Map {
                 "amount": { "type": "string", "minLength": 1, "maxLength": 192 },
                 "destination": { "type": "string", "minLength": 1, "maxLength": 512 },
                 "memo": { "type": "string", "minLength": 1, "maxLength": 256 },
-                "fee_sponsor": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                 "creation_time_ms": { "type": "integer", "format": "uint64", "minimum": 1 },
                 "transaction_ttl_ms": {
                     "type": "integer",
@@ -21997,14 +22262,14 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id", "instructions"],
+                    "required": ["signer_account_id", "fee_payment", "instructions"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "fee_sponsor": { "type": "string" },
+                        "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                         "memo": { "type": "string" },
                         "instructions": {
                             "type": "array",
@@ -22029,14 +22294,14 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id"],
+                    "required": ["signer_account_id", "fee_payment"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "fee_sponsor": { "type": "string" },
+                        "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                         "proposal_id": { "type": "string" },
                         "instructions_hash": { "type": "string" }
                     }
@@ -22080,7 +22345,7 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id", "entrypoint"],
+                    "required": ["signer_account_id", "entrypoint", "fee_payment"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
@@ -22091,9 +22356,7 @@ fn openapi_schemas() -> Map {
                         "contract_alias": { "type": "string" },
                         "entrypoint": { "type": "string" },
                         "payload": { "type": "object" },
-                        "gas_asset_id": { "type": "string" },
-                        "fee_sponsor": { "type": "string" },
-                        "gas_limit": { "type": "integer", "format": "uint64" }
+                        "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" }
                     }
                 }
             ]
@@ -22106,14 +22369,14 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id"],
+                    "required": ["signer_account_id", "fee_payment"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "fee_sponsor": { "type": "string" },
+                        "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                         "proposal_id": { "type": "string" },
                         "instructions_hash": { "type": "string" }
                     }
@@ -22147,14 +22410,14 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id"],
+                    "required": ["signer_account_id", "fee_payment"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "fee_sponsor": { "type": "string" },
+                        "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
                         "proposal_id": { "type": "string" },
                         "instructions_hash": { "type": "string" }
                     }
@@ -22511,6 +22774,59 @@ fn axt_error_details_schema() -> Value {
     })
 }
 
+fn fee_error_details_schema() -> Value {
+    let codes = iroha_data_model::nexus::FeeRejectionCode::ALL
+        .iter()
+        .map(|code| code.as_str())
+        .collect::<Vec<_>>();
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "retryable"],
+        "properties": {
+            "code": {
+                "type": "string",
+                "enum": (codes),
+                "description": "Stable fee-payment rejection code."
+            },
+            "retryable": {
+                "type": "boolean",
+                "description": "Whether the same signed request can succeed after a state or capacity change."
+            },
+            "program_id": (bounded_error_detail_text_schema("Exact canonical sponsor-program identifier selected by the signed transaction.")),
+            "program_revision": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "Exact immutable sponsor-program revision selected by the signed transaction."
+            },
+            "asset_definition_id": (bounded_error_detail_text_schema("Canonical fee asset involved in the rejection.")),
+            "required": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 156,
+                "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?$",
+                "description": "Canonical deterministic amount required at the observation state."
+            },
+            "available": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 156,
+                "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?$",
+                "description": "Canonical deterministic amount available at the observation state."
+            },
+            "rule_id": (bounded_error_detail_text_schema("Stable matching sponsor-program rule identifier.")),
+            "observation_height": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0,
+                "description": "Consensus height at which the decision was evaluated."
+            },
+            "remediation": (bounded_error_detail_text_schema("Concrete repair or retry guidance."))
+        }
+    })
+}
+
 fn error_details_schema() -> Value {
     norito::json!({
         "type": "object",
@@ -22542,6 +22858,9 @@ fn error_details_schema() -> Value {
             "hint": (bounded_error_detail_text_schema("Actionable debugging hint for callers.")),
             "axt": {
                 "$ref": "#/components/schemas/AxtErrorDetails"
+            },
+            "fee": {
+                "$ref": "#/components/schemas/FeeErrorDetails"
             }
         }
     })
@@ -22582,6 +22901,7 @@ fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
     schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
+    schemas.insert("FeeErrorDetails".to_owned(), fee_error_details_schema());
     schemas.insert(
         "QueueErrorSnapshot".to_owned(),
         queue_error_snapshot_schema(),
@@ -25434,7 +25754,7 @@ mod tests {
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("prepare request properties");
-            assert_eq!(required(prepare), ["authority", proof_field]);
+            assert_eq!(required(prepare), ["authority", "fee_payment", proof_field]);
             assert_eq!(
                 prepare_properties
                     .keys()
@@ -25442,6 +25762,7 @@ mod tests {
                     .collect::<BTreeSet<_>>(),
                 BTreeSet::from([
                     "authority",
+                    "fee_payment",
                     "signature_b64",
                     "transaction_payload_b64",
                     proof_field,
@@ -25486,6 +25807,7 @@ mod tests {
                 signed_required,
                 [
                     "authority",
+                    "fee_payment",
                     "signature_b64",
                     "transaction_payload_b64",
                     proof_field,
@@ -25503,6 +25825,7 @@ mod tests {
                     .collect::<BTreeSet<_>>(),
                 BTreeSet::from([
                     "authority",
+                    "fee_payment",
                     "signature_b64",
                     "transaction_payload_b64",
                     proof_field,
@@ -25890,7 +26213,9 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/by-account"));
         assert!(paths.contains_key("/v1/retail/recipients/lookup"));
         assert!(paths.contains_key("/v1/retail/recipients/route"));
-        assert!(paths.contains_key("/v1/fee-sponsor-policies/by-id"));
+        assert!(paths.contains_key("/v1/fee-sponsor-programs/by-id"));
+        assert!(paths.contains_key("/v1/fees/quote"));
+        assert!(!paths.contains_key("/v1/fee-sponsor-policies/by-id"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
@@ -26479,7 +26804,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineSpendBundle"),
             ["statement", "operation", "recursive_proof"],
-            "an ABI-20 spendable bundle must carry its statement and exact operation row"
+            "an ABI-21 spendable bundle must carry its statement and exact operation row"
         );
         for (owner, forbidden) in [
             ("OfflinePeerSplitTransition", "parent_branch_claim_digest"),
@@ -26537,7 +26862,7 @@ mod tests {
             ),
             ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
             ("OfflineBranchPath", "depth", (0, 64)),
-            ("OfflineReadiness", "required_bridge_abi_version", (20, 20)),
+            ("OfflineReadiness", "required_bridge_abi_version", (21, 21)),
             ("OfflineReadiness", "max_hops", (8, 8)),
             (
                 "OfflineAuthenticatedArtifactSet",
@@ -26734,8 +27059,8 @@ mod tests {
             assert!(
                 readiness_properties[property]["description"]
                     .as_str()
-                    .is_some_and(|description| description.contains("ABI-20 V4")),
-                "{property} must describe the active ABI-20 V4 readiness contract"
+                    .is_some_and(|description| description.contains("ABI-21 V4")),
+                "{property} must describe the active ABI-21 V4 readiness contract"
             );
         }
         let readiness_scale = readiness
@@ -27677,7 +28002,12 @@ mod tests {
                 .and_then(Value::as_str)
                 == Some("#/components/schemas/ErrorDetails")
         }));
-        for schema_name in ["ErrorDetails", "QueueErrorSnapshot", "AxtErrorDetails"] {
+        for schema_name in [
+            "ErrorDetails",
+            "QueueErrorSnapshot",
+            "AxtErrorDetails",
+            "FeeErrorDetails",
+        ] {
             let schema = schemas
                 .get(schema_name)
                 .and_then(Value::as_object)
@@ -27708,6 +28038,7 @@ mod tests {
         assert!(error_details.contains_key("last_status"));
         assert!(error_details.contains_key("hint"));
         assert!(error_details.contains_key("axt"));
+        assert!(error_details.contains_key("fee"));
         for field in [
             "layer",
             "endpoint",
@@ -27743,6 +28074,26 @@ mod tests {
         );
         assert!(schemas.contains_key("QueueErrorSnapshot"));
         assert!(schemas.contains_key("AxtErrorDetails"));
+        let fee_codes = schemas
+            .get("FeeErrorDetails")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("code"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("FeeErrorDetails.code enum")
+            .iter()
+            .map(|value| value.as_str().expect("fee rejection code"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fee_codes,
+            iroha_data_model::nexus::FeeRejectionCode::ALL
+                .iter()
+                .map(|code| code.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -28761,6 +29112,7 @@ mod tests {
                 reason: "privacy".to_owned(),
             },
             QueueError::NexusFeeAdmissionRejected {
+                code: iroha_data_model::nexus::FeeRejectionCode::BeneficiaryNotEligible,
                 reason: "fee".to_owned(),
             },
             QueueError::ConfidentialPolicyAdmissionRejected {
@@ -31631,10 +31983,11 @@ mod tests {
                 true,
             ),
             (
-                "/v1/fee-sponsor-policies/by-id",
-                "fee_sponsor_policy_signature_required",
+                "/v1/fee-sponsor-programs/by-id",
+                "fee_sponsor_program_signature_required",
                 false,
             ),
+            ("/v1/fees/quote", "fee_quote_signature_required", false),
         ] {
             let operation = openapi_operation(&document, path, "post");
             assert_eq!(
@@ -32516,6 +32869,7 @@ mod tests {
             "asset_balance_scope",
             "amount",
             "destination",
+            "fee_payment",
             "creation_time_ms",
             "transaction_ttl_ms",
             "public_key_hex",
@@ -32523,7 +32877,15 @@ mod tests {
         ] {
             assert!(properties.contains_key(field), "missing `{field}`");
         }
-        for forbidden in ["private_key", "nonce", "metadata", "signature_b64"] {
+        for forbidden in [
+            "private_key",
+            "nonce",
+            "metadata",
+            "signature_b64",
+            "fee_sponsor",
+            "gas_asset_id",
+            "gas_limit",
+        ] {
             assert!(
                 !properties.contains_key(forbidden),
                 "legacy signing field `{forbidden}` must not be documented"

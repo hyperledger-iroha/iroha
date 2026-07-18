@@ -61,6 +61,13 @@ def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
 
+def _fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": gas_limit},
+    }
+
+
 def _norito_crc64_xz(payload: bytes) -> int:
     polynomial = 0xC96C_5795_D787_0F42
     mask = 0xFFFF_FFFF_FFFF_FFFF
@@ -1299,6 +1306,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
     proof = normalize_bridge_proof_submit_payload(
         {
             "authority": AUTHORITY,
+            "fee_payment": _fee_payment(),
             "signature_b64": base64.b64encode(bytes([1]) * 64).decode("ascii"),
             "transaction_payload_b64": transaction_payload_b64,
             "destination_proof_b64": _destination_artifact_b64(),
@@ -1307,6 +1315,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
     )
     assert list(proof) == [
         "authority",
+        "fee_payment",
         "signature_b64",
         "transaction_payload_b64",
         "destination_proof_b64",
@@ -1315,12 +1324,17 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
     assert proof["transaction_payload_b64"] == transaction_payload_b64
     assert list(
         normalize_bridge_message_submit_payload(
-            {"authority": AUTHORITY, "native_proof_b64": _native_inbound_proof_b64()}
+            {
+                "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
+                "native_proof_b64": _native_inbound_proof_b64(),
+            }
         )
-    ) == ["authority", "native_proof_b64"]
+    ) == ["authority", "fee_payment", "native_proof_b64"]
     native = normalize_bridge_message_submit_payload(
         {
             "authority": AUTHORITY,
+            "fee_payment": _fee_payment(),
             "signature_b64": "AQ==",
             "transaction_payload_b64": transaction_payload_b64,
             "native_proof_b64": _native_inbound_proof_b64(),
@@ -1333,17 +1347,26 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
     assert "message_bundle_b64" not in parameters
     assert "destination_proof_b64" in parameters
     assert "transaction_payload_b64" in parameters
+    assert parameters["fee_payment"].default is inspect.Parameter.empty
 
 
 def test_submit_authorities_require_exact_canonical_i105() -> None:
     noncanonical = "n753" + AUTHORITY.removeprefix("sora")
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_bridge_proof_submit_payload(
-            {"authority": noncanonical, "destination_proof_b64": _destination_artifact_b64()}
+            {
+                "authority": noncanonical,
+                "fee_payment": _fee_payment(),
+                "destination_proof_b64": _destination_artifact_b64(),
+            }
         )
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_bridge_message_submit_payload(
-            {"authority": noncanonical, "native_proof_b64": _native_inbound_proof_b64()}
+            {
+                "authority": noncanonical,
+                "fee_payment": _fee_payment(),
+                "native_proof_b64": _native_inbound_proof_b64(),
+            }
         )
 
 
@@ -1366,6 +1389,7 @@ def test_proof_submit_rejects_retired_fields(field: str, value: Any) -> None:
         normalize_bridge_proof_submit_payload(
             {
                 "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
                 "destination_proof_b64": _destination_artifact_b64(),
                 field: value,
             }
@@ -1376,30 +1400,51 @@ def test_proof_submit_rejects_retired_fields(field: str, value: Any) -> None:
 def test_proof_submit_rejects_noncanonical_base64(artifact: str) -> None:
     with pytest.raises(ValueError, match="base64"):
         normalize_bridge_proof_submit_payload(
-            {"authority": AUTHORITY, "destination_proof_b64": artifact}
+            {
+                "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
+                "destination_proof_b64": artifact,
+            }
         )
 
 
 def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> None:
     normalize_bridge_proof_submit_payload(
-        {"authority": AUTHORITY, "destination_proof_b64": _destination_artifact_b64()}
+        {
+            "authority": AUTHORITY,
+            "fee_payment": _fee_payment(),
+            "destination_proof_b64": _destination_artifact_b64(),
+        }
     )
     normalize_bridge_message_submit_payload(
-        {"authority": AUTHORITY, "native_proof_b64": _native_inbound_proof_b64()}
+        {
+            "authority": AUTHORITY,
+            "fee_payment": _fee_payment(),
+            "native_proof_b64": _native_inbound_proof_b64(),
+        }
     )
     with pytest.raises(ValueError, match="schema hash"):
         normalize_bridge_proof_submit_payload(
-            {"authority": AUTHORITY, "destination_proof_b64": _native_inbound_proof_b64()}
+            {
+                "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
+                "destination_proof_b64": _native_inbound_proof_b64(),
+            }
         )
     with pytest.raises(ValueError, match="schema hash"):
         normalize_bridge_message_submit_payload(
-            {"authority": AUTHORITY, "native_proof_b64": _destination_artifact_b64()}
+            {
+                "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
+                "native_proof_b64": _destination_artifact_b64(),
+            }
         )
     for padding in (1, 8, 64):
         with pytest.raises(ValueError, match="alignment padding"):
             normalize_bridge_proof_submit_payload(
                 {
                     "authority": AUTHORITY,
+                    "fee_payment": _fee_payment(),
                     "destination_proof_b64": _destination_artifact_b64(padding=padding),
                 }
             )
@@ -1407,6 +1452,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
             normalize_bridge_message_submit_payload(
                 {
                     "authority": AUTHORITY,
+                    "fee_payment": _fee_payment(),
                     "native_proof_b64": _native_inbound_proof_b64(padding=padding),
                 }
             )
@@ -1437,6 +1483,7 @@ def test_proof_submit_rejects_mixed_or_malformed_signing_state(
         normalize_bridge_proof_submit_payload(
             {
                 "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
                 "destination_proof_b64": _destination_artifact_b64(),
                 **signing_state,
             }
@@ -1449,8 +1496,48 @@ def test_proof_submit_rejects_nonpositive_or_ambiguous_time(timestamp: Any) -> N
         normalize_bridge_proof_submit_payload(
             {
                 "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
                 "destination_proof_b64": _destination_artifact_b64(),
                 "creation_time_ms": timestamp,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "fee_payment",
+    [
+        None,
+        {"payer": "authority", "value": {"charge_limits": [], "gas_limit": 0}},
+        {
+            "payer": "authority",
+            "value": {"charge_limits": [], "gas_limit": None, "legacy": True},
+        },
+        {
+            "payer": "sponsor",
+            "value": {
+                "program_id": {"sponsor": AUTHORITY, "name": "wallet_fx"},
+                "program_revision": 0,
+                "charge_limits": [],
+                "gas_limit": None,
+            },
+        },
+    ],
+)
+def test_proof_submit_requires_structural_typed_fee_payment(fee_payment: Any) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        normalize_bridge_proof_submit_payload(
+            {
+                "authority": AUTHORITY,
+                "fee_payment": fee_payment,
+                "destination_proof_b64": _destination_artifact_b64(),
+            }
+        )
+
+    with pytest.raises(ValueError, match="fee_payment"):
+        normalize_bridge_proof_submit_payload(
+            {
+                "authority": AUTHORITY,
+                "destination_proof_b64": _destination_artifact_b64(),
             }
         )
 
@@ -1708,7 +1795,9 @@ def test_torii_sccp_error_response_uses_the_same_actual_byte_bound() -> None:
             64 * 1024 * 1024,
             "application/json",
             lambda client: client.submit_bridge_proof(
-                authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
+                authority=AUTHORITY,
+                fee_payment=_fee_payment(),
+                destination_proof_b64=_destination_artifact_b64(),
             ),
         ),
     ],
@@ -1793,6 +1882,7 @@ def test_torii_proof_submit_sends_only_closed_artifact_fields() -> None:
     destination_artifact = _destination_artifact_b64()
     assert client.submit_bridge_proof(
         authority=AUTHORITY,
+        fee_payment=_fee_payment(),
         destination_proof_b64=destination_artifact,
         creation_time_ms=42,
     ).submitted is False
@@ -1800,6 +1890,7 @@ def test_torii_proof_submit_sends_only_closed_artifact_fields() -> None:
     assert call["url"] == "https://example.invalid/v1/bridge/proofs/submit"
     assert json.loads(call["data"]) == {
         "authority": AUTHORITY,
+        "fee_payment": _fee_payment(),
         "destination_proof_b64": destination_artifact,
         "creation_time_ms": 42,
     }
@@ -1819,11 +1910,13 @@ def test_torii_prepare_then_submit_resends_byte_identical_transaction_payload() 
     destination_artifact = _destination_artifact_b64()
     preparation = client.submit_bridge_proof(
         authority=AUTHORITY,
+        fee_payment=_fee_payment(),
         destination_proof_b64=destination_artifact,
         creation_time_ms=42,
     )
     submission = client.submit_bridge_proof(
         authority=AUTHORITY,
+        fee_payment=_fee_payment(),
         destination_proof_b64=destination_artifact,
         signature_b64=_b64(bytes([7]) * 64),
         transaction_payload_b64=preparation.transaction_payload_b64,
@@ -1832,6 +1925,7 @@ def test_torii_prepare_then_submit_resends_byte_identical_transaction_payload() 
     assert submission.submitted is True
     submitted_body = json.loads(session.calls[1]["data"])
     assert submitted_body["transaction_payload_b64"] == prepared["transaction_payload_b64"]
+    assert submitted_body["fee_payment"] == _fee_payment()
     assert base64.b64decode(submitted_body["transaction_payload_b64"], validate=True) == bytes(
         [1, 2, 3, 4]
     )
@@ -1847,12 +1941,15 @@ def test_torii_rejects_response_state_that_contradicts_request() -> None:
     prepare_session = RecordingSession([StubResponse(submitted)])
     with pytest.raises(ValueError, match="signing state"):
         ToriiClient("https://example.invalid", session=prepare_session).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
+            authority=AUTHORITY,
+            fee_payment=_fee_payment(),
+            destination_proof_b64=_destination_artifact_b64(),
         )
     signed_session = RecordingSession([StubResponse(_prepared_response(creation_time_ms=42))])
     with pytest.raises(ValueError, match="signing state"):
         ToriiClient("https://example.invalid", session=signed_session).submit_bridge_proof(
             authority=AUTHORITY,
+            fee_payment=_fee_payment(),
             destination_proof_b64=_destination_artifact_b64(),
             signature_b64="AQ==",
             transaction_payload_b64="Ag==",
@@ -1864,14 +1961,18 @@ def test_torii_rejects_wrong_content_type_and_duplicate_submit_response() -> Non
     plain = RecordingSession([StubResponse(_prepared_response(), content_type="text/plain")])
     with pytest.raises(TypeError, match="application/json"):
         ToriiClient("https://example.invalid", session=plain).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
+            authority=AUTHORITY,
+            fee_payment=_fee_payment(),
+            destination_proof_b64=_destination_artifact_b64(),
         )
     canonical = json.dumps(_prepared_response())
     duplicate = canonical.replace("{", '{"submitted":false,', 1).encode()
     session = RecordingSession([StubResponse(raw=duplicate)])
     with pytest.raises(ValueError, match="duplicate"):
         ToriiClient("https://example.invalid", session=session).submit_bridge_proof(
-            authority=AUTHORITY, destination_proof_b64=_destination_artifact_b64()
+            authority=AUTHORITY,
+            fee_payment=_fee_payment(),
+            destination_proof_b64=_destination_artifact_b64(),
         )
 
 

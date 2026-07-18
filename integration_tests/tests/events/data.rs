@@ -120,7 +120,7 @@ async fn transaction_execution_should_produce_events(
     let result = async {
         {
             let client = client.clone();
-            let tx = client.build_transaction(executable, <_>::default());
+            let tx = client.build_transaction(executable, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), <_>::default());
             let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
@@ -246,11 +246,14 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     {
         let client = network.client();
         spawn_blocking(move || {
-            client.submit_all_blocking::<InstructionBox>([
-                register_role.into(),
-                grant_role.into(),
-                unregister_role.into(),
-            ])
+            client.submit_all_blocking::<InstructionBox>(
+                [
+                    register_role.into(),
+                    grant_role.into(),
+                    unregister_role.into(),
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
         })
         .await??;
     }

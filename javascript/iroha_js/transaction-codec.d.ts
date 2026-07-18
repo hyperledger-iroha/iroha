@@ -14,6 +14,29 @@ export type BrowserTransactionBytes =
 
 export type BrowserTransactionUnsigned = bigint | number | string;
 
+export type BrowserFeeChargeKind = "nexus" | "pipelineGas";
+
+export interface BrowserFeeChargeLimit {
+  kind: BrowserFeeChargeKind;
+  assetDefinitionId: string;
+  /** Positive canonical decimal maximum authorized by the signer. */
+  maxAmount: BrowserKotodamaQuantity | bigint | string;
+}
+
+export type BrowserFeePayment =
+  | {
+      payer: "authority";
+      chargeLimits: readonly BrowserFeeChargeLimit[];
+      gasLimit?: BrowserTransactionUnsigned | null;
+    }
+  | {
+      payer: "sponsor";
+      programId: string;
+      programRevision: BrowserTransactionUnsigned;
+      chargeLimits: readonly BrowserFeeChargeLimit[];
+      gasLimit?: BrowserTransactionUnsigned | null;
+    };
+
 /** `number` leaves must be safe integers; encode decimals as strings. */
 export type BrowserTransactionMetadataValue =
   | null
@@ -31,6 +54,8 @@ export interface BrowserTransferInput {
   /** Positive canonical decimal, scale <= 28, and value <= 2^511 - 1. */
   quantity: BrowserKotodamaQuantity | bigint | string;
   destinationAccountId: string;
+  /** Required signature-bound fee payer, charge maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: string | { readonly [key: string]: BrowserTransactionMetadataValue } | null;
   creationTimeMs?: BrowserTransactionUnsigned;
   ttlMs?: BrowserTransactionUnsigned | null;
@@ -43,6 +68,8 @@ export interface BrowserInstructionTransactionInput {
   chainId: string;
   authority: string;
   instructions: readonly object[];
+  /** Required signature-bound fee payer, charge maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: string | { readonly [key: string]: BrowserTransactionMetadataValue } | null;
   creationTimeMs?: BrowserTransactionUnsigned;
   ttlMs?: BrowserTransactionUnsigned | null;

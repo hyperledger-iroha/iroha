@@ -1373,6 +1373,7 @@ fn build_signable_transaction_b64(
     let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
         chain_id.clone(),
         authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
     .try_sign(dummy_key_pair.private_key())
@@ -3756,6 +3757,7 @@ seiyaku GovernedReadFixture {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(harness.authority_keypair.private_key());
@@ -3831,6 +3833,7 @@ seiyaku GovernedReadFixture {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());
@@ -3886,6 +3889,7 @@ seiyaku GovernedReadFixture {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());

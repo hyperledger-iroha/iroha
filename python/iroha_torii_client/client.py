@@ -39,6 +39,7 @@ import math
 import re
 import secrets
 import time
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import (
@@ -2864,7 +2865,7 @@ class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
 
 
 class KagemushaArtifactBindingV4Json(TypedDict):
-    """Identity of the one authenticated Kagemusha ABI-20/V4 release."""
+    """Identity of the one authenticated Kagemusha ABI-21/V4 release."""
 
     version: Literal[4]
     generation: str
@@ -2996,7 +2997,7 @@ class OfflineRedeemChangeJson(TypedDict):
 
 @dataclass(frozen=True)
 class KagemushaTopUpRequestV4:
-    """Canonical ABI-20/V4 Norito top-up request and operation identifier."""
+    """Canonical ABI-21/V4 Norito top-up request and operation identifier."""
 
     norito: bytes
     operation_id: str
@@ -3013,7 +3014,7 @@ class KagemushaTopUpRequestV4:
 
 @dataclass(frozen=True)
 class KagemushaRedeemRequestV4:
-    """Canonical ABI-20/V4 Norito redemption request and operation identifier."""
+    """Canonical ABI-21/V4 Norito redemption request and operation identifier."""
 
     norito: bytes
     operation_id: str
@@ -3057,7 +3058,7 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 20
+_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
 _KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
@@ -3442,7 +3443,7 @@ class OfflineActiveTransferVerifier:
 
 @dataclass(frozen=True)
 class OfflineAuthenticatedArtifactSet:
-    """Exact authenticated ABI-20 V4 recursive release selected for readiness."""
+    """Exact authenticated ABI-21 V4 recursive release selected for readiness."""
 
     generation: str
     manifest_sha256: str
@@ -3857,17 +3858,17 @@ class OfflineReadiness:
         )
         if (recursive_verifiers[0] is None) != (recursive_verifiers[1] is None):
             raise RuntimeError(
-                f"{context} must report the ABI-20 V4 recursive verifier pair atomically"
+                f"{context} must report the ABI-21 V4 recursive verifier pair atomically"
             )
         if artifact_set is None:
             if any(verifier is not None for verifier in recursive_verifiers):
                 raise RuntimeError(
-                    f"{context}.artifact_set must accompany the ABI-20 V4 recursive verifier pair"
+                    f"{context}.artifact_set must accompany the ABI-21 V4 recursive verifier pair"
                 )
         else:
             if any(verifier is None for verifier in recursive_verifiers):
                 raise RuntimeError(
-                    f"{context}.artifact_set requires the ABI-20 V4 recursive verifier pair"
+                    f"{context}.artifact_set requires the ABI-21 V4 recursive verifier pair"
                 )
             if asset_scale != artifact_set.asset_scale:
                 raise RuntimeError(
@@ -3879,10 +3880,10 @@ class OfflineReadiness:
             ):
                 if verifier is None:
                     raise RuntimeError(
-                        f"{context}.{field} is required with the ABI-20 V4 artifact set"
+                        f"{context}.{field} is required with the ABI-21 V4 artifact set"
                     )
                 if verifier.version == 0:
-                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-20 V4")
+                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-21 V4")
                 if verifier.max_proof_bytes != artifact_set.max_proof_bytes:
                     raise RuntimeError(
                         f"{context}.{field}.max_proof_bytes must equal artifact_set.max_proof_bytes"
@@ -3948,7 +3949,7 @@ class OfflineReadiness:
         if artifact_set is None:
             if len(recursive_registry_codes) != 1:
                 raise RuntimeError(
-                    f"{context}.artifact_set null requires exactly one ABI-20 V4 registry blocker"
+                    f"{context}.artifact_set null requires exactly one ABI-21 V4 registry blocker"
                 )
             if proof_backend_available:
                 raise RuntimeError(
@@ -3956,7 +3957,7 @@ class OfflineReadiness:
                 )
         elif recursive_registry_codes:
             raise RuntimeError(
-                f"{context}.artifact_set contradicts the ABI-20 V4 registry blocker set"
+                f"{context}.artifact_set contradicts the ABI-21 V4 registry blocker set"
             )
         if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
             raise RuntimeError(
@@ -4004,7 +4005,7 @@ class OfflineReadiness:
         )
         if recursive_lineage_supported != expected_recursive_lineage_supported:
             raise RuntimeError(
-                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-20 lineage conjunction"
+                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
             )
         lineage_blocked = "recursive_lineage_unavailable" in blocker_codes
         if lineage_blocked == recursive_lineage_supported:
@@ -4026,7 +4027,7 @@ class OfflineReadiness:
         )
         if ready != expected_ready:
             raise RuntimeError(
-                f"{context}.ready must equal the complete ABI-20 runtime conjunction"
+                f"{context}.ready must equal the complete ABI-21 runtime conjunction"
             )
         return cls(
             required_bridge_abi_version=required_bridge_abi_version,
@@ -4105,7 +4106,7 @@ class OfflineVerifierKeyId:
 
 @dataclass(frozen=True)
 class KagemushaArtifactBindingV4:
-    """Content-addressed ABI-20/V4 recursive proof release."""
+    """Content-addressed ABI-21/V4 recursive proof release."""
 
     version: Literal[4]
     generation: str
@@ -6277,8 +6278,7 @@ class ContractOperationReceipt:
     entrypoint_hash_hex: Optional[str]
     gas_limit: Optional[int]
     gas_used: Optional[int]
-    gas_asset_id: Optional[str]
-    fee_sponsor: Optional[str]
+    fee_payment: Optional[Dict[str, Any]]
     payload_digest_hex: str
 
 
@@ -7067,13 +7067,7 @@ class PipelinePreflightFees:
     per_byte_fee: Any
     per_instruction_fee: Any
     per_gas_unit_fee: Any
-    sponsorship_enabled: bool
-    sponsor_max_fee: Any
-    sponsor_verified_balance_safety_floor: Any
-    canonical_sponsor_account_id: Optional[str]
-    fee_receipts_activation_height: int
-    external_settlement_enabled: bool
-    burn_from_unix_timestamp_ms: int
+    sponsor_vault_custody_account_id: str
     settlement_mode: str
     successful_claim_fee_exempt_authorities: List[str]
 
@@ -7588,7 +7582,7 @@ class _SumeragiV2StatusParser:
         }
         work = SumeragiV2WorkStatus(**parsed_work)
 
-        raw_queues = cls._array(record.get("queues"), f"{context}.queues", maximum=9)
+        raw_queues = cls._array(record.get("queues"), f"{context}.queues", maximum=10)
         queues: List[SumeragiV2QueueLivenessStatus] = []
         queue_names: set[str] = set()
         for index, raw in enumerate(raw_queues):
@@ -7612,6 +7606,7 @@ class _SumeragiV2StatusParser:
                     "runtime_completion",
                     "effect_completion",
                     "network_ingress",
+                    "effect_dispatch",
                 },
                 context=f"{item_context}.queue",
             )
@@ -10112,6 +10107,7 @@ class ToriiClient:
         *,
         authority: str,
         destination_proof_b64: str,
+        fee_payment: Mapping[str, Any],
         signature_b64: Optional[str] = None,
         transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
@@ -10124,6 +10120,7 @@ class ToriiClient:
 
         candidate: Dict[str, Any] = {
             "authority": authority,
+            "fee_payment": fee_payment,
             "destination_proof_b64": destination_proof_b64,
         }
         for key, value in (
@@ -10145,6 +10142,7 @@ class ToriiClient:
         *,
         authority: str,
         native_proof_b64: str,
+        fee_payment: Mapping[str, Any],
         signature_b64: Optional[str] = None,
         transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
@@ -10157,6 +10155,7 @@ class ToriiClient:
 
         candidate: Dict[str, Any] = {
             "authority": authority,
+            "fee_payment": fee_payment,
             "native_proof_b64": native_proof_b64,
         }
         for key, value in (
@@ -11617,18 +11616,151 @@ class ToriiClient:
     # Contract, governance, and council helpers
     # ------------------------------------------------------------------
 
+    def quote_fees(
+        self,
+        unsigned_payload: Mapping[str, Any],
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> Dict[str, Any]:
+        """Quote the exact unsigned transaction via ``POST /v1/fees/quote``.
+
+        The returned ``intent`` may replace only the draft's fee maxima before
+        the exact payload is signed. It must not change the selected payer,
+        sponsor-program revision, or executable gas bound.
+        """
+
+        if not isinstance(unsigned_payload, Mapping):
+            raise TypeError("quote_fees.unsigned_payload must be an object")
+        authority = self._require_exact_i105_account_id(
+            unsigned_payload.get("authority"),
+            "quote_fees.unsigned_payload.authority",
+        )
+        canonical_auth = self._require_vpn_canonical_auth(
+            canonical_auth,
+            "quote_fees",
+        )
+        if canonical_auth.account_id != authority:
+            raise ValueError(
+                "quote_fees.canonical_auth.account_id must equal the exact payload authority"
+            )
+        requested_intent = self._normalize_fee_payment_intent(
+            unsigned_payload.get("fee_payment"),
+            context="quote_fees.unsigned_payload.fee_payment",
+        )
+        payload = self._vpn_json_request(
+            "POST",
+            "/v1/fees/quote",
+            body_payload={
+                "payload": self._clone_json_value(
+                    unsigned_payload,
+                    context="quote_fees.unsigned_payload",
+                )
+            },
+            canonical_auth=canonical_auth,
+            context="fee quote response",
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("fee quote endpoint returned no payload")
+        response = dict(self._ensure_mapping(payload, "fee quote response"))
+        try:
+            quoted_intent = self._normalize_fee_payment_intent(
+                response.get("intent"),
+                context="fee quote response.intent",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("fee quote response.intent is not canonical") from exc
+        requested_value = requested_intent["value"]
+        quoted_value = quoted_intent["value"]
+        same_selection = (
+            requested_intent["payer"] == quoted_intent["payer"]
+            and requested_value["gas_limit"] == quoted_value["gas_limit"]
+        )
+        if same_selection and requested_intent["payer"] == "sponsor":
+            same_selection = (
+                requested_value["program_id"] == quoted_value["program_id"]
+                and requested_value["program_revision"]
+                == quoted_value["program_revision"]
+            )
+        if not same_selection:
+            raise RuntimeError(
+                "fee quote response changed the requested payer, sponsor revision, or gas bound"
+            )
+        return response
+
+    def get_fee_sponsor_program(
+        self,
+        program_id: str,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> Dict[str, Any]:
+        """Fetch one exact on-chain sponsor program by canonical identifier."""
+
+        literal = self._require_non_empty_string(
+            program_id,
+            "get_fee_sponsor_program.program_id",
+        )
+        sponsor, separator, name = literal.partition("/")
+        if (
+            literal != program_id
+            or separator != "/"
+            or not name
+            or "/" in name
+            or any(char.isspace() for char in name)
+        ):
+            raise ValueError(
+                "get_fee_sponsor_program.program_id must be an exact sponsor/program literal"
+            )
+        self._require_exact_i105_account_id(
+            sponsor,
+            "get_fee_sponsor_program.program_id.sponsor",
+        )
+        payload = self._vpn_json_request(
+            "POST",
+            "/v1/fee-sponsor-programs/by-id",
+            body_payload={"program_id": literal},
+            canonical_auth=self._require_vpn_canonical_auth(
+                canonical_auth,
+                "get_fee_sponsor_program",
+            ),
+            context="fee sponsor program response",
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("fee sponsor program endpoint returned no payload")
+        response = dict(self._ensure_mapping(payload, "fee sponsor program response"))
+        response_id = response.get("id")
+        if not isinstance(response_id, Mapping) or set(response_id) != {"sponsor", "name"}:
+            raise RuntimeError(
+                "fee sponsor program response.id must contain only sponsor and name"
+            )
+        try:
+            response_sponsor = self._require_exact_i105_account_id(
+                response_id.get("sponsor"),
+                "fee sponsor program response.id.sponsor",
+            )
+            response_name = _require_exact_non_empty_string(
+                response_id.get("name"),
+                "fee sponsor program response.id.name",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("fee sponsor program response.id is not canonical") from exc
+        if response_sponsor != sponsor or response_name != name:
+            raise RuntimeError(
+                "fee sponsor program response.id does not match the requested program"
+            )
+        return response
+
     def call_contract(
         self,
         *,
         authority: str,
         private_key: str,
+        fee_payment: Mapping[str, Any],
         entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
-        gas_limit: Any,
     ) -> ContractCallResponse:
         """Invoke a deployed contract via ``POST /v1/contracts/call``."""
 
@@ -11658,20 +11790,12 @@ class ToriiClient:
                 payload,
                 context="call_contract.payload",
             )
-        if gas_asset_id is not None:
-            request_payload["gas_asset_id"] = self._require_non_empty_string(
-                gas_asset_id,
-                "call_contract.gas_asset_id",
-            )
-        if fee_sponsor is not None:
-            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
-                fee_sponsor,
-                "call_contract.fee_sponsor",
-            )
-        gas_limit_value = self._coerce_int(gas_limit, "call_contract.gas_limit")
-        if gas_limit_value <= 0:
-            raise ValueError("call_contract.gas_limit must be positive")
-        request_payload["gas_limit"] = gas_limit_value
+        normalized_fee_payment = self._normalize_fee_payment_intent(
+            fee_payment,
+            context="call_contract.fee_payment",
+            require_gas_limit=True,
+        )
+        request_payload["fee_payment"] = normalized_fee_payment
         response = self._request(
             "POST",
             "/v1/contracts/call",
@@ -11698,10 +11822,10 @@ class ToriiClient:
         multisig_account_alias: Optional[str] = None,
         signer_account_id: str,
         instructions: Sequence[Any],
+        fee_payment: Mapping[str, Any],
         public_key_hex: Optional[str] = None,
         signature_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
-        fee_sponsor: Optional[str] = None,
     ) -> MultisigResponse:
         """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
 
@@ -11739,6 +11863,11 @@ class ToriiClient:
                 for index, value in enumerate(instruction_values)
             ],
         }
+        normalized_fee_payment = self._normalize_fee_payment_intent(
+            fee_payment,
+            context="propose_multisig.fee_payment",
+        )
+        request_payload["fee_payment"] = normalized_fee_payment
         if has_account_id:
             request_payload["multisig_account_id"] = self._normalize_canonical_account_id(
                 multisig_account_id,
@@ -11767,12 +11896,6 @@ class ToriiClient:
         )
         if normalized_creation_time is not None:
             request_payload["creation_time_ms"] = normalized_creation_time
-        if fee_sponsor is not None:
-            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
-                fee_sponsor,
-                "propose_multisig.fee_sponsor",
-            )
-
         body = self._post_json(
             "/v1/multisig/propose",
             request_payload,
@@ -13853,6 +13976,122 @@ class ToriiClient:
             )
         }
 
+    @classmethod
+    def _normalize_fee_payment_intent(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        context: str,
+        require_gas_limit: bool = False,
+    ) -> Dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise TypeError(f"{context} must be an object")
+        if set(value) != {"payer", "value"}:
+            raise ValueError(f"{context} must contain only payer and value")
+        payer = _require_exact_non_empty_string(value.get("payer"), f"{context}.payer")
+        if payer not in {"authority", "sponsor"}:
+            raise ValueError(f"{context}.payer must be authority or sponsor")
+        payment = value.get("value")
+        if not isinstance(payment, Mapping):
+            raise TypeError(f"{context}.value must be an object")
+        allowed = {"charge_limits", "gas_limit"}
+        if payer == "sponsor":
+            allowed.update({"program_id", "program_revision"})
+        if set(payment) - allowed:
+            raise ValueError(f"{context}.value contains unsupported fields")
+        if "charge_limits" not in payment:
+            raise ValueError(f"{context}.value.charge_limits is required")
+        charge_limits = payment["charge_limits"]
+        if isinstance(charge_limits, (str, bytes, bytearray, memoryview)) or not isinstance(
+            charge_limits, Sequence
+        ):
+            raise TypeError(f"{context}.value.charge_limits must be an array")
+        if len(charge_limits) > 2:
+            raise ValueError(f"{context}.value.charge_limits contains too many entries")
+        normalized_limits: List[Dict[str, Any]] = []
+        previous_kind = -1
+        for index, raw in enumerate(charge_limits):
+            item_context = f"{context}.value.charge_limits[{index}]"
+            if not isinstance(raw, Mapping):
+                raise TypeError(f"{item_context} must be an object")
+            if set(raw) != {"kind", "asset_definition_id", "max_amount"}:
+                raise ValueError(f"{item_context} has unsupported or missing fields")
+            tagged_kind = raw["kind"]
+            if (
+                not isinstance(tagged_kind, Mapping)
+                or set(tagged_kind) != {"kind", "value"}
+                or tagged_kind.get("value") is not None
+            ):
+                raise ValueError(f"{item_context}.kind must be a canonical tagged unit")
+            kind_literal = tagged_kind.get("kind")
+            kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+            if kind < 0:
+                raise ValueError(f"{item_context}.kind is unsupported")
+            if kind <= previous_kind:
+                raise ValueError(
+                    f"{context}.value.charge_limits must be unique and canonically ordered"
+                )
+            previous_kind = kind
+            asset_definition_id = _offline_canonical_asset_definition_id(
+                raw["asset_definition_id"],
+                f"{item_context}.asset_definition_id",
+            )
+            max_amount = cls._quantity(raw["max_amount"], f"{item_context}.max_amount")
+            if max_amount == "0":
+                raise ValueError(f"{item_context}.max_amount must be positive")
+            normalized_limits.append(
+                {
+                    "kind": {"kind": kind_literal, "value": None},
+                    "asset_definition_id": asset_definition_id,
+                    "max_amount": max_amount,
+                }
+            )
+        gas_limit = payment.get("gas_limit")
+        if gas_limit is not None:
+            gas_limit = cls._normalize_optional_int(
+                gas_limit,
+                f"{context}.value.gas_limit",
+                allow_zero=False,
+            )
+        if require_gas_limit and gas_limit is None:
+            raise ValueError(f"{context}.value.gas_limit is required")
+        normalized_value: Dict[str, Any] = {
+            "charge_limits": normalized_limits,
+            "gas_limit": gas_limit,
+        }
+        if payer == "sponsor":
+            program_id = payment.get("program_id")
+            if not isinstance(program_id, Mapping) or set(program_id) != {"sponsor", "name"}:
+                raise ValueError(f"{context}.value.program_id must contain sponsor and name")
+            sponsor = cls._require_exact_i105_account_id(
+                program_id.get("sponsor"),
+                f"{context}.value.program_id.sponsor",
+            )
+            name = _require_exact_non_empty_string(
+                program_id.get("name"),
+                f"{context}.value.program_id.name",
+            )
+            if (
+                unicodedata.normalize("NFC", name) != name
+                or any(char.isspace() or ord(char) < 0x20 for char in name)
+                or any(char in "@#$/" for char in name)
+            ):
+                raise ValueError(f"{context}.value.program_id.name must be canonical")
+            revision = cls._normalize_optional_int(
+                payment.get("program_revision"),
+                f"{context}.value.program_revision",
+                allow_zero=False,
+            )
+            if revision is None:
+                raise ValueError(f"{context}.value.program_revision is required")
+            normalized_value.update(
+                {
+                    "program_id": {"sponsor": sponsor, "name": name},
+                    "program_revision": revision,
+                }
+            )
+        return {"payer": payer, "value": normalized_value}
+
     @staticmethod
     def _normalize_required_base64_payload(value: Any, context: str) -> str:
         if not isinstance(value, str):
@@ -14375,34 +14614,8 @@ class ToriiClient:
                     fees.get("per_gas_unit_fee"),
                     context=f"{context}.fees.per_gas_unit_fee",
                 ),
-                sponsorship_enabled=self._coerce_bool(
-                    fees.get("sponsorship_enabled"),
-                    f"{context}.fees.sponsorship_enabled",
-                ),
-                sponsor_max_fee=self._clone_json_value(
-                    fees.get("sponsor_max_fee"),
-                    context=f"{context}.fees.sponsor_max_fee",
-                ),
-                sponsor_verified_balance_safety_floor=self._clone_json_value(
-                    fees.get("sponsor_verified_balance_safety_floor"),
-                    context=f"{context}.fees.sponsor_verified_balance_safety_floor",
-                ),
-                canonical_sponsor_account_id=(
-                    None
-                    if fees.get("canonical_sponsor_account_id") is None
-                    else str(fees.get("canonical_sponsor_account_id"))
-                ),
-                fee_receipts_activation_height=self._coerce_int(
-                    fees.get("fee_receipts_activation_height"),
-                    f"{context}.fees.fee_receipts_activation_height",
-                ),
-                external_settlement_enabled=self._coerce_bool(
-                    fees.get("external_settlement_enabled"),
-                    f"{context}.fees.external_settlement_enabled",
-                ),
-                burn_from_unix_timestamp_ms=self._coerce_int(
-                    fees.get("burn_from_unix_timestamp_ms"),
-                    f"{context}.fees.burn_from_unix_timestamp_ms",
+                sponsor_vault_custody_account_id=str(
+                    fees.get("sponsor_vault_custody_account_id") or ""
                 ),
                 settlement_mode=str(fees.get("settlement_mode") or ""),
                 successful_claim_fee_exempt_authorities=self._parse_string_array(
@@ -16657,13 +16870,16 @@ class ToriiClient:
                 record.get("gas_used"),
                 context=f"{context}.gas_used",
             ),
-            gas_asset_id=ToriiClient._coerce_optional_string(
-                record.get("gas_asset_id"),
-                context=f"{context}.gas_asset_id",
-            ),
-            fee_sponsor=ToriiClient._coerce_optional_string(
-                record.get("fee_sponsor"),
-                context=f"{context}.fee_sponsor",
+            fee_payment=(
+                ToriiClient._normalize_fee_payment_intent(
+                    ToriiClient._ensure_mapping(
+                        record.get("fee_payment"), f"{context}.fee_payment"
+                    ),
+                    context=f"{context}.fee_payment",
+                    require_gas_limit=True,
+                )
+                if record.get("fee_payment") is not None
+                else None
             ),
             payload_digest_hex=ToriiClient._normalize_hex_string(
                 record.get("payload_digest_hex"),

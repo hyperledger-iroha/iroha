@@ -47,6 +47,17 @@ Outputs:
 3. Extract the bundle (`tar --use-compress-program=zstd -xf <tar>`) and place `bin/` in the deployment PATH. Apply local configuration overrides where necessary.
 4. Load the container image with `docker load -i <profile>-<version>-<os>-image.tar` if using containerised deployments. Verify the hash/signature as above before loading.
 
+## Validator host platform
+
+First-release production voting-validator artifacts target Linux. macOS arm64
+is also a source-bound Sumeragi v2 release-evidence host, but is not the
+published production deployment artifact. Windows and other non-Unix builds
+are restricted development or non-voting-observer surfaces: they do not
+implement the complete crash-safe validator-storage contract, their complete
+observer application path is not release-certified, and they must fail if
+configured as a voting validator. Compile success alone is not validator
+certification.
+
 ## Nexus configuration checklist
 
 - `config/config.toml` must include `[nexus]`, `[nexus.lane_catalog]`, `[nexus.dataspace_catalog]`, and `[nexus.da]` sections.

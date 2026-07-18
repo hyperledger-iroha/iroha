@@ -16,9 +16,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -27,8 +29,10 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.TypeAdapter;
 import org.junit.Test;
 
-/** Exact Rust/Java parity and adversarial coverage for the sole ABI-20 registration path. */
+/** Exact Rust/Java parity and adversarial coverage for the sole ABI-21 registration path. */
 public final class RegisterOfflineDeviceAttestationTests {
+  private static final FeePaymentIntent TEST_FEE_PAYMENT =
+      FeePaymentIntent.authority(Collections.emptyList());
 
   private static final String P256_GENERATOR =
       "04"
@@ -41,7 +45,7 @@ public final class RegisterOfflineDeviceAttestationTests {
     assertEquals(5, rust.size());
     final DeviceAttestationRegistration registration = registration(rust.get(3));
 
-    assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals(21, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertArrayEquals(hexToBytes(rust.get(0)), registration.noritoEncoded());
     assertArrayEquals(hexToBytes(rust.get(2)), registration.challengeHash());
     assertArrayEquals(hexToBytes(rust.get(4)), registration.canonicalRegistrationHash());
@@ -189,17 +193,20 @@ public final class RegisterOfflineDeviceAttestationTests {
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 0L, 1, null));
+                "00000000", accountId, registration, 1_900_000_000_000L, 0L, 1,
+                TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 1L, 0, null));
+                "00000000", accountId, registration, 1_900_000_000_000L, 1L, 0,
+                TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, Long.MAX_VALUE - 1, 2L, 1, null));
+                "00000000", accountId, registration, Long.MAX_VALUE - 1, 2L, 1,
+                TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -210,7 +217,8 @@ public final class RegisterOfflineDeviceAttestationTests {
                 registration.expiresAtMs() - 1,
                 2L,
                 1,
-                null));
+                TEST_FEE_PAYMENT,
+                Collections.emptyMap()));
   }
 
   private static RegisterOfflineDeviceAttestation request(
@@ -222,7 +230,8 @@ public final class RegisterOfflineDeviceAttestationTests {
         1_900_000_000_000L,
         60_000L,
         7,
-        null);
+        TEST_FEE_PAYMENT,
+        Collections.emptyMap());
   }
 
   private static DeviceAttestationRegistration registration(final String accountId)

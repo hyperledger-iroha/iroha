@@ -1,7 +1,7 @@
 //! Integration-style test: non-VM (native ISI) transaction gas metering and fee transfer.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names)]
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 use iroha_core::{
@@ -10,10 +10,12 @@ use iroha_core::{
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
+use iroha_data_model::transaction::signed::TransactionSignatureError;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
@@ -38,20 +40,86 @@ fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
 
-fn default_fee_sponsor_policy(sponsor: &AccountId) -> iroha_data_model::nexus::FeeSponsorPolicy {
-    let mut policy = iroha_data_model::nexus::FeeSponsorPolicy::new(
-        iroha_data_model::nexus::FeeSponsorPolicyId::new(
-            sponsor.clone(),
-            "default".parse().expect("default fee sponsor policy"),
-        ),
+fn default_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
+    FeeSponsorProgramId::new(
+        sponsor.clone(),
+        "default".parse().expect("default fee sponsor program"),
+    )
+}
+
+fn provision_fee_sponsor_program(
+    state_transaction: &mut iroha_core::state::StateTransaction<'_, '_>,
+    sponsor: &AccountId,
+    beneficiary: &AccountId,
+    program_id: &FeeSponsorProgramId,
+    asset_definition_id: &AssetDefinitionId,
+    instruction: &InstructionBox,
+    allocation: u128,
+    activate_at_height: u64,
+) {
+    let setup_call_hash = iroha_crypto::Hash::new(
+        format!("iroha:test:fee-sponsor-program-setup:{program_id}").as_bytes(),
     );
-    policy.enabled = true;
-    policy
-        .rules
-        .push(iroha_data_model::nexus::FeeSponsorRule::new(
-            iroha_data_model::nexus::FeeSponsorRuleEffect::Allow,
-        ));
-    policy
+    let previous_call_hash = state_transaction.tx_call_hash.replace(setup_call_hash);
+    let selector = FeeSponsorRuleSelector::NativeInstruction(
+        iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
+            wire_id: iroha_data_model::isi::instruction_wire_id(instruction)
+                .expect("native instruction must have a registered wire id")
+                .to_owned(),
+            asset_definition_id: None,
+        },
+    );
+    let revision = FeeSponsorProgramRevision {
+        program_id: program_id.clone(),
+        revision: 1,
+        eligibility: FeeSponsorEligibility::EnrolledOnly,
+        rules: vec![FeeSponsorRule {
+            id: "allow_set_account_metadata"
+                .parse()
+                .expect("valid sponsor rule id"),
+            effect: FeeSponsorRuleEffect::Allow,
+            selectors: vec![selector],
+        }],
+        asset_budgets: vec![FeeSponsorAssetBudget {
+            asset_definition_id: asset_definition_id.clone(),
+            per_transaction: Quantity::from(allocation),
+            per_block: Quantity::from(allocation),
+            per_program_epoch: Quantity::from(allocation),
+            per_beneficiary_epoch: Quantity::from(allocation),
+            reserve_floor: Quantity::zero(),
+            epoch_length_blocks: nonzero!(1_u64),
+        }],
+    };
+
+    iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(program_id.clone()),
+    }
+    .execute(sponsor, state_transaction)
+    .expect("create fee sponsor program");
+    iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }
+        .execute(sponsor, state_transaction)
+        .expect("stage fee sponsor program revision");
+    iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
+        program_id: program_id.clone(),
+        beneficiary: beneficiary.clone(),
+    }
+    .execute(sponsor, state_transaction)
+    .expect("enroll fee sponsor beneficiary");
+    iroha_data_model::isi::nexus::FundFeeSponsorProgram {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+        amount: Quantity::from(allocation),
+    }
+    .execute(sponsor, state_transaction)
+    .expect("fund fee sponsor program");
+    iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision {
+        program_id: program_id.clone(),
+        revision: 1,
+        activate_at_height,
+    }
+    .execute(sponsor, state_transaction)
+    .expect("activate fee sponsor program revision");
+    state_transaction.tx_call_hash = previous_call_hash;
 }
 
 #[test]
@@ -106,19 +174,23 @@ fn non_vm_instructions_charge_fees() {
     });
     assert!(used > 0);
 
-    // Metadata specifying gas asset + generous limit
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        NonZeroU64::new(1_000_000),
     );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     // 4) Execute via executor and verify fee transfer
     let executor = Executor::default();
@@ -215,16 +287,22 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     });
     assert!(used > 0);
 
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        NonZeroU64::new(1_000_000),
     );
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     let executor = Executor::default();
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -267,18 +345,17 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
 
 #[test]
 fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
-    use iroha_core::smartcontracts::Execute;
-    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
-
-    // 1) Minimal world: domains, accounts, asset definition, sponsor balance, tech account
+    // 1) Minimal world: domains, accounts, asset definition, sponsor balance, custody, and tech account
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+    let (custody_id, _custody_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
     let dom_i: Domain = Domain::new(DomainId::try_new("ivm", "universal").unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let sponsor = new_account_in_domain(&sponsor_id, "wonderland");
+    let custody = new_account_in_domain(&custody_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -287,12 +364,13 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
+    let custody_asset = AssetId::of(asset_def_id.clone(), custody_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
-        [alice, sponsor, tech],
+        [alice, sponsor, custody, tech],
         [ad],
         [sponsor_balance, payer_balance],
         [],
@@ -300,8 +378,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let mut state = new_state(world, kura, query_handle);
+    state.nexus.get_mut().fees.sponsor_vault_custody_account_id = custody_id.clone();
 
-    // 2) Configure pipeline gas policy + enable sponsorship
+    // 2) Configure pipeline gas policy.
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
     pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
@@ -314,11 +393,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
-        nexus.fees.sponsorship_enabled = true;
-    }
+    state.nexus.get_mut().enabled = true;
 
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -335,23 +410,26 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     });
     assert!(used > 0);
 
-    // Metadata specifying gas asset + generous limit + fee sponsor
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
-    );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
-    md.insert(
-        "fee_sponsor".parse().unwrap(),
-        iroha_primitives::json::Json::new(sponsor_id.to_string()),
+    let program_id = default_fee_sponsor_program_id(&sponsor_id);
+    let fee_payment = FeePaymentIntent::sponsor(
+        program_id.clone(),
+        1,
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        None,
     );
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     // 4) Execute via executor and verify sponsored fee transfer
     let executor = Executor::default();
@@ -359,19 +437,16 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
 
-    // Grant the authority permission to charge fees to the sponsor.
-    iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
-        policy: default_fee_sponsor_policy(&sponsor_id),
-    }
-    .execute(&sponsor_id, &mut state_tx)
-    .expect("upsert fee sponsor policy");
-    let permission = CanUseFeeSponsor {
-        sponsor: sponsor_id.clone(),
-        policy: "default".parse().expect("default fee sponsor policy"),
-    };
-    Grant::account_permission(permission, alice_id.clone())
-        .execute(&sponsor_id, &mut state_tx)
-        .expect("grant fee sponsor permission");
+    provision_fee_sponsor_program(
+        &mut state_tx,
+        &sponsor_id,
+        &alice_id,
+        &program_id,
+        &asset_def_id,
+        &instruction,
+        init,
+        1,
+    );
     state_tx.nexus.enabled = false;
 
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -385,7 +460,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     // Fee = used * rate (units_per_gas)
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
 
-    // Read balances and assert transfer took place from sponsor -> tech
+    // Funding moved the allocation into protocol custody; charging moves only the fee to tech.
     let payer_balance_after = state_tx
         .world
         .assets()
@@ -399,7 +474,13 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .expect("sponsor asset exists")
+        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
+        .unwrap_or(0);
+    let custody_balance_after = state_tx
+        .world
+        .assets()
+        .get(&custody_asset)
+        .expect("custody asset exists")
         .0
         .as_numeric()
         .try_mantissa_u128()
@@ -415,24 +496,25 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .unwrap();
 
     assert_eq!(payer_balance_after, 0);
-    assert_eq!(sponsor_balance_after, init - fee);
+    assert_eq!(sponsor_balance_after, 0);
+    assert_eq!(custody_balance_after, init - fee);
     assert_eq!(payee_balance_after, fee);
 }
 
 #[test]
 fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     use iroha_core::block::{BlockBuilder, ValidBlock};
-    use iroha_core::smartcontracts::Execute;
-    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
 
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+    let (custody_id, _custody_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
     let dom_i: Domain = Domain::new(DomainId::try_new("ivm", "universal").unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let sponsor = new_account_in_domain(&sponsor_id, "wonderland");
+    let custody = new_account_in_domain(&custody_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -441,13 +523,14 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
+    let custody_asset = AssetId::of(asset_def_id.clone(), custody_id.clone());
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
-        [alice, sponsor, tech],
+        [alice, sponsor, custody, tech],
         [ad],
         [sponsor_balance, payer_balance],
         [],
@@ -455,7 +538,18 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let mut state = new_state(world, kura, query_handle);
-    state.nexus.get_mut().enabled = true;
+    {
+        let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
+        nexus.fees.sponsor_vault_custody_account_id = custody_id.clone();
+    }
+    let program_id = default_fee_sponsor_program_id(&sponsor_id);
+    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+        alice_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )
+    .into();
 
     let setup_block = BlockBuilder::new(Vec::new())
         .chain(0, None)
@@ -470,20 +564,16 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     {
         let mut setup_state_tx = setup_state_block.transaction();
         setup_state_tx.nexus.enabled = true;
-        iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
-            policy: default_fee_sponsor_policy(&sponsor_id),
-        }
-        .execute(&sponsor_id, &mut setup_state_tx)
-        .expect("upsert fee sponsor policy");
-        Grant::account_permission(
-            CanUseFeeSponsor {
-                sponsor: sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            },
-            alice_id.clone(),
-        )
-        .execute(&sponsor_id, &mut setup_state_tx)
-        .expect("grant fee sponsor permission");
+        provision_fee_sponsor_program(
+            &mut setup_state_tx,
+            &sponsor_id,
+            &alice_id,
+            &program_id,
+            &asset_def_id,
+            &instruction,
+            init,
+            1,
+        );
         setup_state_tx.apply();
     }
     setup_state_block
@@ -492,21 +582,24 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     {
         let check_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut check_block = state.block(check_header);
-        let mut check_tx = check_block.transaction();
-        assert!(
-            check_tx.can_use_fee_sponsor(&alice_id, &sponsor_id),
-            "setup block must grant CanUseFeeSponsor permission"
-        );
+        let check_tx = check_block.transaction();
+        let program = check_tx
+            .world
+            .fee_sponsor_programs()
+            .get(&program_id)
+            .expect("setup block must create the exact fee sponsor program");
+        assert_eq!(program.lifecycle, FeeSponsorProgramLifecycle::Active);
+        assert_eq!(program.active_revision, Some(1));
         assert!(
             check_tx
                 .world
-                .fee_sponsor_policies()
-                .get(&iroha_data_model::nexus::FeeSponsorPolicyId::new(
-                    sponsor_id.clone(),
-                    "default".parse().expect("default fee sponsor policy"),
-                ))
+                .fee_sponsor_enrollments()
+                .get(&iroha_data_model::nexus::FeeSponsorEnrollmentKey {
+                    program_id: program_id.clone(),
+                    beneficiary: alice_id.clone(),
+                })
                 .is_some(),
-            "setup block must create the default fee sponsor policy"
+            "setup block must enroll the authority in the exact sponsor program"
         );
     }
 
@@ -521,33 +614,26 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.enabled = false;
-        nexus.fees.sponsorship_enabled = true;
-    }
+    state.nexus.get_mut().enabled = false;
 
-    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
-        alice_id.clone(),
-        "k".parse().unwrap(),
-        iroha_primitives::json::Json::new("v"),
-    )
-    .into();
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
-    );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
-    md.insert(
-        "fee_sponsor".parse().unwrap(),
-        iroha_primitives::json::Json::new(sponsor_id.to_string()),
+    let fee_payment = FeePaymentIntent::sponsor(
+        program_id,
+        1,
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        None,
     );
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(Executable::from(core::iter::once(instruction)))
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(Executable::from(core::iter::once(instruction)))
+    .sign(alice_kp.private_key());
 
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     // Build a height>1 block so genesis fee bypass never applies in this test.
@@ -581,7 +667,13 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .expect("sponsor asset exists")
+        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
+        .unwrap_or(0);
+    let custody_balance_after = inspect_tx
+        .world
+        .assets()
+        .get(&custody_asset)
+        .expect("custody asset exists")
         .0
         .as_numeric()
         .try_mantissa_u128()
@@ -599,10 +691,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         "overlay transaction must apply instruction effects; validation_events={validation_events:?}"
     );
     assert_eq!(payer_balance_after, 0);
-    assert!(
-        sponsor_balance_after < init,
-        "sponsor must pay fees in overlay pipeline path"
-    );
+    assert_eq!(sponsor_balance_after, 0);
+    assert!(custody_balance_after < init);
     let payee_balance_after = inspect_tx
         .world
         .assets()
@@ -665,17 +755,18 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         iroha_primitives::json::Json::new("v"),
     )
     .into();
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        NonZeroU64::new(1_000_000),
     );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
 
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-    let tx = TransactionBuilder::new(chain, alice_id.clone())
+    let tx = TransactionBuilder::new(chain, alice_id.clone(), fee_payment)
         .with_executable(Executable::from(core::iter::once(instruction)))
-        .with_metadata(md)
         .sign(alice_kp.private_key());
 
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -757,15 +848,25 @@ fn non_vm_gas_limit_too_low_rejects() {
     });
     assert!(used > 0);
 
-    // Provide a gas_limit smaller than metered usage
-    let mut md = Metadata::default();
-    md.insert("gas_limit".parse().unwrap(), used.saturating_sub(1));
+    let gas_limit = NonZeroU64::new(used.saturating_sub(1))
+        .expect("metered instruction usage must exceed one gas unit");
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(1_000_000_u64),
+        )],
+        Some(gas_limit),
+    );
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     let executor = Executor::default();
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -791,7 +892,10 @@ fn ivm_syscall_charges_fees() {
     );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-    let init = 100_000u128;
+    let rate: u64 = 10;
+    let gas_bound = 1_000_000_u64;
+    let fee_capacity = u128::from(gas_bound) * u128::from(rate);
+    let init = fee_capacity + 100;
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
@@ -801,7 +905,6 @@ fn ivm_syscall_charges_fees() {
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
     pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
-    let rate: u64 = 10;
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
@@ -825,18 +928,23 @@ fn ivm_syscall_charges_fees() {
 
     let exec = Executable::Ivm(IvmBytecode::from_compiled(program));
 
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(fee_capacity),
+        )],
+        NonZeroU64::new(gas_bound),
     );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     let executor = Executor::default();
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -880,16 +988,8 @@ fn ivm_syscall_charges_fees() {
 }
 
 #[test]
-fn gas_limit_metadata_invalid_rejects() {
+fn legacy_gas_limit_metadata_string_is_rejected() {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
-    let dom: Domain =
-        Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
-    let alice = new_account_in_domain(&alice_id, "wonderland");
-    let world = World::with([dom], [alice], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = query::store::LiveQueryStore::start_test();
-    let state = new_state(world, kura, query_handle);
-
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
         "k".parse().unwrap(),
@@ -905,37 +1005,26 @@ fn gas_limit_metadata_invalid_rejects() {
     );
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
-
-    let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
-    match res {
-        Err(ValidationFail::NotPermitted(msg)) => assert!(
-            msg.contains("invalid gas_limit metadata"),
-            "unexpected rejection: {msg}"
-        ),
-        other => panic!("expected invalid gas_limit rejection, got {other:?}"),
-    }
+    let error = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(exec)
+    .with_metadata(md)
+    .try_sign(alice_kp.private_key())
+    .expect_err("legacy gas_limit metadata must fail before signing");
+    assert_eq!(
+        error,
+        TransactionSignatureError::InvalidFeePaymentIntent(
+            "legacy transaction metadata key `gas_limit` is not supported".to_owned(),
+        )
+    );
 }
 
 #[test]
-fn gas_limit_metadata_zero_rejects() {
+fn legacy_gas_limit_metadata_zero_is_rejected() {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
-    let dom: Domain =
-        Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
-    let alice = new_account_in_domain(&alice_id, "wonderland");
-    let world = World::with([dom], [alice], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = query::store::LiveQueryStore::start_test();
-    let state = new_state(world, kura, query_handle);
-
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
         "k".parse().unwrap(),
@@ -951,24 +1040,21 @@ fn gas_limit_metadata_zero_rejects() {
     );
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
-
-    let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
-    match res {
-        Err(ValidationFail::NotPermitted(msg)) => assert!(
-            msg.contains("gas_limit must be positive"),
-            "unexpected rejection: {msg}"
-        ),
-        other => panic!("expected invalid gas_limit rejection, got {other:?}"),
-    }
+    let error = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(exec)
+    .with_metadata(md)
+    .try_sign(alice_kp.private_key())
+    .expect_err("legacy gas_limit metadata must fail before signing");
+    assert_eq!(
+        error,
+        TransactionSignatureError::InvalidFeePaymentIntent(
+            "legacy transaction metadata key `gas_limit` is not supported".to_owned(),
+        )
+    );
 }
 
 #[test]
@@ -987,7 +1073,10 @@ fn ivm_gas_fees_record_settlement_receipt() {
     );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-    let init = 100_000u128;
+    let rate: u64 = 7;
+    let gas_bound = 1_000_000_u64;
+    let fee_capacity = u128::from(gas_bound) * u128::from(rate);
+    let init = fee_capacity + 100;
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
@@ -998,7 +1087,6 @@ fn ivm_gas_fees_record_settlement_receipt() {
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
     pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
-    let rate: u64 = 7;
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
@@ -1023,19 +1111,23 @@ fn ivm_gas_fees_record_settlement_receipt() {
     let mut program = meta.encode();
     program.extend_from_slice(&code);
 
-    // Metadata specifying gas asset + generous limit
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(fee_capacity),
+        )],
+        NonZeroU64::new(gas_bound),
     );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+    .sign(alice_kp.private_key());
     let tx_hash = tx.hash();
 
     // 4) Execute via executor and verify settlement receipt is recorded
@@ -1109,18 +1201,23 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     }];
     state.set_pipeline(pipeline);
 
-    let mut md = Metadata::default();
-    md.insert(
-        "gas_asset_id".parse().unwrap(),
-        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    let fee_payment = FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::PipelineGas,
+            asset_def_id.clone(),
+            Quantity::from(init),
+        )],
+        NonZeroU64::new(1_000_000),
     );
-    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
 
     let chain: ChainId = "test-chain".parse().unwrap();
-    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
-        .with_executable(exec)
-        .with_metadata(md)
-        .sign(alice_kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain,
+        alice_id.clone(),
+        fee_payment,
+    )
+    .with_executable(exec)
+    .sign(alice_kp.private_key());
 
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);

@@ -157,7 +157,10 @@ _SEED_SCENARIOS = (
     "authoritative_v2_finalizes_through_validator_restart",
     "taira_npos_leader_timeout_commits_within_rotation_bound",
     "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
+    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
 )
+_SEED_RUNS_PER_SCENARIO = 32
+_SEED_RUN_COUNT = len(_SEED_SCENARIOS) * _SEED_RUNS_PER_SCENARIO
 _SEED_SUMMARY_FIELDS = (
     "profile",
     "source_manifest_sha256",
@@ -183,7 +186,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 185
+_PRODUCTION_TEST_COUNT = 204
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -193,14 +196,14 @@ _PRODUCTION_MODULES = (
     (
         "production-kura-lane-geometry",
         "kura::lane_geometry::tests",
-        2,
+        8,
     ),
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
         8,
     ),
-    ("production-v2-core", "sumeragi::v2_core::tests", 12),
+    ("production-v2-core", "sumeragi::v2_core::tests", 14),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
         "production-v2-core-source-link",
@@ -210,17 +213,26 @@ _PRODUCTION_MODULES = (
     ("production-v2-adapter", "sumeragi::v2::tests", 24),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 39),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 14),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 46),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 15),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 20),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 10),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 11),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 19),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
-        15,
+        16,
     ),
+    (
+        "production-v2-integration-runner",
+        "sumeragi_v2_runner",
+        1,
+    ),
+)
+_PRODUCTION_INTEGRATION_TEST = (
+    "sumeragi_v2_runner::prepare_qc_split_tests::"
+    "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one"
 )
 _DATA_STATUS_TEST = (
     "block::consensus_v2::tests::"
@@ -275,7 +287,8 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
         len(tests) != _PRODUCTION_TEST_COUNT
         or len(set(tests)) != _PRODUCTION_TEST_COUNT
         or any(
-            not test.startswith(("sumeragi::", "kura::")) for test in tests
+            not test.startswith(("sumeragi::", "sumeragi_v2_runner::", "kura::"))
+            for test in tests
         )
     ):
         raise ReceiptError(
@@ -289,9 +302,16 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs = [
         (
             leg_id,
-            "cargo-module",
+            "cargo-exact" if module == "sumeragi_v2_runner" else "cargo-module",
             count,
-            f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1",
+            (
+                "cargo test --locked -p integration_tests --test "
+                "sumeragi_v2_runner_isolated "
+                f"{_PRODUCTION_INTEGRATION_TEST} -- --exact --test-threads=1"
+                if module == "sumeragi_v2_runner"
+                else f"cargo test --locked -p iroha_core --lib {module} "
+                "-- --test-threads=1"
+            ),
         )
         for leg_id, module, count in _PRODUCTION_MODULES
     ]
@@ -409,14 +429,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                173,
+                175,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
             ),
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                440,
+                477,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -3289,6 +3309,7 @@ def _corridor_artifacts(
     logs: list[Path] = []
     module_for_leg = {leg_id: module for leg_id, module, _ in _PRODUCTION_MODULES}
     exact_cargo_tests: dict[str, tuple[str, ...]] = {
+        "production-v2-integration-runner": (_PRODUCTION_INTEGRATION_TEST,),
         "status-rust": (_DATA_STATUS_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
     }
@@ -3367,15 +3388,17 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
             rows = list(reader)
     except UnicodeDecodeError as error:
         raise ReceiptError("seed summary is not UTF-8") from error
-    if len(rows) != 128:
-        raise ReceiptError("seed summary must contain exactly 128 run rows")
+    if len(rows) != _SEED_RUN_COUNT:
+        raise ReceiptError(
+            f"seed summary must contain exactly {_SEED_RUN_COUNT} run rows"
+        )
 
     run_logs = []
     for index, row in enumerate(rows):
         if None in row or set(row) != set(_SEED_SUMMARY_FIELDS):
             raise ReceiptError(f"seed summary row {index} has extra or missing columns")
-        scenario = _SEED_SCENARIOS[index // 32]
-        seed_index = index % 32
+        scenario = _SEED_SCENARIOS[index // _SEED_RUNS_PER_SCENARIO]
+        seed_index = index % _SEED_RUNS_PER_SCENARIO
         expected_seed = (
             scenario if seed_index == 0 else f"{scenario}:seed:{seed_index:02d}"
         )
@@ -3582,8 +3605,8 @@ def build_receipt(
         or seed["head_tree"] != sealed["head_tree"]
         or seed["source_manifest_sha256"] != manifest
         or seed["cargo_lock_sha256"] != sealed["cargo_lock_sha256"]
-        or seed["completed_runs"] != "128"
-        or seed["expected_runs"] != "128"
+        or seed["completed_runs"] != str(_SEED_RUN_COUNT)
+        or seed["expected_runs"] != str(_SEED_RUN_COUNT)
     ):
         raise ReceiptError("seed completion does not describe the exact release matrix")
     seed_summary = _regular_file(seed_path.with_name("summary.tsv"), "seed summary")

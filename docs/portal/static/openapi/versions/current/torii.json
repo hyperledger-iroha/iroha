@@ -940,10 +940,8 @@
             "minLength": 1,
             "type": "string"
           },
-          "fee_sponsor": {
-            "maxLength": 512,
-            "minLength": 1,
-            "type": "string"
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "memo": {
             "maxLength": 256,
@@ -964,6 +962,7 @@
           "asset_balance_scope",
           "amount",
           "destination",
+          "fee_payment",
           "creation_time_ms",
           "transaction_ttl_ms"
         ],
@@ -1088,11 +1087,8 @@
             "minLength": 1,
             "type": "string"
           },
-          "fee_sponsor": {
-            "description": "Exact canonical I105 fee-sponsor account.",
-            "maxLength": 512,
-            "minLength": 1,
-            "type": "string"
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "memo": {
             "description": "At most 256 UTF-8 bytes and free of Unicode control characters.",
@@ -1125,6 +1121,7 @@
           "asset_balance_scope",
           "amount",
           "destination",
+          "fee_payment",
           "creation_time_ms",
           "transaction_ttl_ms"
         ],
@@ -2114,6 +2111,211 @@
         ],
         "type": "object"
       },
+      "ContractCallRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "contract_alias"
+              ]
+            },
+            "required": [
+              "contract_address"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "contract_address"
+              ]
+            },
+            "required": [
+              "contract_alias"
+            ]
+          }
+        ],
+        "properties": {
+          "authority": {
+            "description": "Canonical transaction authority.",
+            "type": "string"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "entrypoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "public_key_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature_b64": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authority",
+          "entrypoint",
+          "fee_payment"
+        ],
+        "type": "object"
+      },
+      "ContractCallSimulateRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "contract_alias"
+              ]
+            },
+            "required": [
+              "contract_address"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "contract_address"
+              ]
+            },
+            "required": [
+              "contract_alias"
+            ]
+          }
+        ],
+        "properties": {
+          "authority": {
+            "type": "string"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "entrypoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "gas_limit": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "authority",
+          "entrypoint",
+          "gas_limit"
+        ],
+        "type": "object"
+      },
+      "ContractDeploymentStateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "description": "Exact canonical I105 deployment authority. The canonical X-Iroha-Account caller must be this account.",
+            "type": "string"
+          },
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "contract_alias"
+        ],
+        "type": "object"
+      },
+      "ContractDeploymentStateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "type": "string"
+          },
+          "chain_discriminant": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "dataspace_alias": {
+            "type": "string"
+          },
+          "dataspace_id": {
+            "description": "Resolved active dataspace id as canonical decimal u64 text.",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "deploy_nonce": {
+            "description": "Current reserved native deployment nonce as canonical decimal u64 text.",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "ledger_time_ms": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "observed_block_hash": {
+            "type": "string"
+          },
+          "observed_block_height": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "previous_contract_address": {
+            "description": "Exact live alias target for CAS, or null for a first deployment or grace-expired raw binding.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "authority",
+          "contract_alias",
+          "deploy_nonce",
+          "dataspace_alias",
+          "dataspace_id",
+          "previous_contract_address",
+          "observed_block_height",
+          "observed_block_hash",
+          "ledger_time_ms",
+          "chain_discriminant"
+        ],
+        "type": "object"
+      },
       "DaCommitmentLocation": {
         "additionalProperties": false,
         "properties": {
@@ -2648,6 +2850,9 @@
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
           },
+          "fee": {
+            "$ref": "#/components/schemas/FeeErrorDetails"
+          },
           "field": {
             "description": "Field associated with validation or decode failures.",
             "maxLength": 1024,
@@ -2907,123 +3112,318 @@
         ],
         "type": "object"
       },
-      "FeeSponsorPolicy": {
+      "FeeChargeKind": {
         "additionalProperties": false,
         "properties": {
-          "enabled": {
+          "kind": {
+            "enum": [
+              "nexus",
+              "pipeline_gas"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "FeeChargeLimit": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FeeChargeKind"
+          },
+          "max_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "kind",
+          "asset_definition_id",
+          "max_amount"
+        ],
+        "type": "object"
+      },
+      "FeeErrorDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "description": "Canonical fee asset involved in the rejection.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          },
+          "available": {
+            "description": "Canonical deterministic amount available at the observation state.",
+            "maxLength": 156,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?$",
+            "type": "string"
+          },
+          "code": {
+            "description": "Stable fee-payment rejection code.",
+            "enum": [
+              "invalid_fee_intent",
+              "program_not_found",
+              "revision_not_found",
+              "revision_not_active",
+              "program_not_active",
+              "beneficiary_not_eligible",
+              "operation_not_allowed",
+              "operation_denied",
+              "invalid_gas_limit",
+              "fee_asset_not_covered",
+              "signed_limit_exceeded",
+              "program_transaction_limit_exceeded",
+              "program_block_budget_exhausted",
+              "program_epoch_budget_exhausted",
+              "beneficiary_epoch_budget_exhausted",
+              "vault_insufficient",
+              "authority_payer_insufficient",
+              "relay_capacity_unavailable",
+              "invalid_program_configuration"
+            ],
+            "type": "string"
+          },
+          "observation_height": {
+            "description": "Consensus height at which the decision was evaluated.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "program_id": {
+            "description": "Exact canonical sponsor-program identifier selected by the signed transaction.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          },
+          "program_revision": {
+            "description": "Exact immutable sponsor-program revision selected by the signed transaction.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "remediation": {
+            "description": "Concrete repair or retry guidance.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          },
+          "required": {
+            "description": "Canonical deterministic amount required at the observation state.",
+            "maxLength": 156,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?$",
+            "type": "string"
+          },
+          "retryable": {
+            "description": "Whether the same signed request can succeed after a state or capacity change.",
             "type": "boolean"
           },
-          "id": {
+          "rule_id": {
+            "description": "Stable matching sponsor-program rule identifier.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "retryable"
+        ],
+        "type": "object"
+      },
+      "FeePaymentIntent": {
+        "oneOf": [
+          {
             "additionalProperties": false,
             "properties": {
-              "name": {
-                "type": "string"
+              "payer": {
+                "const": "authority"
               },
-              "sponsor": {
-                "type": "string"
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "charge_limits": {
+                    "items": {
+                      "$ref": "#/components/schemas/FeeChargeLimit"
+                    },
+                    "type": "array"
+                  },
+                  "gas_limit": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "charge_limits"
+                ],
+                "type": "object"
               }
             },
             "required": [
-              "sponsor",
-              "name"
+              "payer",
+              "value"
             ],
             "type": "object"
           },
-          "max_fee": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Quantity"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "payer": {
+                "const": "sponsor"
               },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Canonical non-negative Quantity string."
-          },
-          "rules": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "asset_transfer_definition_ids": {
-                  "items": {
-                    "description": "Canonical Base58 UUIDv4-backed asset definition id.",
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "contract_selectors": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "contract_address": {
-                        "type": "string"
-                      },
-                      "contract_alias": {
-                        "type": "string"
-                      },
-                      "entrypoints": {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      }
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "charge_limits": {
+                    "items": {
+                      "$ref": "#/components/schemas/FeeChargeLimit"
                     },
-                    "required": [
-                      "entrypoints"
-                    ],
-                    "type": "object"
+                    "type": "array"
                   },
-                  "type": "array"
-                },
-                "dataspaces": {
-                  "items": {
-                    "minimum": 0,
+                  "gas_limit": {
+                    "format": "uint64",
+                    "minimum": 1,
                     "type": "integer"
                   },
-                  "type": "array"
-                },
-                "effect": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "effect": {
-                      "enum": [
-                        "allow",
-                        "deny"
-                      ],
-                      "type": "string"
-                    },
-                    "value": {
-                      "enum": [
-                        null
-                      ],
-                      "nullable": true
-                    }
+                  "program_id": {
+                    "$ref": "#/components/schemas/FeeSponsorProgramId"
                   },
-                  "required": [
-                    "effect",
-                    "value"
-                  ],
-                  "type": "object"
+                  "program_revision": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  }
                 },
-                "executable_kinds": {
-                  "items": {
+                "required": [
+                  "program_id",
+                  "program_revision",
+                  "charge_limits"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "payer",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FeeQuoteCapacity": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "type": "string"
+          },
+          "beneficiary_epoch_remaining": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "block_remaining": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "program_epoch_remaining": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "reserve_floor": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "vault_balance": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "asset_definition_id",
+          "vault_balance",
+          "reserve_floor",
+          "block_remaining",
+          "program_epoch_remaining",
+          "beneficiary_epoch_remaining"
+        ],
+        "type": "object"
+      },
+      "FeeQuoteComponent": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FeeChargeKind"
+          },
+          "max_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "kind",
+          "asset_definition_id",
+          "max_amount"
+        ],
+        "type": "object"
+      },
+      "FeeQuoteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/TransactionPayload"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "type": "object"
+      },
+      "FeeQuoteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "capacities": {
+            "items": {
+              "$ref": "#/components/schemas/FeeQuoteCapacity"
+            },
+            "type": "array"
+          },
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/FeeQuoteComponent"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "accepted"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "debit_source": {
                     "additionalProperties": false,
                     "properties": {
                       "kind": {
                         "enum": [
-                          "instructions",
-                          "contract_call",
-                          "ivm",
-                          "ivm_proved"
+                          "account",
+                          "sponsor_program"
                         ],
                         "type": "string"
                       },
-                      "value": {
-                        "enum": [
-                          null
-                        ],
-                        "nullable": true
-                      }
+                      "value": {}
                     },
                     "required": [
                       "kind",
@@ -3031,60 +3431,157 @@
                     ],
                     "type": "object"
                   },
-                  "type": "array"
+                  "program_revision": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  }
                 },
-                "instruction_wire_ids": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "max_fee": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/Quantity"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Optional canonical non-negative rule-level Quantity fee cap."
-                }
-              },
-              "required": [
-                "effect",
-                "dataspaces",
-                "executable_kinds",
-                "instruction_wire_ids",
-                "asset_transfer_definition_ids",
-                "contract_selectors"
-              ],
-              "type": "object"
+                "required": [
+                  "debit_source"
+                ],
+                "type": "object"
+              }
             },
-            "type": "array"
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "observation": {
+            "additionalProperties": false,
+            "properties": {
+              "ledger_time_ms": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "next_block_height": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "route_dataspace_id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ledger_time_ms",
+              "next_block_height",
+              "route_dataspace_id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "intent",
+          "observation",
+          "components",
+          "capacities",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "FeeSponsorProgram": {
+        "additionalProperties": false,
+        "properties": {
+          "active_revision": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/FeeSponsorProgramId"
+          },
+          "lifecycle": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "staged",
+                  "paused",
+                  "active",
+                  "closing",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "state",
+              "value"
+            ],
+            "type": "object"
+          },
+          "scheduled_activation": {
+            "additionalProperties": false,
+            "properties": {
+              "activate_at_height": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "revision": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "revision",
+              "activate_at_height"
+            ],
+            "type": "object"
+          },
+          "staged_revision": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
           "id",
-          "enabled",
-          "rules"
+          "lifecycle"
         ],
         "type": "object"
       },
-      "FeeSponsorPolicyByIdRequest": {
+      "FeeSponsorProgramByIdRequest": {
         "additionalProperties": false,
         "properties": {
-          "policy_name": {
+          "program_id": {
+            "description": "Canonical sponsor/program literal.",
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id"
+        ],
+        "type": "object"
+      },
+      "FeeSponsorProgramId": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
             "type": "string"
           },
-          "sponsor_account_id": {
+          "sponsor": {
             "description": "Canonical bare I105 sponsor account identifier.",
             "type": "string"
           }
         },
         "required": [
-          "sponsor_account_id",
-          "policy_name"
+          "sponsor",
+          "name"
         ],
         "type": "object"
       },
@@ -4112,8 +4609,8 @@
                 "format": "uint64",
                 "type": "integer"
               },
-              "fee_sponsor": {
-                "type": "string"
+              "fee_payment": {
+                "$ref": "#/components/schemas/FeePaymentIntent"
               },
               "instructions_hash": {
                 "type": "string"
@@ -4132,7 +4629,8 @@
               }
             },
             "required": [
-              "signer_account_id"
+              "signer_account_id",
+              "fee_payment"
             ],
             "type": "object"
           }
@@ -4150,8 +4648,8 @@
                 "format": "uint64",
                 "type": "integer"
               },
-              "fee_sponsor": {
-                "type": "string"
+              "fee_payment": {
+                "$ref": "#/components/schemas/FeePaymentIntent"
               },
               "instructions_hash": {
                 "type": "string"
@@ -4170,7 +4668,8 @@
               }
             },
             "required": [
-              "signer_account_id"
+              "signer_account_id",
+              "fee_payment"
             ],
             "type": "object"
           }
@@ -4280,8 +4779,8 @@
                 "format": "uint64",
                 "type": "integer"
               },
-              "fee_sponsor": {
-                "type": "string"
+              "fee_payment": {
+                "$ref": "#/components/schemas/FeePaymentIntent"
               },
               "instructions_hash": {
                 "type": "string"
@@ -4300,7 +4799,8 @@
               }
             },
             "required": [
-              "signer_account_id"
+              "signer_account_id",
+              "fee_payment"
             ],
             "type": "object"
           }
@@ -4327,15 +4827,8 @@
               "entrypoint": {
                 "type": "string"
               },
-              "fee_sponsor": {
-                "type": "string"
-              },
-              "gas_asset_id": {
-                "type": "string"
-              },
-              "gas_limit": {
-                "format": "uint64",
-                "type": "integer"
+              "fee_payment": {
+                "$ref": "#/components/schemas/FeePaymentIntent"
               },
               "payload": {
                 "type": "object"
@@ -4352,7 +4845,8 @@
             },
             "required": [
               "signer_account_id",
-              "entrypoint"
+              "entrypoint",
+              "fee_payment"
             ],
             "type": "object"
           }
@@ -4740,8 +5234,8 @@
                 "format": "uint64",
                 "type": "integer"
               },
-              "fee_sponsor": {
-                "type": "string"
+              "fee_payment": {
+                "$ref": "#/components/schemas/FeePaymentIntent"
               },
               "instructions": {
                 "items": {
@@ -4764,6 +5258,7 @@
             },
             "required": [
               "signer_account_id",
+              "fee_payment",
               "instructions"
             ],
             "type": "object"
@@ -5824,7 +6319,7 @@
       },
       "OfflineAuthenticatedArtifactSet": {
         "additionalProperties": false,
-        "description": "Exact authenticated ABI-20 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
+        "description": "Exact authenticated ABI-21 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
         "properties": {
           "activation_height": {
             "description": "First height at which this authenticated release may issue notes.",
@@ -5847,7 +6342,7 @@
             "type": "string"
           },
           "manifest_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-20 V4 release manifest.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-21 V4 release manifest.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -5857,14 +6352,14 @@
             "type": "string"
           },
           "max_proof_bytes": {
-            "description": "Authenticated upper bound for one canonical ABI-20 V4 proof-pair payload.",
+            "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload.",
             "format": "uint32",
             "maximum": 16777216,
             "minimum": 1,
             "type": "integer"
           },
           "release_attestation_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-20 V4 release attestation.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-21 V4 release attestation.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -5874,7 +6369,7 @@
             "type": "string"
           },
           "release_policy_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-20 V4 release policy.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-21 V4 release policy.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -6398,7 +6893,7 @@
       },
       "OfflinePastaCycleProofEnvelope": {
         "additionalProperties": false,
-        "description": "Authenticated ABI-20/V4 Eq/Ep proof-pair envelope.",
+        "description": "Authenticated ABI-21/V4 Eq/Ep proof-pair envelope.",
         "properties": {
           "artifact_generation": {
             "maxLength": 128,
@@ -6601,7 +7096,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active ABI-20 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+            "description": "Authoritative active ABI-21 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_recursive_step_eq_verifier": {
             "anyOf": [
@@ -6612,7 +7107,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active ABI-20 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+            "description": "Authoritative active ABI-21 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_topup_shield_verifier": {
             "anyOf": [
@@ -6656,7 +7151,7 @@
                 "type": "null"
               }
             ],
-            "description": "Exact authenticated ABI-20 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
+            "description": "Exact authenticated ABI-21 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
           },
           "asset_definition_id": {
             "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
@@ -6701,7 +7196,7 @@
             "type": "integer"
           },
           "proof_backend_available": {
-            "description": "Whether the exact authenticated ABI-20 V4 artifacts constructed the production recursive verifier backend at this snapshot.",
+            "description": "Whether the exact authenticated ABI-21 V4 artifacts constructed the production recursive verifier backend at this snapshot.",
             "type": "boolean"
           },
           "ready": {
@@ -6709,14 +7204,14 @@
             "type": "boolean"
           },
           "recursive_lineage_supported": {
-            "description": "Whether the exact authenticated ABI-20 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
+            "description": "Whether the exact authenticated ABI-21 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
             "type": "boolean"
           },
           "required_bridge_abi_version": {
-            "description": "Exact native bridge ABI required by the authenticated ABI-20 V4 recursive release.",
+            "description": "Exact native bridge ABI required by the authenticated ABI-21 V4 recursive release.",
             "format": "uint32",
-            "maximum": 20,
-            "minimum": 20,
+            "maximum": 21,
+            "minimum": 21,
             "type": "integer"
           }
         },
@@ -6766,7 +7261,7 @@
       },
       "OfflineRecursiveOperationVector": {
         "additionalProperties": false,
-        "description": "Exact canonical ABI-20 operation row independently carried by the bundle.",
+        "description": "Exact canonical ABI-21 operation row independently carried by the bundle.",
         "properties": {
           "limbs": {
             "items": {
@@ -6897,7 +7392,7 @@
             "$ref": "#/components/schemas/OfflineRedemptionIntent"
           },
           "version": {
-            "description": "Exact ABI-20/V4 chain-request wire version.",
+            "description": "Exact ABI-21/V4 chain-request wire version.",
             "format": "uint16",
             "maximum": 4,
             "minimum": 4,
@@ -7668,7 +8163,7 @@
             "description": "Typed public-to-confidential proof that appends exactly the first spendable note without consuming a confidential input."
           },
           "version": {
-            "description": "Exact ABI-20/V4 chain-request wire version.",
+            "description": "Exact ABI-21/V4 chain-request wire version.",
             "format": "uint16",
             "maximum": 4,
             "minimum": 4,
@@ -8221,27 +8716,8 @@
               "base_fee": {
                 "$ref": "#/components/schemas/JsonValue"
               },
-              "burn_from_unix_timestamp_ms": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "canonical_sponsor_account_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "external_settlement_enabled": {
-                "type": "boolean"
-              },
               "fee_asset_id": {
                 "type": "string"
-              },
-              "fee_receipts_activation_height": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
               },
               "fee_sink_account_id": {
                 "type": "string"
@@ -8258,14 +8734,8 @@
               "settlement_mode": {
                 "type": "string"
               },
-              "sponsor_max_fee": {
-                "$ref": "#/components/schemas/JsonValue"
-              },
-              "sponsor_verified_balance_safety_floor": {
-                "$ref": "#/components/schemas/JsonValue"
-              },
-              "sponsorship_enabled": {
-                "type": "boolean"
+              "sponsor_vault_custody_account_id": {
+                "type": "string"
               },
               "successful_claim_fee_exempt_authorities": {
                 "items": {
@@ -8281,12 +8751,7 @@
               "per_byte_fee",
               "per_instruction_fee",
               "per_gas_unit_fee",
-              "sponsorship_enabled",
-              "sponsor_max_fee",
-              "sponsor_verified_balance_safety_floor",
-              "fee_receipts_activation_height",
-              "external_settlement_enabled",
-              "burn_from_unix_timestamp_ms",
+              "sponsor_vault_custody_account_id",
               "settlement_mode",
               "successful_claim_fee_exempt_authorities"
             ],
@@ -10343,6 +10808,9 @@
               "null"
             ]
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "native_proof_b64": {
             "$ref": "#/components/schemas/SccpCanonicalBase64",
             "description": "Canonical Norito native SCCP admission proof bytes.",
@@ -10359,6 +10827,7 @@
         },
         "required": [
           "authority",
+          "fee_payment",
           "native_proof_b64"
         ],
         "type": "object"
@@ -10375,6 +10844,9 @@
             "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "native_proof_b64": {
             "$ref": "#/components/schemas/SccpCanonicalBase64",
@@ -10394,6 +10866,7 @@
         },
         "required": [
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",
@@ -10402,7 +10875,7 @@
         "type": "object"
       },
       "SccpBridgeMessageSubmitRequest": {
-        "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp.",
+        "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/SccpBridgeMessagePrepareRequest"
@@ -10432,6 +10905,9 @@
             "description": "Canonical Norito SccpGroth16Bn254ProofArtifactV1 bytes.",
             "maxLength": 22457004
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "signature_b64": {
             "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null.",
             "type": "null"
@@ -10443,6 +10919,7 @@
         },
         "required": [
           "authority",
+          "fee_payment",
           "destination_proof_b64"
         ],
         "type": "object"
@@ -10465,6 +10942,9 @@
             "description": "Canonical Norito SccpGroth16Bn254ProofArtifactV1 bytes.",
             "maxLength": 22457004
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "signature_b64": {
             "$ref": "#/components/schemas/SccpCanonicalBase64",
             "description": "Canonical algorithm-specific detached signature bytes for authority.",
@@ -10478,6 +10958,7 @@
         },
         "required": [
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "destination_proof_b64",
@@ -10486,7 +10967,7 @@
         "type": "object"
       },
       "SccpBridgeProofSubmitRequest": {
-        "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp.",
+        "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/SccpBridgeProofPrepareRequest"
@@ -15725,6 +16206,50 @@
         ],
         "type": "object"
       },
+      "TransactionPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "type": "string"
+          },
+          "chain": {
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions": {
+            "description": "Canonical Norito JSON Executable variant.",
+            "type": "object"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "nonce": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "time_to_live_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain",
+          "authority",
+          "creation_time_ms",
+          "instructions",
+          "fee_payment",
+          "metadata"
+        ],
+        "type": "object"
+      },
       "TransactionSubmissionReceipt": {
         "additionalProperties": false,
         "properties": {
@@ -16723,7 +17248,7 @@
       },
       "ZkIvmDeriveRequest": {
         "additionalProperties": false,
-        "description": "Body is limited to 8 MiB before extraction. metadata must carry gas_limit.",
+        "description": "Body is limited to 8 MiB before extraction. fee_payment must be structurally valid and carry gas_limit; retired fee metadata keys are rejected.",
         "properties": {
           "authority": {
             "minLength": 1,
@@ -16733,6 +17258,9 @@
             "contentEncoding": "base64",
             "maxLength": 5592408,
             "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "metadata": {
             "additionalProperties": true,
@@ -16745,6 +17273,7 @@
         "required": [
           "vk_ref",
           "authority",
+          "fee_payment",
           "bytecode"
         ],
         "type": "object"
@@ -16865,7 +17394,7 @@
       },
       "ZkIvmProveRequest": {
         "additionalProperties": false,
-        "description": "Body is limited to 8 MiB before extraction. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
+        "description": "Body is limited to 8 MiB before extraction. fee_payment must be structurally valid and carry gas_limit; retired fee metadata keys are rejected. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
         "properties": {
           "authority": {
             "minLength": 1,
@@ -16875,6 +17404,9 @@
             "contentEncoding": "base64",
             "maxLength": 5592408,
             "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "metadata": {
             "additionalProperties": true,
@@ -16890,6 +17422,7 @@
         "required": [
           "vk_ref",
           "authority",
+          "fee_payment",
           "bytecode"
         ],
         "type": "object"
@@ -18849,7 +19382,7 @@
     },
     "/v1/assets/transfer": {
       "post": {
-        "description": "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
+        "description": "Prepare a strictly bound, versioned detached-signature scaffold with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -20083,12 +20616,12 @@
     },
     "/v1/contracts/call": {
       "post": {
-        "description": "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
+        "description": "Prepare or submit a contract entrypoint by canonical address or on-chain alias. Requests carry a typed fee_payment intent; retired fee_sponsor, gas_asset_id, and metadata gas_limit fields are rejected. SDK clients quote the exact prepared payload before signing.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ContractCallRequest"
               }
             }
           },
@@ -20231,12 +20764,12 @@
     },
     "/v1/contracts/call/simulate": {
       "post": {
-        "description": "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
+        "description": "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics. Simulation accepts only an execution gas_limit and never selects a fee payer.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ContractCallSimulateRequest"
               }
             }
           },
@@ -20263,13 +20796,59 @@
     },
     "/v1/contracts/code-bytes/{code_hash}": {
       "get": {
-        "description": "Fetch contract code bytes (base64) by code hash.",
+        "description": "Fetch the canonical base64 contract artifact by code hash. Canonical account request signing is required.",
+        "operationId": "contractCodeBytesGet",
         "parameters": [
           {
             "description": "Contract code hash (hex).",
             "in": "path",
             "name": "code_hash",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -20284,7 +20863,66 @@
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The canonical base64 contract artifact."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The contract code hash is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for contract artifact bytes.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for contract artifact reads.",
+                "schema": {
+                  "enum": [
+                    "contract_code_auth_required"
+                  ],
+                  "example": "contract_code_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No contract artifact exists for the code hash."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Contract artifact read rate exceeded."
           }
         },
         "summary": "Fetch contract code bytes.",
@@ -20321,6 +20959,175 @@
           }
         },
         "summary": "Fetch contract metadata.",
+        "tags": [
+          "Contracts"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/contracts/deployment-state": {
+      "post": {
+        "description": "Authenticate as the exact deployment authority and read its reserved nonce, the alias's active dataspace and live previous target, and one committed block anchor from a single state view. All u64 values are returned as canonical decimal strings. Malformed native nonce or alias indexes fail closed.",
+        "operationId": "contractDeploymentState",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContractDeploymentStateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractDeploymentStateResponse"
+                }
+              }
+            },
+            "description": "One committed, internally consistent deployment CAS snapshot."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON body, I105 authority, or contract alias is not exact and canonical."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical account request signing is required for deployment-state reads.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated account differs from the requested deployment authority."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested deployment authority does not exist."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Contract deployment-state read rate exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The reserved nonce, alias indexes, binding record, active instance, dataspace, or block anchor is internally inconsistent."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No committed block is available to anchor deployment state."
+          }
+        },
+        "summary": "Read an atomic contract deployment CAS snapshot.",
         "tags": [
           "Contracts"
         ],
@@ -22648,10 +23455,10 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/fee-sponsor-policies/by-id": {
+    "/v1/fee-sponsor-programs/by-id": {
       "post": {
-        "description": "Signed lookup for an exact on-chain policy selected by dataspace fee-sponsor configuration. Unconfigured policies are not disclosed and enumeration is unsupported.",
-        "operationId": "feeSponsorPolicyById",
+        "description": "Account-signed lookup for one canonical sponsor/program identifier. The response exposes the program lifecycle and revision pointers without compatibility policy fields.",
+        "operationId": "feeSponsorProgramById",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -22703,7 +23510,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FeeSponsorPolicyByIdRequest"
+                "$ref": "#/components/schemas/FeeSponsorProgramByIdRequest"
               }
             }
           },
@@ -22714,7 +23521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FeeSponsorPolicy"
+                  "$ref": "#/components/schemas/FeeSponsorProgram"
                 }
               }
             },
@@ -22728,7 +23535,7 @@
                 }
               }
             },
-            "description": "Malformed or noncanonical policy identifier."
+            "description": "Malformed or noncanonical sponsor-program identifier."
           },
           "401": {
             "content": {
@@ -22748,12 +23555,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable code returned when canonical request authentication is required for an exact fee-sponsor policy lookup.",
+                "description": "Stable code returned when canonical request authentication is required for an exact sponsor-program lookup.",
                 "schema": {
                   "enum": [
-                    "fee_sponsor_policy_signature_required"
+                    "fee_sponsor_program_signature_required"
                   ],
-                  "example": "fee_sponsor_policy_signature_required",
+                  "example": "fee_sponsor_program_signature_required",
                   "type": "string"
                 }
               }
@@ -22767,10 +23574,149 @@
                 }
               }
             },
-            "description": "The policy is absent or not selected by dataspace configuration."
+            "description": "The exact sponsor program is absent."
           }
         },
-        "summary": "Read one exact configured fee sponsor policy.",
+        "summary": "Read one exact on-chain fee sponsor program.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/fees/quote": {
+      "post": {
+        "description": "Evaluates the exact unsigned TransactionPayload at a committed ledger observation. Empty or stale charge limits are replaced by Core's deterministic fixed-point limits; payer selection, sponsor program, revision, and gas bound are preserved. The returned intent must be inserted into the otherwise unchanged payload before signing.",
+        "operationId": "quoteFees",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeeQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeQuoteResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed or noncanonical payload; details.fee contains invalid_fee_intent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for fee quoting.",
+                "schema": {
+                  "enum": [
+                    "fee_quote_signature_required"
+                  ],
+                  "example": "fee_quote_signature_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The payload or selected payer is not admissible; details.fee contains the stable rejection."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The node's authoritative fee configuration cannot produce a quote."
+          }
+        },
+        "summary": "Quote an unsigned transaction's exact fee intent.",
         "tags": [
           "Nexus"
         ],
@@ -23059,12 +24005,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "description": "Stable code returned when canonical request authentication is required for contract artifact reads.",
                 "schema": {
                   "enum": [
-                    "alias_auth_required"
+                    "contract_code_auth_required"
                   ],
-                  "example": "alias_auth_required",
+                  "example": "contract_code_auth_required",
                   "type": "string"
                 }
               }
@@ -25074,7 +26020,7 @@
     },
     "/v1/multisig/proposals/query": {
       "post": {
-        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority. Both canonical `multisig_account_id` and `multisig_account_alias` selectors require canonical request signing; body fields never establish signer identity.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -25167,7 +26113,7 @@
                 }
               }
             },
-            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "description": "Canonical request signing is required for every multisig state selector; a body selector is not authentication.",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Canonical request-signature authentication challenge.",
@@ -25177,12 +26123,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "description": "Stable code returned when canonical request authentication is required for multisig state reads.",
                 "schema": {
                   "enum": [
-                    "alias_auth_required"
+                    "multisig_read_auth_required"
                   ],
-                  "example": "alias_auth_required",
+                  "example": "multisig_read_auth_required",
                   "type": "string"
                 }
               }
@@ -25208,7 +26154,7 @@
     },
     "/v1/multisig/proposals/resolve": {
       "post": {
-        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`. Both canonical `multisig_account_id` and `multisig_account_alias` selectors require canonical request signing; body fields never establish signer identity.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -25301,7 +26247,7 @@
                 }
               }
             },
-            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "description": "Canonical request signing is required for every multisig state selector; a body selector is not authentication.",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Canonical request-signature authentication challenge.",
@@ -25311,12 +26257,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "description": "Stable code returned when canonical request authentication is required for multisig state reads.",
                 "schema": {
                   "enum": [
-                    "alias_auth_required"
+                    "multisig_read_auth_required"
                   ],
-                  "example": "alias_auth_required",
+                  "example": "multisig_read_auth_required",
                   "type": "string"
                 }
               }
@@ -25400,7 +26346,7 @@
     },
     "/v1/multisig/spec": {
       "post": {
-        "description": "Resolve a multisig selector and return the current active concrete authority plus its multisig specification. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "description": "Resolve a multisig selector and return the current active concrete authority plus its multisig specification. Both canonical `multisig_account_id` and `multisig_account_alias` selectors require canonical request signing; body fields never establish signer identity.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -25493,7 +26439,7 @@
                 }
               }
             },
-            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "description": "Canonical request signing is required for every multisig state selector; a body selector is not authentication.",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Canonical request-signature authentication challenge.",
@@ -25503,12 +26449,12 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "description": "Stable code returned when canonical request authentication is required for multisig state reads.",
                 "schema": {
                   "enum": [
-                    "alias_auth_required"
+                    "multisig_read_auth_required"
                   ],
-                  "example": "alias_auth_required",
+                  "example": "multisig_read_auth_required",
                   "type": "string"
                 }
               }
@@ -26881,7 +27827,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-20 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-21 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
         "operationId": "offlineReadiness",
         "parameters": [
           {

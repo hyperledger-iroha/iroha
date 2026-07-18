@@ -4319,9 +4319,7 @@ public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
     public let contractAlias: String?
     public let contractEntrypoint: String?
     public let contractPayload: ToriiJSONValue?
-    public let gasAssetId: String?
-    public let feeSponsor: String?
-    public let gasLimit: UInt64?
+    public let feePayment: FeePaymentIntent?
 
     private enum CodingKeys: String, CodingKey {
         case authority
@@ -4332,9 +4330,7 @@ public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
         case contractAlias = "contract_alias"
         case contractEntrypoint = "contract_entrypoint"
         case contractPayload = "contract_payload"
-        case gasAssetId = "gas_asset_id"
-        case feeSponsor = "fee_sponsor"
-        case gasLimit = "gas_limit"
+        case feePayment = "fee_payment"
     }
 }
 
@@ -4363,9 +4359,7 @@ public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
     public let assetIds: [String]?
     public let numericFields: [String: ToriiJSONValue]?
     public let payload: ToriiJSONValue?
-    public let gasAssetId: String?
-    public let feeSponsor: String?
-    public let gasLimit: UInt64?
+    public let feePayment: FeePaymentIntent?
 
     private enum CodingKeys: String, CodingKey {
         case eventId = "event_id"
@@ -4385,9 +4379,7 @@ public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
         case assetIds = "asset_ids"
         case numericFields = "numeric_fields"
         case payload
-        case gasAssetId = "gas_asset_id"
-        case feeSponsor = "fee_sponsor"
-        case gasLimit = "gas_limit"
+        case feePayment = "fee_payment"
     }
 }
 
@@ -9394,7 +9386,7 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-    public static let expectedDataModelVersion = 1
+    public static let expectedDataModelVersion = 2
     /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
     public static let expectedSignedTransactionSchemaHashHex = "7ab5ff9c572efb316deac478f19209c5"
     public let abiVersion: Int
@@ -10644,7 +10636,7 @@ public typealias ToriiKagemushaActiveRecursiveStepEqVerifier =
 public typealias ToriiKagemushaActiveRecursiveStepEpVerifier =
     ToriiKagemushaActiveTransferVerifier
 
-/// Authenticated ABI-20 V4 recursive release selected for a readiness snapshot.
+/// Authenticated ABI-21 V4 recursive release selected for a readiness snapshot.
 ///
 /// The three digests bind the release manifest, locally trusted policy, and
 /// signed release attestation. Torii emits this value only after Core has
@@ -10750,7 +10742,7 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
                 forKey: .maxProofBytes,
                 in: container,
                 debugDescription:
-                    "max_proof_bytes must be within the ABI-20 V4 absolute proof limit"
+                    "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             )
         }
         maxProofBytes = decodedMaxProofBytes
@@ -10803,7 +10795,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     /// verifier records. `nil` is an explicit unavailable registry state.
     public let artifactSet: ToriiKagemushaAuthenticatedArtifactSet?
     public let proofBackendAvailable: Bool
-    /// True only when the chain can verify and redeem the ABI-20 lineage.
+    /// True only when the chain can verify and redeem the ABI-21 lineage.
     public let recursiveLineageSupported: Bool
     public let ready: Bool
     public let blockers: [ToriiKagemushaReadinessBlocker]
@@ -11120,7 +11112,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 forKey: .recursiveLineageSupported,
                 in: container,
                 debugDescription:
-                    "recursive_lineage_supported must equal the exact authenticated ABI-20 lineage conjunction"
+                    "recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
             )
         }
         guard decodedRecursiveLineageSupported
@@ -11146,7 +11138,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .ready,
                 in: container,
-                debugDescription: "ready must equal the complete ABI-20 runtime conjunction"
+                debugDescription: "ready must equal the complete ABI-21 runtime conjunction"
             )
         }
         requiredBridgeAbiVersion = decodedBridgeABI
@@ -11244,7 +11236,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         }
     }
 
-    /// ABI-20 recursive verifier names and circuits are exact registry roles.
+    /// ABI-21 recursive verifier names and circuits are exact registry roles.
     /// The authenticated artifact set subsequently binds their proof cap and
     /// lifecycle window to one release.
     private static func validateRecursiveVerifierRoleV4(
@@ -15126,9 +15118,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
     public var payload: ToriiJSONValue?
     public var creationTimeMs: UInt64?
     public var transactionTtlMs: UInt64?
-    public var gasAssetId: String?
-    public var feeSponsor: String?
-    public var gasLimit: UInt64
+    public var feePayment: FeePaymentIntent
 
     public init(authority: String,
                 publicKeyHex: String? = nil,
@@ -15139,9 +15129,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
                 payload: ToriiJSONValue? = nil,
                 creationTimeMs: UInt64? = nil,
                 transactionTtlMs: UInt64? = nil,
-                gasAssetId: String? = nil,
-                feeSponsor: String? = nil,
-                gasLimit: UInt64) {
+                feePayment: FeePaymentIntent) {
         self.authority = authority
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
@@ -15151,9 +15139,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         self.payload = payload
         self.creationTimeMs = creationTimeMs
         self.transactionTtlMs = transactionTtlMs
-        self.gasAssetId = gasAssetId
-        self.feeSponsor = feeSponsor
-        self.gasLimit = gasLimit
+        self.feePayment = feePayment
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -15166,9 +15152,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         case payload
         case creationTimeMs = "creation_time_ms"
         case transactionTtlMs = "transaction_ttl_ms"
-        case gasAssetId = "gas_asset_id"
-        case feeSponsor = "fee_sponsor"
-        case gasLimit = "gas_limit"
+        case feePayment = "fee_payment"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -15189,14 +15173,9 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
             entrypoint,
             field: "entrypoint"
         )
-        let normalizedGasAssetId = try gasAssetId.map {
-            try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
-        }
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
-        }
-        if gasLimit == 0 {
-            throw ToriiClientError.invalidPayload("gas_limit must be greater than zero.")
+        _ = try feePayment.canonicalJSONData()
+        if feePayment.gasLimit == nil {
+            throw ToriiClientError.invalidPayload("fee_payment.gas_limit is required for a contract call.")
         }
         if creationTimeMs == 0 {
             throw ToriiClientError.invalidPayload("creation_time_ms must be greater than zero.")
@@ -15215,9 +15194,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         try container.encodeIfPresent(payload, forKey: .payload)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encodeIfPresent(transactionTtlMs, forKey: .transactionTtlMs)
-        try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
-        try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
-        try container.encode(gasLimit, forKey: .gasLimit)
+        try container.encode(feePayment, forKey: .feePayment)
     }
 
     fileprivate func normalizedForDetachedPreparation(
@@ -15251,12 +15228,10 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
                 "entrypoint must not contain surrounding whitespace."
             )
         }
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
-        }
-        if let feeSponsor, feeSponsor.contains("@") || normalizedFeeSponsor != feeSponsor {
+        _ = try feePayment.canonicalJSONData()
+        guard feePayment.gasLimit != nil else {
             throw ToriiClientError.invalidPayload(
-                "fee_sponsor must be an exact canonical I105 account id."
+                "detached contract-call preparation requires fee_payment.gas_limit."
             )
         }
         guard let creationTimeMs else {
@@ -15284,11 +15259,6 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
                 "detached contract-call preparation requires transaction_ttl_ms between 1 and \(Self.maximumDetachedTransactionTtlMs)."
             )
         }
-        guard gasAssetId != nil else {
-            throw ToriiClientError.invalidPayload(
-                "detached contract-call preparation requires an explicit canonical gas_asset_id."
-            )
-        }
         let normalized = Self(
             authority: normalizedAuthority,
             contractAddress: normalizedTarget.contractAddress,
@@ -15297,11 +15267,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
             payload: payload,
             creationTimeMs: creationTimeMs,
             transactionTtlMs: transactionTtlMs,
-            gasAssetId: try gasAssetId.map {
-                try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
-            },
-            feeSponsor: normalizedFeeSponsor,
-            gasLimit: gasLimit
+            feePayment: feePayment
         )
         _ = try JSONEncoder().encode(normalized)
         return normalized
@@ -15336,8 +15302,7 @@ public struct ToriiContractOperationReceipt: Decodable, Sendable {
     public let entrypointHashHex: String?
     public let gasLimit: UInt64?
     public let gasUsed: UInt64?
-    public let gasAssetId: String?
-    public let feeSponsor: String?
+    public let feePayment: FeePaymentIntent?
     public let payloadDigestHex: String
 
     private enum CodingKeys: String, CodingKey {
@@ -15354,8 +15319,7 @@ public struct ToriiContractOperationReceipt: Decodable, Sendable {
         case entrypointHashHex = "entrypoint_hash_hex"
         case gasLimit = "gas_limit"
         case gasUsed = "gas_used"
-        case gasAssetId = "gas_asset_id"
-        case feeSponsor = "fee_sponsor"
+        case feePayment = "fee_payment"
         case payloadDigestHex = "payload_digest_hex"
     }
 
@@ -15366,7 +15330,7 @@ public struct ToriiContractOperationReceipt: Decodable, Sendable {
                 "operation_kind", "status", "transport", "dataspace",
                 "contract_alias", "contract_address", "code_hash_hex", "abi_hash_hex",
                 "tx_hash_hex", "entrypoint", "entrypoint_hash_hex", "gas_limit",
-                "gas_used", "gas_asset_id", "fee_sponsor", "payload_digest_hex",
+                "gas_used", "fee_payment", "payload_digest_hex",
             ],
             context: "contract call operation receipt"
         )
@@ -15426,18 +15390,7 @@ public struct ToriiContractOperationReceipt: Decodable, Sendable {
             )
         }
         gasUsed = try container.decodeIfPresent(UInt64.self, forKey: .gasUsed)
-        gasAssetId = try optionalString(.gasAssetId, field: "gas_asset_id").map {
-            try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
-        }
-        feeSponsor = try optionalString(.feeSponsor, field: "fee_sponsor").map {
-            let normalized = try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
-            guard !$0.contains("@"), normalized == $0 else {
-                throw ToriiClientError.invalidPayload(
-                    "fee_sponsor must be an exact canonical I105 account id."
-                )
-            }
-            return normalized
-        }
+        feePayment = try container.decodeIfPresent(FeePaymentIntent.self, forKey: .feePayment)
         payloadDigestHex = try ToriiValidation.normalized32ByteHex(
             container.decode(String.self, forKey: .payloadDigestHex),
             field: "payload_digest_hex",
@@ -15628,8 +15581,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
     public let payloadDigestHex: String
 
     fileprivate let receiptContractAlias: String?
-    fileprivate let receiptGasAssetId: String?
-    fileprivate let receiptFeeSponsor: String?
+    fileprivate let receiptFeePayment: FeePaymentIntent
 
     fileprivate init(
         preparedRequest: ToriiContractCallRequest,
@@ -15652,9 +15604,8 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
               response.operationReceipt.abiHashHex == response.abiHashHex,
               response.operationReceipt.entrypoint == response.entrypoint,
               response.operationReceipt.entrypointHashHex == response.entrypointHashHex,
-              response.operationReceipt.gasLimit == preparedRequest.gasLimit,
-              response.operationReceipt.gasAssetId == preparedRequest.gasAssetId,
-              response.operationReceipt.feeSponsor == preparedRequest.feeSponsor,
+              response.operationReceipt.gasLimit == preparedRequest.feePayment.gasLimit,
+              response.operationReceipt.feePayment == preparedRequest.feePayment,
               response.operationReceipt.payloadDigestHex == expectedPayloadDigestHex,
               let entrypoint = response.entrypoint,
               entrypoint == preparedRequest.entrypoint,
@@ -15737,8 +15688,10 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
         self.scaffoldEntrypointHashHex = scaffoldEntrypointHashHex
         self.payloadDigestHex = response.operationReceipt.payloadDigestHex
         self.receiptContractAlias = response.operationReceipt.contractAlias
-        self.receiptGasAssetId = response.operationReceipt.gasAssetId
-        self.receiptFeeSponsor = response.operationReceipt.feeSponsor
+        guard let receiptFeePayment = response.operationReceipt.feePayment else {
+            throw ToriiClientError.invalidPayload("contract call receipt is missing fee_payment.")
+        }
+        self.receiptFeePayment = receiptFeePayment
     }
 
     fileprivate func validateSubmittedResponse(
@@ -15780,10 +15733,9 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
               response.operationReceipt.txHashHex == txHash,
               response.operationReceipt.entrypoint == request.entrypoint,
               response.operationReceipt.entrypointHashHex == finalizedEntrypointHashHex,
-              response.operationReceipt.gasLimit == request.gasLimit,
+              response.operationReceipt.gasLimit == request.feePayment.gasLimit,
               response.operationReceipt.gasUsed == nil,
-              response.operationReceipt.gasAssetId == receiptGasAssetId,
-              response.operationReceipt.feeSponsor == receiptFeeSponsor,
+              response.operationReceipt.feePayment == receiptFeePayment,
               response.operationReceipt.payloadDigestHex == payloadDigestHex,
               finalization.payloadSigningHash == signingMessage,
               txHash.contains(where: { $0 != "0" })
@@ -15801,9 +15753,9 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
     ) throws {
         guard metadataString(metadata["contract_address"]) == resolvedContractAddress,
               metadataString(metadata["contract_entrypoint"]) == request.entrypoint,
-              metadataString(metadata["gas_asset_id"]) == request.gasAssetId,
-              optionalMetadataString(metadata["fee_sponsor"], equals: request.feeSponsor),
-              metadataUInt64(metadata["gas_limit"]) == request.gasLimit else {
+              metadata["gas_asset_id"] == nil,
+              metadata["fee_sponsor"] == nil,
+              metadata["gas_limit"] == nil else {
             throw ToriiClientError.invalidPayload(
                 "native contract-call scaffold metadata differs from the prepared request."
             )
@@ -15846,31 +15798,6 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
     private static func metadataString(_ value: NativeBridgeJSONValue?) -> String? {
         guard case let .string(string)? = value else { return nil }
         return string
-    }
-
-    private static func optionalMetadataString(
-        _ value: NativeBridgeJSONValue?,
-        equals expected: String?
-    ) -> Bool {
-        switch (value, expected) {
-        case (nil, nil):
-            return true
-        case let (.some(.string(actual)), .some(expected)):
-            return actual == expected
-        default:
-            return false
-        }
-    }
-
-    private static func metadataUInt64(_ value: NativeBridgeJSONValue?) -> UInt64? {
-        switch value {
-        case let .signedInteger(number)? where number >= 0:
-            return UInt64(number)
-        case let .unsignedInteger(number)?:
-            return number
-        default:
-            return nil
-        }
     }
 
     fileprivate static func lowercaseHex(_ data: Data) -> String {
@@ -16034,7 +15961,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
     public var amount: String
     public var destination: String
     public var memo: String?
-    public var feeSponsor: String?
+    public var feePayment: FeePaymentIntent
     public var creationTimeMs: UInt64
     public var transactionTtlMs: UInt64
     public var publicKeyHex: String?
@@ -16047,7 +15974,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
         amount: String,
         destination: String,
         memo: String? = nil,
-        feeSponsor: String? = nil,
+        feePayment: FeePaymentIntent,
         creationTimeMs: UInt64,
         transactionTtlMs: UInt64,
         publicKeyHex: String? = nil,
@@ -16059,7 +15986,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
         self.amount = amount
         self.destination = destination
         self.memo = memo
-        self.feeSponsor = feeSponsor
+        self.feePayment = feePayment
         self.creationTimeMs = creationTimeMs
         self.transactionTtlMs = transactionTtlMs
         self.publicKeyHex = publicKeyHex
@@ -16073,7 +16000,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
         case amount
         case destination
         case memo
-        case feeSponsor = "fee_sponsor"
+        case feePayment = "fee_payment"
         case creationTimeMs = "creation_time_ms"
         case transactionTtlMs = "transaction_ttl_ms"
         case publicKeyHex = "public_key_hex"
@@ -16085,7 +16012,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
             from: decoder,
             allowed: [
                 "authority", "asset_definition_id", "asset_balance_scope", "amount",
-                "destination", "memo", "fee_sponsor", "creation_time_ms",
+                "destination", "memo", "fee_payment", "creation_time_ms",
                 "transaction_ttl_ms", "public_key_hex", "signature_base64",
             ],
             context: "asset transfer request"
@@ -16098,7 +16025,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
             amount: try container.decode(String.self, forKey: .amount),
             destination: try container.decode(String.self, forKey: .destination),
             memo: try container.decodeIfPresent(String.self, forKey: .memo),
-            feeSponsor: try container.decodeIfPresent(String.self, forKey: .feeSponsor),
+            feePayment: try container.decode(FeePaymentIntent.self, forKey: .feePayment),
             creationTimeMs: try container.decode(UInt64.self, forKey: .creationTimeMs),
             transactionTtlMs: try container.decode(UInt64.self, forKey: .transactionTtlMs),
             publicKeyHex: try container.decodeIfPresent(String.self, forKey: .publicKeyHex),
@@ -16119,7 +16046,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
         try container.encode(normalized.amount, forKey: .amount)
         try container.encode(normalized.destination, forKey: .destination)
         try container.encodeIfPresent(normalized.memo, forKey: .memo)
-        try container.encodeIfPresent(normalized.feeSponsor, forKey: .feeSponsor)
+        try container.encode(normalized.feePayment, forKey: .feePayment)
         try container.encode(normalized.creationTimeMs, forKey: .creationTimeMs)
         try container.encode(normalized.transactionTtlMs, forKey: .transactionTtlMs)
         try container.encodeIfPresent(normalized.publicKeyHex, forKey: .publicKeyHex)
@@ -16172,7 +16099,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
             && intent.amount == amount
             && intent.destination == destination
             && intent.memo == memo
-            && intent.feeSponsor == feeSponsor
+            && intent.feePayment == feePayment
             && intent.creationTimeMs == creationTimeMs
             && intent.transactionTtlMs == transactionTtlMs
     }
@@ -16187,9 +16114,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
         let amount = try normalizeDetachedAssetTransferAmount(amount)
         let destination = try normalizeDetachedAssetTransferAccount(destination, field: "destination")
         let memo = try normalizeDetachedAssetTransferMemo(memo)
-        let feeSponsor = try feeSponsor.map {
-            try normalizeDetachedAssetTransferAccount($0, field: "fee_sponsor")
-        }
+        _ = try feePayment.canonicalJSONData()
         guard creationTimeMs > 0 else {
             throw ToriiClientError.invalidPayload("creation_time_ms must be greater than zero.")
         }
@@ -16272,7 +16197,7 @@ public struct ToriiAssetTransferRequest: Codable, Sendable, Equatable {
             amount: amount,
             destination: destination,
             memo: memo,
-            feeSponsor: feeSponsor,
+            feePayment: feePayment,
             creationTimeMs: creationTimeMs,
             transactionTtlMs: transactionTtlMs,
             publicKeyHex: normalizedPublicKey,
@@ -16289,7 +16214,7 @@ public struct ToriiAssetTransferIntent: Decodable, Sendable, Equatable {
     public let amount: String
     public let destination: String
     public let memo: String?
-    public let feeSponsor: String?
+    public let feePayment: FeePaymentIntent
     public let creationTimeMs: UInt64
     public let transactionTtlMs: UInt64
 
@@ -16301,7 +16226,7 @@ public struct ToriiAssetTransferIntent: Decodable, Sendable, Equatable {
         case amount
         case destination
         case memo
-        case feeSponsor = "fee_sponsor"
+        case feePayment = "fee_payment"
         case creationTimeMs = "creation_time_ms"
         case transactionTtlMs = "transaction_ttl_ms"
     }
@@ -16311,7 +16236,7 @@ public struct ToriiAssetTransferIntent: Decodable, Sendable, Equatable {
             from: decoder,
             allowed: [
                 "chain_id", "authority", "asset_definition_id", "asset_balance_scope",
-                "amount", "destination", "memo", "fee_sponsor", "creation_time_ms",
+                "amount", "destination", "memo", "fee_payment", "creation_time_ms",
                 "transaction_ttl_ms",
             ],
             context: "asset transfer intent"
@@ -16348,9 +16273,7 @@ public struct ToriiAssetTransferIntent: Decodable, Sendable, Equatable {
         memo = try normalizeDetachedAssetTransferMemo(
             container.decodeIfPresent(String.self, forKey: .memo)
         )
-        feeSponsor = try container.decodeIfPresent(String.self, forKey: .feeSponsor).map {
-            try normalizeDetachedAssetTransferAccount($0, field: "fee_sponsor")
-        }
+        feePayment = try container.decode(FeePaymentIntent.self, forKey: .feePayment)
         creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
         transactionTtlMs = try container.decode(UInt64.self, forKey: .transactionTtlMs)
         guard creationTimeMs > 0,
@@ -17005,13 +16928,9 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
         _ metadata: [String: NativeBridgeJSONValue],
         request: ToriiAssetTransferRequest
     ) throws {
-        let expectedKeys = Set(
-            [request.memo == nil ? nil : "memo", request.feeSponsor == nil ? nil : "fee_sponsor"]
-                .compactMap { $0 }
-        )
+        let expectedKeys = Set([request.memo == nil ? nil : "memo"].compactMap { $0 })
         guard Set(metadata.keys) == expectedKeys,
-              metadataString(metadata["memo"]) == request.memo,
-              metadataString(metadata["fee_sponsor"]) == request.feeSponsor else {
+              metadataString(metadata["memo"]) == request.memo else {
             throw ToriiClientError.invalidPayload(
                 "native asset-transfer scaffold metadata differs from the prepared request."
             )
@@ -17517,12 +17436,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var publicKeyHex: String?
     public var signatureB64: String?
     public var creationTimeMs: UInt64?
-    public var feeSponsor: String?
+    public var feePayment: FeePaymentIntent
     public var memo: String?
-    public var validationFeePolicyVersion: UInt64?
-    public var validationFeePolicyHash: String?
-    public var validationFeeInstructionIndex: UInt64?
-    public var validationFeeTransferEntryIndex: UInt64?
     public var instructions: [ToriiMultisigProposeInstruction]
 
     public init(selector: ToriiMultisigAccountSelector,
@@ -17530,24 +17445,16 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 publicKeyHex: String? = nil,
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
-                feeSponsor: String? = nil,
                 memo: String? = nil,
-                validationFeePolicyVersion: UInt64? = nil,
-                validationFeePolicyHash: String? = nil,
-                validationFeeInstructionIndex: UInt64? = nil,
-                validationFeeTransferEntryIndex: UInt64? = nil,
-                instructions: [ToriiMultisigProposeInstruction]) {
+                instructions: [ToriiMultisigProposeInstruction],
+                feePayment: FeePaymentIntent) {
         self.selector = selector
         self.signerAccountId = signerAccountId
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
         self.creationTimeMs = creationTimeMs
-        self.feeSponsor = feeSponsor
+        self.feePayment = feePayment
         self.memo = memo
-        self.validationFeePolicyVersion = validationFeePolicyVersion
-        self.validationFeePolicyHash = validationFeePolicyHash
-        self.validationFeeInstructionIndex = validationFeeInstructionIndex
-        self.validationFeeTransferEntryIndex = validationFeeTransferEntryIndex
         self.instructions = instructions
     }
 
@@ -17556,28 +17463,20 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 publicKeyHex: String? = nil,
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
-                feeSponsor: String? = nil,
                 memo: String? = nil,
-                validationFeePolicyVersion: UInt64? = nil,
-                validationFeePolicyHash: String? = nil,
-                validationFeeInstructionIndex: UInt64? = nil,
-                validationFeeTransferEntryIndex: UInt64? = nil,
-                noritoInstructionBoxBytes: [Data]) throws {
+                noritoInstructionBoxBytes: [Data],
+                feePayment: FeePaymentIntent) throws {
         try self.init(
             selector: selector,
             signerAccountId: signerAccountId,
             publicKeyHex: publicKeyHex,
             signatureB64: signatureB64,
             creationTimeMs: creationTimeMs,
-            feeSponsor: feeSponsor,
             memo: memo,
-            validationFeePolicyVersion: validationFeePolicyVersion,
-            validationFeePolicyHash: validationFeePolicyHash,
-            validationFeeInstructionIndex: validationFeeInstructionIndex,
-            validationFeeTransferEntryIndex: validationFeeTransferEntryIndex,
             instructions: noritoInstructionBoxBytes.map {
                 try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: $0)
-            }
+            },
+            feePayment: feePayment
         )
     }
 
@@ -17588,12 +17487,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
         case creationTimeMs = "creation_time_ms"
-        case feeSponsor = "fee_sponsor"
+        case feePayment = "fee_payment"
         case memo
-        case validationFeePolicyVersion = "validation_fee_policy_version"
-        case validationFeePolicyHash = "validation_fee_policy_hash"
-        case validationFeeInstructionIndex = "validation_fee_instruction_index"
-        case validationFeeTransferEntryIndex = "validation_fee_transfer_entry_index"
         case instructions
     }
 
@@ -17607,35 +17502,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         let normalizedSignatureB64 = try signatureB64.map {
             try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
-        }
+        _ = try feePayment.canonicalJSONData()
         let normalizedMemo = try ToriiRequestValidation.normalizedOptionalNonEmpty(memo, field: "memo")
-        let normalizedValidationFeePolicyVersion = validationFeePolicyVersion.map { String($0) }
-        let normalizedValidationFeePolicyHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
-            validationFeePolicyHash,
-            field: "validation_fee_policy_hash"
-        )
-        if (normalizedValidationFeePolicyVersion == nil) != (normalizedValidationFeePolicyHash == nil) {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_policy_version and validation_fee_policy_hash must be provided together."
-            )
-        }
-        if normalizedValidationFeePolicyVersion == nil && validationFeeInstructionIndex != nil {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_instruction_index requires validation fee policy metadata."
-            )
-        }
-        if normalizedValidationFeePolicyVersion == nil && validationFeeTransferEntryIndex != nil {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_transfer_entry_index requires validation fee policy metadata."
-            )
-        }
-        if validationFeeTransferEntryIndex != nil && validationFeeInstructionIndex == nil {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_transfer_entry_index requires validation_fee_instruction_index."
-            )
-        }
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -17647,12 +17515,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
-        try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
+        try container.encode(feePayment, forKey: .feePayment)
         try container.encodeIfPresent(normalizedMemo, forKey: .memo)
-        try container.encodeIfPresent(normalizedValidationFeePolicyVersion, forKey: .validationFeePolicyVersion)
-        try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
-        try container.encodeIfPresent(validationFeeInstructionIndex.map(String.init), forKey: .validationFeeInstructionIndex)
-        try container.encodeIfPresent(validationFeeTransferEntryIndex.map(String.init), forKey: .validationFeeTransferEntryIndex)
         try container.encode(instructions, forKey: .instructions)
     }
 }
@@ -17667,9 +17531,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
     public var contractAlias: String?
     public var entrypoint: String
     public var payload: ToriiJSONValue?
-    public var gasAssetId: String?
-    public var feeSponsor: String?
-    public var gasLimit: UInt64?
+    public var feePayment: FeePaymentIntent
 
     public init(selector: ToriiMultisigAccountSelector,
                 signerAccountId: String,
@@ -17680,9 +17542,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
                 contractAlias: String? = nil,
                 entrypoint: String,
                 payload: ToriiJSONValue? = nil,
-                gasAssetId: String? = nil,
-                feeSponsor: String? = nil,
-                gasLimit: UInt64? = nil) {
+                feePayment: FeePaymentIntent) {
         self.selector = selector
         self.signerAccountId = signerAccountId
         self.publicKeyHex = publicKeyHex
@@ -17692,9 +17552,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         self.contractAlias = contractAlias
         self.entrypoint = entrypoint
         self.payload = payload
-        self.gasAssetId = gasAssetId
-        self.feeSponsor = feeSponsor
-        self.gasLimit = gasLimit
+        self.feePayment = feePayment
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17708,9 +17566,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         case contractAlias = "contract_alias"
         case entrypoint
         case payload
-        case gasAssetId = "gas_asset_id"
-        case feeSponsor = "fee_sponsor"
-        case gasLimit = "gas_limit"
+        case feePayment = "fee_payment"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -17729,14 +17585,9 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         let normalizedSignatureB64 = try signatureB64.map {
             try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
-        let normalizedGasAssetId = try gasAssetId.map {
-            try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
-        }
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
-        }
-        if let gasLimit, gasLimit == 0 {
-            throw ToriiClientError.invalidPayload("gas_limit must be greater than zero.")
+        _ = try feePayment.canonicalJSONData()
+        if feePayment.gasLimit == nil {
+            throw ToriiClientError.invalidPayload("fee_payment.gas_limit is required for a contract call.")
         }
 
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -17750,9 +17601,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedEntrypoint, forKey: .entrypoint)
         try container.encodeIfPresent(payload, forKey: .payload)
-        try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
-        try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
-        try container.encodeIfPresent(gasLimit, forKey: .gasLimit)
+        try container.encode(feePayment, forKey: .feePayment)
     }
 }
 
@@ -17762,6 +17611,7 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
     public var publicKeyHex: String?
     public var signatureB64: String?
     public var creationTimeMs: UInt64?
+    public var feePayment: FeePaymentIntent
     public var proposalId: String?
     public var instructionsHash: String?
 
@@ -17771,12 +17621,14 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 proposalId: String? = nil,
-                instructionsHash: String? = nil) {
+                instructionsHash: String? = nil,
+                feePayment: FeePaymentIntent) {
         self.selector = selector
         self.signerAccountId = signerAccountId
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
         self.creationTimeMs = creationTimeMs
+        self.feePayment = feePayment
         self.proposalId = proposalId
         self.instructionsHash = instructionsHash
     }
@@ -17788,6 +17640,7 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
         case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
         case creationTimeMs = "creation_time_ms"
+        case feePayment = "fee_payment"
         case proposalId = "proposal_id"
         case instructionsHash = "instructions_hash"
     }
@@ -17802,6 +17655,7 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
         let normalizedSignatureB64 = try signatureB64.map {
             try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
+        _ = try feePayment.canonicalJSONData()
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             instructionsHash,
@@ -17820,6 +17674,7 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
+        try container.encode(feePayment, forKey: .feePayment)
         try container.encodeIfPresent(normalizedProposalId, forKey: .proposalId)
         try container.encodeIfPresent(normalizedInstructionsHash, forKey: .instructionsHash)
     }
@@ -18545,13 +18400,7 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
     public let perByteFee: ToriiJSONValue
     public let perInstructionFee: ToriiJSONValue
     public let perGasUnitFee: ToriiJSONValue
-    public let sponsorshipEnabled: Bool
-    public let sponsorMaxFee: ToriiJSONValue
-    public let sponsorVerifiedBalanceSafetyFloor: ToriiJSONValue
-    public let canonicalSponsorAccountId: String?
-    public let feeReceiptsActivationHeight: Int
-    public let externalSettlementEnabled: Bool
-    public let burnFromUnixTimestampMs: Int
+    public let sponsorVaultCustodyAccountId: String
     public let settlementMode: String
     public let successfulClaimFeeExemptAuthorities: [String]
 
@@ -18562,13 +18411,7 @@ public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
         case perByteFee = "per_byte_fee"
         case perInstructionFee = "per_instruction_fee"
         case perGasUnitFee = "per_gas_unit_fee"
-        case sponsorshipEnabled = "sponsorship_enabled"
-        case sponsorMaxFee = "sponsor_max_fee"
-        case sponsorVerifiedBalanceSafetyFloor = "sponsor_verified_balance_safety_floor"
-        case canonicalSponsorAccountId = "canonical_sponsor_account_id"
-        case feeReceiptsActivationHeight = "fee_receipts_activation_height"
-        case externalSettlementEnabled = "external_settlement_enabled"
-        case burnFromUnixTimestampMs = "burn_from_unix_timestamp_ms"
+        case sponsorVaultCustodyAccountId = "sponsor_vault_custody_account_id"
         case settlementMode = "settlement_mode"
         case successfulClaimFeeExemptAuthorities = "successful_claim_fee_exempt_authorities"
     }
@@ -26476,6 +26319,123 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiMultisigProposalResolveResponse.self, from: data)
+    }
+
+    /// Quote one exact unsigned transaction payload using canonical account authentication.
+    public func quoteFees(
+        unsignedPayload: [String: ToriiJSONValue],
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> FeeQuoteResponse {
+        let allowedFields: Set<String> = [
+            "chain", "authority", "creation_time_ms", "instructions",
+            "time_to_live_ms", "nonce", "fee_payment", "metadata",
+        ]
+        let requiredFields: Set<String> = [
+            "chain", "authority", "creation_time_ms", "instructions",
+            "fee_payment", "metadata",
+        ]
+        guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
+              requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload must use the exact TransactionPayload field set."
+            )
+        }
+        guard case let .string(chain)? = unsignedPayload["chain"],
+              !chain.isEmpty,
+              chain == chain.trimmingCharacters(in: .whitespacesAndNewlines),
+              case let .number(creationTime)? = unsignedPayload["creation_time_ms"],
+              creationTime.isFinite,
+              creationTime >= 0,
+              creationTime.rounded(.towardZero) == creationTime,
+              case .object? = unsignedPayload["instructions"],
+              case let .object(metadata)? = unsignedPayload["metadata"] else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload contains a malformed canonical TransactionPayload field."
+            )
+        }
+        guard case let .string(authority)? = unsignedPayload["authority"],
+              authority == canonicalAuth.accountId else {
+            throw ToriiClientError.invalidPayload(
+                "canonicalAuth.accountId must equal unsignedPayload.authority."
+            )
+        }
+        guard let feeValue = unsignedPayload["fee_payment"] else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.fee_payment must be an exact FeePaymentIntent object."
+            )
+        }
+        _ = try feeValue.decode(as: FeePaymentIntent.self)
+        for optionalInteger in ["time_to_live_ms", "nonce"] {
+            guard let value = unsignedPayload[optionalInteger] else { continue }
+            switch value {
+            case .null:
+                break
+            case let .number(number)
+                where number.isFinite && number > 0 && number.rounded(.towardZero) == number:
+                break
+            default:
+                throw ToriiClientError.invalidPayload(
+                    "unsignedPayload.\(optionalInteger) must be a positive integer when present."
+                )
+            }
+        }
+        if metadata.keys.contains(where: { ["fee_sponsor", "gas_limit", "gas_asset_id"].contains($0) }) {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.metadata contains a retired fee field."
+            )
+        }
+        let body = try ToriiJSONValue.object([
+            "payload": .object(unsignedPayload),
+        ]).encodedData()
+        let request = try makeVpnRequest(
+            path: "/v1/fees/quote",
+            method: .post,
+            body: body,
+            canonicalAuth: canonicalAuth
+        )
+        let data = try await data(for: request, acceptedStatus: 200..<201)
+        return try decodeJSON(FeeQuoteResponse.self, from: data)
+    }
+
+    /// Quote and replace only `fee_payment`, rejecting payer, revision, or gas substitution.
+    public func quoteAndApplyFees(
+        unsignedPayload: [String: ToriiJSONValue],
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> (payload: [String: ToriiJSONValue], quote: FeeQuoteResponse) {
+        guard let draftValue = unsignedPayload["fee_payment"] else {
+            throw ToriiClientError.invalidPayload("unsignedPayload.fee_payment is required.")
+        }
+        let draftIntent = try draftValue.decode(as: FeePaymentIntent.self)
+        let quote = try await quoteFees(
+            unsignedPayload: unsignedPayload,
+            canonicalAuth: canonicalAuth
+        )
+        let quotedIntent = try quote.applying(to: draftIntent)
+        let quotedJSON = try JSONDecoder().decode(
+            ToriiJSONValue.self,
+            from: quotedIntent.canonicalJSONData()
+        )
+        var quotedPayload = unsignedPayload
+        quotedPayload["fee_payment"] = quotedJSON
+        return (quotedPayload, quote)
+    }
+
+    /// Fetch one exact on-chain sponsor program by canonical `sponsor/program` id.
+    public func getFeeSponsorProgram(
+        id: FeeSponsorProgramId,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> FeeSponsorProgram {
+        let body = try ToriiJSONValue.object([
+            "program_id": .string(id.description),
+        ]).encodedData()
+        let request = try makeVpnRequest(
+            path: "/v1/fee-sponsor-programs/by-id",
+            method: .post,
+            body: body,
+            canonicalAuth: canonicalAuth
+        )
+        let data = try await data(for: request, acceptedStatus: 200..<201)
+        return try decodeJSON(FeeSponsorProgram.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractCodeBytes {

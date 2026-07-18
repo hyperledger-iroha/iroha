@@ -130,16 +130,22 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             let domain_id = domain_id.clone();
             move || {
                 client
-                    .submit_all::<InstructionBox>([
-                        Register::domain(Domain::new(domain_id.clone())).into(),
-                        Register::account(Account::new(account.clone())).into(),
-                        Register::asset_definition({
-                            let __asset_definition_id = asset_def;
-                            AssetDefinition::numeric(__asset_definition_id.clone())
-                                .with_name(__asset_definition_id.name().to_string())
-                        })
-                        .into(),
-                    ])
+                    .submit_all::<InstructionBox>(
+                        [
+                            Register::domain(Domain::new(domain_id.clone())).into(),
+                            Register::account(Account::new(account.clone())).into(),
+                            Register::asset_definition({
+                                let __asset_definition_id = asset_def;
+                                AssetDefinition::numeric(__asset_definition_id.clone())
+                                    .with_name(__asset_definition_id.name().to_string())
+                            })
+                            .into(),
+                        ],
+                        iroha::data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                     .map(|_| ())
             }
         },
@@ -356,7 +362,10 @@ where
     run_blocking_with_timeout(
         move || {
             client
-                .submit(instruction)
+                .submit(
+                    instruction,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .map(|_| ())
                 .wrap_err_with(|| context_owned.clone())
         },

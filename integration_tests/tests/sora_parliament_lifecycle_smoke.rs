@@ -1186,16 +1186,22 @@ async fn setup_hostile_fixture(
     ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
         .wrap_err("seed governance domain registration lease for hostile fixture")?;
     alice
-        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit_blocking(
+            Register::domain(Domain::new(gov_domain_id.clone())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("register governance domain for hostile fixture")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration in hostile fixture")?;
     alice
-        .submit_blocking(Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        ))
+        .submit_blocking(
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_def_id.clone())
+                    .with_name(asset_def_id.name().to_string()),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("register governance asset definition for hostile fixture")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
@@ -1246,10 +1252,13 @@ async fn setup_hostile_fixture(
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(total_accounts).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_quantity(
-            u64::try_from(total_fund).expect("mint amount should fit u64"),
-            alice_asset_id.clone(),
-        ))
+        .submit(
+            Mint::asset_quantity(
+                u64::try_from(total_fund).expect("mint amount should fit u64"),
+                alice_asset_id.clone(),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("mint hostile-fixture governance balances")?;
     wait_for_tx_applied(
         &http,
@@ -1300,10 +1309,13 @@ async fn setup_hostile_fixture(
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
         let tx_hash = citizen_client
-            .submit(RegisterCitizen {
-                owner: account_id.clone(),
-                amount: CITIZEN_BOND,
-            })
+            .submit(
+                RegisterCitizen {
+                    owner: account_id.clone(),
+                    amount: CITIZEN_BOND,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("submit hostile-fixture citizen bond #{idx} ({account_id})")
             })?;
@@ -1389,7 +1401,7 @@ async fn cast_stage_approvals_from_snapshot(
                     body: *body,
                     proposal_id,
                     decision: ParliamentDecision::Approve,
-                })
+                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!(
                         "{context}: submit {body:?} signed approval ballot #{approval_idx} ({account_id})"
@@ -1493,16 +1505,22 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
         .wrap_err("seed governance domain registration lease")?;
     alice
-        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit_blocking(
+            Register::domain(Domain::new(gov_domain_id.clone())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("register governance domain")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;
     alice
-        .submit_blocking(Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        ))
+        .submit_blocking(
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_def_id.clone())
+                    .with_name(asset_def_id.name().to_string()),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("register governance numeric asset definition")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
@@ -1547,7 +1565,10 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
     }
     alice
-        .submit_blocking(Register::account(Account::new(outsider_id.clone())))
+        .submit_blocking(
+            Register::account(Account::new(outsider_id.clone())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("register outsider account for negative authorization tests")?;
     wait_for_account_registration(&alice, &outsider_id, Duration::from_secs(180))
         .await
@@ -1557,10 +1578,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_quantity(
-            u64::try_from(total_fund).expect("total fund should fit u64"),
-            alice_asset_id.clone(),
-        ))
+        .submit(
+            Mint::asset_quantity(
+                u64::try_from(total_fund).expect("total fund should fit u64"),
+                alice_asset_id.clone(),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("mint total governance balances for citizen funding")?;
     wait_for_tx_applied(
         &http,
@@ -1589,10 +1613,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         let missing = total_fund.saturating_sub(observed);
         if missing > 0 {
             let retry_mint_tx_hash = alice
-                .submit(Mint::asset_quantity(
-                    u64::try_from(missing).expect("missing fund should fit u64"),
-                    alice_asset_id.clone(),
-                ))
+                .submit(
+                    Mint::asset_quantity(
+                        u64::try_from(missing).expect("missing fund should fit u64"),
+                        alice_asset_id.clone(),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .wrap_err(
                     "retry minting missing governance balances for citizen funding after timeout",
                 )?;
@@ -1645,13 +1672,16 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .wrap_err("grant ballot permissions for both referenda")?;
 
     alice
-        .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
-            Transfer::asset_quantity(
-                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-                u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
-                account_id.clone(),
-            )
-        }))
+        .submit_all_blocking(
+            citizens.iter().map(|(account_id, _)| {
+                Transfer::asset_quantity(
+                    AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                    u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
+                    account_id.clone(),
+                )
+            }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("transfer citizen funding allocations")?;
 
     wait_for_all_citizen_balances(
@@ -1678,10 +1708,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
     tune_client_timeouts(&mut outsider_client);
     let outsider_bond_tx_hash = outsider_client
-        .submit(RegisterCitizen {
-            owner: outsider_id.clone(),
-            amount: CITIZEN_BOND,
-        })
+        .submit(
+            RegisterCitizen {
+                owner: outsider_id.clone(),
+                amount: CITIZEN_BOND,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit outsider underfunded citizenship bond (negative path)")?;
     wait_for_tx_rejected(
         &http,
@@ -1698,10 +1731,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
         let tx_hash = citizen_client
-            .submit(RegisterCitizen {
-                owner: account_id.clone(),
-                amount: CITIZEN_BOND,
-            })
+            .submit(
+                RegisterCitizen {
+                    owner: account_id.clone(),
+                    amount: CITIZEN_BOND,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| format!("register citizen bond #{idx} ({account_id})"))?;
         wait_for_tx_applied(
             &http,
@@ -1753,14 +1789,17 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .map(|(account_id, _)| account_id.clone())
         .collect();
     alice
-        .submit(PersistCouncilForEpoch {
-            epoch: 0,
-            members: council_members.clone(),
-            alternates: council_alternates,
-            verified: 0,
-            candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
-            derived_by: CouncilDerivationKind::Fallback,
-        })
+        .submit(
+            PersistCouncilForEpoch {
+                epoch: 0,
+                members: council_members.clone(),
+                alternates: council_alternates,
+                verified: 0,
+                candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
+                derived_by: CouncilDerivationKind::Fallback,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("persist fallback council for epoch 0")?;
     wait_for_council_member_present(&alice, council_member_id, 0, Duration::from_secs(180))
         .await
@@ -1768,19 +1807,22 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: council persisted");
 
     alice
-        .submit(ProposeDeployContract {
-            contract_address: contract_address.clone(),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            abi_version: "1".to_string(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance(
-                &code_hash_hex,
-                &abi_hash_hex,
-                &ALICE_KEYPAIR,
-            )),
-        })
+        .submit(
+            ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash_hex: code_hash_hex.clone(),
+                abi_hash_hex: abi_hash_hex.clone(),
+                abi_version: "1".to_string(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+                manifest_provenance: Some(manifest_provenance(
+                    &code_hash_hex,
+                    &abi_hash_hex,
+                    &ALICE_KEYPAIR,
+                )),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("propose governance contract deployment referendum")?;
     wait_for_proposal_found(&alice, &proposal_id_hex, Duration::from_secs(180))
         .await
@@ -1791,10 +1833,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
     tune_client_timeouts(&mut unauthorized_approver_client);
     let unauthorized_approval_tx_hash = unauthorized_approver_client
-        .submit(ApproveGovernanceProposal {
-            body: ParliamentBody::RulesCommittee,
-            proposal_id,
-        })
+        .submit(
+            ApproveGovernanceProposal {
+                body: ParliamentBody::RulesCommittee,
+                proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit unauthorized proposal approval attempt from outsider account")?;
     wait_for_tx_rejected(
         &http,
@@ -1825,10 +1870,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     );
     tune_client_timeouts(&mut first_rules_client);
     let first_rules_tx_hash = first_rules_client
-        .submit(ApproveGovernanceProposal {
-            body: ParliamentBody::RulesCommittee,
-            proposal_id,
-        })
+        .submit(
+            ApproveGovernanceProposal {
+                body: ParliamentBody::RulesCommittee,
+                proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit first rules committee approval")?;
     wait_for_tx_applied(
         &http,
@@ -1888,17 +1936,20 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
         citizen_client
-            .submit(CastPlainBallot {
-                referendum_id: referendum_id.clone(),
-                owner: account_id.clone(),
-                amount: BALLOT_LOCK,
-                duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: if idx < FIRST_REFERENDUM_APPROVE_VOTERS {
-                    0
-                } else {
-                    1
+            .submit(
+                CastPlainBallot {
+                    referendum_id: referendum_id.clone(),
+                    owner: account_id.clone(),
+                    amount: BALLOT_LOCK,
+                    duration_blocks: BALLOT_DURATION_BLOCKS,
+                    direction: if idx < FIRST_REFERENDUM_APPROVE_VOTERS {
+                        0
+                    } else {
+                        1
+                    },
                 },
-            })
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| format!("cast citizen ballot #{idx} ({account_id})"))?;
     }
     let expected_total_weight = expected_plain_total_weight(FIRST_REFERENDUM_VOTERS);
@@ -1913,14 +1964,17 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: tally reached expected total");
 
     let premature_enact_tx_hash = alice
-        .submit(EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit premature enact referendum before finalize (negative path)")?;
     wait_for_tx_rejected(
         &http,
@@ -1934,10 +1988,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: premature enact rejected");
 
     let finalize_tx_hash = alice
-        .submit(FinalizeReferendum {
-            referendum_id: referendum_id.clone(),
-            proposal_id,
-        })
+        .submit(
+            FinalizeReferendum {
+                referendum_id: referendum_id.clone(),
+                proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("finalize referendum")?;
     wait_for_tx_applied(
         &http,
@@ -1958,14 +2015,17 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .wrap_err("wait for approved proposal status before enactment")?;
 
     let enact_tx_hash = alice
-        .submit(EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("enact referendum")?;
     wait_for_tx_applied(
         &http,
@@ -2071,19 +2131,22 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: deployment side effects verified");
 
     alice
-        .submit(ProposeDeployContract {
-            contract_address: reject_contract_address.clone(),
-            code_hash_hex: reject_code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            abi_version: "1".to_string(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance(
-                &reject_code_hash_hex,
-                &abi_hash_hex,
-                &ALICE_KEYPAIR,
-            )),
-        })
+        .submit(
+            ProposeDeployContract {
+                contract_address: reject_contract_address.clone(),
+                code_hash_hex: reject_code_hash_hex.clone(),
+                abi_hash_hex: abi_hash_hex.clone(),
+                abi_version: "1".to_string(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+                manifest_provenance: Some(manifest_provenance(
+                    &reject_code_hash_hex,
+                    &abi_hash_hex,
+                    &ALICE_KEYPAIR,
+                )),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("propose second governance contract deployment referendum for rejection path")?;
     wait_for_proposal_found(&alice, &reject_proposal_id_hex, Duration::from_secs(180))
         .await
@@ -2124,17 +2187,20 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
         citizen_client
-            .submit(CastPlainBallot {
-                referendum_id: reject_referendum_id.clone(),
-                owner: account_id.clone(),
-                amount: BALLOT_LOCK,
-                duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: if idx < SECOND_REFERENDUM_REJECT_VOTERS {
-                    1
-                } else {
-                    0
+            .submit(
+                CastPlainBallot {
+                    referendum_id: reject_referendum_id.clone(),
+                    owner: account_id.clone(),
+                    amount: BALLOT_LOCK,
+                    duration_blocks: BALLOT_DURATION_BLOCKS,
+                    direction: if idx < SECOND_REFERENDUM_REJECT_VOTERS {
+                        1
+                    } else {
+                        0
+                    },
                 },
-            })
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("cast rejection-path citizen ballot #{idx} ({account_id})")
             })?;
@@ -2149,10 +2215,13 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .wrap_err("wait for rejection-path ballot tally ingestion")?;
 
     let reject_finalize_tx_hash = alice
-        .submit(FinalizeReferendum {
-            referendum_id: reject_referendum_id.clone(),
-            proposal_id: reject_proposal_id,
-        })
+        .submit(
+            FinalizeReferendum {
+                referendum_id: reject_referendum_id.clone(),
+                proposal_id: reject_proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("finalize rejection-path referendum")?;
     wait_for_tx_applied(
         &http,
@@ -2173,14 +2242,17 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .wrap_err("wait for rejection-path proposal status")?;
 
     let rejected_enact_tx_hash = alice
-        .submit(EnactReferendum {
-            referendum_id: reject_proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: reject_proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit enactment for rejected proposal (negative path)")?;
     wait_for_tx_rejected(
         &http,
@@ -2276,17 +2348,20 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
         .collect();
     fixture
         .alice
-        .submit(PersistCouncilForEpoch {
-            epoch: 0,
-            members: honest_members.clone(),
-            alternates: honest_alternates,
-            verified: 0,
-            candidates_count: u32::try_from(
-                fixture.attackers.len().saturating_add(fixture.honest.len()),
-            )
-            .expect("count should fit u32"),
-            derived_by: CouncilDerivationKind::Fallback,
-        })
+        .submit(
+            PersistCouncilForEpoch {
+                epoch: 0,
+                members: honest_members.clone(),
+                alternates: honest_alternates,
+                verified: 0,
+                candidates_count: u32::try_from(
+                    fixture.attackers.len().saturating_add(fixture.honest.len()),
+                )
+                .expect("count should fit u32"),
+                derived_by: CouncilDerivationKind::Fallback,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("persist honest-only parliament selection for blocked hostile scenario")?;
     wait_for_council_member_present(
         &fixture.alice,
@@ -2306,19 +2381,22 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
 
     fixture
         .alice
-        .submit(ProposeDeployContract {
-            contract_address: contract_address.clone(),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            abi_version: "1".to_owned(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance(
-                &code_hash_hex,
-                &abi_hash_hex,
-                &ALICE_KEYPAIR,
-            )),
-        })
+        .submit(
+            ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash_hex: code_hash_hex.clone(),
+                abi_hash_hex: abi_hash_hex.clone(),
+                abi_version: "1".to_owned(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+                manifest_provenance: Some(manifest_provenance(
+                    &code_hash_hex,
+                    &abi_hash_hex,
+                    &ALICE_KEYPAIR,
+                )),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit blocked hostile deployment proposal")?;
     wait_for_proposal_found(&fixture.alice, &proposal_id_hex, Duration::from_secs(180))
         .await
@@ -2332,10 +2410,13 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
             ready_peer.client_for(attacker_id, attacker_keypair.private_key().clone());
         tune_client_timeouts(&mut attacker_client);
         let rules_hash = attacker_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id,
-            })
+            .submit(
+                ApproveGovernanceProposal {
+                    body: ParliamentBody::RulesCommittee,
+                    proposal_id,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("submit blocked hostile rules approval attempt #{idx} ({attacker_id})")
             })?;
@@ -2352,10 +2433,13 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
         })?;
 
         let agenda_hash = attacker_client
-            .submit(ApproveGovernanceProposal {
-                body: ParliamentBody::AgendaCouncil,
-                proposal_id,
-            })
+            .submit(
+                ApproveGovernanceProposal {
+                    body: ParliamentBody::AgendaCouncil,
+                    proposal_id,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("submit blocked hostile agenda approval attempt #{idx} ({attacker_id})")
             })?;
@@ -2436,17 +2520,20 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
         .collect();
     fixture
         .alice
-        .submit(PersistCouncilForEpoch {
-            epoch: 0,
-            members: council_members.clone(),
-            alternates: council_alternates,
-            verified: 0,
-            candidates_count: u32::try_from(
-                fixture.attackers.len().saturating_add(fixture.honest.len()),
-            )
-            .expect("count should fit u32"),
-            derived_by: CouncilDerivationKind::Fallback,
-        })
+        .submit(
+            PersistCouncilForEpoch {
+                epoch: 0,
+                members: council_members.clone(),
+                alternates: council_alternates,
+                verified: 0,
+                candidates_count: u32::try_from(
+                    fixture.attackers.len().saturating_add(fixture.honest.len()),
+                )
+                .expect("count should fit u32"),
+                derived_by: CouncilDerivationKind::Fallback,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("persist attacker-captured parliament selection")?;
     wait_for_council_member_present(
         &fixture.alice,
@@ -2488,19 +2575,22 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     fixture
         .alice
-        .submit(ProposeDeployContract {
-            contract_address: contract_address.clone(),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            abi_version: "1".to_owned(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance(
-                &code_hash_hex,
-                &abi_hash_hex,
-                &ALICE_KEYPAIR,
-            )),
-        })
+        .submit(
+            ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash_hex: code_hash_hex.clone(),
+                abi_hash_hex: abi_hash_hex.clone(),
+                abi_version: "1".to_owned(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+                manifest_provenance: Some(manifest_provenance(
+                    &code_hash_hex,
+                    &abi_hash_hex,
+                    &ALICE_KEYPAIR,
+                )),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile deployment proposal")?;
     wait_for_proposal_found(
         &fixture.alice,
@@ -2520,7 +2610,7 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                     body,
                     proposal_id: deploy_proposal_id,
                     decision: ParliamentDecision::Approve,
-                })
+                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!(
                         "submit attacker-captured deploy approval for body {body:?} from `{member_id}`"
@@ -2541,13 +2631,16 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
         let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut voter_client);
         voter_client
-            .submit(CastPlainBallot {
-                referendum_id: deploy_referendum_id.clone(),
-                owner: account_id.clone(),
-                amount: BALLOT_LOCK,
-                duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: 0,
-            })
+            .submit(
+                CastPlainBallot {
+                    referendum_id: deploy_referendum_id.clone(),
+                    owner: account_id.clone(),
+                    amount: BALLOT_LOCK,
+                    duration_blocks: BALLOT_DURATION_BLOCKS,
+                    direction: 0,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("cast captured hostile deploy ballot #{idx} ({account_id})")
             })?;
@@ -2563,10 +2656,13 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     let deploy_finalize_hash = fixture
         .alice
-        .submit(FinalizeReferendum {
-            referendum_id: deploy_referendum_id.clone(),
-            proposal_id: deploy_proposal_id,
-        })
+        .submit(
+            FinalizeReferendum {
+                referendum_id: deploy_referendum_id.clone(),
+                proposal_id: deploy_proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile deploy finalize")?;
     wait_for_tx_applied(
         &fixture.http,
@@ -2588,14 +2684,17 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     let deploy_enact_hash = fixture
         .alice
-        .submit(EnactReferendum {
-            referendum_id: deploy_proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: deploy_proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile deploy enact")?;
     wait_for_tx_applied(
         &fixture.http,
@@ -2654,11 +2753,14 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     fixture
         .alice
-        .submit(ProposeRuntimeUpgradeProposal {
-            manifest: runtime_manifest.clone(),
-            window: None,
-            mode: Some(VotingMode::Plain),
-        })
+        .submit(
+            ProposeRuntimeUpgradeProposal {
+                manifest: runtime_manifest.clone(),
+                window: None,
+                mode: Some(VotingMode::Plain),
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile runtime upgrade proposal")?;
     wait_for_proposal_found(
         &fixture.alice,
@@ -2678,7 +2780,7 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                     body,
                     proposal_id: runtime_proposal_id,
                     decision: ParliamentDecision::Approve,
-                })
+                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!(
                         "submit attacker-captured runtime approval for body {body:?} from `{member_id}`"
@@ -2699,13 +2801,16 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
         let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut voter_client);
         voter_client
-            .submit(CastPlainBallot {
-                referendum_id: runtime_referendum_id.clone(),
-                owner: account_id.clone(),
-                amount: BALLOT_LOCK,
-                duration_blocks: BALLOT_DURATION_BLOCKS,
-                direction: 0,
-            })
+            .submit(
+                CastPlainBallot {
+                    referendum_id: runtime_referendum_id.clone(),
+                    owner: account_id.clone(),
+                    amount: BALLOT_LOCK,
+                    duration_blocks: BALLOT_DURATION_BLOCKS,
+                    direction: 0,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!("cast captured hostile runtime ballot #{idx} ({account_id})")
             })?;
@@ -2721,10 +2826,13 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     let runtime_finalize_hash = fixture
         .alice
-        .submit(FinalizeReferendum {
-            referendum_id: runtime_referendum_id.clone(),
-            proposal_id: runtime_proposal_id,
-        })
+        .submit(
+            FinalizeReferendum {
+                referendum_id: runtime_referendum_id.clone(),
+                proposal_id: runtime_proposal_id,
+            },
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile runtime finalize")?;
     wait_for_tx_applied(
         &fixture.http,
@@ -2746,14 +2854,17 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
 
     let runtime_enact_hash = fixture
         .alice
-        .submit(EnactReferendum {
-            referendum_id: runtime_proposal_id,
-            preimage_hash: [0; 32],
-            at_window: AtWindow {
-                lower: 0,
-                upper: u64::MAX,
+        .submit(
+            EnactReferendum {
+                referendum_id: runtime_proposal_id,
+                preimage_hash: [0; 32],
+                at_window: AtWindow {
+                    lower: 0,
+                    upper: u64::MAX,
+                },
             },
-        })
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit captured hostile runtime enact")?;
     wait_for_tx_applied(
         &fixture.http,

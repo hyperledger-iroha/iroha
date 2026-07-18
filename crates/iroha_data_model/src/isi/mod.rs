@@ -411,23 +411,36 @@ impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
     }
 }
 
-impl From<crate::isi::nexus::RegisterVerifiedNexusFeeBudget> for InstructionBox {
-    fn from(i: crate::isi::nexus::RegisterVerifiedNexusFeeBudget) -> Self {
+impl From<crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation> for InstructionBox {
+    fn from(i: crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::nexus::UpsertFeeSponsorPolicy> for InstructionBox {
-    fn from(i: crate::isi::nexus::UpsertFeeSponsorPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
+macro_rules! impl_nexus_program_instruction_box {
+    ($($ty:ident),+ $(,)?) => {
+        $(
+            impl From<crate::isi::nexus::$ty> for InstructionBox {
+                fn from(i: crate::isi::nexus::$ty) -> Self {
+                    InstructionBox(Box::new(i))
+                }
+            }
+        )+
+    };
 }
 
-impl From<crate::isi::nexus::RemoveFeeSponsorPolicy> for InstructionBox {
-    fn from(i: crate::isi::nexus::RemoveFeeSponsorPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_nexus_program_instruction_box!(
+    CreateFeeSponsorProgram,
+    StageFeeSponsorProgramRevision,
+    ActivateFeeSponsorProgramRevision,
+    PauseFeeSponsorProgram,
+    BeginCloseFeeSponsorProgram,
+    CloseFeeSponsorProgram,
+    EnrollFeeSponsorBeneficiary,
+    UnenrollFeeSponsorBeneficiary,
+    FundFeeSponsorProgram,
+    WithdrawFeeSponsorProgram,
+);
 
 impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {

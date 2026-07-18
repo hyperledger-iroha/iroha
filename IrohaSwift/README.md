@@ -182,7 +182,7 @@ rounding.
 
 Wallet applications own encrypted note state and peer transport. Persist the
 opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete ABI-20/V4 artifact set,
+operation status at each commit boundary. Fetch the complete ABI-21/V4 artifact set,
 wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
 it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
 `.authenticated(...)` from deployment-provisioned release trust. Keep every proof
@@ -320,7 +320,7 @@ let request = ToriiAssetTransferRequest(
     amount: "750",
     destination: destination,
     memo: "invoice 42",
-    feeSponsor: sponsor,
+    feePayment: .authority(chargeLimits: [], gasLimit: nil),
     creationTimeMs: torii.recommendedCreationTimeMs(),
     transactionTtlMs: 120_000
 )
@@ -338,12 +338,24 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-20 native inspection proves the versioned
+Preparation fails closed unless ABI-21 native inspection proves the versioned
 scaffold has the exact authority, chain, definition, source scope, amount,
-destination, memo, fee sponsor, creation time, TTL, and no extra metadata.
+destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
+The prepare route obtains the canonical fee quote and replaces only the charge
+maxima before returning the scaffold. To select sponsorship, pass
+`.sponsor(programId:programRevision:chargeLimits:gasLimit:)` with one exact
+`FeeSponsorProgramId` and non-zero immutable revision; there is no account-only
+sponsor selector or authority fallback.
 Submission locally verifies Ed25519 authority/signature binding, uses native
 finalization, and requires Torii's final transaction and entrypoint hashes to
 match. `IrohaSDK` forwards the same prepare, submit, and finality methods.
+
+For locally assembled transactions, build the complete unsigned payload first,
+then call `quoteAndApplyFees(unsignedPayload:canonicalAuth:)`. Sign the returned
+payload without changing any other field. `quoteFees` and
+`getFeeSponsorProgram` expose the underlying account-signed
+`/v1/fees/quote` and exact program lookup routes. Transaction metadata named
+`fee_sponsor`, `gas_asset_id`, or `gas_limit` is retired and rejected.
 
 ### Kotodama contract manifests
 
@@ -747,7 +759,7 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Artifact and readiness validation requires exact bridge ABI 20 and manifest
+Artifact and readiness validation requires exact bridge ABI 21 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
@@ -778,7 +790,7 @@ backend and lineage facts.
 
 Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
 `KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
-canonical ABI-20 digest. After direct Torii submission and authenticated
+canonical ABI-21 digest. After direct Torii submission and authenticated
 finality verification, initialize the offline branch with
 `KagemushaRecursiveSpendInitLocalRequestV4` and
 `KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:
@@ -814,7 +826,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 20, the privacy
+pass. Native availability in the first release requires exact ABI 21, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

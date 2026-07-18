@@ -21,11 +21,19 @@ use iroha_data_model::{
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, SetAssetDefinitionAlias,
+        nexus::{
+            ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+            EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
+        },
         sns::RegisterSnsName,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         verifying_keys,
     },
-    nexus::DataSpaceId,
+    nexus::{
+        DataSpaceId, FeeSponsorAssetBudget, FeeSponsorEligibility,
+        FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
+    },
     offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::{
         custom::{CustomParameter, CustomParameterId},
@@ -43,7 +51,7 @@ use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
     domain::CanRegisterDomain,
     governance::CanEnactGovernance,
-    nexus::CanPublishSpaceDirectoryManifest,
+    nexus::{CanEnrollFeeSponsorProgram, CanPublishSpaceDirectoryManifest},
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
@@ -504,6 +512,14 @@ const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_FAUCET_AUTHORITY_BALANCE: u64 = 1_000_000_000;
+const LOCALNET_FEE_SPONSOR_PROGRAM_NAME: &str = "default";
+const LOCALNET_FEE_SPONSOR_VAULT_BALANCE: u64 = 100_000_000;
+const LOCALNET_FEE_SPONSOR_PER_TRANSACTION: u64 = 1_000_000;
+const LOCALNET_FEE_SPONSOR_PER_BLOCK: u64 = 10_000_000;
+const LOCALNET_FEE_SPONSOR_PER_PROGRAM_EPOCH: u64 = 100_000_000;
+const LOCALNET_FEE_SPONSOR_PER_BENEFICIARY_EPOCH: u64 = 50_000_000;
+const LOCALNET_FEE_SPONSOR_RESERVE_FLOOR: u64 = 10_000_000;
+const LOCALNET_FEE_SPONSOR_EPOCH_BLOCKS: u64 = 3_600;
 const LOCALNET_FAUCET_AMOUNT: &str = "25000";
 const LOCALNET_FAUCET_POW_DIFFICULTY_BITS: i64 = 8;
 const LOCALNET_FAUCET_POW_SCRYPT_LOG_N: i64 = 13;
@@ -700,6 +716,62 @@ fn localnet_fee_asset_definition_id() -> AssetDefinitionId {
 
 fn localnet_fee_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+}
+
+fn localnet_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
+    FeeSponsorProgramId::new(
+        sponsor.clone(),
+        LOCALNET_FEE_SPONSOR_PROGRAM_NAME
+            .parse()
+            .expect("static localnet fee sponsor program name must parse"),
+    )
+}
+
+fn localnet_fee_sponsor_revision(
+    program_id: FeeSponsorProgramId,
+    fee_asset_id: AssetDefinitionId,
+) -> FeeSponsorProgramRevision {
+    let quantity = |value| Quantity::try_from(value).expect("static sponsor budget must fit");
+    let native = |wire_id: &str| {
+        FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
+            wire_id: wire_id.to_owned(),
+            asset_definition_id: None,
+        })
+    };
+
+    FeeSponsorProgramRevision {
+        program_id,
+        revision: 1,
+        eligibility: FeeSponsorEligibility::EnrolledOnly,
+        rules: vec![FeeSponsorRule {
+            id: "onboarding"
+                .parse()
+                .expect("static localnet sponsor rule name must parse"),
+            effect: FeeSponsorRuleEffect::Allow,
+            selectors: vec![
+                native(RegisterBox::WIRE_ID),
+                native(GrantBox::WIRE_ID),
+                native(std::any::type_name::<
+                    iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease,
+                >()),
+                native("nexus::EnrollFeeSponsorBeneficiary"),
+                native(std::any::type_name::<
+                    iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                >()),
+                native("identity::SetPrimaryAccountAlias"),
+            ],
+        }],
+        asset_budgets: vec![FeeSponsorAssetBudget {
+            asset_definition_id: fee_asset_id,
+            per_transaction: quantity(LOCALNET_FEE_SPONSOR_PER_TRANSACTION),
+            per_block: quantity(LOCALNET_FEE_SPONSOR_PER_BLOCK),
+            per_program_epoch: quantity(LOCALNET_FEE_SPONSOR_PER_PROGRAM_EPOCH),
+            per_beneficiary_epoch: quantity(LOCALNET_FEE_SPONSOR_PER_BENEFICIARY_EPOCH),
+            reserve_floor: quantity(LOCALNET_FEE_SPONSOR_RESERVE_FLOOR),
+            epoch_length_blocks: NonZeroU64::new(LOCALNET_FEE_SPONSOR_EPOCH_BLOCKS)
+                .expect("static sponsor epoch length must be non-zero"),
+        }],
+    }
 }
 
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
@@ -1215,6 +1287,7 @@ fn generate_localnet_with_line<T: Write>(
             gas_account_id,
             stake_amount,
             opts.sora_profile,
+            &genesis_account_id,
             &client_identity.account_id,
         )?;
         genesis = append_private_dataspace_genesis_bootstrap_for_client(
@@ -2029,6 +2102,10 @@ fn render_peer_config(
         client_private_key,
     } = features;
     let localnet_client_account = client_account.to_owned();
+    let genesis_account = AccountId::new(genesis_public_key.clone());
+    let genesis_account_literal = account_id_runtime_literal(&genesis_account, chain_discriminant);
+    let fee_sponsor_program_id =
+        format!("{genesis_account_literal}/{LOCALNET_FEE_SPONSOR_PROGRAM_NAME}");
 
     let trusted_list = trusted_peers
         .iter()
@@ -2206,11 +2283,12 @@ fn render_peer_config(
             "per_gas_unit_fee".into(),
             Value::String("0.000001".to_owned()),
         );
-        fees.insert("sponsorship_enabled".into(), Value::Boolean(true));
-        fees.insert("external_settlement_enabled".into(), Value::Boolean(false));
-        fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
         fees.insert(
             "fee_sink_account_id".into(),
+            Value::String(gas_account_id.to_owned()),
+        );
+        fees.insert(
+            "sponsor_vault_custody_account_id".into(),
             Value::String(gas_account_id.to_owned()),
         );
         nexus.insert("fees".into(), Value::Table(fees));
@@ -2701,12 +2779,8 @@ fn render_peer_config(
     onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
     if npos_bootstrap {
         onboarding.insert(
-            "fee_sponsor_account".into(),
-            Value::String(localnet_client_account.clone()),
-        );
-        onboarding.insert(
-            "fee_sponsor_policy".into(),
-            Value::String("default".to_owned()),
+            "fee_sponsor_program_id".into(),
+            Value::String(fee_sponsor_program_id),
         );
     }
     torii.insert("onboarding".into(), Value::Table(onboarding));
@@ -3224,6 +3298,7 @@ fn append_localnet_npos_bootstrap(
     gas_account_id: &AccountId,
     stake_amount: Quantity,
     sora_profile: Option<SoraProfile>,
+    genesis_account_id: &AccountId,
 ) -> Result<RawGenesisTransaction> {
     append_localnet_npos_bootstrap_for_client(
         genesis,
@@ -3231,6 +3306,7 @@ fn append_localnet_npos_bootstrap(
         gas_account_id,
         stake_amount,
         sora_profile,
+        genesis_account_id,
         &localnet_client_account_id(),
     )
 }
@@ -3241,6 +3317,7 @@ fn append_localnet_npos_bootstrap_for_client(
     gas_account_id: &AccountId,
     stake_amount: Quantity,
     sora_profile: Option<SoraProfile>,
+    genesis_account_id: &AccountId,
     client_account_id: &AccountId,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
@@ -3340,7 +3417,45 @@ fn append_localnet_npos_bootstrap_for_client(
     }
     builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_FAUCET_AUTHORITY_BALANCE,
-        AssetId::new(fee_asset_id, client_account_id.clone()),
+        AssetId::new(fee_asset_id.clone(), client_account_id.clone()),
+    ));
+
+    let fee_sponsor_program_id = localnet_fee_sponsor_program_id(genesis_account_id);
+    let fee_sponsor_revision =
+        localnet_fee_sponsor_revision(fee_sponsor_program_id.clone(), fee_asset_id.clone());
+    fee_sponsor_revision
+        .validate()
+        .map_err(|error| eyre!("invalid localnet fee sponsor revision: {error}"))?;
+    builder = builder.append_instruction(Mint::asset_quantity(
+        LOCALNET_FEE_SPONSOR_VAULT_BALANCE,
+        AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
+    ));
+    builder = builder.append_instruction(CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(fee_sponsor_program_id.clone()),
+    });
+    builder = builder.append_instruction(StageFeeSponsorProgramRevision {
+        revision: fee_sponsor_revision,
+    });
+    builder = builder.append_instruction(EnrollFeeSponsorBeneficiary {
+        program_id: fee_sponsor_program_id.clone(),
+        beneficiary: client_account_id.clone(),
+    });
+    builder = builder.append_instruction(FundFeeSponsorProgram {
+        program_id: fee_sponsor_program_id.clone(),
+        asset_definition_id: fee_asset_id,
+        amount: Quantity::try_from(LOCALNET_FEE_SPONSOR_VAULT_BALANCE)
+            .expect("static sponsor funding amount must fit"),
+    });
+    builder = builder.append_instruction(ActivateFeeSponsorProgramRevision {
+        program_id: fee_sponsor_program_id.clone(),
+        revision: 1,
+        activate_at_height: 1,
+    });
+    builder = builder.append_instruction(Grant::account_permission(
+        CanEnrollFeeSponsorProgram {
+            program_id: fee_sponsor_program_id,
+        },
+        client_account_id.clone(),
     ));
 
     for lane_id in public_validator_lanes {
@@ -3952,11 +4067,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "      printf '{{\"gas_asset_id\":\"%s\",\"gas_limit\":2000000}}\\n' \"$FAUCET_ASSET_DEFINITION_ID\" > \"$DIR/faucet-topup.metadata.json\""
-    )?;
-    writeln!(
-        start_file,
-        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --metadata \"$DIR/faucet-topup.metadata.json\" --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
+        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
     )?;
     writeln!(start_file, "      return 0")?;
     writeln!(start_file, "    fi")?;
@@ -4438,6 +4549,7 @@ mod tests {
                     &gas_account_id,
                     stake_amount,
                     opts.sora_profile,
+                    &genesis_account_id,
                 )
             } else {
                 append_localnet_npos_bootstrap_for_client(
@@ -4446,6 +4558,7 @@ mod tests {
                     &gas_account_id,
                     stake_amount,
                     opts.sora_profile,
+                    &genesis_account_id,
                     client_account_id,
                 )
             }
@@ -5227,18 +5340,22 @@ mod tests {
             onboarding.get("authority").and_then(toml::Value::as_str),
             Some(client_account_id.as_str())
         );
+        let configured_program = onboarding
+            .get("fee_sponsor_program_id")
+            .and_then(toml::Value::as_str)
+            .expect("exact onboarding fee sponsor program");
+        let configured_program = configured_program
+            .parse::<FeeSponsorProgramId>()
+            .expect("canonical onboarding fee sponsor program id");
+        let (genesis_public_key, _) =
+            generate_genesis_key_pair(opts.seed.as_deref().map(str::as_bytes), GENESIS_SEED)
+                .expect("derive expected genesis sponsor");
         assert_eq!(
-            onboarding
-                .get("fee_sponsor_account")
-                .and_then(toml::Value::as_str),
-            Some(client_account_id.as_str())
+            configured_program,
+            localnet_fee_sponsor_program_id(&AccountId::new(genesis_public_key))
         );
-        assert_eq!(
-            onboarding
-                .get("fee_sponsor_policy")
-                .and_then(toml::Value::as_str),
-            Some("default")
-        );
+        assert!(onboarding.get("fee_sponsor_account").is_none());
+        assert!(onboarding.get("fee_sponsor_policy").is_none());
 
         let settlement_offline = peer_cfg
             .get("settlement")
@@ -7374,6 +7491,82 @@ mod tests {
     }
 
     #[test]
+    fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("typed-fee-sponsor".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29_080,
+            base_p2p_port: 33_337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+        let (genesis_public_key, _) =
+            generate_genesis_key_pair(opts.seed.as_deref().map(str::as_bytes), GENESIS_SEED)
+                .expect("derive expected genesis sponsor");
+        let expected_program = localnet_fee_sponsor_program_id(&AccountId::new(genesis_public_key));
+        let expected_client = localnet_client_account_id();
+        let manifest = localnet_genesis_for_opts(&opts);
+
+        let created = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<CreateFeeSponsorProgram>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].program().id, expected_program);
+
+        let staged = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<StageFeeSponsorProgramRevision>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].revision().program_id, expected_program);
+        assert_eq!(staged[0].revision().revision, 1);
+        staged[0]
+            .revision()
+            .validate()
+            .expect("localnet sponsor revision must validate");
+
+        let enrollment = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<EnrollFeeSponsorBeneficiary>()
+            })
+            .find(|enrollment| enrollment.program_id() == &expected_program)
+            .expect("client enrollment for exact localnet program");
+        assert_eq!(enrollment.beneficiary(), &expected_client);
+
+        let has_exact_permission = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant) if grant.destination() == &expected_client => {
+                    CanEnrollFeeSponsorProgram::try_from(grant.object()).ok()
+                }
+                _ => None,
+            })
+            .any(|permission| permission.program_id == expected_program);
+        assert!(has_exact_permission);
+    }
+
+    #[test]
     fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
@@ -8112,17 +8305,12 @@ mod tests {
             Some("0.000001")
         );
         assert_eq!(
-            fees.get("sponsorship_enabled")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            fees.get("external_settlement_enabled")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
             fees.get("fee_sink_account_id")
+                .and_then(toml::Value::as_str),
+            Some(gas_account_id.as_str())
+        );
+        assert_eq!(
+            fees.get("sponsor_vault_custody_account_id")
                 .and_then(toml::Value::as_str),
             Some(gas_account_id.as_str())
         );
@@ -8446,13 +8634,11 @@ mod tests {
             "start script should mint the fee asset back to the faucet when reserve is low"
         );
         assert!(
-            start_contents.contains("--metadata \"$DIR/faucet-topup.metadata.json\""),
-            "start script should attach fee metadata to faucet reserve top-ups"
+            start_contents.contains("--fee-payer authority --output-format json"),
+            "start script should explicitly select authority-paid typed fees for faucet reserve top-ups"
         );
-        assert!(
-            start_contents.contains("'{\"gas_asset_id\":\"%s\",\"gas_limit\":2000000}\\n'"),
-            "start script should render faucet top-up gas metadata"
-        );
+        assert!(!start_contents.contains("faucet-topup.metadata.json"));
+        assert!(!start_contents.contains("gas_asset_id"));
         assert!(
             start_contents
                 .lines()

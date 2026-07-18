@@ -1812,7 +1812,6 @@ where
         chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
         content_length: manifest.content_length,
         submitted_epoch,
-        gas_asset_id: None,
         alias: None,
         successor_of_hex: None,
     };
@@ -1896,9 +1895,13 @@ fn create_manifest_setup_with_seed(
         successor_of,
     );
     let chain_id = harness.chain_id.as_ref().clone();
-    let register_tx = TransactionBuilder::new(chain_id.clone(), authority.account.clone())
-        .with_instructions([dm::InstructionBox::from(register)])
-        .sign(&authority.private_key.0);
+    let register_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([dm::InstructionBox::from(register)])
+    .sign(&authority.private_key.0);
     submit_transaction(harness, register_tx, next_height);
 
     if let Some(timestamp) = status_timestamp_unix {

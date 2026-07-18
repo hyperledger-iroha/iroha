@@ -774,9 +774,25 @@ pub mod isi {
 
     fn is_permission_account_associated(permission: &Permission, account_id: &AccountId) -> bool {
         if let Ok(permission) =
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor::try_from(permission)
+            iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram::try_from(
+                permission,
+            )
         {
             return account_subject_matches(&permission.sponsor, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.program_id.sponsor, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::nexus::CanWithdrawFeeSponsorProgram::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.program_id.sponsor, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanMintAsset::try_from(permission)
@@ -2773,6 +2789,35 @@ pub mod isi {
                             InvalidParameterError::SmartContract(
                                 format!("unknown migration dataspace {}", dataspace_id.as_u64())
                                     .into(),
+                            ),
+                        )
+                        .into());
+                    }
+
+                    let referenced_by_revision = state_transaction
+                        .world
+                        .fee_sponsor_program_revisions
+                        .iter()
+                        .any(|(_, revision)| {
+                            revision
+                                .asset_budgets
+                                .iter()
+                                .any(|budget| budget.asset_definition_id == asset_definition_id)
+                        });
+                    let referenced_by_vault = state_transaction
+                        .world
+                        .fee_sponsor_vaults
+                        .iter()
+                        .any(|(key, _)| key.asset_definition_id == asset_definition_id);
+                    // Verified relay leases bind an immutable revision and funded vault, so these
+                    // two indexes also transitively cover every valid live sponsor allocation.
+                    if referenced_by_revision || referenced_by_vault {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                format!(
+                                    "asset definition {asset_definition_id} cannot become DataspaceRestricted while referenced by a fee sponsor revision, vault, or relay lease"
+                                )
+                                .into(),
                             ),
                         )
                         .into());
@@ -9848,6 +9893,112 @@ mod tests {
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
+    }
+
+    #[test]
+    fn balance_policy_migration_rejects_fee_sponsor_revision_and_vault_assets() {
+        use iroha_data_model::nexus::{
+            FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
+            FeeSponsorProgramId, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
+            FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
+            FeeSponsorVaultKey,
+        };
+
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id = DomainId::try_new("sponsor-policy-lock", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let revision_asset =
+            AssetDefinitionId::new(domain_id.clone(), "revision".parse().expect("name"));
+        let vault_asset = AssetDefinitionId::new(domain_id, "vault".parse().expect("name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        for (id, name) in [
+            (revision_asset.clone(), "Revision Fee Asset"),
+            (vault_asset.clone(), "Vault Fee Asset"),
+        ] {
+            Register::asset_definition(NewAssetDefinition {
+                id,
+                name: name.to_owned(),
+                description: None,
+                alias: None,
+                spec: NumericSpec::integer(),
+                mintable: Mintable::Infinitely,
+                logo: None,
+                metadata: Metadata::default(),
+                balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+                confidential_policy: AssetConfidentialPolicy::transparent(),
+            })
+            .execute(&authority, &mut tx)
+            .expect("register global fee asset");
+        }
+
+        let program_id = FeeSponsorProgramId::new(
+            authority.clone(),
+            "policy_lock".parse().expect("program name"),
+        );
+        tx.world.fee_sponsor_program_revisions.insert(
+            FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+            FeeSponsorProgramRevision {
+                program_id: program_id.clone(),
+                revision: 1,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![FeeSponsorRule {
+                    id: "allow_ivm".parse().expect("rule name"),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![FeeSponsorRuleSelector::Ivm(FeeSponsorIvmSelector {
+                        code_hash: Hash::new(b"fee-sponsor-policy-lock"),
+                    })],
+                }],
+                asset_budgets: vec![FeeSponsorAssetBudget {
+                    asset_definition_id: revision_asset.clone(),
+                    per_transaction: Quantity::from(1_u32),
+                    per_block: Quantity::from(10_u32),
+                    per_program_epoch: Quantity::from(100_u32),
+                    per_beneficiary_epoch: Quantity::from(5_u32),
+                    reserve_floor: Quantity::zero(),
+                    epoch_length_blocks: nonzero!(100_u64),
+                }],
+            },
+        );
+        let vault_key = FeeSponsorVaultKey {
+            program_id,
+            asset_definition_id: vault_asset.clone(),
+        };
+        tx.world.fee_sponsor_vaults.insert(
+            vault_key.clone(),
+            FeeSponsorVault {
+                key: vault_key,
+                balance: Quantity::from(1_u32),
+            },
+        );
+
+        for asset_definition_id in [revision_asset, vault_asset] {
+            let error = SetAssetDefinitionBalancePolicy::new(
+                asset_definition_id.clone(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(paynet),
+            )
+            .execute(&authority, &mut tx)
+            .expect_err("fee sponsor reference must lock global balance policy");
+            assert!(
+                error
+                    .to_string()
+                    .contains("fee sponsor revision, vault, or relay lease"),
+                "unexpected migration error: {error}"
+            );
+            assert_eq!(
+                tx.world
+                    .asset_definition(&asset_definition_id)
+                    .expect("fee asset definition remains registered")
+                    .balance_scope_policy(),
+                iroha_data_model::asset::AssetBalancePolicy::Global
+            );
+        }
     }
 
     #[test]

@@ -3131,28 +3131,32 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
-            .with_instructions([
-                InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-                InstructionBox::from(Register::account(
-                    Account::new(account_id.clone()).with_label(Some(label.clone())),
+        let tx = TransactionBuilder::new(
+            chain_id,
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+            InstructionBox::from(Register::account(
+                Account::new(account_id.clone()).with_label(Some(label.clone())),
+            )),
+            InstructionBox::from(SetAccountAliasBinding {
+                account: account_id.clone(),
+                alias: Some(bound_alias.clone()),
+                lease_expiry_ms: None,
+            }),
+            InstructionBox::from(SetPrimaryAccountAlias {
+                account: genesis_account.clone(),
+                alias: Some(AccountAlias::new(
+                    "ops".parse().expect("label"),
+                    Some(AccountAliasDomain::new(domain_id.name().clone())),
+                    DataSpaceId::UNIVERSAL,
                 )),
-                InstructionBox::from(SetAccountAliasBinding {
-                    account: account_id.clone(),
-                    alias: Some(bound_alias.clone()),
-                    lease_expiry_ms: None,
-                }),
-                InstructionBox::from(SetPrimaryAccountAlias {
-                    account: genesis_account.clone(),
-                    alias: Some(AccountAlias::new(
-                        "ops".parse().expect("label"),
-                        Some(AccountAliasDomain::new(domain_id.name().clone())),
-                        DataSpaceId::UNIVERSAL,
-                    )),
-                    lease_expiry_ms: None,
-                }),
-            ])
-            .sign(genesis_key.private_key());
+                lease_expiry_ms: None,
+            }),
+        ])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let bootstrap_authority = block
             .external_transactions()

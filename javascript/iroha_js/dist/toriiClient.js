@@ -246,7 +246,7 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 1;
+const EXPECTED_DATA_MODEL_VERSION = 2;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -338,11 +338,19 @@ const RETAIL_RECIPIENT_ROUTE_RESPONSE_KEYS = new Set([
   "alias_fqn",
   "fi_id",
 ]);
-const FEE_SPONSOR_POLICY_RESPONSE_KEYS = new Set([
+const FEE_SPONSOR_PROGRAM_RESPONSE_KEYS = new Set([
   "id",
-  "enabled",
-  "max_fee",
-  "rules",
+  "lifecycle",
+  "active_revision",
+  "staged_revision",
+  "scheduled_activation",
+]);
+const FEE_QUOTE_RESPONSE_KEYS = new Set([
+  "intent",
+  "observation",
+  "components",
+  "capacities",
+  "decision",
 ]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -1683,7 +1691,7 @@ export class ToriiClient {
     }
   }
 
-  /** Fetch the transport-only ABI-20/V4 Kagemusha readiness projection. */
+  /** Fetch the transport-only ABI-21/V4 Kagemusha readiness projection. */
   async getKagemushaReadinessV4(assetDefinitionId, options = {}) {
     const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
@@ -3089,38 +3097,19 @@ export class ToriiClient {
     return route;
   }
 
-  /**
-   * Read one exact configured on-chain fee sponsor policy.
-   * @param {string} sponsorAccountId
-   * @param {string} policyName
-   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
-   * @returns {Promise<object | null>}
-   */
-  async findFeeSponsorPolicyById(sponsorAccountId, policyName, options = {}) {
-    const normalizedSponsorAccountId = ToriiClient._requireAccountId(
-      sponsorAccountId,
-      "findFeeSponsorPolicyById.sponsorAccountId",
+  /** Read one exact on-chain sponsor-program lifecycle record. */
+  async findFeeSponsorProgramById(programId, options = {}) {
+    const normalizedProgramId = normalizeFeeSponsorProgramId(
+      programId,
+      "findFeeSponsorProgramById.programId",
     );
-    const normalizedPolicyName = requireCanonicalIrohaName(
-      policyName,
-      "findFeeSponsorPolicyById.policyName",
-    );
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
-      "findFeeSponsorPolicyById",
+      "findFeeSponsorProgramById",
     );
-    assertSupportedOptionKeys(
-      rest,
-      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
-      "findFeeSponsorPolicyById options",
-    );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
-    const response = await this._request("POST", "/v1/fee-sponsor-policies/by-id", {
+    const response = await this._request("POST", "/v1/fee-sponsor-programs/by-id", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify({
-        sponsor_account_id: normalizedSponsorAccountId,
-        policy_name: normalizedPolicyName,
-      }),
+      body: JSON.stringify({ program_id: normalizedProgramId.literal }),
       signal,
       canonicalAuth,
     });
@@ -3130,18 +3119,55 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("fee sponsor policy endpoint returned no payload");
+      throw new Error("fee sponsor program endpoint returned no payload");
     }
-    const policy = normalizeFeeSponsorPolicyResponse(body, "fee sponsor policy response");
+    const program = normalizeFeeSponsorProgramResponse(body, "fee sponsor program response");
     if (
-      policy.id.sponsor !== normalizedSponsorAccountId ||
-      policy.id.name !== normalizedPolicyName
+      program.id.sponsor !== normalizedProgramId.sponsor ||
+      program.id.name !== normalizedProgramId.name
     ) {
       throw new TypeError(
-        "fee sponsor policy response.id does not match the requested sponsor and policy name",
+        "fee sponsor program response.id does not match the requested exact program id",
       );
     }
-    return policy;
+    return program;
+  }
+
+  /**
+   * Quote the exact unsigned payload that will subsequently be signed.
+   * The account in `canonicalAuth` must equal the payload authority.
+   */
+  async quoteFees(payloadOrDraft, options = {}) {
+    const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
+    const payload = ensureRecord(candidate, "quoteFees payload");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "quoteFees",
+    );
+    const authority = ensureCanonicalAccountId(
+      payload.authority,
+      "quoteFees payload.authority",
+    );
+    if (payload.authority !== authority) {
+      throw new TypeError("quoteFees payload.authority must be an exact canonical I105 account id");
+    }
+    if (canonicalAuth.accountId !== authority) {
+      throw new TypeError(
+        "quoteFees canonicalAuth.accountId must equal the exact payload authority",
+      );
+    }
+    const response = await this._request("POST", "/v1/fees/quote", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ payload }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("fee quote endpoint returned no payload");
+    }
+    return normalizeFeeQuoteResponse(body, "fee quote response");
   }
 
   /**
@@ -15768,7 +15794,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
 
   const queueNames = new Set();
   const queues = Object.freeze(
-    assertSumeragiArrayBound(record.queues, 9, `${context}.queues`).map((raw, index) => {
+    assertSumeragiArrayBound(record.queues, 10, `${context}.queues`).map((raw, index) => {
       const itemContext = `${context}.queues[${index}]`;
       const item = ensureRecord(raw, itemContext);
       const allowedFields = new Set([
@@ -15800,6 +15826,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           "runtime_completion",
           "effect_completion",
           "network_ingress",
+          "effect_dispatch",
         ],
         `${itemContext}.queue`,
       );
@@ -23745,6 +23772,9 @@ function normalizeContractTargetSelector(record, context) {
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
+  rejectRetiredFeeSelectionFields(record, "contractCall request", {
+    allowGasLimit: false,
+  });
   const normalized = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
@@ -23782,24 +23812,10 @@ function normalizeContractCallRequest(input) {
       "contractCall.transactionTtlMs",
     );
   }
-  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
-  if (gasAsset !== undefined && gasAsset !== null) {
-    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAsset,
-      "contractCall.gasAssetId",
-    );
-  }
-  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
-      feeSponsor,
-      "contractCall.feeSponsor",
-    );
-  }
-  const gasLimit = record.gas_limit ?? record.gasLimit;
-  normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
-    gasLimit,
-    "contractCall.gasLimit",
+  normalized.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "contractCall.fee_payment",
+    { requireGasLimit: true },
   );
   return normalized;
 }
@@ -23822,8 +23838,7 @@ function normalizeContractOperationReceipt(payload, context) {
       "entrypoint_hash_hex",
       "gas_limit",
       "gas_used",
-      "gas_asset_id",
-      "fee_sponsor",
+      "fee_payment",
       "payload_digest_hex",
     ]),
     context,
@@ -23866,8 +23881,13 @@ function normalizeContractOperationReceipt(payload, context) {
         : requireExactJsonUnsignedInteger(receipt.gas_used, `${context}.gas_used`, {
             allowZero: true,
           }),
-    gas_asset_id: optionalString(receipt.gas_asset_id, `${context}.gas_asset_id`),
-    fee_sponsor: optionalString(receipt.fee_sponsor, `${context}.fee_sponsor`),
+    fee_payment:
+      receipt.fee_payment === undefined || receipt.fee_payment === null
+        ? null
+        : normalizeFeePaymentIntentValue(
+            receipt.fee_payment,
+            `${context}.fee_payment`,
+          ),
     payload_digest_hex: requireExactLowerHex32String(
       receipt.payload_digest_hex,
       `${context}.payload_digest_hex`,
@@ -23998,6 +24018,9 @@ function normalizeContractCallResponse(payload) {
 
 function normalizeContractCallSimulateRequest(input) {
   const record = ensureRecord(input, "contractCall simulation request");
+  rejectRetiredFeeSelectionFields(record, "contractCall simulation request", {
+    allowGasLimit: true,
+  });
   const normalized = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
@@ -24015,20 +24038,6 @@ function normalizeContractCallSimulateRequest(input) {
     normalized.payload = cloneJsonValue(
       record.payload,
       "contractCall simulation.payload",
-    );
-  }
-  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
-  if (gasAsset !== undefined && gasAsset !== null) {
-    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAsset,
-      "contractCall simulation.gasAssetId",
-    );
-  }
-  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
-      feeSponsor,
-      "contractCall simulation.feeSponsor",
     );
   }
   normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
@@ -24667,6 +24676,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 function normalizeMultisigProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisig request");
   rejectValidationFeeSnakeCaseInputs(record, "proposeMultisig request");
+  rejectRetiredFeeSelectionFields(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
   const instructionsValue = pickOverride(record, "instructions", "instructions");
   if (!Array.isArray(instructionsValue) || instructionsValue.length === 0) {
@@ -24718,13 +24728,10 @@ function normalizeMultisigProposeRequest(input) {
       { allowZero: true },
     );
   }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "proposeMultisig request.fee_sponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "proposeMultisig request.fee_payment",
+  );
   const validationFeePolicyVersion = record.validationFeePolicyVersion;
   const validationFeePolicyHash = record.validationFeePolicyHash;
   const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
@@ -24801,6 +24808,10 @@ function normalizeMultisigProposeRequest(input) {
 
 function normalizeMultisigContractCallProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisigContractCall request");
+  rejectRetiredFeeSelectionFields(
+    record,
+    "proposeMultisigContractCall request",
+  );
   const selector = normalizeMultisigAccountSelector(
     record,
     "proposeMultisigContractCall request",
@@ -24852,33 +24863,20 @@ function normalizeMultisigContractCallProposeRequest(input) {
       "proposeMultisigContractCall request.payload",
     );
   }
-  const gasAssetId = pickOverride(record, "gas_asset_id", "gasAssetId");
-  if (gasAssetId !== undefined && gasAssetId !== null) {
-    payload.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAssetId,
-      "proposeMultisigContractCall request.gas_asset_id",
-    );
-  }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "proposeMultisigContractCall request.fee_sponsor",
-    );
-  }
-  const gasLimit = pickOverride(record, "gas_limit", "gasLimit");
-  if (gasLimit !== undefined && gasLimit !== null) {
-    payload.gas_limit = ToriiClient._normalizeUnsignedInteger(
-      gasLimit,
-      "proposeMultisigContractCall request.gas_limit",
-      { allowZero: false },
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "proposeMultisigContractCall request.fee_payment",
+    { requireGasLimit: true },
+  );
   return payload;
 }
 
 function normalizeMultisigContractCallApproveRequest(input) {
   const record = ensureRecord(input, "approveMultisigContractCall request");
+  rejectRetiredFeeSelectionFields(
+    record,
+    "approveMultisigContractCall request",
+  );
   const selector = normalizeMultisigAccountSelector(
     record,
     "approveMultisigContractCall request",
@@ -24944,13 +24942,10 @@ function normalizeMultisigContractCallApproveRequest(input) {
       "approveMultisigContractCall.request",
     );
   }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "approveMultisigContractCall request.fee_sponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "approveMultisigContractCall request.fee_payment",
+  );
   return payload;
 }
 
@@ -25568,12 +25563,37 @@ function normalizeRetailRecipientRouteResponse(
   };
 }
 
-function normalizeFeeSponsorPolicyResponse(
+function normalizeFeeSponsorProgramId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const separator = literal.lastIndexOf("/");
+  if (separator <= 0 || separator === literal.length - 1) {
+    throw new TypeError(`${context} must be an exact sponsor/program literal`);
+  }
+  const sponsorLiteral = literal.slice(0, separator);
+  const sponsor = ToriiClient._requireAccountId(sponsorLiteral, `${context}.sponsor`);
+  if (sponsor !== sponsorLiteral) {
+    throw new TypeError(`${context}.sponsor must be a canonical I105 account id`);
+  }
+  const name = requireCanonicalIrohaName(literal.slice(separator + 1), `${context}.name`);
+  return { literal, sponsor, name };
+}
+
+function normalizeTaggedUnit(value, tag, allowed, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, new Set([tag, "value"]), context);
+  const kind = requireExactNonEmptyString(record[tag], `${context}.${tag}`);
+  if (!allowed.has(kind) || record.value !== null) {
+    throw new TypeError(`${context} must contain a supported tagged unit value`);
+  }
+  return kind;
+}
+
+function normalizeFeeSponsorProgramResponse(
   payload,
-  context = "fee sponsor policy response",
+  context = "fee sponsor program response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
-  assertSupportedOptionKeys(record, FEE_SPONSOR_POLICY_RESPONSE_KEYS, context);
+  assertSupportedOptionKeys(record, FEE_SPONSOR_PROGRAM_RESPONSE_KEYS, context);
   const id = ensureRecord(record.id, `${context}.id`);
   assertSupportedOptionKeys(id, new Set(["sponsor", "name"]), `${context}.id`);
   const sponsor = ToriiClient._requireAccountId(id.sponsor, `${context}.id.sponsor`);
@@ -25581,159 +25601,265 @@ function normalizeFeeSponsorPolicyResponse(
     throw new TypeError(`${context}.id.sponsor must be a canonical I105 account id`);
   }
   requireCanonicalIrohaName(id.name, `${context}.id.name`);
-  if (typeof record.enabled !== "boolean") {
-    throw new TypeError(`${context}.enabled must be a boolean`);
-  }
-  if (record.max_fee !== undefined && record.max_fee !== null) {
-    const maxFee = requireCanonicalQuantity(record.max_fee, `${context}.max_fee`);
-    if (maxFee !== record.max_fee) {
-      throw new TypeError(`${context}.max_fee must be a canonical quantity string`);
+  normalizeTaggedUnit(
+    record.lifecycle,
+    "state",
+    new Set(["staged", "paused", "active", "closing", "closed"]),
+    `${context}.lifecycle`,
+  );
+  for (const field of ["active_revision", "staged_revision"]) {
+    if (record[field] !== undefined && record[field] !== null) {
+      ToriiClient._normalizeUnsignedInteger(record[field], `${context}.${field}`, {
+        allowZero: false,
+      });
     }
   }
-  requireDenseArray(record.rules, `${context}.rules`).forEach((rule, index) => {
-    const normalizedRule = ensureRecord(rule, `${context}.rules[${index}]`);
-    assertSupportedOptionKeys(
-      normalizedRule,
-      new Set([
-        "effect",
-        "max_fee",
-        "dataspaces",
-        "executable_kinds",
-        "instruction_wire_ids",
-        "asset_transfer_definition_ids",
-        "contract_selectors",
-      ]),
-      `${context}.rules[${index}]`,
+  if (record.scheduled_activation !== undefined && record.scheduled_activation !== null) {
+    const activation = ensureRecord(
+      record.scheduled_activation,
+      `${context}.scheduled_activation`,
     );
-    if (normalizedRule.max_fee !== undefined && normalizedRule.max_fee !== null) {
-      const maxFee = requireCanonicalQuantity(
-        normalizedRule.max_fee,
-        `${context}.rules[${index}].max_fee`,
+    assertSupportedOptionKeys(
+      activation,
+      new Set(["revision", "activate_at_height"]),
+      `${context}.scheduled_activation`,
+    );
+    ToriiClient._normalizeUnsignedInteger(
+      activation.revision,
+      `${context}.scheduled_activation.revision`,
+      { allowZero: false },
+    );
+    ToriiClient._normalizeUnsignedInteger(
+      activation.activate_at_height,
+      `${context}.scheduled_activation.activate_at_height`,
+      { allowZero: true },
+    );
+  }
+  return record;
+}
+
+function rejectRetiredFeeSelectionFields(
+  record,
+  context,
+  { allowGasLimit = false } = {},
+) {
+  const retired = [
+    ["gas_asset_id", "fee_payment"],
+    ["gasAssetId", "feePayment"],
+    ["fee_sponsor", "fee_payment"],
+    ["feeSponsor", "feePayment"],
+  ];
+  if (!allowGasLimit) {
+    retired.push(["gas_limit", "fee_payment.value.gas_limit"]);
+    retired.push(["gasLimit", "feePayment.value.gas_limit"]);
+  }
+  for (const [field, replacement] of retired) {
+    if (Object.prototype.hasOwnProperty.call(record, field)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${field} is retired; use ${replacement}`,
+        normalizeErrorPath(`${context}.${field}`),
       );
-      if (maxFee !== normalizedRule.max_fee) {
-        throw new TypeError(
-          `${context}.rules[${index}].max_fee must be a canonical quantity string`,
-        );
-      }
     }
-    const effect = ensureRecord(
-      normalizedRule.effect,
-      `${context}.rules[${index}].effect`,
-    );
+  }
+}
+
+function normalizeFeePaymentIntentValue(
+  intent,
+  context,
+  { requireGasLimit = false } = {},
+) {
+  const record = ensureRecord(intent, context);
+  assertSupportedOptionKeys(record, new Set(["payer", "value"]), context);
+  const payer = requireExactNonEmptyString(record.payer, `${context}.payer`);
+  if (payer !== "authority" && payer !== "sponsor") {
+    throw new TypeError(`${context}.payer must be authority or sponsor`);
+  }
+  const value = ensureRecord(record.value, `${context}.value`);
+  const allowed = new Set(["charge_limits", "gas_limit"]);
+  if (payer === "sponsor") {
+    allowed.add("program_id");
+    allowed.add("program_revision");
+  }
+  assertSupportedOptionKeys(value, allowed, `${context}.value`);
+  const normalizedValue = {};
+  if (payer === "sponsor") {
+    const programId = ensureRecord(value.program_id, `${context}.value.program_id`);
     assertSupportedOptionKeys(
-      effect,
-      new Set(["effect", "value"]),
-      `${context}.rules[${index}].effect`,
+      programId,
+      new Set(["sponsor", "name"]),
+      `${context}.value.program_id`,
     );
-    const effectName = requireExactNonEmptyString(
-      effect.effect,
-      `${context}.rules[${index}].effect.effect`,
+    const sponsor = ToriiClient._requireAccountId(
+      programId.sponsor,
+      `${context}.value.program_id.sponsor`,
     );
-    if ((effectName !== "allow" && effectName !== "deny") || effect.value !== null) {
+    if (sponsor !== programId.sponsor) {
       throw new TypeError(
-        `${context}.rules[${index}].effect must be a canonical tagged allow/deny value`,
+        `${context}.value.program_id.sponsor must be a canonical I105 account id`,
       );
     }
-
-    const dataspaces = requireDenseArray(
-      normalizedRule.dataspaces,
-      `${context}.rules[${index}].dataspaces`,
+    const name = requireCanonicalIrohaName(
+      programId.name,
+      `${context}.value.program_id.name`,
     );
-    let previousDataspace = -1;
-    dataspaces.forEach((dataspace, dataspaceIndex) => {
-      const normalized = ToriiClient._normalizeUnsignedInteger(
-        dataspace,
-        `${context}.rules[${index}].dataspaces[${dataspaceIndex}]`,
-        { allowZero: true },
-      );
-      if (normalized !== dataspace || normalized <= previousDataspace) {
-        throw new TypeError(
-          `${context}.rules[${index}].dataspaces must be canonical sorted unique u64 values`,
-        );
-      }
-      previousDataspace = normalized;
-    });
-
-    const executableKinds = requireDenseArray(
-      normalizedRule.executable_kinds,
-      `${context}.rules[${index}].executable_kinds`,
+    normalizedValue.program_id = { sponsor, name };
+    normalizedValue.program_revision = ToriiClient._normalizeUnsignedInteger(
+      value.program_revision,
+      `${context}.value.program_revision`,
+      { allowZero: false },
     );
-    const executableKindOrder = new Map([
-      ["instructions", 0],
-      ["contract_call", 1],
-      ["ivm", 2],
-      ["ivm_proved", 3],
-    ]);
-    let previousExecutableKind = -1;
-    executableKinds.forEach((kind, kindIndex) => {
-      const tagged = ensureRecord(
-        kind,
-        `${context}.rules[${index}].executable_kinds[${kindIndex}]`,
-      );
-      assertSupportedOptionKeys(
-        tagged,
-        new Set(["kind", "value"]),
-        `${context}.rules[${index}].executable_kinds[${kindIndex}]`,
-      );
-      const kindName = requireExactNonEmptyString(
-        tagged.kind,
-        `${context}.rules[${index}].executable_kinds[${kindIndex}].kind`,
-      );
-      const order = executableKindOrder.get(kindName);
-      if (order === undefined || tagged.value !== null || order <= previousExecutableKind) {
-        throw new TypeError(
-          `${context}.rules[${index}].executable_kinds must contain canonical sorted unique tagged values`,
-        );
-      }
-      previousExecutableKind = order;
-    });
-
-    requireCanonicalSortedStringSet(
-      normalizedRule.instruction_wire_ids,
-      `${context}.rules[${index}].instruction_wire_ids`,
+  }
+  let previousKind = -1;
+  normalizedValue.charge_limits = requireDenseArray(
+    value.charge_limits,
+    `${context}.value.charge_limits`,
+  ).map((limit, index) => {
+    const limitContext = `${context}.value.charge_limits[${index}]`;
+    const item = ensureRecord(limit, limitContext);
+    assertSupportedOptionKeys(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      limitContext,
     );
-    const assetTransferDefinitionIds = requireCanonicalSortedStringSet(
-      normalizedRule.asset_transfer_definition_ids,
-      `${context}.rules[${index}].asset_transfer_definition_ids`,
+    const kind = normalizeTaggedUnit(
+      item.kind,
+      "kind",
+      new Set(["nexus", "pipeline_gas"]),
+      `${limitContext}.kind`,
     );
-    assetTransferDefinitionIds.forEach((assetDefinitionId, assetIndex) => {
-      const normalized = normalizeAssetDefinitionId(
-        assetDefinitionId,
-        `${context}.rules[${index}].asset_transfer_definition_ids[${assetIndex}]`,
+    const kindIndex = kind === "nexus" ? 0 : 1;
+    if (kindIndex <= previousKind) {
+      throw new TypeError(
+        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
       );
-      if (normalized !== assetDefinitionId) {
-        throw new TypeError(
-          `${context}.rules[${index}].asset_transfer_definition_ids must contain canonical asset definition ids`,
-        );
-      }
-    });
-    requireDenseArray(
-      normalizedRule.contract_selectors,
-      `${context}.rules[${index}].contract_selectors`,
-    ).forEach((selector, selectorIndex) => {
-      const selectorRecord = ensureRecord(
-        selector,
-        `${context}.rules[${index}].contract_selectors[${selectorIndex}]`,
-      );
-      assertSupportedOptionKeys(
-        selectorRecord,
-        new Set(["contract_alias", "contract_address", "entrypoints"]),
-        `${context}.rules[${index}].contract_selectors[${selectorIndex}]`,
-      );
-      for (const field of ["contract_alias", "contract_address"]) {
-        if (selectorRecord[field] !== undefined) {
-          requireExactNonEmptyString(
-            selectorRecord[field],
-            `${context}.rules[${index}].contract_selectors[${selectorIndex}].${field}`,
-          );
-        }
-      }
-      requireCanonicalSortedStringSet(
-        selectorRecord.entrypoints,
-        `${context}.rules[${index}].contract_selectors[${selectorIndex}].entrypoints`,
-      );
-    });
+    }
+    previousKind = kindIndex;
+    return {
+      kind: { kind, value: null },
+      asset_definition_id: normalizeAssetDefinitionId(
+        item.asset_definition_id,
+        `${limitContext}.asset_definition_id`,
+      ),
+      max_amount: requireCanonicalQuantity(
+        item.max_amount,
+        `${limitContext}.max_amount`,
+      ),
+    };
   });
+  if (value.gas_limit !== undefined && value.gas_limit !== null) {
+    normalizedValue.gas_limit = ToriiClient._normalizeUnsignedInteger(
+      value.gas_limit,
+      `${context}.value.gas_limit`,
+      {
+        allowZero: false,
+      },
+    );
+  } else {
+    normalizedValue.gas_limit = null;
+  }
+  if (requireGasLimit && normalizedValue.gas_limit === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.gas_limit is required for contract execution`,
+      normalizeErrorPath(`${context}.value.gas_limit`),
+    );
+  }
+  return { payer, value: normalizedValue };
+}
+
+function normalizeFeePaymentIntentResponse(intent, context) {
+  return normalizeFeePaymentIntentValue(intent, context);
+}
+
+function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, FEE_QUOTE_RESPONSE_KEYS, context);
+  normalizeFeePaymentIntentResponse(record.intent, `${context}.intent`);
+  const observation = ensureRecord(record.observation, `${context}.observation`);
+  assertSupportedOptionKeys(
+    observation,
+    new Set(["ledger_time_ms", "next_block_height", "route_dataspace_id"]),
+    `${context}.observation`,
+  );
+  ToriiClient._normalizeUnsignedInteger(
+    observation.ledger_time_ms,
+    `${context}.observation.ledger_time_ms`,
+    { allowZero: true },
+  );
+  ToriiClient._normalizeUnsignedInteger(
+    observation.next_block_height,
+    `${context}.observation.next_block_height`,
+    { allowZero: false },
+  );
+  if (observation.route_dataspace_id !== undefined && observation.route_dataspace_id !== null) {
+    ToriiClient._normalizeUnsignedInteger(
+      observation.route_dataspace_id,
+      `${context}.observation.route_dataspace_id`,
+      { allowZero: true },
+    );
+  }
+  requireDenseArray(record.components, `${context}.components`).forEach((component, index) => {
+    const item = ensureRecord(component, `${context}.components[${index}]`);
+    assertSupportedOptionKeys(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      `${context}.components[${index}]`,
+    );
+    normalizeTaggedUnit(
+      item.kind,
+      "kind",
+      new Set(["nexus", "pipeline_gas"]),
+      `${context}.components[${index}].kind`,
+    );
+    normalizeAssetDefinitionId(
+      item.asset_definition_id,
+      `${context}.components[${index}].asset_definition_id`,
+    );
+    requireCanonicalQuantity(item.max_amount, `${context}.components[${index}].max_amount`);
+  });
+  requireDenseArray(record.capacities, `${context}.capacities`).forEach((capacity, index) => {
+    const item = ensureRecord(capacity, `${context}.capacities[${index}]`);
+    const fields = [
+      "asset_definition_id",
+      "vault_balance",
+      "reserve_floor",
+      "block_remaining",
+      "program_epoch_remaining",
+      "beneficiary_epoch_remaining",
+    ];
+    assertSupportedOptionKeys(item, new Set(fields), `${context}.capacities[${index}]`);
+    normalizeAssetDefinitionId(
+      item.asset_definition_id,
+      `${context}.capacities[${index}].asset_definition_id`,
+    );
+    for (const field of fields.slice(1)) {
+      requireCanonicalQuantity(item[field], `${context}.capacities[${index}].${field}`);
+    }
+  });
+  const decision = ensureRecord(record.decision, `${context}.decision`);
+  assertSupportedOptionKeys(decision, new Set(["status", "value"]), `${context}.decision`);
+  if (decision.status !== "accepted") {
+    throw new TypeError(`${context}.decision.status must be accepted`);
+  }
+  const decisionValue = ensureRecord(decision.value, `${context}.decision.value`);
+  assertSupportedOptionKeys(
+    decisionValue,
+    new Set(["debit_source", "program_revision"]),
+    `${context}.decision.value`,
+  );
+  const debitSource = ensureRecord(
+    decisionValue.debit_source,
+    `${context}.decision.value.debit_source`,
+  );
+  assertSupportedOptionKeys(
+    debitSource,
+    new Set(["kind", "value"]),
+    `${context}.decision.value.debit_source`,
+  );
+  if (debitSource.kind !== "account" && debitSource.kind !== "sponsor_program") {
+    throw new TypeError(`${context}.decision.value.debit_source.kind is unsupported`);
+  }
   return record;
 }
 
@@ -29135,31 +29261,11 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       per_byte_fee: fees.per_byte_fee,
       per_instruction_fee: fees.per_instruction_fee,
       per_gas_unit_fee: fees.per_gas_unit_fee,
-      sponsorship_enabled: coerceBoolean(
-        fees.sponsorship_enabled,
-        `${context}.fees.sponsorship_enabled`,
-      ),
-      sponsor_max_fee: fees.sponsor_max_fee,
-      sponsor_verified_balance_safety_floor:
-        fees.sponsor_verified_balance_safety_floor,
-      canonical_sponsor_account_id: optionalString(
-        fees.canonical_sponsor_account_id,
-        `${context}.fees.canonical_sponsor_account_id`,
-      ),
-      fee_receipts_activation_height: coerceNestedInt(
-        fees,
-        "fee_receipts_activation_height",
-        `${context}.fees`,
-      ),
-      external_settlement_enabled: coerceBoolean(
-        fees.external_settlement_enabled,
-        `${context}.fees.external_settlement_enabled`,
-      ),
-      burn_from_unix_timestamp_ms: coerceNestedInt(
-        fees,
-        "burn_from_unix_timestamp_ms",
-        `${context}.fees`,
-      ),
+      sponsor_vault_custody_account_id:
+        fees.sponsor_vault_custody_account_id === undefined ||
+        fees.sponsor_vault_custody_account_id === null
+          ? ""
+          : String(fees.sponsor_vault_custody_account_id),
       settlement_mode:
         fees.settlement_mode === undefined || fees.settlement_mode === null
           ? ""
@@ -29394,7 +29500,6 @@ function buildSorafsPinRegisterPayload(record, context) {
       "private_key",
       "manifest_payload",
       "submitted_epoch",
-      "gas_asset_id",
       "alias",
       "successor_of_hex",
       "signal",
@@ -29415,12 +29520,6 @@ function buildSorafsPinRegisterPayload(record, context) {
       { allowZero: true },
     ),
   };
-  if (record.gas_asset_id !== undefined && record.gas_asset_id !== null) {
-    payload.gas_asset_id = requireExactNonEmptyString(
-      record.gas_asset_id,
-      `${context}.gas_asset_id`,
-    );
-  }
   if (record.alias !== undefined && record.alias !== null) {
     payload.alias = normalizeSorafsPinRegisterAlias(record.alias, `${context}.alias`);
   }
@@ -33226,9 +33325,8 @@ function normalizeContractActivityListItem(value, context) {
   rejectAliasField(record, context, "contractAlias", "contract_alias");
   rejectAliasField(record, context, "contractEntrypoint", "contract_entrypoint");
   rejectAliasField(record, context, "contractPayload", "contract_payload");
-  rejectAliasField(record, context, "gasAssetId", "gas_asset_id");
-  rejectAliasField(record, context, "feeSponsor", "fee_sponsor");
-  rejectAliasField(record, context, "gasLimit", "gas_limit");
+  rejectAliasField(record, context, "feePayment", "fee_payment");
+  rejectRetiredFeeSelectionFields(record, context);
   const entrypointHash = requireNonEmptyString(
     record.entrypoint_hash,
     `${context}.entrypoint_hash`,
@@ -33267,20 +33365,10 @@ function normalizeContractActivityListItem(value, context) {
     record.contract_payload === undefined
       ? undefined
       : cloneJsonValue(record.contract_payload, `${context}.contract_payload`);
-  const gasAssetId =
-    record.gas_asset_id === undefined || record.gas_asset_id === null
+  const feePayment =
+    record.fee_payment === undefined || record.fee_payment === null
       ? undefined
-      : requireNonEmptyString(record.gas_asset_id, `${context}.gas_asset_id`);
-  const feeSponsor =
-    record.fee_sponsor === undefined || record.fee_sponsor === null
-      ? undefined
-      : requireNonEmptyString(record.fee_sponsor, `${context}.fee_sponsor`);
-  const gasLimit =
-    record.gas_limit === undefined || record.gas_limit === null
-      ? undefined
-      : ToriiClient._normalizeUnsignedInteger(record.gas_limit, `${context}.gas_limit`, {
-          allowZero: true,
-        });
+      : normalizeFeePaymentIntentValue(record.fee_payment, `${context}.fee_payment`);
   const normalized = {
     ...record,
     entrypoint_hash: entrypointHash,
@@ -33304,14 +33392,10 @@ function normalizeContractActivityListItem(value, context) {
   if (contractPayload !== undefined) {
     normalized.contract_payload = contractPayload;
   }
-  if (gasAssetId !== undefined) {
-    normalized.gas_asset_id = gasAssetId;
-  }
-  if (feeSponsor !== undefined) {
-    normalized.fee_sponsor = feeSponsor;
-  }
-  if (gasLimit !== undefined) {
-    normalized.gas_limit = gasLimit;
+  if (feePayment !== undefined) {
+    normalized.fee_payment = feePayment;
+  } else {
+    delete normalized.fee_payment;
   }
   return normalized;
 }
@@ -33330,6 +33414,8 @@ function normalizeContractEventListItem(value, context) {
   rejectAliasField(record, context, "eventKind", "event_kind");
   rejectAliasField(record, context, "assetIds", "asset_ids");
   rejectAliasField(record, context, "numericFields", "numeric_fields");
+  rejectAliasField(record, context, "feePayment", "fee_payment");
+  rejectRetiredFeeSelectionFields(record, context);
   const eventId = requireNonEmptyString(record.event_id, `${context}.event_id`);
   const schemaVersion = ToriiClient._normalizeUnsignedInteger(
     record.schema_version,
@@ -33388,20 +33474,10 @@ function normalizeContractEventListItem(value, context) {
     record.payload === undefined
       ? undefined
       : cloneJsonValue(record.payload, `${context}.payload`);
-  const gasAssetId =
-    record.gas_asset_id === undefined || record.gas_asset_id === null
+  const feePayment =
+    record.fee_payment === undefined || record.fee_payment === null
       ? undefined
-      : requireNonEmptyString(record.gas_asset_id, `${context}.gas_asset_id`);
-  const feeSponsor =
-    record.fee_sponsor === undefined || record.fee_sponsor === null
-      ? undefined
-      : requireNonEmptyString(record.fee_sponsor, `${context}.fee_sponsor`);
-  const gasLimit =
-    record.gas_limit === undefined || record.gas_limit === null
-      ? undefined
-      : ToriiClient._normalizeUnsignedInteger(record.gas_limit, `${context}.gas_limit`, {
-          allowZero: true,
-        });
+      : normalizeFeePaymentIntentValue(record.fee_payment, `${context}.fee_payment`);
   const normalized = {
     ...record,
     event_id: eventId,
@@ -33438,14 +33514,10 @@ function normalizeContractEventListItem(value, context) {
   if (payload !== undefined) {
     normalized.payload = payload;
   }
-  if (gasAssetId !== undefined) {
-    normalized.gas_asset_id = gasAssetId;
-  }
-  if (feeSponsor !== undefined) {
-    normalized.fee_sponsor = feeSponsor;
-  }
-  if (gasLimit !== undefined) {
-    normalized.gas_limit = gasLimit;
+  if (feePayment !== undefined) {
+    normalized.fee_payment = feePayment;
+  } else {
+    delete normalized.fee_payment;
   }
   return normalized;
 }

@@ -41,7 +41,11 @@ async fn test_with_instruction_and_status(
     let client = network.client();
 
     // When
-    let transaction = client.build_transaction(exec, Metadata::default());
+    let transaction = client.build_transaction(
+        exec,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     let hash = transaction.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
@@ -94,7 +98,11 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
     ensure_domain_registration_lease_for_network(network, &kura_domain)?;
     let register = Register::domain(Domain::new(kura_domain));
-    let tx = client.build_transaction([register], Metadata::default());
+    let tx = client.build_transaction(
+        [register],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     let hash = tx.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(

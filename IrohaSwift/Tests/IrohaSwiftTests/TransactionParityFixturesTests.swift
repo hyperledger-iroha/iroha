@@ -58,6 +58,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                                           quantity: quantity,
                                           destination: canonicalDestination,
                                           description: fixture.payload.metadata["memo"],
+                                          feePayment: fixture.payload.feePayment,
                                           ttlMs: fixture.payload.timeToLiveMs,
                                           nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeTransfer(transfer: request,
@@ -87,7 +88,8 @@ final class TransactionParityFixturesTests: XCTestCase {
                                       quantity: quantity,
                                       destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
-                                      nonce: fixture.payload.nonce)
+                                      nonce: fixture.payload.nonce,
+                                      feePayment: fixture.payload.feePayment)
             return try SwiftTransactionEncoder.encodeMint(request: request,
                                                           keypair: keypair,
                                                           creationTimeMs: fixture.payload.creationTimeMs)
@@ -115,7 +117,8 @@ final class TransactionParityFixturesTests: XCTestCase {
                                       quantity: quantity,
                                       destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
-                                      nonce: fixture.payload.nonce)
+                                      nonce: fixture.payload.nonce,
+                                      feePayment: fixture.payload.feePayment)
             return try SwiftTransactionEncoder.encodeBurn(request: request,
                                                           keypair: keypair,
                                                           creationTimeMs: fixture.payload.creationTimeMs)
@@ -485,6 +488,7 @@ private struct TransactionPayloadSpec: Decodable {
     let executable: TransactionExecutable
     let timeToLiveMs: UInt64?
     let nonce: UInt32?
+    let feePayment: FeePaymentIntent
     let metadata: [String: String]
 
     private enum CodingKeys: String, CodingKey {
@@ -494,6 +498,7 @@ private struct TransactionPayloadSpec: Decodable {
         case executable
         case timeToLiveMs
         case nonce
+        case feePayment
         case metadata
     }
 
@@ -505,6 +510,7 @@ private struct TransactionPayloadSpec: Decodable {
         executable = try container.decode(TransactionExecutable.self, forKey: .executable)
         timeToLiveMs = try container.decodeIfPresent(UInt64.self, forKey: .timeToLiveMs)
         nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
+        feePayment = try container.decode(FeePaymentIntent.self, forKey: .feePayment)
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata) ?? [:]
     }
 

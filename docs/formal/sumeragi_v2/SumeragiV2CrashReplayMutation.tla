@@ -153,6 +153,22 @@ DurableWorkHasReplayOrRecovery ==
     \/ phase = "ReplayRequired"
     \/ queue # <<>>
 
+(***************************************************************************
+The pre-fix witness observes only the volatile signature carrier.  It fails on
+the Crash step even in Repaired mode.  The crash-aware witness accepts only an
+exact authority for the durable kind and current generation, and therefore
+still rejects DropReplay after recovery authority is retired.
+***************************************************************************)
+
+VolatileSignatureProgressWitness ==
+  durableKind # "Signature" \/ completed \/ queue # <<>>
+
+CrashAwareSignatureProgressWitness ==
+  \/ VolatileSignatureProgressWitness
+  \/ /\ durableKind = "Signature"
+     /\ phase \in {"RestartRequired", "ReplayRequired"}
+     /\ authority = Authority(generation, durableKind)
+
 NoStaleCompletion == ~staleCompletion
 
 ExactRestartAuthority ==

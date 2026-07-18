@@ -229,6 +229,33 @@ def require_signature_parity(names: set[str]) -> None:
                 f"rust={rust_value}, c={c_value}"
             )
 
+def rust_parameter_names(name: str) -> list[str]:
+    match = re.search(
+        rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(name)}\s*'
+        rf'\((.*?)\)\s*(?:->\s*[^\s{{]+)?\s*{{',
+        rust,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse Rust FFI parameters: {name}")
+    return [parameter.split(":", 1)[0].strip() for parameter in split_parameters(match.group(1))]
+
+def c_parameter_names(name: str) -> list[str]:
+    match = re.search(
+        rf'(?:int32_t|uint32_t|void)\s+{re.escape(name)}\s*\((.*?)\)\s*;',
+        header,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse C FFI parameters: {name}")
+    names = []
+    for parameter in split_parameters(match.group(1)):
+        parsed = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*$', parameter)
+        if parsed is None:
+            raise SystemExit(f"cannot parse C FFI parameter name for {name}: {parameter}")
+        names.append(parsed.group(1))
+    return names
+
 rust_kagemusha = rust_exports("connect_norito_kagemusha_")
 header_kagemusha = header_exports("connect_norito_kagemusha_")
 swift_kagemusha = set(re.findall(r'"(connect_norito_kagemusha_[a-z0-9_]+)"', swift))
@@ -282,18 +309,65 @@ rust_detached = rust_exports("connect_norito_detached_transaction_") | rust_expo
 header_detached = header_exports("connect_norito_detached_transaction_") | header_exports("connect_norito_canonical_json_")
 exact("Rust detached transaction", DETACHED_EXPORTS, rust_detached)
 exact("C header detached transaction", DETACHED_EXPORTS, header_detached)
+
+signer_name = re.compile(
+    r"^connect_norito_encode_[a-z0-9_]+_signed_transaction(?:_alg)?$"
+)
+rust_transaction_signers = {
+    name for name in rust_exports("connect_norito_encode_") if signer_name.fullmatch(name)
+}
+header_transaction_signers = {
+    name for name in header_exports("connect_norito_encode_") if signer_name.fullmatch(name)
+}
+if len(rust_transaction_signers) != 34:
+    raise SystemExit(
+        "Rust transaction signer inventory must contain exactly 17 base/algorithm pairs: "
+        f"found {len(rust_transaction_signers)}"
+    )
+exact("C header transaction signer", rust_transaction_signers, header_transaction_signers)
+base_transaction_signers = {
+    name for name in rust_transaction_signers if not name.endswith("_alg")
+}
+expected_transaction_signers = base_transaction_signers | {
+    f"{name}_alg" for name in base_transaction_signers
+}
+exact("Rust transaction signer algorithm pairing", expected_transaction_signers, rust_transaction_signers)
+for name in sorted(rust_transaction_signers):
+    rust_names = rust_parameter_names(name)
+    header_names = c_parameter_names(name)
+    rust_fee_index = rust_names.index("fee_payment_json_ptr")
+    header_fee_index = header_names.index("fee_payment_json")
+    if rust_names[rust_fee_index:rust_fee_index + 4] != [
+        "fee_payment_json_ptr",
+        "fee_payment_json_len",
+        "private_key_ptr",
+        "private_key_len",
+    ]:
+        raise SystemExit(
+            f"Rust signer {name} must require fee payment immediately before its private key"
+        )
+    if header_names[header_fee_index:header_fee_index + 4] != [
+        "fee_payment_json",
+        "fee_payment_json_len",
+        "private_key",
+        "private_key_len",
+    ]:
+        raise SystemExit(
+            f"C signer {name} must require fee payment immediately before its private key"
+        )
 require_signature_parity(
     KAGEMUSHA_EXPORTS
     | KAGEMUSHA_CANDIDATE_LAB_EXPORTS
     | PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
+    | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
 
 abi = re.search(r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;", rust)
-if abi is None or abi.group(1) != "20":
-    raise SystemExit("connect_norito bridge ABI must be exactly 20")
+if abi is None or abi.group(1) != "21":
+    raise SystemExit("connect_norito bridge ABI must be exactly 21")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
@@ -325,7 +399,7 @@ if swift_proof_exports & swift_protocol_exports:
 expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
 if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
     raise SystemExit(
-        "Swift ABI-20 inventory must contain 4 proof and "
+        "Swift ABI-21 inventory must contain 4 proof and "
         f"{expected_protocol_count} protocol symbols"
     )
 swift_exports = swift_proof_exports | swift_protocol_exports
@@ -334,7 +408,7 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
 print(
-    "bridge header contract passed: ABI 20, "
+    "bridge header contract passed: ABI 21, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
@@ -428,7 +502,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
   case "${MODE}" in
     --self-test-bad-abi)
       replace_once "${tmp_rust}" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;" \
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;" \
         "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;"
       ;;
     --self-test-missing-header-symbol)

@@ -1116,11 +1116,15 @@ mod tests {
                         .canonical_resultless_proposal()
                 };
             let body = if include_lane_payload {
-                let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
-                        SumeragiParameter::MaxClockDriftMs(100),
-                    ))])
-                    .sign(transaction_key.private_key());
+                let transaction = TransactionBuilder::new(
+                    chain_id.clone(),
+                    transaction_authority,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::MaxClockDriftMs(100),
+                ))])
+                .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
                     .route_plan_with_state(&accepted, state.as_ref())
@@ -1146,11 +1150,15 @@ mod tests {
                     .with_lane_payload_ownerships(lane_plan.ownerships);
                 build_genesis_body(transaction, Some(execution_context))
             } else {
-                let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
-                        SumeragiParameter::MaxClockDriftMs(100),
-                    ))])
-                    .sign(transaction_key.private_key());
+                let transaction = TransactionBuilder::new(
+                    chain_id.clone(),
+                    transaction_authority,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::MaxClockDriftMs(100),
+                ))])
+                .sign(transaction_key.private_key());
                 build_genesis_body(transaction, None)
             };
             let canonical_wire = body.encode_wire().expect("canonical block wire");

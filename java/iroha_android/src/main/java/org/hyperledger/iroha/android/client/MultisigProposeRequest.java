@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
@@ -17,7 +18,7 @@ public final class MultisigProposeRequest {
   private final String publicKeyHex;
   private final String signatureB64;
   private final Long creationTimeMs;
-  private final String feeSponsor;
+  private final FeePaymentIntent feePayment;
   private final String memo;
   private final Long validationFeePolicyVersion;
   private final String validationFeePolicyHash;
@@ -32,7 +33,7 @@ public final class MultisigProposeRequest {
     this.publicKeyHex = builder.publicKeyHex;
     this.signatureB64 = builder.signatureB64;
     this.creationTimeMs = builder.creationTimeMs;
-    this.feeSponsor = builder.feeSponsor;
+    this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
     this.memo = builder.memo;
     this.validationFeePolicyVersion = builder.validationFeePolicyVersion;
     this.validationFeePolicyHash = builder.validationFeePolicyHash;
@@ -51,7 +52,7 @@ public final class MultisigProposeRequest {
   public String publicKeyHex() { return publicKeyHex; }
   public String signatureB64() { return signatureB64; }
   public Long creationTimeMs() { return creationTimeMs; }
-  public String feeSponsor() { return feeSponsor; }
+  public FeePaymentIntent feePayment() { return feePayment; }
   public String memo() { return memo; }
   public Long validationFeePolicyVersion() { return validationFeePolicyVersion; }
   public String validationFeePolicyHash() { return validationFeePolicyHash; }
@@ -76,7 +77,7 @@ public final class MultisigProposeRequest {
     private String publicKeyHex;
     private String signatureB64;
     private Long creationTimeMs;
-    private String feeSponsor;
+    private FeePaymentIntent feePayment;
     private String memo;
     private Long validationFeePolicyVersion;
     private String validationFeePolicyHash;
@@ -138,8 +139,8 @@ public final class MultisigProposeRequest {
       return this;
     }
 
-    public Builder setFeeSponsor(final String value) {
-      this.feeSponsor = value;
+    public Builder setFeePayment(final FeePaymentIntent value) {
+      this.feePayment = Objects.requireNonNull(value, "feePayment");
       return this;
     }
 

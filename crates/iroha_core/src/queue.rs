@@ -33,17 +33,21 @@ use indexmap::IndexSet;
 #[cfg(test)]
 use iroha_config::parameters::actual::LaneConfig as LaneGeometry;
 use iroha_config::parameters::actual::{
-    GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
+    GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
 };
 use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
     AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan,
+    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
+    FeeSponsorBeneficiaryEpochBudgetWindow, FeeSponsorBlockBudgetWindow,
+    FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow, FeeSponsorProgramEpochBudgetWindow,
+    FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LaneLifecyclePlan,
     LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
     account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
     block::{ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole},
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
@@ -55,15 +59,19 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    transaction::{Executable, TransactionEntrypoint, error::TransactionRejectionReason},
+    transaction::{
+        Executable, TransactionEntrypoint, error::TransactionRejectionReason,
+        signed::TransactionPayload,
+    },
 };
 use iroha_logger::{debug, trace, warn};
-use iroha_primitives::time::TimeSource;
+use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
 use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1};
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
@@ -74,7 +82,7 @@ use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReser
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
-    RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
+    RoutingPlan, RoutingResolveError, SingleLaneRouter, TransactionRoutingView, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
     evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_plan_with_nexus_and_world_at,
     evaluate_policy_plan_with_nexus_and_world_at_block_height, evaluate_policy_with_catalog,
@@ -94,7 +102,7 @@ use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
-    executor::{NexusFeeAdmissionError, check_external_nexus_fee_admission},
+    executor::{FeeAdmissionQuote, NexusFeeAdmissionError, quote_external_nexus_fee_admission},
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
@@ -727,6 +735,8 @@ pub struct Queue {
     plan_journal_disabled: AtomicBool,
     /// Durable exact ownership of queue entries selected by independent lane ticks.
     lane_reservations: parking_lot::Mutex<LaneQueueReservationStore>,
+    /// Live sponsor-program capacity holds keyed by signed transaction hash.
+    fee_admission_reservations: parking_lot::Mutex<FeeAdmissionReservationStore>,
     /// Sticky process-lifetime fault after an ambiguous reservation ownership write.
     lane_reservation_durability_fault: AtomicBool,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -972,8 +982,207 @@ struct PreparedQueueAdmission {
     encoded_len: usize,
     proposal_gas_cost: u64,
     enqueued_at_ms: u64,
+    fee_reservation: Option<FeeAdmissionReservation>,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+/// Exact balance resource held by one queued fee component.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum FeeReservationAssetSource {
+    Authority(AssetId),
+    SponsorProgram {
+        program_id: FeeSponsorProgramId,
+        asset_definition_id: AssetDefinitionId,
+    },
+}
+
+/// In-memory hold on fee-payer capacity for one admitted transaction.
+///
+/// Persisted budget counters remain authoritative. This reservation prevents
+/// multiple live queue entries from independently passing against the same
+/// pre-execution vault and budget snapshot.
+#[derive(Clone, Debug)]
+struct FeeAdmissionReservation {
+    program_revision: Option<u64>,
+    beneficiary: AccountId,
+    asset_charges: BTreeMap<FeeReservationAssetSource, Quantity>,
+    window_charges: BTreeMap<FeeSponsorBudgetCounterKey, Quantity>,
+    relay_lease_charges: BTreeMap<Hash, Quantity>,
+    asset_remaining: BTreeMap<FeeReservationAssetSource, Quantity>,
+    window_remaining: BTreeMap<FeeSponsorBudgetCounterKey, Quantity>,
+    relay_lease_remaining: BTreeMap<Hash, Quantity>,
+}
+
+#[derive(Default)]
+struct FeeAdmissionReservationStore {
+    live_by_hash: BTreeMap<SignedTxHash, FeeAdmissionReservation>,
+}
+
+impl FeeAdmissionReservationStore {
+    fn checked_add(
+        lhs: &Quantity,
+        rhs: &Quantity,
+        context: &'static str,
+    ) -> Result<Quantity, Error> {
+        lhs.checked_add(rhs)
+            .map_err(|_| Error::NexusFeeAdmissionConfigInvalid {
+                code: FeeRejectionCode::InvalidProgramConfiguration,
+                reason: format!("fee reservation {context} arithmetic overflow"),
+            })
+    }
+
+    fn ensure_capacity(&self, reservation: &FeeAdmissionReservation) -> Result<(), Error> {
+        for (source, amount) in &reservation.asset_charges {
+            let already_reserved = self
+                .live_by_hash
+                .values()
+                .filter_map(|existing| existing.asset_charges.get(source))
+                .try_fold(Quantity::zero(), |total, amount| {
+                    Self::checked_add(&total, amount, "payer balance capacity")
+                })?;
+            let required = Self::checked_add(&already_reserved, amount, "payer balance capacity")?;
+            let available = reservation
+                .asset_remaining
+                .get(source)
+                .cloned()
+                .unwrap_or_else(Quantity::zero);
+            if required > available {
+                let (code, detail) = match source {
+                    FeeReservationAssetSource::Authority(asset_id) => (
+                        FeeRejectionCode::AuthorityPayerInsufficient,
+                        format!(
+                            "authority balance `{asset_id}` for `{}`",
+                            reservation.beneficiary
+                        ),
+                    ),
+                    FeeReservationAssetSource::SponsorProgram {
+                        program_id,
+                        asset_definition_id,
+                    } => (
+                        FeeRejectionCode::VaultInsufficient,
+                        format!(
+                            "sponsor program `{program_id}` revision {} vault `{asset_definition_id}` for beneficiary `{}`",
+                            reservation.program_revision.map_or_else(
+                                || "unknown".to_owned(),
+                                |revision| revision.to_string()
+                            ),
+                            reservation.beneficiary,
+                        ),
+                    ),
+                };
+                return Err(Error::NexusFeeAdmissionRejected {
+                    code,
+                    reason: format!(
+                        "live queue reservations exhaust {detail}: requires {required}, available {available}"
+                    ),
+                });
+            }
+        }
+
+        for (key, amount) in &reservation.window_charges {
+            let already_reserved = self
+                .live_by_hash
+                .values()
+                .filter_map(|existing| existing.window_charges.get(key))
+                .try_fold(Quantity::zero(), |total, amount| {
+                    Self::checked_add(&total, amount, "budget-window capacity")
+                })?;
+            let required = Self::checked_add(&already_reserved, amount, "budget-window capacity")?;
+            let available = reservation
+                .window_remaining
+                .get(key)
+                .cloned()
+                .unwrap_or_else(Quantity::zero);
+            if required > available {
+                let code = match &key.window {
+                    FeeSponsorBudgetWindow::Block(_) => {
+                        FeeRejectionCode::ProgramBlockBudgetExhausted
+                    }
+                    FeeSponsorBudgetWindow::ProgramEpoch(_) => {
+                        FeeRejectionCode::ProgramEpochBudgetExhausted
+                    }
+                    FeeSponsorBudgetWindow::BeneficiaryEpoch(_) => {
+                        FeeRejectionCode::BeneficiaryEpochBudgetExhausted
+                    }
+                };
+                return Err(Error::NexusFeeAdmissionRejected {
+                    code,
+                    reason: format!(
+                        "live queue reservations exhaust sponsor program `{}` revision {} budget window for beneficiary `{}` and asset `{}`: requires {required}, available {available}",
+                        key.program_id,
+                        reservation
+                            .program_revision
+                            .map_or_else(|| "unknown".to_owned(), |revision| revision.to_string()),
+                        reservation.beneficiary,
+                        key.asset_definition_id,
+                    ),
+                });
+            }
+        }
+
+        for (lease_id, amount) in &reservation.relay_lease_charges {
+            let already_reserved = self
+                .live_by_hash
+                .values()
+                .filter_map(|existing| existing.relay_lease_charges.get(lease_id))
+                .try_fold(Quantity::zero(), |total, amount| {
+                    Self::checked_add(&total, amount, "relay spend-lease capacity")
+                })?;
+            let required =
+                Self::checked_add(&already_reserved, amount, "relay spend-lease capacity")?;
+            let available = reservation
+                .relay_lease_remaining
+                .get(lease_id)
+                .cloned()
+                .unwrap_or_else(Quantity::zero);
+            if required > available {
+                return Err(Error::NexusFeeAdmissionRejected {
+                    code: FeeRejectionCode::RelayCapacityUnavailable,
+                    reason: format!(
+                        "live queue reservations exhaust sponsor spend lease `{lease_id}`: requires {required}, available {available}"
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn reserve(
+        &mut self,
+        hash: SignedTxHash,
+        reservation: FeeAdmissionReservation,
+    ) -> Result<(), Error> {
+        if self.live_by_hash.contains_key(&hash) {
+            return Err(Error::IsInQueue);
+        }
+        self.ensure_capacity(&reservation)?;
+        self.live_by_hash.insert(hash, reservation);
+        Ok(())
+    }
+
+    fn release(&mut self, hash: &SignedTxHash) {
+        self.live_by_hash.remove(hash);
+    }
+
+    fn refresh(
+        &mut self,
+        hash: SignedTxHash,
+        reservation: Option<FeeAdmissionReservation>,
+    ) -> Result<(), Error> {
+        let previous = self.live_by_hash.remove(&hash);
+        let Some(reservation) = reservation else {
+            return Ok(());
+        };
+        if let Err(err) = self.reserve(hash, reservation) {
+            if let Some(previous) = previous {
+                self.live_by_hash.insert(hash, previous);
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
 }
 
 struct ExpiredQueueTransaction {
@@ -1099,8 +1308,10 @@ pub enum Error {
         /// Reason describing why the privacy proof failed.
         reason: String,
     },
-    /// Nexus fee admission rejected the transaction before queueing: {reason}
+    /// Nexus fee admission rejected the transaction before queueing [{code}]: {reason}
     NexusFeeAdmissionRejected {
+        /// Stable machine-readable fee/sponsor rejection code.
+        code: FeeRejectionCode,
         /// Reason describing why the transaction could not cover the Nexus fee bound.
         reason: String,
     },
@@ -1111,8 +1322,10 @@ pub enum Error {
         /// Human-readable confidential policy rejection detail.
         detail: String,
     },
-    /// Nexus fee admission encountered invalid node configuration: {reason}
+    /// Nexus fee admission encountered invalid node configuration [{code}]: {reason}
     NexusFeeAdmissionConfigInvalid {
+        /// Stable machine-readable invalid-configuration code.
+        code: FeeRejectionCode,
         /// Reason describing which Nexus fee configuration entry is invalid.
         reason: String,
     },
@@ -1302,7 +1515,7 @@ trait QueueAdmissionStateAccess {
         queue: &Queue,
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
-    ) -> Result<(), Error>;
+    ) -> Result<Option<FeeAdmissionReservation>, Error>;
 
     fn extract_lane_identity_metadata(
         &mut self,
@@ -1326,6 +1539,7 @@ trait QueueAdmissionStateAccess {
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
     nexus: &'view Nexus,
+    pipeline: &'view Pipeline,
     next_block_height: u64,
     ledger_time_ms: u64,
 }
@@ -1343,12 +1557,14 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
     const fn new<'view>(
         world: &'view W,
         nexus: &'view Nexus,
+        pipeline: &'view Pipeline,
         next_block_height: u64,
         ledger_time_ms: u64,
     ) -> EagerAdmissionStateAccess<'view, W> {
         EagerAdmissionStateAccess {
             world,
             nexus,
+            pipeline,
             next_block_height,
             ledger_time_ms,
         }
@@ -1361,11 +1577,12 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         queue: &Queue,
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<FeeAdmissionReservation>, Error> {
         queue.recheck_external_nexus_fee_admission(
             tx,
             self.world,
             self.nexus,
+            self.pipeline,
             self.next_block_height,
             route_dataspace_id,
         )
@@ -1441,7 +1658,7 @@ impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
         queue: &Queue,
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<FeeAdmissionReservation>, Error> {
         self.ensure_world_and_nexus();
         let next_block_height = u64::try_from(self.state.committed_height())
             .unwrap_or(u64::MAX)
@@ -1450,6 +1667,7 @@ impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
             tx,
             self.world.as_ref().expect("world initialized above"),
             self.nexus.as_ref().expect("nexus initialized above"),
+            &self.state.pipeline_snapshot(),
             next_block_height,
             route_dataspace_id,
         )
@@ -2457,24 +2675,13 @@ impl Queue {
                 match signed.instructions() {
                     Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
                     Executable::ContractCall(_) | Executable::Ivm(_) => {
-                        match crate::executor::parse_gas_limit(signed.metadata()) {
-                            Ok(Some(limit)) => limit,
-                            Ok(None) => {
-                                warn!(
-                                    tx = %tx.hash(),
-                                    "missing gas_limit metadata while deriving proposal gas cost"
-                                );
-                                0
-                            }
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    tx = %tx.hash(),
-                                    "invalid gas_limit metadata while deriving proposal gas cost"
-                                );
-                                0
-                            }
-                        }
+                        crate::executor::transaction_gas_limit(signed).unwrap_or_else(|| {
+                            warn!(
+                                tx = %tx.hash(),
+                                "missing gas limit in fee payment intent while deriving proposal gas cost"
+                            );
+                            0
+                        })
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -2488,26 +2695,14 @@ impl Queue {
                 match reveal.signed_transaction().instructions() {
                     Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
                     Executable::ContractCall(_) | Executable::Ivm(_) => {
-                        match crate::executor::parse_gas_limit(
-                            reveal.signed_transaction().metadata(),
-                        ) {
-                            Ok(Some(limit)) => limit,
-                            Ok(None) => {
+                        crate::executor::transaction_gas_limit(reveal.signed_transaction())
+                            .unwrap_or_else(|| {
                                 warn!(
                                     tx = %tx.hash(),
-                                    "missing gas_limit metadata while deriving proposal gas cost for sealed reveal"
+                                    "missing gas limit in fee payment intent while deriving proposal gas cost for sealed reveal"
                                 );
                                 0
-                            }
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    tx = %tx.hash(),
-                                    "invalid gas_limit metadata while deriving proposal gas cost for sealed reveal"
-                                );
-                                0
-                            }
-                        }
+                            })
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -3319,6 +3514,9 @@ impl Queue {
                 plan_journal: parking_lot::Mutex::new(None),
                 plan_journal_disabled: AtomicBool::new(false),
                 lane_reservations: parking_lot::Mutex::new(LaneQueueReservationStore::default()),
+                fee_admission_reservations: parking_lot::Mutex::new(
+                    FeeAdmissionReservationStore::default(),
+                ),
                 lane_reservation_durability_fault: AtomicBool::new(false),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
@@ -3425,9 +3623,14 @@ impl Queue {
 
     fn map_nexus_fee_admission_error(err: NexusFeeAdmissionError) -> Error {
         match err {
-            NexusFeeAdmissionError::Rejected(reason) => Error::NexusFeeAdmissionRejected { reason },
+            NexusFeeAdmissionError::Rejected { code, reason } => {
+                Error::NexusFeeAdmissionRejected { code, reason }
+            }
             NexusFeeAdmissionError::ConfigInvalid(reason) => {
-                Error::NexusFeeAdmissionConfigInvalid { reason }
+                Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason,
+                }
             }
         }
     }
@@ -3437,35 +3640,262 @@ impl Queue {
         tx: &AcceptedTransaction<'static>,
         world: &impl WorldReadOnly,
         nexus: &Nexus,
+        pipeline: &Pipeline,
         next_block_height: u64,
         route_dataspace_id: Option<DataSpaceId>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<FeeAdmissionReservation>, Error> {
         let Some(transaction) = tx.external() else {
-            return Ok(());
+            return Ok(None);
         };
         let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
-        check_external_nexus_fee_admission(
+        let quote = quote_external_nexus_fee_admission(
             world,
             nexus,
+            pipeline,
             transaction,
             observation_time_ms,
             next_block_height,
             route_dataspace_id,
         )
-        .map_err(Self::map_nexus_fee_admission_error)
+        .map_err(Self::map_nexus_fee_admission_error)?;
+        quote
+            .map(|quote| {
+                Self::fee_admission_reservation_from_quote(
+                    world,
+                    transaction.authority(),
+                    next_block_height,
+                    quote,
+                )
+            })
+            .transpose()
+    }
+
+    fn fee_admission_reservation_from_quote(
+        world: &impl WorldReadOnly,
+        beneficiary: &AccountId,
+        next_block_height: u64,
+        quote: FeeAdmissionQuote,
+    ) -> Result<FeeAdmissionReservation, Error> {
+        let FeeAdmissionQuote {
+            charges,
+            debit_source,
+            program_revision,
+            relay_lease_id,
+            relay_lease_remaining,
+            capacities,
+            authority_balances,
+            authority_charge_assets,
+        } = quote;
+
+        if let FeeDebitSource::Account(account) = &debit_source {
+            if account != beneficiary {
+                return Err(Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason: format!(
+                        "authority fee quote selected `{account}` for beneficiary `{beneficiary}`"
+                    ),
+                });
+            }
+            let mut asset_charges = BTreeMap::new();
+            let mut asset_remaining = BTreeMap::new();
+            for charge in charges {
+                let asset_id = authority_charge_assets.get(&charge.kind).ok_or_else(|| {
+                    Error::NexusFeeAdmissionConfigInvalid {
+                        code: FeeRejectionCode::InvalidProgramConfiguration,
+                        reason: format!(
+                            "authority fee quote omitted the exact {:?} balance bucket",
+                            charge.kind
+                        ),
+                    }
+                })?;
+                let source = FeeReservationAssetSource::Authority(asset_id.clone());
+                let current = asset_charges
+                    .get(&source)
+                    .cloned()
+                    .unwrap_or_else(Quantity::zero);
+                asset_charges.insert(
+                    source.clone(),
+                    FeeAdmissionReservationStore::checked_add(
+                        &current,
+                        &charge.max_bound,
+                        "per-authority-asset charge",
+                    )?,
+                );
+                let available = authority_balances.get(asset_id).cloned().ok_or_else(|| {
+                    Error::NexusFeeAdmissionConfigInvalid {
+                        code: FeeRejectionCode::InvalidProgramConfiguration,
+                        reason: format!(
+                            "authority fee quote omitted observed balance for `{asset_id}`"
+                        ),
+                    }
+                })?;
+                asset_remaining.insert(source, available);
+            }
+            return Ok(FeeAdmissionReservation {
+                program_revision: None,
+                beneficiary: beneficiary.clone(),
+                asset_charges,
+                window_charges: BTreeMap::new(),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining,
+                window_remaining: BTreeMap::new(),
+                relay_lease_remaining: BTreeMap::new(),
+            });
+        }
+
+        let FeeDebitSource::SponsorProgram(program_id) = &debit_source else {
+            unreachable!("fee debit source has only account and sponsor-program variants")
+        };
+        let program_revision =
+            program_revision.ok_or_else(|| Error::NexusFeeAdmissionConfigInvalid {
+                code: FeeRejectionCode::InvalidProgramConfiguration,
+                reason: format!(
+                    "sponsor program `{program_id}` quote omitted its immutable revision"
+                ),
+            })?;
+        let revision = world
+            .fee_sponsor_program_revisions()
+            .get(&FeeSponsorProgramRevisionKey::new(
+                program_id.clone(),
+                program_revision,
+            ))
+            .ok_or_else(|| Error::NexusFeeAdmissionConfigInvalid {
+                code: FeeRejectionCode::InvalidProgramConfiguration,
+                reason: format!(
+                    "sponsor program `{program_id}` revision {program_revision} disappeared while preparing its queue reservation"
+                ),
+            })?;
+
+        let relay_charge = charges
+            .iter()
+            .find(|charge| charge.kind == iroha_data_model::transaction::FeeChargeKind::Nexus)
+            .map(|charge| charge.max_bound.clone());
+        let mut sponsor_charges = BTreeMap::<AssetDefinitionId, Quantity>::new();
+        for charge in charges {
+            let current = sponsor_charges
+                .get(&charge.asset_definition_id)
+                .cloned()
+                .unwrap_or_else(Quantity::zero);
+            let total = FeeAdmissionReservationStore::checked_add(
+                &current,
+                &charge.max_bound,
+                "per-asset charge",
+            )?;
+            sponsor_charges.insert(charge.asset_definition_id, total);
+        }
+
+        let mut asset_charges = BTreeMap::new();
+        let mut asset_remaining = BTreeMap::new();
+        let mut window_charges = BTreeMap::new();
+        let mut window_remaining = BTreeMap::new();
+        for (asset_definition_id, amount) in &sponsor_charges {
+            let capacity = capacities.get(asset_definition_id).ok_or_else(|| {
+                Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason: format!(
+                        "sponsor program `{program_id}` quote omitted capacity for `{asset_definition_id}`"
+                    ),
+                }
+            })?;
+            let available_vault = capacity
+                .vault_balance
+                .checked_sub(&capacity.reserve_floor)
+                .unwrap_or_else(|_| Quantity::zero());
+            let source = FeeReservationAssetSource::SponsorProgram {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+            };
+            asset_charges.insert(source.clone(), amount.clone());
+            asset_remaining.insert(source, available_vault);
+
+            let budget = revision
+                .asset_budgets
+                .iter()
+                .find(|budget| budget.asset_definition_id == *asset_definition_id)
+                .ok_or_else(|| Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason: format!(
+                        "sponsor program `{program_id}` revision {program_revision} has no budget for `{asset_definition_id}`"
+                    ),
+                })?;
+            let epoch = next_block_height.saturating_sub(1) / budget.epoch_length_blocks.get();
+            let windows = [
+                (
+                    FeeSponsorBudgetWindow::Block(FeeSponsorBlockBudgetWindow {
+                        height: next_block_height,
+                    }),
+                    capacity.block_remaining.clone(),
+                ),
+                (
+                    FeeSponsorBudgetWindow::ProgramEpoch(FeeSponsorProgramEpochBudgetWindow {
+                        epoch,
+                    }),
+                    capacity.program_epoch_remaining.clone(),
+                ),
+                (
+                    FeeSponsorBudgetWindow::BeneficiaryEpoch(
+                        FeeSponsorBeneficiaryEpochBudgetWindow {
+                            epoch,
+                            beneficiary: beneficiary.clone(),
+                        },
+                    ),
+                    capacity.beneficiary_epoch_remaining.clone(),
+                ),
+            ];
+            for (window, remaining) in windows {
+                let key = FeeSponsorBudgetCounterKey {
+                    program_id: program_id.clone(),
+                    asset_definition_id: asset_definition_id.clone(),
+                    window,
+                };
+                window_charges.insert(key.clone(), amount.clone());
+                window_remaining.insert(key, remaining);
+            }
+        }
+
+        let (relay_lease_charges, relay_lease_remaining) = match (
+            relay_charge,
+            relay_lease_id,
+            relay_lease_remaining,
+        ) {
+            (None, None, None) | (Some(_), None, None) => (BTreeMap::new(), BTreeMap::new()),
+            (Some(charge), Some(lease_id), Some(remaining)) => (
+                BTreeMap::from([(lease_id, charge)]),
+                BTreeMap::from([(lease_id, remaining)]),
+            ),
+            _ => {
+                return Err(Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason: format!(
+                        "sponsor program `{program_id}` quote has inconsistent receipt-lane lease capacity"
+                    ),
+                });
+            }
+        };
+
+        Ok(FeeAdmissionReservation {
+            program_revision: Some(program_revision),
+            beneficiary: beneficiary.clone(),
+            asset_charges,
+            window_charges,
+            relay_lease_charges,
+            asset_remaining,
+            window_remaining,
+            relay_lease_remaining,
+        })
     }
 
     fn queue_rejection_reason(
         err: &Error,
     ) -> Option<iroha_data_model::transaction::error::TransactionRejectionReason> {
         match err {
-            Error::NexusFeeAdmissionRejected { reason } => Some(
+            Error::NexusFeeAdmissionRejected { reason, .. } => Some(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
                 ),
             ),
             Error::ConfidentialPolicyAdmissionRejected { reason, .. } => Some(reason.clone()),
-            Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
+            Error::NexusFeeAdmissionConfigInvalid { reason, .. } => Some(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::InternalError(reason.clone()),
                 ),
@@ -3828,6 +4258,7 @@ impl Queue {
         }
 
         let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
+        self.fee_admission_reservations.lock().release(&hash);
         if let Some(removed_tx) = removed_tx {
             self.untrack_active_transaction();
             self.untrack_expiry_hash(&hash);
@@ -3884,6 +4315,35 @@ impl Queue {
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
+        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
+    }
+
+    /// Resolve the coordinator lane and dataspace for an exact unsigned payload.
+    ///
+    /// This follows the same router and catalog-resolution path as queue admission;
+    /// signatures and envelope attachments cannot change the result.
+    pub fn route_payload_with_state(
+        &self,
+        payload: &TransactionPayload,
+        state: &State,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        self.route_payload_plan_with_state(payload, state)
+            .map(|plan| plan.coordinator_route())
+    }
+
+    /// Resolve the complete routing plan for an exact unsigned payload.
+    ///
+    /// Native AMX participant legs are retained alongside the coordinator route.
+    pub fn route_payload_plan_with_state(
+        &self,
+        payload: &TransactionPayload,
+        state: &State,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = self.sync_nexus_routing_with_state(state);
+        let plan = self
+            .router
+            .read()
+            .try_route_plan_with_state(payload, state)?;
         resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
     }
 
@@ -3992,6 +4452,7 @@ impl Queue {
         let mut state_access = EagerAdmissionStateAccess::new(
             state_view.world(),
             &state_view.nexus,
+            &state_view.pipeline,
             next_block_height,
             state_view.latest_block().map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -4147,18 +4608,23 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
-        if checked.as_accepted().external().is_some() {
-            if let Err(err) = state_access.recheck_external_nexus_fee_admission(
+        let fee_reservation = if checked.as_accepted().external().is_some() {
+            match state_access.recheck_external_nexus_fee_admission(
                 self,
                 checked.as_accepted(),
                 Some(dataspace_id),
             ) {
-                return Err(Failure {
-                    tx: Box::new(checked.as_accepted().clone()),
-                    err,
-                });
+                Ok(reservation) => reservation,
+                Err(err) => {
+                    return Err(Failure {
+                        tx: Box::new(checked.as_accepted().clone()),
+                        err,
+                    });
+                }
             }
-        }
+        } else {
+            None
+        };
 
         if let Some(transaction) = checked.as_accepted().external()
             && let Err(err) =
@@ -4482,6 +4948,7 @@ impl Queue {
             encoded_len,
             proposal_gas_cost,
             enqueued_at_ms,
+            fee_reservation,
             #[cfg(feature = "telemetry")]
             pending_teu,
         })
@@ -4609,14 +5076,34 @@ impl Queue {
                     encoded_len,
                     proposal_gas_cost,
                     enqueued_at_ms,
+                    fee_reservation,
                     #[cfg(feature = "telemetry")]
                     pending_teu,
                 } = admission;
                 let lane_id = routing_decision.lane_id;
                 let dataspace_id = routing_decision.dataspace_id;
                 let authority = checked.as_ref().authority_opt().cloned();
+                let fee_reserved = if let Some(reservation) = fee_reservation {
+                    if let Err(err) = self
+                        .fee_admission_reservations
+                        .lock()
+                        .reserve(hash, reservation)
+                    {
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err,
+                        });
+                        break;
+                    }
+                    true
+                } else {
+                    false
+                };
                 let entry = match self.txs.entry(hash) {
                     Entry::Occupied(_) => {
+                        if fee_reserved {
+                            self.fee_admission_reservations.lock().release(&hash);
+                        }
                         failure = Some(Failure {
                             tx: checked.as_accepted().clone().into(),
                             err: Error::IsInQueue,
@@ -4649,6 +5136,9 @@ impl Queue {
                 if !pushed {
                     debug!("Queue is full");
                     let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                    if fee_reserved {
+                        self.fee_admission_reservations.lock().release(&hash);
+                    }
                     drop(tx_arc);
                     self.untrack_active_transaction();
                     if let Some((_, plan)) = self.routing_plans.remove(&hash) {
@@ -5156,6 +5646,7 @@ impl Queue {
             if !pushed {
                 debug!("Queue is full");
                 let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                self.fee_admission_reservations.lock().release(&hash);
                 drop(tx_arc);
                 self.untrack_active_transaction();
                 if let Some((_, plan)) = self.routing_plans.remove(&hash) {
@@ -5292,6 +5783,7 @@ impl Queue {
                 self.removed_hashes.remove(&hash);
             }
             while self.tx_gossip.pop().is_some() {}
+            self.fee_admission_reservations.lock().live_by_hash.clear();
             self.txs_per_user.clear();
             self.expiry_ring_members.clear();
             self.expiry_ring.lock().clear();
@@ -5382,6 +5874,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.fee_admission_reservations.lock().release(&hash);
                     self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
@@ -5432,15 +5925,22 @@ impl Queue {
                 };
             let routing = routing_plan.coordinator_route();
 
-            if tx_arc.as_accepted().external().is_some()
-                && let Err(e) = self.recheck_external_nexus_fee_admission(
+            let fee_recheck = tx_arc.as_accepted().external().map_or(Ok(()), |_| {
+                self.recheck_external_nexus_fee_admission(
                     tx_arc.as_accepted(),
                     state_view.world(),
                     &state_view.nexus,
+                    &state_view.pipeline,
                     next_block_height,
                     Some(routing.dataspace_id),
                 )
-            {
+                .and_then(|reservation| {
+                    self.fee_admission_reservations
+                        .lock()
+                        .refresh(hash, reservation)
+                })
+            });
+            if let Err(e) = fee_recheck {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -5448,6 +5948,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.fee_admission_reservations.lock().release(&hash);
                     self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
@@ -5568,6 +6069,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.fee_admission_reservations.lock().release(&hash);
                     self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
@@ -5618,13 +6120,20 @@ impl Queue {
                 };
             let routing = routing_plan.coordinator_route();
             let route_dataspace_id = Some(routing.dataspace_id);
-            if tx_arc.as_accepted().external().is_some()
-                && let Err(e) = state_access.recheck_external_nexus_fee_admission(
-                    self,
-                    tx_arc.as_accepted(),
-                    route_dataspace_id,
-                )
-            {
+            let fee_recheck = tx_arc.as_accepted().external().map_or(Ok(()), |_| {
+                state_access
+                    .recheck_external_nexus_fee_admission(
+                        self,
+                        tx_arc.as_accepted(),
+                        route_dataspace_id,
+                    )
+                    .and_then(|reservation| {
+                        self.fee_admission_reservations
+                            .lock()
+                            .refresh(hash, reservation)
+                    })
+            });
+            if let Err(e) = fee_recheck {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -5632,6 +6141,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.fee_admission_reservations.lock().release(&hash);
                     self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
@@ -6512,6 +7022,7 @@ impl Queue {
                 continue;
             }
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
+                self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_active_transaction();
                 let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
                 if let Some(plan) = removed_plan.as_ref() {
@@ -6624,6 +7135,9 @@ impl Queue {
     ) {
         let hash = tx.hash();
         if self.txs.remove(&hash).is_some() {
+            // Execution has materialized the authoritative vault/counter debit;
+            // the in-memory queue hold is no longer needed.
+            self.fee_admission_reservations.lock().release(&hash);
             self.untrack_active_transaction();
             self.untrack_expiry_hash(&hash);
             let decision = self
@@ -7028,6 +7542,7 @@ impl Queue {
             let mut journal_removals = Vec::new();
             for hash in hashes {
                 let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
+                self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_expiry_hash(&hash);
                 let _ = self.routing_decisions.remove(&hash);
                 if let Some((_, plan)) = self.routing_plans.remove(&hash) {
@@ -7139,10 +7654,7 @@ impl Queue {
                         gas::meter_instructions(&instructions)
                     }
                     Executable::ContractCall(_) => {
-                        match crate::executor::parse_gas_limit(signed.metadata()) {
-                            Ok(Some(limit)) => limit,
-                            _ => 0,
-                        }
+                        crate::executor::transaction_gas_limit(signed).unwrap_or(0)
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -7160,12 +7672,8 @@ impl Queue {
                         gas::meter_instructions(&instructions)
                     }
                     Executable::ContractCall(_) => {
-                        match crate::executor::parse_gas_limit(
-                            reveal.signed_transaction().metadata(),
-                        ) {
-                            Ok(Some(limit)) => limit,
-                            _ => 0,
-                        }
+                        crate::executor::transaction_gas_limit(reveal.signed_transaction())
+                            .unwrap_or(0)
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -7907,11 +8415,10 @@ pub mod tests {
         name::Name,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorPolicy,
-            FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, JurisdictionSet, LaneCatalog,
-            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId,
-            LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-            ManifestVersion, ParticipantSelector,
+            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, JurisdictionSet,
+            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -7923,7 +8430,6 @@ pub mod tests {
         },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
-    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
     use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
@@ -7948,7 +8454,6 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::Execute,
         state::{State, World},
     };
 
@@ -8052,11 +8557,11 @@ pub mod tests {
     struct FutureCreatedNoStateRouter;
 
     impl LaneRouter for FutureCreatedNoStateRouter {
-        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
         }
 
-        fn route_without_state(&self, _tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+        fn route_without_state(&self, _tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
             Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL))
         }
     }
@@ -8252,12 +8757,12 @@ pub mod tests {
 
     #[test]
     fn apply_lane_lifecycle_reconfigures_router_and_limits() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8333,8 +8838,7 @@ pub mod tests {
 
     #[test]
     fn apply_lane_lifecycle_error_preserves_router_and_limits() {
-        let NexusFeeFixture { mut state, .. } =
-            nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        let NexusRoutingFixture { mut state, .. } = nexus_routing_fixture();
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8515,12 +9019,12 @@ pub mod tests {
 
     #[test]
     fn reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let retired_lane = LaneId::new(1);
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
@@ -8657,12 +9161,12 @@ pub mod tests {
 
     #[test]
     fn proposal_queue_syncs_stale_router_from_committed_nexus() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
         let (lane_catalog, dataspace_catalog) =
@@ -8728,12 +9232,12 @@ pub mod tests {
 
     #[test]
     fn proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8845,12 +9349,12 @@ pub mod tests {
 
     #[test]
     fn proposal_queue_keeps_pending_default_route_off_future_created_autoscale_lane() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8954,12 +9458,12 @@ pub mod tests {
 
     #[test]
     fn proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -9117,7 +9621,7 @@ pub mod tests {
     }
 
     impl LaneRouter for StaticRouter {
-        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             RoutingDecision::new(self.lane, self.dataspace)
         }
     }
@@ -9147,21 +9651,21 @@ pub mod tests {
     }
 
     impl LaneRouter for MutableRouter {
-        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             self.current()
                 .expect("mutable test router should have a route")
         }
 
         fn try_route(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.current()
         }
 
         fn route_with_view(
             &self,
-            tx: &AcceptedTransaction<'_>,
+            tx: &dyn TransactionRoutingView,
             _state_view: &StateView<'_>,
         ) -> RoutingDecision {
             self.route(tx)
@@ -9169,33 +9673,33 @@ pub mod tests {
 
         fn try_route_with_view(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
             _state_view: &StateView<'_>,
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.current()
         }
 
-        fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+        fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
             Some(self.route(tx))
         }
 
         fn try_route_without_state(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
             self.current().map(Some)
         }
 
         fn try_route_plan(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<RoutingPlan, RoutingResolveError> {
             self.current().map(RoutingPlan::single)
         }
 
         fn try_route_plan_with_view(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
             _state_view: &StateView<'_>,
         ) -> Result<RoutingPlan, RoutingResolveError> {
             self.current().map(RoutingPlan::single)
@@ -9203,7 +9707,7 @@ pub mod tests {
 
         fn try_route_plan_with_state(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
             _state: &State,
         ) -> Result<RoutingPlan, RoutingResolveError> {
             self.current().map(RoutingPlan::single)
@@ -9211,7 +9715,7 @@ pub mod tests {
 
         fn try_route_plan_without_state(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
             self.current().map(|route| Some(RoutingPlan::single(route)))
         }
@@ -10989,12 +11493,12 @@ pub mod tests {
     fn queue_plan_journal_tombstones_stale_nexus_policy_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
@@ -12926,6 +13430,7 @@ pub mod tests {
             chain_id.clone(),
             authority.clone(),
             &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
             Level::INFO,
@@ -13026,7 +13531,7 @@ pub mod tests {
         struct UnresolvedRouter;
 
         impl LaneRouter for UnresolvedRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 RoutingDecision::new(LaneId::new(99), DataSpaceId::new(77))
             }
         }
@@ -13109,458 +13614,6 @@ pub mod tests {
             ));
         }
         assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_missing_nexus_fee_asset_before_enqueue() {
-        let fixture = nexus_fee_fixture(None, None);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect_err("missing fee asset must be rejected before enqueue");
-
-        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
-        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
-            assert!(
-                reason.contains("missing"),
-                "expected missing asset reason, got {reason}"
-            );
-        }
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
-        let fixture = nexus_fee_fixture(Some(Quantity::zero()), None);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect_err("insufficient fee balance must be rejected before enqueue");
-
-        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
-        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
-            assert!(
-                reason.contains("insufficient"),
-                "expected insufficient balance reason, got {reason}"
-            );
-        }
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
-        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-        );
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("funded payer should be admitted");
-
-        assert_eq!(queue.queued_len(), 1);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
-        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "fee_sponsor".parse().expect("fee sponsor key"),
-            Json::new(fixture.sponsor_id.to_string()),
-        );
-        let tx = accepted_tx_with(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            vec![sample_unregister_instruction()],
-            metadata,
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect_err("unauthorized sponsor must be rejected");
-
-        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
-        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
-            assert!(
-                reason.contains("not authorized"),
-                "expected sponsor authorization reason, got {reason}"
-            );
-        }
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
-        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = fixture.state.block(header);
-        let mut stx = block.transaction();
-        Grant::account_permission(
-            CanUseFeeSponsor {
-                sponsor: fixture.sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            },
-            fixture.authority_id.clone(),
-        )
-        .execute(&fixture.sponsor_id, &mut stx)
-        .expect("grant fee sponsor permission");
-        stx.apply();
-        block.commit().expect("commit sponsor permission grant");
-
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_dpn_contract_call_tx(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            Some(&fixture.sponsor_id),
-        );
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("authorized sponsor should be admitted");
-
-        assert_eq!(queue.queued_len(), 1);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_accepts_dataspace_default_fee_sponsor() {
-        let mut fixture =
-            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
-        fixture
-            .state
-            .nexus
-            .get_mut()
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
-        fixture
-            .state
-            .nexus
-            .get_mut()
-            .dataspace_fee_sponsor_policies
-            .insert(
-                DataSpaceId::UNIVERSAL,
-                "default".parse().expect("default fee sponsor policy"),
-            );
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_dpn_contract_call_tx(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            None,
-        );
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("dataspace default sponsor should be admitted without a grant");
-
-        assert_eq!(queue.queued_len(), 1);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_accepts_explicit_dataspace_default_fee_sponsor() {
-        let mut fixture =
-            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
-        fixture
-            .state
-            .nexus
-            .get_mut()
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
-        fixture
-            .state
-            .nexus
-            .get_mut()
-            .dataspace_fee_sponsor_policies
-            .insert(
-                DataSpaceId::UNIVERSAL,
-                "default".parse().expect("default fee sponsor policy"),
-            );
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_dpn_contract_call_tx(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            Some(&fixture.sponsor_id),
-        );
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("explicit dataspace default sponsor should be admitted without a grant");
-
-        assert_eq!(queue.queued_len(), 1);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_accepts_external_settled_sponsor_without_local_fee_asset() {
-        let mut fixture = nexus_fee_fixture(None, None);
-        fixture
-            .state
-            .nexus
-            .get_mut()
-            .fees
-            .external_settlement_enabled = true;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = fixture.state.block(header);
-        let mut stx = block.transaction();
-        Grant::account_permission(
-            CanUseFeeSponsor {
-                sponsor: fixture.sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            },
-            fixture.authority_id.clone(),
-        )
-        .execute(&fixture.sponsor_id, &mut stx)
-        .expect("grant fee sponsor permission");
-        stx.apply();
-        block.commit().expect("commit sponsor permission grant");
-
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_dpn_contract_call_tx(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            Some(&fixture.sponsor_id),
-        );
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("external-settled sponsor should not require local fee asset");
-
-        assert_eq!(queue.queued_len(), 1);
-    }
-
-    #[test]
-    fn read_only_fee_sponsor_check_accepts_granted_permission() {
-        let fixture = nexus_fee_fixture(None, Some(Quantity::from(10_u32)));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = fixture.state.block(header);
-        let mut stx = block.transaction();
-        Grant::account_permission(
-            CanUseFeeSponsor {
-                sponsor: fixture.sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            },
-            fixture.authority_id.clone(),
-        )
-        .execute(&fixture.sponsor_id, &mut stx)
-        .expect("grant fee sponsor permission");
-
-        assert!(
-            crate::executor::can_use_fee_sponsor_read_only(
-                &stx.world,
-                &fixture.authority_id,
-                &fixture.sponsor_id,
-                &stx.nexus,
-                None,
-                stx.block_unix_timestamp_ms(),
-            ),
-            "read-only sponsor check should honor granted permission"
-        );
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
-        let mut fixture = nexus_fee_fixture(Some(Quantity::from(50_u32)), None);
-        {
-            let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
-        }
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_ivm_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            5_000,
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect_err("raw IVM fee bound should use gas_limit");
-
-        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
-        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
-            assert!(
-                reason.contains("insufficient"),
-                "expected insufficient balance reason, got {reason}"
-            );
-        }
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
-        let mut fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
-        let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
-            "xor#universal".parse().expect("asset alias");
-        {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = fixture.state.block(header);
-            let mut stx = block.transaction();
-            stx.world_mut_for_testing()
-                .bind_asset_definition_alias(
-                    &fixture.fee_asset_definition_id,
-                    fee_asset_alias.clone(),
-                    Some(500),
-                    Some(600),
-                    0,
-                )
-                .expect("bind short-lived fee asset alias");
-            stx.apply();
-            block.commit().expect("commit fee asset alias binding");
-        }
-        {
-            let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.fee_asset_id = fee_asset_alias.to_string();
-        }
-
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(
-            Config {
-                transaction_time_to_live: Duration::from_millis(1_000),
-                ..config_factory()
-            },
-            &time_source,
-        );
-        let tx = accepted_tx_with_ttl(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-            Duration::from_millis(1_000),
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect_err("fee alias should be rejected when it expires before the tx deadline");
-
-        assert!(matches!(
-            err.err,
-            Error::NexusFeeAdmissionConfigInvalid { .. }
-        ));
-        if let Error::NexusFeeAdmissionConfigInvalid { reason } = &err.err {
-            assert!(
-                reason.contains("invalid nexus fee asset id"),
-                "expected invalid fee asset config reason, got {reason}"
-            );
-        }
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn push_with_gossip_payload_with_state_and_routing_plan_rejects_fee_insolvent_transaction() {
-        let fixture = nexus_fee_fixture(None, None);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-        );
-
-        let err = queue
-            .push_with_gossip_payload_with_state_and_routing_plan(
-                tx,
-                &fixture.state,
-                RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
-                Some(Arc::new(vec![1_u8])),
-            )
-            .expect_err("fee-insolvent gossip should be rejected before enqueue");
-
-        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
-        assert_eq!(queue.queued_len(), 0);
-    }
-
-    #[test]
-    fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
-        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let mut queue = Queue::test(config_factory(), &time_source);
-        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
-        queue.events_sender = event_sender;
-        let queue = Arc::new(queue);
-        let tx = accepted_tx_by(
-            fixture.authority_id.clone(),
-            &fixture.authority_keypair,
-            &time_source,
-        );
-        let tx_hash = tx.as_ref().hash();
-
-        queue
-            .push_with_lane_with_state(tx, &fixture.state)
-            .expect("funded payer should be admitted before the balance race");
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = fixture.state.block(header);
-        let mut stx = block.transaction();
-        let removed = stx.world.remove_asset_and_metadata(&AssetId::of(
-            fixture.fee_asset_definition_id.clone(),
-            fixture.authority_id.clone(),
-        ));
-        assert!(removed.is_some(), "fee asset should exist before removal");
-        stx.apply();
-        block.commit().expect("commit fee asset removal");
-
-        let mut guards = Vec::new();
-        queue.get_transactions_for_block_with_state(&fixture.state, nonzero!(1_usize), &mut guards);
-
-        assert!(
-            guards.is_empty(),
-            "balance-race tx must not reach proposal assembly"
-        );
-        assert_eq!(queue.queued_len(), 0);
-        let mut saw_rejected = false;
-        while let Ok(event) = event_receiver.try_recv() {
-            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
-                continue;
-            };
-            if event.hash != tx_hash {
-                continue;
-            }
-            let TransactionStatus::Rejected(reason) = &event.status else {
-                continue;
-            };
-            assert!(matches!(
-                reason.as_ref(),
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::NotPermitted(message)
-                ) if message.contains("fee asset")
-                    && message.contains(&fixture.fee_asset_definition_id.to_string())
-                    && message.contains(&fixture.authority_id.to_string())
-            ));
-            saw_rejected = true;
-            break;
-        }
-        assert!(
-            saw_rejected,
-            "expected rejected pipeline event for dropped tx"
-        );
     }
 
     #[test]
@@ -14049,120 +14102,6 @@ pub mod tests {
         )
     }
 
-    fn dpn_contract_call_executable_and_metadata(
-        authority: &AccountId,
-        entrypoint: &str,
-        fee_sponsor: Option<&AccountId>,
-    ) -> (Executable, Metadata) {
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
-            authority,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive DPN contract address");
-        let call = iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: contract_address.clone(),
-            expected_code_hash: iroha_crypto::Hash::new(b"dpn-contract-code"),
-            entrypoint: entrypoint.to_owned(),
-            arguments: None,
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "contract_address".parse().expect("contract_address key"),
-            Json::new(contract_address.to_string()),
-        );
-        metadata.insert(
-            "contract_alias".parse().expect("contract_alias key"),
-            Json::new("dpn_suite::dpn".to_owned()),
-        );
-        metadata.insert(
-            "contract_entrypoint"
-                .parse()
-                .expect("contract_entrypoint key"),
-            Json::new(entrypoint.to_owned()),
-        );
-        metadata.insert(
-            "gas_limit".parse().expect("gas_limit key"),
-            Json::new(1_u64),
-        );
-        if let Some(fee_sponsor) = fee_sponsor {
-            metadata.insert(
-                "fee_sponsor".parse().expect("fee_sponsor key"),
-                Json::new(fee_sponsor.to_string()),
-            );
-        }
-        (Executable::ContractCall(call), metadata)
-    }
-
-    fn accepted_dpn_contract_call_tx(
-        account_id: AccountId,
-        key_pair: &KeyPair,
-        time_source: &TimeSource,
-        fee_sponsor: Option<&AccountId>,
-    ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let (executable, metadata) =
-            dpn_contract_call_executable_and_metadata(&account_id, "transfer_dpn", fee_sponsor);
-        let tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
-                .with_executable(executable)
-                .with_metadata(metadata)
-                .sign(key_pair.private_key());
-        let default_limits = TransactionParameters::default();
-        let tx_limits = TransactionParameters::with_max_signatures(
-            nonzero!(16_u64),
-            nonzero!(4096_u64),
-            nonzero!(1024_u64),
-            default_limits.max_tx_bytes(),
-            default_limits.max_decompressed_bytes(),
-            default_limits.max_metadata_depth(),
-        );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        AcceptedTransaction::accept_with_time_source(
-            tx,
-            &chain_id,
-            Duration::from_millis(10),
-            tx_limits,
-            &crypto_cfg,
-            time_source,
-        )
-        .expect("Failed to accept DPN contract-call Transaction.")
-    }
-
-    fn accepted_tx_with_ttl(
-        account_id: AccountId,
-        key_pair: &KeyPair,
-        time_source: &TimeSource,
-        ttl: Duration,
-    ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let mut builder =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
-                .with_instructions(vec![sample_unregister_instruction()]);
-        builder.set_ttl(ttl);
-        let tx = builder.sign(key_pair.private_key());
-        let default_limits = TransactionParameters::default();
-        let tx_limits = TransactionParameters::with_max_signatures(
-            nonzero!(16_u64),
-            nonzero!(4096_u64),
-            nonzero!(1024_u64),
-            default_limits.max_tx_bytes(),
-            default_limits.max_decompressed_bytes(),
-            default_limits.max_metadata_depth(),
-        );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        AcceptedTransaction::accept_with_time_source(
-            tx,
-            &chain_id,
-            Duration::from_millis(10),
-            tx_limits,
-            &crypto_cfg,
-            time_source,
-        )
-        .expect("Failed to accept Transaction with TTL.")
-    }
-
     fn accepted_tx_with_attachments(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -14172,10 +14111,14 @@ pub mod tests {
         attachments: Option<ProofAttachmentList>,
     ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let mut builder =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
-                .with_instructions(instructions)
-                .with_metadata(metadata);
+        let mut builder = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            account_id,
+            time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata);
         if let Some(att) = attachments {
             builder = builder.with_attachments(att);
         }
@@ -14209,19 +14152,21 @@ pub mod tests {
     ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let program = minimal_ivm_program_with_max_cycles(1, max_cycles);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "gas_limit".parse().expect("gas_limit key"),
-            iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(
-                std::num::NonZeroU64::new(max_cycles)
-                    .expect("queue IVM fixture requires a positive cycle limit"),
-            )),
+        let gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(
+            std::num::NonZeroU64::new(max_cycles)
+                .expect("queue IVM fixture requires a positive cycle limit"),
         );
-        let tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-                .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            account_id,
+            time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                std::num::NonZeroU64::new(gas_limit),
+            ),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(key_pair.private_key());
         let default_limits = TransactionParameters::default();
         let tx_limits = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -14265,108 +14210,26 @@ pub mod tests {
         World::with([domain], [account], [])
     }
 
-    struct NexusFeeFixture {
+    struct NexusRoutingFixture {
         state: State,
         authority_id: AccountId,
         authority_keypair: KeyPair,
-        sponsor_id: AccountId,
-        fee_asset_definition_id: AssetDefinitionId,
     }
 
-    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
-        FeeSponsorPolicy {
-            id: FeeSponsorPolicyId::new(
-                sponsor.clone(),
-                "default".parse().expect("default fee sponsor policy"),
-            ),
-            enabled: true,
-            max_fee: None,
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
-        }
-    }
-
-    fn nexus_fee_fixture(
-        authority_balance: Option<Quantity>,
-        sponsor_balance: Option<Quantity>,
-    ) -> NexusFeeFixture {
+    fn nexus_routing_fixture() -> NexusRoutingFixture {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
-        let fee_asset_selector = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-        let fee_asset_id = AssetDefinitionId::parse_address_literal(&fee_asset_selector)
-            .expect("default Nexus XOR fee asset id must be canonical");
-        let asset_definition =
-            AssetDefinition::numeric(fee_asset_id.clone()).with_name("xor".to_string());
-        let asset_definition = asset_definition.build(&authority_id);
-        let mut assets = Vec::new();
-        if let Some(balance) = authority_balance {
-            assets.push(Asset::new(
-                AssetId::of(fee_asset_id.clone(), authority_id.clone()),
-                balance,
-            ));
-        }
-        if let Some(balance) = sponsor_balance {
-            assets.push(Asset::new(
-                AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
-                balance,
-            ));
-        }
-        let world = World::with_assets(
-            [domain],
-            [authority_account, sponsor_account, sink_account],
-            [asset_definition],
-            assets,
-            [],
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let state = State::new(
+            World::with([domain], [authority], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(world, kura, query_handle);
-        let policy = default_fee_sponsor_policy(&sponsor_id);
-        state
-            .world
-            .fee_sponsor_policies
-            .insert(policy.id.clone(), policy);
-        let dpn_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
-            &authority_id,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive DPN contract address");
-        state
-            .world
-            .bind_contract_alias(
-                &dpn_contract_address,
-                "dpn_suite::dpn".parse().expect("DPN contract alias"),
-                None,
-                None,
-                0,
-            )
-            .expect("bind DPN contract alias");
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.sponsor_max_fee = Quantity::zero();
-            nexus.fees.fee_asset_id = fee_asset_selector;
-            nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-        NexusFeeFixture {
+        NexusRoutingFixture {
             state,
             authority_id,
             authority_keypair,
-            sponsor_id,
-            fee_asset_definition_id: fee_asset_id,
         }
     }
 
@@ -14552,13 +14415,13 @@ pub mod tests {
         }
 
         impl LaneRouter for PanicOnViewRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 panic!("route() should not be called when route_without_state is available");
             }
 
             fn route_without_state(
                 &self,
-                _tx: &AcceptedTransaction<'_>,
+                _tx: &dyn TransactionRoutingView,
             ) -> Option<RoutingDecision> {
                 Some(RoutingDecision::new(self.lane, self.dataspace))
             }
@@ -14803,13 +14666,13 @@ pub mod tests {
         }
 
         impl LaneRouter for ViewOnlyRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 panic!("route() should not be used for view-only routers");
             }
 
             fn route_with_view(
                 &self,
-                _tx: &AcceptedTransaction<'_>,
+                _tx: &dyn TransactionRoutingView,
                 _state_view: &StateView<'_>,
             ) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
@@ -14817,7 +14680,7 @@ pub mod tests {
 
             fn route_without_state(
                 &self,
-                _tx: &AcceptedTransaction<'_>,
+                _tx: &dyn TransactionRoutingView,
             ) -> Option<RoutingDecision> {
                 None
             }
@@ -15201,13 +15064,13 @@ pub mod tests {
         }
 
         impl LaneRouter for ViewOnlyRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 panic!("route() should not be used for view-only routers");
             }
 
             fn route_with_view(
                 &self,
-                _tx: &AcceptedTransaction<'_>,
+                _tx: &dyn TransactionRoutingView,
                 _state_view: &StateView<'_>,
             ) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
@@ -15215,7 +15078,7 @@ pub mod tests {
 
             fn route_without_state(
                 &self,
-                _tx: &AcceptedTransaction<'_>,
+                _tx: &dyn TransactionRoutingView,
             ) -> Option<RoutingDecision> {
                 None
             }
@@ -15308,7 +15171,7 @@ pub mod tests {
         }
 
         impl LaneRouter for CountingRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 self.calls.fetch_add(1, Ordering::Relaxed);
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
             }
@@ -15736,12 +15599,12 @@ pub mod tests {
 
     #[test]
     fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autoscale_plan() {
-        let NexusFeeFixture {
+        let NexusRoutingFixture {
             mut state,
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
+        } = nexus_routing_fixture();
         let mut future_elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_owned(),
@@ -16434,7 +16297,7 @@ pub mod tests {
         }
 
         impl LaneRouter for SequenceRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 let mut decisions = self.decisions.lock();
                 decisions.remove(0)
             }
@@ -16914,7 +16777,7 @@ pub mod tests {
         }
 
         impl LaneRouter for StaticRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -16950,10 +16813,14 @@ pub mod tests {
         let domain_name = unique_test_domain_name("tagged");
         let unregister =
             Unregister::domain(DomainId::try_new(&domain_name, "test-dataspace-42").unwrap());
-        let tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
-                .with_instructions([unregister])
-                .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            account_id,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([unregister])
+        .sign(key_pair.private_key());
         let default_limits = TransactionParameters::default();
         let tx_limits = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -17019,7 +16886,7 @@ pub mod tests {
         }
 
         impl LaneRouter for TaggedRouter {
-            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -18157,9 +18024,13 @@ pub mod tests {
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
-        let mut tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), alice_id, &time_source)
-                .with_instructions([ok_instruction]);
+        let mut tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            alice_id,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ok_instruction]);
         tx.set_ttl(Duration::from_millis(100));
         let tx = tx.sign(alice_keypair.private_key());
         let tx = {
@@ -18311,9 +18182,13 @@ pub mod tests {
         // Use a simple instruction to avoid exercising heavy decode paths
         // unrelated to queue TTL behavior.
         let instructions = [Log::new(iroha_logger::Level::INFO, "ttl".into())];
-        let mut tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), alice_id, &time_source)
-                .with_instructions(instructions);
+        let mut tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            alice_id,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions);
         tx.set_ttl(Duration::from_millis(TTL_MS));
         let tx = tx.sign(alice_keypair.private_key());
         let tx_hash = tx.hash();
@@ -19439,20 +19314,20 @@ pub mod tests {
     }
 
     impl LaneRouter for FixedReservationPlanRouter {
-        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             self.plan.coordinator_route()
         }
 
         fn try_route_plan(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<RoutingPlan, RoutingResolveError> {
             Ok(self.plan.clone())
         }
 
         fn try_route_plan_without_state(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
             Ok(Some(self.plan.clone()))
         }
@@ -19616,5 +19491,313 @@ pub mod tests {
 
         run(true, "lane-first");
         run(false, "global-first");
+    }
+
+    #[test]
+    fn fee_capacity_reservations_prevent_queue_oversubscription() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_hash = accepted_tx_by_someone(&time_source).hash();
+        let second_hash = accepted_tx_by_someone(&time_source).hash();
+        assert_ne!(
+            first_hash, second_hash,
+            "fixtures must identify two transactions"
+        );
+
+        let (sponsor, _) = gen_account_in("sponsor");
+        let (beneficiary, _) = gen_account_in("beneficiary");
+        let program_id = FeeSponsorProgramId::new(
+            sponsor,
+            "queue_capacity".parse().expect("valid program name"),
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("valid fee domain"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let amount = Quantity::from(6_u32);
+        let remaining = Quantity::from(10_u32);
+
+        let reservation = || {
+            let block_key = FeeSponsorBudgetCounterKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                window: FeeSponsorBudgetWindow::Block(FeeSponsorBlockBudgetWindow { height: 7 }),
+            };
+            let program_epoch_key = FeeSponsorBudgetCounterKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                window: FeeSponsorBudgetWindow::ProgramEpoch(FeeSponsorProgramEpochBudgetWindow {
+                    epoch: 1,
+                }),
+            };
+            let beneficiary_epoch_key = FeeSponsorBudgetCounterKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                window: FeeSponsorBudgetWindow::BeneficiaryEpoch(
+                    FeeSponsorBeneficiaryEpochBudgetWindow {
+                        epoch: 1,
+                        beneficiary: beneficiary.clone(),
+                    },
+                ),
+            };
+            let source = FeeReservationAssetSource::SponsorProgram {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+            };
+            FeeAdmissionReservation {
+                program_revision: Some(1),
+                beneficiary: beneficiary.clone(),
+                asset_charges: BTreeMap::from([(source.clone(), amount.clone())]),
+                window_charges: BTreeMap::from([
+                    (block_key.clone(), amount.clone()),
+                    (program_epoch_key.clone(), amount.clone()),
+                    (beneficiary_epoch_key.clone(), amount.clone()),
+                ]),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining: BTreeMap::from([(source, Quantity::from(100_u32))]),
+                window_remaining: BTreeMap::from([
+                    (block_key, remaining.clone()),
+                    (program_epoch_key, remaining.clone()),
+                    (beneficiary_epoch_key, remaining.clone()),
+                ]),
+                relay_lease_remaining: BTreeMap::new(),
+            }
+        };
+
+        let mut store = FeeAdmissionReservationStore::default();
+        store
+            .reserve(first_hash, reservation())
+            .expect("first transaction reserves the shared capacity");
+        let err = store
+            .reserve(second_hash, reservation())
+            .expect_err("second transaction must not overbook the same snapshot");
+        assert!(matches!(
+            err,
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::ProgramBlockBudgetExhausted,
+                ..
+            }
+        ));
+
+        store.release(&first_hash);
+        store
+            .reserve(second_hash, reservation())
+            .expect("released capacity is immediately reusable");
+    }
+
+    #[test]
+    fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_hash = accepted_tx_by_someone(&time_source).hash();
+        let second_hash = accepted_tx_by_someone(&time_source).hash();
+        let (sponsor, _) = gen_account_in("refresh_fee_reservation");
+        let (beneficiary, _) = gen_account_in("refresh_fee_beneficiary");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor, "rollover".parse().expect("valid program name"));
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("valid fee domain"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let reservation_at = |height| {
+            let key = FeeSponsorBudgetCounterKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                window: FeeSponsorBudgetWindow::Block(FeeSponsorBlockBudgetWindow { height }),
+            };
+            FeeAdmissionReservation {
+                program_revision: Some(1),
+                beneficiary: beneficiary.clone(),
+                asset_charges: BTreeMap::new(),
+                window_charges: BTreeMap::from([(key.clone(), Quantity::from(6_u32))]),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining: BTreeMap::new(),
+                window_remaining: BTreeMap::from([(key, Quantity::from(10_u32))]),
+                relay_lease_remaining: BTreeMap::new(),
+            }
+        };
+
+        let mut store = FeeAdmissionReservationStore::default();
+        store
+            .reserve(first_hash, reservation_at(7))
+            .expect("transaction reserves its enqueue-height window");
+        store
+            .refresh(first_hash, Some(reservation_at(8)))
+            .expect("pop-time recheck moves the hold to the execution-height window");
+
+        let err = store
+            .reserve(second_hash, reservation_at(8))
+            .expect_err("a competing transaction must see the refreshed current-height hold");
+        assert!(matches!(
+            err,
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::ProgramBlockBudgetExhausted,
+                ..
+            }
+        ));
+
+        store
+            .refresh(first_hash, None)
+            .expect("disabling fee charging releases the stale hold");
+        store
+            .reserve(second_hash, reservation_at(8))
+            .expect("released current-height capacity is reusable");
+    }
+
+    #[test]
+    fn unsigned_payload_routing_matches_signed_queue_admission_routing() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let tx = accepted_tx_by_someone(&time_source);
+        let payload = tx
+            .external()
+            .expect("external transaction fixture")
+            .payload()
+            .clone();
+        let state = State::new_for_testing(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let queue = Queue::test(config_factory(), &time_source);
+
+        let signed = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("signed route");
+        let unsigned = queue
+            .route_payload_plan_with_state(&payload, &state)
+            .expect("unsigned route");
+        assert_eq!(unsigned, signed);
+    }
+
+    #[test]
+    fn receipt_settled_queue_admission_rejects_authority_payer() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let (authority, keypair) = gen_account_in("receipt_fee_admission");
+        let domain_id =
+            DomainId::try_new("receipt_fee_admission", "universal").expect("receipt fee domain");
+        let fee_asset = AssetDefinitionId::new(
+            domain_id.clone(),
+            "xor".parse().expect("receipt fee asset name"),
+        );
+        let world = World::with(
+            [Domain::new(domain_id).build(&authority)],
+            [Account::new(authority.clone()).build(&authority)],
+            [AssetDefinition::numeric(fee_asset.clone())
+                .with_name("receipt fee XOR".to_owned())
+                .build(&authority)],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_asset_id = fee_asset.canonical_address();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+        }
+        let queue = Queue::test(config_factory(), &time_source);
+        let transaction = accepted_tx_by(authority, &keypair, &time_source);
+
+        let error = queue
+            .push(transaction, state.view())
+            .expect_err("receipt-settled queue admission must require a sponsor");
+
+        assert!(matches!(
+            error.err,
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::RelayCapacityUnavailable,
+                ref reason,
+            } if reason.contains("active fee sponsor program")
+                && reason.contains("exact active revision")
+        ));
+        assert_eq!(queue.active_len(), 0);
+    }
+
+    #[test]
+    fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_hash = accepted_tx_by_someone(&time_source).hash();
+        let second_hash = accepted_tx_by_someone(&time_source).hash();
+        let (authority, _) = gen_account_in("authority_fee_reservation");
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("valid fee domain"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let asset_id = AssetId::new(asset_definition_id, authority.clone());
+        let source = FeeReservationAssetSource::Authority(asset_id);
+        let reservation = || FeeAdmissionReservation {
+            program_revision: None,
+            beneficiary: authority.clone(),
+            asset_charges: BTreeMap::from([(source.clone(), Quantity::from(6_u32))]),
+            window_charges: BTreeMap::new(),
+            relay_lease_charges: BTreeMap::new(),
+            asset_remaining: BTreeMap::from([(source.clone(), Quantity::from(10_u32))]),
+            window_remaining: BTreeMap::new(),
+            relay_lease_remaining: BTreeMap::new(),
+        };
+
+        let mut store = FeeAdmissionReservationStore::default();
+        store
+            .reserve(first_hash, reservation())
+            .expect("first authority transaction reserves its balance");
+        let err = store
+            .reserve(second_hash, reservation())
+            .expect_err("second authority transaction must not overbook the balance");
+        assert!(matches!(
+            err,
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::AuthorityPayerInsufficient,
+                ..
+            }
+        ));
+
+        store.release(&first_hash);
+        store
+            .reserve(second_hash, reservation())
+            .expect("released authority capacity is immediately reusable");
+    }
+
+    #[test]
+    fn relay_spend_lease_reservations_prevent_overbooking_and_release_capacity() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_hash = accepted_tx_by_someone(&time_source).hash();
+        let second_hash = accepted_tx_by_someone(&time_source).hash();
+        let (beneficiary, _) = gen_account_in("relay_lease_reservation");
+        let lease_id = Hash::new(b"exact verified sponsor spend lease");
+        let reservation = || FeeAdmissionReservation {
+            program_revision: Some(3),
+            beneficiary: beneficiary.clone(),
+            asset_charges: BTreeMap::new(),
+            window_charges: BTreeMap::new(),
+            relay_lease_charges: BTreeMap::from([(lease_id, Quantity::from(6_u32))]),
+            asset_remaining: BTreeMap::new(),
+            window_remaining: BTreeMap::new(),
+            relay_lease_remaining: BTreeMap::from([(lease_id, Quantity::from(10_u32))]),
+        };
+
+        let mut store = FeeAdmissionReservationStore::default();
+        store
+            .reserve(first_hash, reservation())
+            .expect("first transaction reserves exact lease capacity");
+        let err = store
+            .reserve(second_hash, reservation())
+            .expect_err("second transaction must not overbook the exact lease");
+        assert!(matches!(
+            err,
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::RelayCapacityUnavailable,
+                ..
+            }
+        ));
+
+        store.release(&first_hash);
+        store
+            .reserve(second_hash, reservation())
+            .expect("released lease capacity is immediately reusable");
     }
 }

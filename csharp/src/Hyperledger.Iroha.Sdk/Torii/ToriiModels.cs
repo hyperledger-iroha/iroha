@@ -1,5 +1,7 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -3986,9 +3988,6 @@ public sealed record class ToriiSoraFsPinRegisterRequest
     [JsonPropertyName("submitted_epoch")]
     public ulong? SubmittedEpoch { get; init; }
 
-    [JsonPropertyName("gas_asset_id")]
-    public string? GasAssetId { get; init; }
-
     [JsonPropertyName("alias")]
     public ToriiSoraFsPinAlias? Alias { get; init; }
 
@@ -4009,9 +4008,6 @@ internal sealed record class ToriiSoraFsPinRegisterWireRequest
 
     [JsonPropertyName("submitted_epoch")]
     public ulong? SubmittedEpoch { get; init; }
-
-    [JsonPropertyName("gas_asset_id")]
-    public string? GasAssetId { get; init; }
 
     [JsonPropertyName("alias")]
     public ToriiSoraFsPinAlias? Alias { get; init; }
@@ -6071,14 +6067,185 @@ public sealed record class ToriiContractCallRequest
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
 
-    [JsonPropertyName("gas_asset_id")]
-    public string? GasAssetId { get; init; }
+    [JsonPropertyName("transaction_ttl_ms")]
+    public ulong? TransactionTimeToLiveMilliseconds { get; init; }
 
-    [JsonPropertyName("fee_sponsor")]
-    public string? FeeSponsor { get; init; }
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+}
+
+public sealed record class ToriiFeeQuoteRequest
+{
+    [JsonPropertyName("payload")]
+    public UnsignedTransactionPayload Payload { get; init; } = null!;
+}
+
+public sealed record class ToriiFeeQuoteObservation
+{
+    [JsonPropertyName("ledger_time_ms")]
+    public ulong LedgerTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("next_block_height")]
+    public ulong NextBlockHeight { get; init; }
+
+    [JsonPropertyName("route_dataspace_id")]
+    public ulong RouteDataspaceId { get; init; }
+}
+
+public sealed record class ToriiFeeQuoteCapacity
+{
+    [JsonPropertyName("asset_definition_id")]
+    public string AssetDefinitionId { get; init; } = string.Empty;
+
+    [JsonPropertyName("vault_balance")]
+    public string VaultBalance { get; init; } = string.Empty;
+
+    [JsonPropertyName("reserve_floor")]
+    public string ReserveFloor { get; init; } = string.Empty;
+
+    [JsonPropertyName("block_remaining")]
+    public string BlockRemaining { get; init; } = string.Empty;
+
+    [JsonPropertyName("program_epoch_remaining")]
+    public string ProgramEpochRemaining { get; init; } = string.Empty;
+
+    [JsonPropertyName("beneficiary_epoch_remaining")]
+    public string BeneficiaryEpochRemaining { get; init; } = string.Empty;
+}
+
+public sealed record class ToriiFeeDebitSource
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public JsonElement Value { get; init; }
+}
+
+public sealed record class ToriiFeeQuoteDecisionValue
+{
+    [JsonPropertyName("debit_source")]
+    public ToriiFeeDebitSource DebitSource { get; init; } = null!;
+
+    [JsonPropertyName("program_revision")]
+    public ulong? ProgramRevision { get; init; }
+}
+
+public sealed record class ToriiFeeQuoteDecision
+{
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public ToriiFeeQuoteDecisionValue Value { get; init; } = null!;
+}
+
+public sealed record class ToriiFeeQuoteResponse
+{
+    [JsonPropertyName("intent")]
+    public FeePaymentIntent Intent { get; init; } = null!;
+
+    [JsonPropertyName("observation")]
+    public ToriiFeeQuoteObservation Observation { get; init; } = null!;
+
+    [JsonPropertyName("components")]
+    public IReadOnlyList<FeeChargeLimit> Components { get; init; } = Array.Empty<FeeChargeLimit>();
+
+    [JsonPropertyName("capacities")]
+    public IReadOnlyList<ToriiFeeQuoteCapacity> Capacities { get; init; } = Array.Empty<ToriiFeeQuoteCapacity>();
+
+    [JsonPropertyName("decision")]
+    public ToriiFeeQuoteDecision Decision { get; init; } = null!;
+}
+
+public sealed record class ToriiFeeSponsorProgramLookupRequest
+{
+    [JsonPropertyName("program_id")]
+    public string ProgramId { get; init; } = string.Empty;
+}
+
+public sealed record class ToriiFeeSponsorProgramLifecycle
+{
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public JsonNode? Value { get; init; }
+}
+
+public sealed record class ToriiFeeSponsorProgramActivation
+{
+    [JsonPropertyName("revision")]
+    public ulong Revision { get; init; }
+
+    [JsonPropertyName("activate_at_height")]
+    public ulong ActivateAtHeight { get; init; }
+}
+
+public sealed record class ToriiFeeSponsorProgram
+{
+    [JsonPropertyName("id")]
+    public FeeSponsorProgramId Id { get; init; } = null!;
+
+    [JsonPropertyName("lifecycle")]
+    public ToriiFeeSponsorProgramLifecycle Lifecycle { get; init; } = null!;
+
+    [JsonPropertyName("active_revision")]
+    public ulong? ActiveRevision { get; init; }
+
+    [JsonPropertyName("staged_revision")]
+    public ulong? StagedRevision { get; init; }
+
+    [JsonPropertyName("scheduled_activation")]
+    public ToriiFeeSponsorProgramActivation? ScheduledActivation { get; init; }
+}
+
+public sealed record class ToriiOperationReceipt
+{
+    [JsonPropertyName("operation_kind")]
+    public string OperationKind { get; init; } = string.Empty;
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("transport")]
+    public string Transport { get; init; } = string.Empty;
+
+    [JsonPropertyName("dataspace")]
+    public string Dataspace { get; init; } = string.Empty;
+
+    [JsonPropertyName("contract_alias")]
+    public string? ContractAlias { get; init; }
+
+    [JsonPropertyName("contract_address")]
+    public string? ContractAddress { get; init; }
+
+    [JsonPropertyName("code_hash_hex")]
+    public string? CodeHashHex { get; init; }
+
+    [JsonPropertyName("abi_hash_hex")]
+    public string? AbiHashHex { get; init; }
+
+    [JsonPropertyName("tx_hash_hex")]
+    public string? TransactionHashHex { get; init; }
+
+    [JsonPropertyName("entrypoint")]
+    public string? Entrypoint { get; init; }
+
+    [JsonPropertyName("entrypoint_hash_hex")]
+    public string? EntrypointHashHex { get; init; }
 
     [JsonPropertyName("gas_limit")]
-    public ulong GasLimit { get; init; }
+    public ulong? GasLimit { get; init; }
+
+    [JsonPropertyName("gas_used")]
+    public ulong? GasUsed { get; init; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent? FeePayment { get; init; }
+
+    [JsonPropertyName("payload_digest_hex")]
+    public string PayloadDigestHex { get; init; } = string.Empty;
 }
 
 [JsonConverter(typeof(ToriiContractViewAccessHintsJsonConverter))]
@@ -6437,12 +6604,10 @@ public sealed record class ToriiContractCodeView
     public ToriiContractVerifiedSourceReference? VerifiedSourceReference { get; init; }
 }
 
-[JsonConverter(typeof(ToriiContractCallResponseJsonConverter))]
 public sealed record class ToriiContractCallResponse
 {
     private bool ok;
     private string dataspace = string.Empty;
-    private string contractId = string.Empty;
     private string? contractAddress;
     private string codeHashHex = string.Empty;
     private string abiHashHex = string.Empty;
@@ -6452,6 +6617,10 @@ public sealed record class ToriiContractCallResponse
     private string? signedTransactionBase64;
     private string? signingMessageBase64;
     private string? entrypoint;
+
+    // TODO: Remove with the retired response converter after its remaining view helpers are split out.
+    [JsonIgnore]
+    internal string ContractId { get; init; } = string.Empty;
 
     [JsonPropertyName("ok")]
     public bool Ok
@@ -6468,13 +6637,6 @@ public sealed record class ToriiContractCallResponse
     {
         get => dataspace;
         init => dataspace = ToriiContractCallDirectMetadata.RequireExactTokenText(value, nameof(Dataspace));
-    }
-
-    [JsonPropertyName("contract_id")]
-    public string ContractId
-    {
-        get => contractId;
-        init => contractId = ToriiContractCallDirectMetadata.RequireExactTokenText(value, nameof(ContractId));
     }
 
     [JsonPropertyName("contract_address")]
@@ -6509,6 +6671,9 @@ public sealed record class ToriiContractCallResponse
             nameof(CreationTimeMilliseconds));
     }
 
+    [JsonPropertyName("transaction_ttl_ms")]
+    public ulong? TransactionTimeToLiveMilliseconds { get; init; }
+
     [JsonPropertyName("tx_hash_hex")]
     public string? TransactionHashHex
     {
@@ -6517,6 +6682,12 @@ public sealed record class ToriiContractCallResponse
             value,
             nameof(TransactionHashHex));
     }
+
+    [JsonPropertyName("pipeline_status")]
+    public JsonNode? PipelineStatus { get; init; }
+
+    [JsonPropertyName("entrypoint_hash_hex")]
+    public string? EntrypointHashHex { get; init; }
 
     [JsonPropertyName("transaction_scaffold_b64")]
     public string? TransactionScaffoldBase64
@@ -6553,6 +6724,9 @@ public sealed record class ToriiContractCallResponse
             value,
             nameof(Entrypoint));
     }
+
+    [JsonPropertyName("operation_receipt")]
+    public ToriiOperationReceipt OperationReceipt { get; init; } = null!;
 }
 
 [JsonConverter(typeof(ToriiContractViewResponseJsonConverter))]
@@ -7015,6 +7189,9 @@ public sealed record class ToriiMultisigProposeRequest
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
 
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
@@ -7024,8 +7201,8 @@ public sealed record class ToriiMultisigProposeRequest
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
 
-    [JsonPropertyName("fee_sponsor")]
-    public string? FeeSponsor { get; init; }
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
 
     [JsonPropertyName("instructions")]
     public IReadOnlyList<string>? Instructions
@@ -7060,11 +7237,11 @@ public sealed record class ToriiMultisigContractCallProposeRequest
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
 
-    [JsonPropertyName("namespace")]
-    public string Namespace { get; init; } = string.Empty;
+    [JsonPropertyName("contract_address")]
+    public string? ContractAddress { get; init; }
 
-    [JsonPropertyName("contract_id")]
-    public string ContractId { get; init; } = string.Empty;
+    [JsonPropertyName("contract_alias")]
+    public string? ContractAlias { get; init; }
 
     [JsonPropertyName("entrypoint")]
     public string Entrypoint { get; init; } = string.Empty;
@@ -7076,14 +7253,8 @@ public sealed record class ToriiMultisigContractCallProposeRequest
         init => payload = ToriiJsonSnapshots.Copy(value);
     }
 
-    [JsonPropertyName("gas_asset_id")]
-    public string? GasAssetId { get; init; }
-
-    [JsonPropertyName("fee_sponsor")]
-    public string? FeeSponsor { get; init; }
-
-    [JsonPropertyName("gas_limit")]
-    public ulong? GasLimit { get; init; }
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
 }
 
 public sealed record class ToriiMultisigContractCallApproveRequest
@@ -7108,6 +7279,75 @@ public sealed record class ToriiMultisigContractCallApproveRequest
 
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+
+    [JsonPropertyName("proposal_id")]
+    public string? ProposalId { get; init; }
+
+    [JsonPropertyName("instructions_hash")]
+    public string? InstructionsHash { get; init; }
+}
+
+public sealed record class ToriiMultisigApproveRequest
+{
+    [JsonPropertyName("multisig_account_id")]
+    public string? MultisigAccountId { get; init; }
+
+    [JsonPropertyName("multisig_account_alias")]
+    public string? MultisigAccountAlias { get; init; }
+
+    [JsonPropertyName("signer_account_id")]
+    public string SignerAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("public_key_hex")]
+    public string? PublicKeyHex { get; init; }
+
+    [JsonPropertyName("signature_b64")]
+    public string? SignatureBase64 { get; init; }
+
+    [JsonPropertyName("creation_time_ms")]
+    public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+
+    [JsonPropertyName("proposal_id")]
+    public string? ProposalId { get; init; }
+
+    [JsonPropertyName("instructions_hash")]
+    public string? InstructionsHash { get; init; }
+}
+
+public sealed record class ToriiMultisigCancelRequest
+{
+    [JsonPropertyName("multisig_account_id")]
+    public string? MultisigAccountId { get; init; }
+
+    [JsonPropertyName("multisig_account_alias")]
+    public string? MultisigAccountAlias { get; init; }
+
+    [JsonPropertyName("signer_account_id")]
+    public string SignerAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("public_key_hex")]
+    public string? PublicKeyHex { get; init; }
+
+    [JsonPropertyName("signature_b64")]
+    public string? SignatureBase64 { get; init; }
+
+    [JsonPropertyName("creation_time_ms")]
+    public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
 
     [JsonPropertyName("proposal_id")]
     public string? ProposalId { get; init; }
@@ -7200,6 +7440,45 @@ public sealed record class ToriiMultisigResponse
             value,
             nameof(SigningMessageBase64));
     }
+}
+
+public sealed record class ToriiMultisigCancelResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("resolved_multisig_account_id")]
+    public string ResolvedMultisigAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("submitted")]
+    public bool? Submitted { get; init; }
+
+    [JsonPropertyName("action")]
+    public string Action { get; init; } = string.Empty;
+
+    [JsonPropertyName("target_proposal_id")]
+    public string TargetProposalId { get; init; } = string.Empty;
+
+    [JsonPropertyName("target_instructions_hash")]
+    public string TargetInstructionsHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("cancel_proposal_id")]
+    public string CancelProposalId { get; init; } = string.Empty;
+
+    [JsonPropertyName("cancel_instructions_hash")]
+    public string CancelInstructionsHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("tx_hash_hex")]
+    public string? TransactionHashHex { get; init; }
+
+    [JsonPropertyName("executed_tx_hash_hex")]
+    public string? ExecutedTransactionHashHex { get; init; }
+
+    [JsonPropertyName("creation_time_ms")]
+    public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("signing_message_b64")]
+    public string? SigningMessageBase64 { get; init; }
 }
 
 [JsonConverter(typeof(ToriiMultisigContractCallResponseJsonConverter))]

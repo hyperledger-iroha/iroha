@@ -226,7 +226,7 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
 
 DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-DATA_MODEL_VERSION = 1
+DATA_MODEL_VERSION = 2
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
 
@@ -2559,7 +2559,7 @@ def _normalize_sorafs_pin_register_request(
         "private_key",
         "manifest_payload",
         "submitted_epoch",
-        "gas_asset_id",
+        "fee_payment",
         "alias",
         "successor_of_hex",
     }
@@ -2581,11 +2581,13 @@ def _normalize_sorafs_pin_register_request(
 
     manifest_payload_value = _first_present(request, "manifest_payload")
     submitted_epoch_value = _first_present(request, "submitted_epoch")
-    gas_asset_value = _first_present(request, "gas_asset_id")
+    fee_payment_value = _first_present(request, "fee_payment")
     if manifest_payload_value is _MISSING:
         raise TypeError(f"{context}.manifest_payload is required")
     if submitted_epoch_value is _MISSING:
         raise TypeError(f"{context}.submitted_epoch is required")
+    if fee_payment_value is _MISSING:
+        raise TypeError(f"{context}.fee_payment is required")
     if not isinstance(submitted_epoch_value, int) or isinstance(submitted_epoch_value, bool):
         raise TypeError(f"{context}.submitted_epoch must be an integer")
 
@@ -2600,12 +2602,11 @@ def _normalize_sorafs_pin_register_request(
             f"{context}.submitted_epoch",
             allow_zero=True,
         ),
+        "fee_payment": _BaseToriiClient._normalize_fee_payment_intent(
+            fee_payment_value,
+            context=f"{context}.fee_payment",
+        ),
     }
-    if gas_asset_value is not _MISSING:
-        payload["gas_asset_id"] = _require_exact_non_empty_string(
-            gas_asset_value,
-            f"{context}.gas_asset_id",
-        )
 
     alias_value = _first_present(request, "alias")
     if alias_value is not _MISSING:
@@ -13338,6 +13339,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         additions: Sequence[Mapping[str, Any]],
         *,
+        fee_payment: Mapping[str, Any],
         retire: Optional[Sequence[int]] = None,
         chain_id: Optional[str] = None,
         authority: Optional[str] = None,
@@ -13448,6 +13450,7 @@ class ToriiClient(_BaseToriiClient):
             chain_id.strip(),
             authority.strip(),
             private_key_bytes,
+            fee_payment=fee_payment,
             instructions=[instruction],
             wait=wait,
             interval=interval,
@@ -14570,6 +14573,7 @@ class ToriiClient(_BaseToriiClient):
         authority: str,
         private_key: bytes,
         *,
+        fee_payment: Mapping[str, Any],
         instructions: Iterable["Instruction"] = (),
         creation_time_ms: Optional[int] = None,
         ttl_ms: Optional[int] = None,
@@ -14597,6 +14601,7 @@ class ToriiClient(_BaseToriiClient):
             chain_id,
             authority,
             private_key,
+            fee_payment=fee_payment,
             instructions=instructions,
             creation_time_ms=creation_time_ms,
             ttl_ms=ttl_ms,
@@ -14782,6 +14787,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         ttl_ms: Optional[int] = 900_000,
         nonce: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
@@ -14797,6 +14803,7 @@ class ToriiClient(_BaseToriiClient):
             TransactionConfig(
                 chain_id=effective_chain_id,
                 authority=effective_authority,
+                fee_payment=fee_payment,
                 ttl_ms=ttl_ms,
                 nonce=nonce,
                 metadata=metadata,
@@ -14860,6 +14867,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         instructions: Iterable["Instruction"],
@@ -14877,6 +14885,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             ttl_ms=ttl_ms,
             nonce=nonce,
             metadata=metadata,
@@ -14898,6 +14907,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         domain_id: str,
@@ -14912,6 +14922,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_domain(domain_id, metadata=domain_metadata)
@@ -14929,6 +14940,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14943,6 +14955,7 @@ class ToriiClient(_BaseToriiClient):
         return self.register_accounts_and_wait(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             private_key=private_key,
             private_key_hex=private_key_hex,
             accounts=[account_id],
@@ -14958,6 +14971,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         accounts: Iterable[str],
@@ -14972,6 +14986,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         metadata_by_account = dict(account_metadata or {})
@@ -15005,6 +15020,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -15020,6 +15036,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.grant_account_permission(
@@ -15041,6 +15058,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -15056,6 +15074,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.revoke_account_permission(
@@ -15077,6 +15096,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         definition_id: str,
@@ -15099,6 +15119,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_asset_definition(
@@ -15127,6 +15148,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -15141,6 +15163,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.mint_asset_quantity(
@@ -15166,6 +15189,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         mints: Iterable[Mapping[str, Any]],
@@ -15179,6 +15203,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         count = 0
@@ -15220,6 +15245,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -15234,6 +15260,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.burn_asset_quantity(
@@ -15259,6 +15286,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -15274,6 +15302,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.transfer_asset_quantity(
@@ -15300,6 +15329,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15319,6 +15349,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.open_asset_lock(
@@ -15351,6 +15382,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15365,6 +15397,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.drawdown_asset_lock(escrow_id, amount)
@@ -15382,6 +15415,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15395,6 +15429,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.cancel_asset_lock(escrow_id)
@@ -15412,6 +15447,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15425,6 +15461,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.expire_asset_lock(escrow_id)
@@ -15442,6 +15479,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         transfers: Iterable[Mapping[str, Any]],
@@ -15455,6 +15493,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         count = 0
@@ -15504,6 +15543,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15523,6 +15563,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_zk_asset(
@@ -15548,6 +15589,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         proof: Mapping[str, Any],
@@ -15563,6 +15605,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.verify_proof(dict(proof))
@@ -15580,6 +15623,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         pool_id: str,
@@ -15596,6 +15640,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_asset_hidden_zk_pool(
@@ -15618,6 +15663,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15642,6 +15688,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_zk_ace_identity_commitment(
@@ -15693,6 +15740,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15713,6 +15761,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.rotate_zk_ace_identity_commitment(
@@ -15745,6 +15794,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15760,6 +15810,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.revoke_zk_ace_identity_commitment(
@@ -15781,6 +15832,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15801,6 +15853,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.shield_asset(
@@ -15827,6 +15880,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15844,6 +15898,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.zk_transfer_prepared(
@@ -15867,6 +15922,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15886,6 +15942,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.unshield_prepared(
@@ -15911,6 +15968,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         pool_id: str,
@@ -15928,6 +15986,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.asset_hidden_zk_transfer_prepared(
@@ -15951,6 +16010,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         from_account_id: str,
@@ -15984,6 +16044,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.zk_ace_authorized_transfer(
@@ -17454,13 +17515,11 @@ class ToriiClient(_BaseToriiClient):
         *,
         authority: str,
         private_key: str,
-        gas_limit: Any,
+        fee_payment: Mapping[str, Any],
         entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
         wait: bool = True,
         timeout_ms: Optional[int] = 120_000,
         interval: float = 1.0,
@@ -17477,9 +17536,7 @@ class ToriiClient(_BaseToriiClient):
             contract_alias=contract_alias,
             entrypoint=entrypoint,
             payload=payload,
-            gas_asset_id=gas_asset_id,
-            fee_sponsor=fee_sponsor,
-            gas_limit=gas_limit,
+            fee_payment=fee_payment,
         )
         if not wait:
             return self._contract_response_payload(typed_response)

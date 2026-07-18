@@ -608,8 +608,12 @@ pub fn compose_preview_with_options(
         .iter()
         .map(InstructionDraft::instruction)
         .collect::<Vec<_>>();
-    let mut builder = TransactionBuilder::new(chain, authority.account_id().clone())
-        .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(
+        chain,
+        authority.account_id().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions);
     if let Some(creation_time) = options.creation_time() {
         builder.set_creation_time(creation_time);
     }

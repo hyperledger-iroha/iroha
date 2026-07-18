@@ -209,11 +209,11 @@ public sealed partial class ToriiClient
         var hasEp = readiness.ActiveRecursiveStepEpVerifier is not null;
         if (hasEq != hasEp)
         {
-            throw new JsonException("ABI-20 V4 recursive verifier records must be reported as an Eq/Ep pair.");
+            throw new JsonException("ABI-21 V4 recursive verifier records must be reported as an Eq/Ep pair.");
         }
         if ((readiness.ArtifactSet is not null) != hasEq)
         {
-            throw new JsonException("artifact_set and the ABI-20 V4 Eq/Ep verifier pair must be reported together.");
+            throw new JsonException("artifact_set and the ABI-21 V4 Eq/Ep verifier pair must be reported together.");
         }
         if (readiness.ArtifactSet is { } artifactSet)
         {
@@ -230,7 +230,7 @@ public sealed partial class ToriiClient
             && hasEp;
         if (readiness.RecursiveLineageSupported != expectedLineage)
         {
-            throw new JsonException("recursive_lineage_supported contradicts the ABI-20 runtime conjunction.");
+            throw new JsonException("recursive_lineage_supported contradicts the ABI-21 runtime conjunction.");
         }
         var expectedReady = expectedLineage
             && readiness.AssetScale is <= 28
@@ -240,7 +240,7 @@ public sealed partial class ToriiClient
             && readiness.Blockers.Length == 0;
         if (readiness.Ready != expectedReady)
         {
-            throw new JsonException("ready contradicts the complete ABI-20 runtime conjunction.");
+            throw new JsonException("ready contradicts the complete ABI-21 runtime conjunction.");
         }
         if (readiness.Blockers.Any(static blocker =>
                 string.IsNullOrWhiteSpace(blocker.Code)
@@ -284,7 +284,7 @@ public sealed partial class ToriiClient
             && (!string.Equals(verifier.Id.Name, expectedName, StringComparison.Ordinal)
                 || !string.Equals(verifier.CircuitId, expectedCircuit, StringComparison.Ordinal)))
         {
-            throw new JsonException($"{field} does not identify its ABI-20 V4 verifier role.");
+            throw new JsonException($"{field} does not identify its ABI-21 V4 verifier role.");
         }
     }
 
@@ -305,7 +305,7 @@ public sealed partial class ToriiClient
             || artifactSet.MaxProofBytes != readiness.ActiveRecursiveStepEqVerifier!.MaxProofBytes
             || artifactSet.MaxProofBytes != readiness.ActiveRecursiveStepEpVerifier!.MaxProofBytes)
         {
-            throw new JsonException("artifact_set does not match the authenticated active ABI-20 V4 release.");
+            throw new JsonException("artifact_set does not match the authenticated active ABI-21 V4 release.");
         }
     }
 

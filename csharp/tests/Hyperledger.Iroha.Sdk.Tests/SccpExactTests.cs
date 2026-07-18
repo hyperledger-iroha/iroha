@@ -8,12 +8,14 @@ using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Torii;
+using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class SccpExactTests
 {
     private static readonly string MessageId = SccpV1.LowerHex(SccpV1.MessageId(BundleLane(), ExactTransfer()));
+    private static readonly FeePaymentIntent BridgeFeePayment = FeePaymentIntent.Authority([]);
 
     [Fact]
     public void SharedNativeTransferEventVectorsMatchExactly()
@@ -287,13 +289,34 @@ public sealed class SccpExactTests
         var transaction = CanonicalTransactionPayload(7, destinationProof: true);
         var signature = Convert.ToBase64String(
             Ed25519Signer.Sign(IrohaHash.Hash(transaction), pair.PrivateKeySeed));
-        var request = new SccpBridgeProofSubmitRequest(
+        var gasBoundIntent = FeePaymentIntent.Authority([], gasLimit: 9);
+        var gasBoundTransaction = CanonicalTransactionPayload(
+            7,
+            destinationProof: true,
+            feePayment: gasBoundIntent);
+        var gasBoundSignature = Convert.ToBase64String(
+            Ed25519Signer.Sign(IrohaHash.Hash(gasBoundTransaction), pair.PrivateKeySeed));
+        _ = new SccpBridgeProofSubmitRequest(
+            authority,
+            artifact,
+            gasBoundIntent,
+            gasBoundSignature,
+            Convert.ToBase64String(gasBoundTransaction),
+            creationTimeMs: 7);
+        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+            authority,
+            artifact,
+            FeePaymentIntent.Authority([], gasLimit: 10),
+            gasBoundSignature,
+            Convert.ToBase64String(gasBoundTransaction),
+            creationTimeMs: 7));
+        var request = BridgeProofRequest(
             authority,
             artifact,
             signature,
             Convert.ToBase64String(transaction),
             creationTimeMs: 7);
-        Assert.Equal(nativeArtifact, new SccpBridgeMessageSubmitRequest(authority, nativeArtifact).NativeProofBase64);
+        Assert.Equal(nativeArtifact, BridgeMessageRequest(authority, nativeArtifact).NativeProofBase64);
         using var json = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request));
         var fields = json.RootElement.EnumerateObject()
             .Select(static property => property.Name)
@@ -301,9 +324,9 @@ public sealed class SccpExactTests
         Assert.True(fields.SetEquals(
             [
                 "authority", "signature_b64", "transaction_payload_b64",
-                "destination_proof_b64", "creation_time_ms",
+                "fee_payment", "destination_proof_b64", "creation_time_ms",
             ]));
-        var prepared = new SccpBridgeProofSubmitRequest(
+        var prepared = BridgeProofRequest(
             authority,
             artifact,
             creationTimeMs: 7);
@@ -318,30 +341,30 @@ public sealed class SccpExactTests
             Assert.False(json.RootElement.TryGetProperty(retired, out _));
         }
 
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(authority, "AQ=="));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(authority, "AQ=="));
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             pair.ToAccountAddress().ToI105(AccountAddress.DefaultChainDiscriminant),
             artifact));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(authority, nativeArtifact));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(authority, unrelatedArtifact));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeMessageSubmitRequest(authority, artifact));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeMessageSubmitRequest(authority, unrelatedArtifact));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(authority, nativeArtifact));
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(authority, unrelatedArtifact));
+        Assert.Throws<ArgumentException>(() => BridgeMessageRequest(authority, artifact));
+        Assert.Throws<ArgumentException>(() => BridgeMessageRequest(authority, unrelatedArtifact));
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             signatureBase64: "AQ=="));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             transactionPayloadBase64: Convert.ToBase64String(transaction)));
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             signature,
             Convert.ToBase64String(transaction),
             creationTimeMs: null));
         var nativePayload = CanonicalTransactionPayload(7);
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
@@ -353,7 +376,7 @@ public sealed class SccpExactTests
             7,
             destinationProof: true,
             chainId: "809574f5-fee7-5e69-bfcf-52451e42d50f");
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
@@ -365,7 +388,7 @@ public sealed class SccpExactTests
             7,
             legacyOuterBinding: true,
             destinationProof: true);
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
@@ -379,7 +402,7 @@ public sealed class SccpExactTests
                 7,
                 destinationProof: true,
                 payloadKindOverride: payloadKind);
-            Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+            Assert.Throws<ArgumentException>(() => BridgeProofRequest(
                 authority,
                 artifact,
                 Convert.ToBase64String(Ed25519Signer.Sign(
@@ -389,7 +412,7 @@ public sealed class SccpExactTests
                 creationTimeMs: 7));
         }
         var truncatedPayload = transaction[..^1];
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
@@ -398,7 +421,7 @@ public sealed class SccpExactTests
             Convert.ToBase64String(truncatedPayload),
             creationTimeMs: 7));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new SccpBridgeMessageSubmitRequest(authority, nativeArtifact, creationTimeMs: 0));
+            BridgeMessageRequest(authority, nativeArtifact, creationTimeMs: 0));
     }
 
     [Fact]
@@ -418,13 +441,13 @@ public sealed class SccpExactTests
         })
         {
             var malformed = mutation(archive.ToArray());
-            Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+            Assert.Throws<ArgumentException>(() => BridgeProofRequest(
                 authority,
                 Convert.ToBase64String(malformed)));
         }
 
         var canonical = Convert.ToBase64String(archive);
-        Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
             authority,
             canonical.TrimEnd('=')));
         Assert.Throws<ArgumentException>(() => SccpSubmitValidation.CanonicalBase64(
@@ -450,7 +473,7 @@ public sealed class SccpExactTests
             var signature = new byte[64];
             Convert.FromHexString(point).CopyTo(signature, 0);
             signature[32] = 1;
-            Assert.Throws<ArgumentException>(() => new SccpBridgeProofSubmitRequest(
+            Assert.Throws<ArgumentException>(() => BridgeProofRequest(
                 authority,
                 canonical,
                 Convert.ToBase64String(signature),
@@ -1402,6 +1425,54 @@ public sealed class SccpExactTests
     }
 
     [Fact]
+    public void PreparedBridgePayloadAcceptsTypedFeeIntentAndBindsExactSelection()
+    {
+        var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
+        var authorityIntent = FeePaymentIntent.Authority([], gasLimit: 700);
+        var authorityPayload = CanonicalTransactionPayload(7, feePayment: authorityIntent);
+        var authorityPrepared = ResponseJson(
+            false,
+            null,
+            Convert.ToBase64String(authorityPayload),
+            Convert.ToBase64String(IrohaHash.Hash(authorityPayload)));
+
+        Assert.False(SccpBridgeSubmitResponse.Parse(
+            authorityPrepared,
+            new SccpBridgeResponseExpectation(FeePayment: authorityIntent)).Submitted);
+        Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(
+            authorityPrepared,
+            new SccpBridgeResponseExpectation(
+                FeePayment: FeePaymentIntent.Authority([], gasLimit: 701))));
+
+        var sponsorId = new FeeSponsorProgramId(
+            pair.ToAccountAddress().ToI105(AccountAddress.DefaultChainDiscriminant),
+            "wallet_fx");
+        var sponsorIntent = FeePaymentIntent.Sponsor(
+            sponsorId,
+            programRevision: 3,
+            chargeLimits: [],
+            gasLimit: 700);
+        var sponsorPayload = CanonicalTransactionPayload(7, feePayment: sponsorIntent);
+        var sponsorPrepared = ResponseJson(
+            false,
+            null,
+            Convert.ToBase64String(sponsorPayload),
+            Convert.ToBase64String(IrohaHash.Hash(sponsorPayload)));
+
+        Assert.False(SccpBridgeSubmitResponse.Parse(
+            sponsorPrepared,
+            new SccpBridgeResponseExpectation(FeePayment: sponsorIntent)).Submitted);
+        Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(
+            sponsorPrepared,
+            new SccpBridgeResponseExpectation(
+                FeePayment: FeePaymentIntent.Sponsor(
+                    sponsorId,
+                    programRevision: 4,
+                    chargeLimits: [],
+                    gasLimit: 700))));
+    }
+
+    [Fact]
     public async Task ToriiClientUsesExactPathsAndRejectsPathInjectionBeforeFetch()
     {
         var calls = new List<string>();
@@ -1681,7 +1752,7 @@ public sealed class SccpExactTests
         });
         using var client = new ToriiClient(new Uri("https://example.test"), new HttpClient(handler));
         var prepared = await client.SubmitSccpBridgeMessageAsync(
-            new SccpBridgeMessageSubmitRequest(
+            BridgeMessageRequest(
                 authority,
                 Convert.ToBase64String(proof),
                 creationTimeMs: 7),
@@ -1690,7 +1761,7 @@ public sealed class SccpExactTests
         Assert.Equal(payloadBase64, prepared.TransactionPayloadBase64);
 
         var submitted = await client.SubmitSccpBridgeMessageAsync(
-            new SccpBridgeMessageSubmitRequest(
+            BridgeMessageRequest(
                 authority,
                 Convert.ToBase64String(proof),
                 signatureBase64,
@@ -2507,7 +2578,8 @@ public sealed class SccpExactTests
         byte routeHashByte = 0x22,
         bool destinationProof = false,
         uint? payloadKindOverride = null,
-        string chainId = "fc56984b-2be7-431d-840e-21514d1883f0")
+        string chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
+        FeePaymentIntent? feePayment = null)
     {
         const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
@@ -2547,6 +2619,9 @@ public sealed class SccpExactTests
         BinaryPrimitives.WriteUInt64LittleEndian(creation, creationTimeMs);
         var ttl = new byte[] { 0 };
         var nonce = new byte[] { 0 };
+        var encodedFeePayment = CanonicalFeePayment(
+            feePayment ?? FeePaymentIntent.Authority([]),
+            authority);
         var metadata = UInt64(0);
         return Concat(
             CompactField(CompactField(CompactString(chainId))),
@@ -2555,7 +2630,43 @@ public sealed class SccpExactTests
             CompactField(executable),
             CompactField(ttl),
             CompactField(nonce),
+            CompactField(encodedFeePayment),
             CompactField(metadata));
+    }
+
+    private static byte[] CanonicalFeePayment(
+        FeePaymentIntent feePayment,
+        byte[] sponsorController)
+    {
+        Assert.Empty(feePayment.ChargeLimits);
+        var limits = UInt64(0);
+        var gasLimit = feePayment.GasLimit is { } gas
+            ? Concat([(byte)1], CompactField(UInt64(gas)))
+            : [(byte)0];
+        byte[] value;
+        uint payer;
+        switch (feePayment)
+        {
+            case AuthorityFeePaymentIntent:
+                payer = 0;
+                value = Concat(CompactField(limits), CompactField(gasLimit));
+                break;
+            case SponsorFeePaymentIntent sponsor:
+                payer = 1;
+                var programId = Concat(
+                    CompactField(sponsorController),
+                    CompactField(CompactString(sponsor.ProgramId.Name)));
+                value = Concat(
+                    CompactField(programId),
+                    CompactField(UInt64(sponsor.ProgramRevision)),
+                    CompactField(limits),
+                    CompactField(gasLimit));
+                break;
+            default:
+                throw new InvalidOperationException("unknown fee payment intent");
+        }
+
+        return Concat(UInt32(payer), CompactField(value));
     }
 
     private static byte[] CompactString(string value) =>
@@ -2740,6 +2851,32 @@ public sealed class SccpExactTests
     };
 
     private static byte[] Json(object value) => JsonSerializer.SerializeToUtf8Bytes(value);
+
+    private static SccpBridgeProofSubmitRequest BridgeProofRequest(
+        string authority,
+        string destinationProofBase64,
+        string? signatureBase64 = null,
+        string? transactionPayloadBase64 = null,
+        ulong? creationTimeMs = null) => new(
+            authority,
+            destinationProofBase64,
+            BridgeFeePayment,
+            signatureBase64,
+            transactionPayloadBase64,
+            creationTimeMs);
+
+    private static SccpBridgeMessageSubmitRequest BridgeMessageRequest(
+        string authority,
+        string nativeProofBase64,
+        string? signatureBase64 = null,
+        string? transactionPayloadBase64 = null,
+        ulong? creationTimeMs = null) => new(
+            authority,
+            nativeProofBase64,
+            BridgeFeePayment,
+            signatureBase64,
+            transactionPayloadBase64,
+            creationTimeMs);
 
     private static byte[] Concat(params byte[][] values)
     {

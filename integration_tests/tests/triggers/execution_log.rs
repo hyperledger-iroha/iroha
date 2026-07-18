@@ -75,10 +75,14 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     })??;
 
     // Submit the user transaction and derive its entrypoint hash.
-    let tx_hash: HashOf<SignedTransaction> =
-        spawn_blocking(move || test_client.submit(user_instruction))
-            .await
-            .unwrap()?;
+    let tx_hash: HashOf<SignedTransaction> = spawn_blocking(move || {
+        test_client.submit(
+            user_instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .unwrap()?;
     let entrypoint_hash: HashOf<TransactionEntrypoint> =
         HashOf::from_untyped_unchecked(tx_hash.into());
 

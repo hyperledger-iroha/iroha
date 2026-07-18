@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
@@ -33,11 +34,13 @@ import kotlin.test.assertTrue
 
 class NoritoJavaCodecAdapterParityTest {
     private val adapter = NoritoJavaCodecAdapter()
+    private val testFeePayment = FeePaymentIntent.authority(emptyList())
 
     @Test
     fun `codec round-trips payload as bare payload`() {
         val instructions = "android-instructions".toByteArray()
         val payload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000001",
             authority = sampleAuthority(0x11),
             creationTimeMs = 1_735_000_000_123L,
@@ -67,6 +70,7 @@ class NoritoJavaCodecAdapterParityTest {
             .fromAccount(publicKey, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000002",
             authority = authority,
             creationTimeMs = 1_735_000_000_456L,
@@ -108,6 +112,7 @@ class NoritoJavaCodecAdapterParityTest {
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
         val payload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000003",
             authority = authority,
             creationTimeMs = 1_735_000_000_789L,
@@ -197,6 +202,7 @@ class NoritoJavaCodecAdapterParityTest {
             NoritoAdapters.stringAdapter(),
         )
         val payload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000009",
             authority = sampleAuthority(0x41),
             creationTimeMs = 1_735_111_111_000L,
@@ -226,6 +232,7 @@ class NoritoJavaCodecAdapterParityTest {
     fun `codec encodes chain id ivm and instruction layouts`() {
         val chainId = "00000003"
         val chainPayload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = chainId,
             authority = sampleAuthority(0x42),
             creationTimeMs = 1_735_000_000_789L,
@@ -242,6 +249,7 @@ class NoritoJavaCodecAdapterParityTest {
 
         val ivmBytes = byteArrayOf(0x01, 0x02, 0x03, 0x04)
         val ivmPayload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000012",
             authority = sampleAuthority(0x43),
             creationTimeMs = 1_735_222_222_123L,
@@ -278,6 +286,7 @@ class NoritoJavaCodecAdapterParityTest {
             NoritoAdapters.stringAdapter(),
         )
         val instructionPayload = TransactionPayload(
+            feePayment = testFeePayment,
             chainId = "00000013",
             authority = sampleAuthority(0x44),
             creationTimeMs = 1_735_222_333_123L,

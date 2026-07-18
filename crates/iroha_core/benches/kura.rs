@@ -303,9 +303,13 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     );
     let alice_xor_id = AssetId::new(xor_id, alice_id.clone());
     let transfer = Transfer::asset_quantity(alice_xor_id, 10_u32, bob_id);
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([transfer])
-        .sign(alice_keypair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer])
+    .sign(alice_keypair.private_key());
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

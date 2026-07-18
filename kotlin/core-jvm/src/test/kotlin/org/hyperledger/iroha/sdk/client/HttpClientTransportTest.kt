@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -23,6 +24,8 @@ import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
@@ -33,6 +36,9 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private fun testFeePayment(gasLimit: Long? = null): FeePaymentIntent =
+        FeePaymentIntent.authority(emptyList(), gasLimit)
+
     private fun testMultisigAccountId(): String =
         AccountAddress.fromAccount(ByteArray(32) { 0x37.toByte() }, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -920,8 +926,10 @@ class HttpClientTransportTest {
                     "entrypoint_hash_hex": "${"77".repeat(32)}",
                     "gas_limit": 5000,
                     "gas_used": 17,
-                    "gas_asset_id": "xor#sora",
-                    "fee_sponsor": "alice",
+                    "fee_payment": {
+                      "payer": "authority",
+                      "value": {"charge_limits": [], "gas_limit": 5000}
+                    },
                     "payload_digest_hex": "${"88".repeat(32)}"
                   }
                 }
@@ -935,11 +943,10 @@ class HttpClientTransportTest {
         val response = transport.callContract(
             authority = "alice",
             privateKey = "privkey",
-            gasLimit = 5_000L,
+            feePayment = testFeePayment(5_000L),
             contractAlias = "router::universal",
             entrypoint = "contribute",
             payload = linkedMapOf("buyer" to "alice", "payment_amount" to 1L),
-            gasAssetId = "xor#sora",
         ).join()
 
         assertTrue(response.ok)
@@ -951,6 +958,7 @@ class HttpClientTransportTest {
         assertEquals("local", response.pipelineStatus?.get("scope"))
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
+        assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
         assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
         assertEquals("AQID", response.transactionScaffoldB64)
         assertEquals("BAUG", response.signedTransactionB64)
@@ -966,9 +974,14 @@ class HttpClientTransportTest {
         assertEquals("privkey", payload["private_key"])
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
-        assertEquals(5000L, (payload["gas_limit"] as Number).toLong())
         assertEquals("contribute", payload["entrypoint"])
-        assertEquals("xor#sora", payload["gas_asset_id"])
+        assertFalse(payload.containsKey("gas_limit"))
+        assertFalse(payload.containsKey("gas_asset_id"))
+        @Suppress("UNCHECKED_CAST")
+        val feePayment = payload["fee_payment"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val feeValue = feePayment["value"] as Map<String, Any?>
+        assertEquals(5_000L, (feeValue["gas_limit"] as Number).toLong())
         @Suppress("UNCHECKED_CAST")
         val args = payload["payload"] as Map<String, Any?>
         assertEquals("alice", args["buyer"])
@@ -986,15 +999,18 @@ class HttpClientTransportTest {
         assertTrue(Regex("(?:[0-9a-f]{2})+").matches(string(record, "norito_hex")))
 
         val boundary = obj(fixture, "torii_boundary")
+        val boundaryFeePayment = FeePaymentJson.parse(
+            boundary["fee_payment"],
+            "torii_boundary.fee_payment",
+        )
         val request = HttpClientTransport.buildContractCallPayload(
             authority = string(boundary, "authority"),
             privateKey = "fixture-private-key",
-            gasLimit = (boundary["gas_limit"] as Number).toLong(),
+            feePayment = boundaryFeePayment,
             contractAddress = null,
             contractAlias = string(boundary, "contract_alias"),
             entrypoint = string(boundary, "entrypoint"),
             payload = boundary["payload"],
-            gasAssetId = null,
         )
 
         assertEquals(string(boundary, "authority"), request["authority"])
@@ -1003,7 +1019,7 @@ class HttpClientTransportTest {
         assertFalse(request.containsKey("contract_address"))
         assertEquals(string(boundary, "entrypoint"), request["entrypoint"])
         assertEquals(boundary["payload"], request["payload"])
-        assertEquals((boundary["gas_limit"] as Number).toLong(), request["gas_limit"])
+        assertEquals(boundaryFeePayment.toJsonMap(), request["fee_payment"])
         assertFalse(request.containsKey("argument_record"))
         assertFalse(request.containsKey("argument_record_norito_hex"))
     }
@@ -1036,11 +1052,11 @@ class HttpClientTransportTest {
 
         val response = transport.proposeMultisig(
             MultisigProposeRequest(
+                feePayment = testFeePayment(),
                 multisigAccountAlias = "cbdc@banka",
                 signerAccountId = "alice",
                 instructions = listOf(instructionBytes),
                 creationTimeMs = 123,
-                feeSponsor = "fee-sponsor",
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
@@ -1063,7 +1079,10 @@ class HttpClientTransportTest {
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("cbdc@banka", payload["multisig_account_alias"])
         assertEquals("alice", payload["signer_account_id"])
-        assertEquals("fee-sponsor", payload["fee_sponsor"])
+        assertFalse(payload.containsKey("fee_sponsor"))
+        @Suppress("UNCHECKED_CAST")
+        val feePayment = payload["fee_payment"] as Map<String, Any?>
+        assertEquals("authority", feePayment["payer"])
         assertEquals("QR invoice 42", payload["memo"])
         assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
         assertEquals("7", payload["validation_fee_policy_version"])
@@ -1080,6 +1099,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(byteArrayOf()),
@@ -1094,6 +1114,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountId = "aid:multisig",
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
@@ -1104,6 +1125,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
                 )
@@ -1114,6 +1136,7 @@ class HttpClientTransportTest {
             assertFailsWith<IllegalArgumentException> {
                 HttpClientTransport.buildMultisigProposePayload(
                     MultisigProposeRequest(
+                        feePayment = testFeePayment(),
                         multisigAccountAlias = "cbdc@banka",
                         signerAccountId = "alice",
                         instructions = listOf(instruction),
@@ -1125,6 +1148,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1135,6 +1159,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1145,6 +1170,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1155,6 +1181,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1165,6 +1192,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1175,6 +1203,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1187,6 +1216,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1197,6 +1227,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1209,6 +1240,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1322,7 +1354,7 @@ class HttpClientTransportTest {
             transport.callContract(
                 authority = "alice",
                 privateKey = "privkey",
-                gasLimit = 5_000L,
+                feePayment = testFeePayment(5_000L),
                 contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
@@ -1339,28 +1371,18 @@ class HttpClientTransportTest {
                 HttpClientTransport.buildContractCallPayload(
                     authority = "alice",
                     privateKey = "privkey",
-                    gasLimit = 1,
+                    feePayment = testFeePayment(1),
                     contractAddress = null,
                     contractAlias = "router::universal",
                     entrypoint = entrypoint,
                     payload = null,
-                    gasAssetId = null,
                 )
             }
             assertTrue(error.message?.contains("entrypoint") == true)
         }
         for (gasLimit in listOf(0L, -1L)) {
             val error = assertFailsWith<IllegalArgumentException> {
-                HttpClientTransport.buildContractCallPayload(
-                    authority = "alice",
-                    privateKey = "privkey",
-                    gasLimit = gasLimit,
-                    contractAddress = null,
-                    contractAlias = "router::universal",
-                    entrypoint = "contribute",
-                    payload = null,
-                    gasAssetId = null,
-                )
+                testFeePayment(gasLimit)
             }
             assertTrue(error.message?.contains("positive") == true)
         }
@@ -1872,6 +1894,195 @@ class HttpClientTransportTest {
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
         assertEquals("vpn-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "vpn-nonce-1")
+    }
+
+    @Test
+    fun quoteFeesSignsExactUnsignedPayloadAndPreservesPayer() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "intent": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": 9000}
+                  },
+                  "observation": {"schedule_revision": 4},
+                  "components": [],
+                  "capacities": [],
+                  "decision": {"accepted": true}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val unsignedPayload = linkedMapOf<String, Any?>(
+            "chain" to "test-chain",
+            "authority" to "alice",
+            "fee_payment" to testFeePayment(9_000L).toJsonMap(),
+        )
+
+        val quote = transport.quoteFees(unsignedPayload, auth).join()
+
+        assertIs<FeePaymentIntent.Authority>(quote.intent)
+        assertEquals(9_000L, quote.intent.gasLimit)
+        assertEquals(4L, (quote.observation["schedule_revision"] as Number).toLong())
+        assertEquals("POST", executor.lastRequest.method)
+        assertEquals("https://torii.example/api/v1/fees/quote", executor.lastRequest.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val request = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+        assertEquals(unsignedPayload, request["payload"])
+        assertCanonicalSignature(executor.lastRequest, keyPair.public, 1_700_000_000_020L, "fee-quote-1")
+
+        val requestCount = executor.requestCount
+        assertFailsWith<IllegalArgumentException> {
+            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob", keyPair.private))
+        }
+        assertEquals(requestCount, executor.requestCount)
+    }
+
+    @Test
+    fun quoteFeesRejectsPayerRevisionAndGasSubstitution() {
+        val sponsor = testMultisigAccountId()
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private)
+        val sponsorIntent = FeePaymentIntent.sponsor(
+            FeeSponsorProgramId(sponsor, "wallet_fx"),
+            3,
+            emptyList(),
+            9_000L,
+        )
+
+        fun assertRejected(requested: FeePaymentIntent, responseIntent: String) {
+            val executor = StubResponseExecutor(
+                statusCode = 200,
+                body = """
+                    {
+                      "intent": $responseIntent,
+                      "observation": {},
+                      "components": [],
+                      "capacities": [],
+                      "decision": {}
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+            val transport = HttpClientTransport.withExecutor(
+                executor = executor,
+                config = ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build(),
+            )
+            val error = assertFailsWith<java.util.concurrent.CompletionException> {
+                transport.quoteFees(
+                    linkedMapOf(
+                        "authority" to "alice",
+                        "fee_payment" to requested.toJsonMap(),
+                    ),
+                    auth,
+                ).join()
+            }
+            assertIs<IllegalArgumentException>(error.cause)
+        }
+
+        assertRejected(
+            testFeePayment(9_000L),
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":9001}}""",
+        )
+        assertRejected(
+            sponsorIntent,
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":9000}}""",
+        )
+        assertRejected(
+            sponsorIntent,
+            """{"payer":"sponsor","value":{"program_id":{"sponsor":"$sponsor","name":"wallet_fx"},"program_revision":4,"charge_limits":[],"gas_limit":9000}}""",
+        )
+    }
+
+    @Test
+    fun getFeeSponsorProgramSignsExactSelectorAndParsesLifecycle() {
+        val sponsor = testMultisigAccountId()
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "id": {"sponsor": "$sponsor", "name": "wallet_fx"},
+                  "lifecycle": {"state": "active", "value": null},
+                  "active_revision": 3,
+                  "staged_revision": 4,
+                  "scheduled_activation": {"revision": 4, "activate_at_height": 100}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_700_000_000_021L,
+            "fee-program-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
+        )
+
+        val program = transport.getFeeSponsorProgram(
+            FeeSponsorProgramId(sponsor, "wallet_fx"),
+            auth,
+        ).join()
+
+        assertEquals(sponsor, program.id.sponsor)
+        assertEquals("wallet_fx", program.id.name)
+        assertEquals(FeeSponsorProgramLifecycle.ACTIVE, program.lifecycle)
+        assertEquals(3L, program.activeRevision)
+        assertEquals(4L, program.stagedRevision)
+        assertEquals(4L, program.scheduledActivation?.revision)
+        assertEquals(100L, program.scheduledActivation?.activateAtHeight)
+        assertEquals("POST", executor.lastRequest.method)
+        assertEquals(
+            "https://torii.example/api/v1/fee-sponsor-programs/by-id",
+            executor.lastRequest.uri.toString(),
+        )
+        assertEquals("""{"program_id":"$sponsor/wallet_fx"}""", readBody(executor.lastRequest))
+        assertCanonicalSignature(
+            executor.lastRequest,
+            keyPair.public,
+            1_700_000_000_021L,
+            "fee-program-1",
+        )
+    }
+
+    @Test
+    fun getFeeSponsorProgramRejectsSubstitutedResponseId() {
+        val sponsor = testMultisigAccountId()
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "id": {"sponsor": "$sponsor", "name": "other"},
+                  "lifecycle": {"state": "active", "value": null}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build(),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            transport.getFeeSponsorProgram(
+                FeeSponsorProgramId(sponsor, "wallet_fx"),
+                ToriiCanonicalRequestAuth("alice", keyPair.private),
+            ).join()
+        }
+        assertIs<IllegalArgumentException>(error.cause)
     }
 
     @Test
@@ -2902,6 +3113,7 @@ class HttpClientTransportTest {
                 creationTimeMs = 1_700_000_000_000L + seed,
                 timeToLiveMs = 5_000L,
                 nonce = seed + 1,
+                feePayment = testFeePayment(),
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )

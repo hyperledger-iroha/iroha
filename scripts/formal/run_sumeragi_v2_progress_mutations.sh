@@ -153,6 +153,19 @@ run_case causal-replacement-coalesced \
   SumeragiV2CausalReplacementMutation.tla causal_replacement_coalesced.cfg 0 \
   "Model checking completed. No error has been found." \
   "5 distinct states" "depth of the complete state graph search is 4"
+run_case causal-fifo-rank-multiplier-one-bug \
+  SumeragiV2CausalFifoRankMutation.tla \
+  causal_fifo_rank_multiplier_one_bug.cfg 12 \
+  "Invariant EarlierHeadRemovalStrictlyDropsTargetRank is violated." \
+  "State 2: <RemoveEarlierHead" \
+  "earlierHeadRemoved = TRUE" \
+  "2 states generated, 2 distinct states found, 0 states left on queue."
+run_case causal-fifo-rank-doubled \
+  SumeragiV2CausalFifoRankMutation.tla \
+  causal_fifo_rank_doubled.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "2 states generated, 2 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 2"
 run_case discovery-debt-bug \
   SumeragiV2DiscoveryDebtMutation.tla discovery_debt_bug.cfg 13 \
   "Temporal properties were violated." "4 distinct states" "Back to state 2"
@@ -207,4 +220,4 @@ run_case ownership-invariant-n1 \
   "42817 states generated, 6208 distinct states found" \
   "depth of the complete state graph search is 45"
 
-echo "[tlc] protected-rank, successor, effective-lock, and ownership mutation matrix passed"
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, and ownership mutation matrix passed"

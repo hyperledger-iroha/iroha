@@ -56,7 +56,7 @@ use super::{
     v2_effects::VerifiedPendingGenesisNexusAmxContext,
 };
 use crate::{
-    kura::{CertifiedLaneBlockArtifact, Kura},
+    kura::{CertifiedLaneBlockArtifact, Kura, sumeragi_v2_validator_storage_supported},
     lane_consensus::{
         CommittedLaneBlockSession, LaneBlockSessionCache, LaneBlockSessionInsertOutcome,
         LaneBlockVoteV1,
@@ -414,6 +414,9 @@ pub(crate) enum V2LaneWorkError {
     /// Local consensus key does not match the supplied peer identity.
     #[error("local lane/AMX consensus key does not match the local peer")]
     LocalKeyMismatch,
+    /// The host cannot provide the crash-safe filesystem contract required by a voter.
+    #[error("Sumeragi v2 voting validators require the Linux/macOS storage contract")]
+    UnsupportedValidatorStoragePlatform,
     /// Durable lane certificate persistence failed.
     #[error("failed to persist anchored lane-local certificate: {0}")]
     Persistence(String),
@@ -426,6 +429,17 @@ pub(crate) enum V2LaneWorkError {
     /// A conflicting exact subject did not carry a strictly higher Prepare round.
     #[error("global Prepare lock subject changed without a strictly higher round")]
     ConflictingGlobalBodyLock,
+}
+
+/// Reject a voting role unless the host satisfies the first-release storage contract.
+pub(crate) fn require_validator_storage_platform(
+    voting_enabled: bool,
+    storage_supported: bool,
+) -> Result<(), V2LaneWorkError> {
+    if voting_enabled && !storage_supported {
+        return Err(V2LaneWorkError::UnsupportedValidatorStoragePlatform);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -586,6 +600,10 @@ impl V2LaneWorkAdapter {
         recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, V2LaneWorkError> {
+        require_validator_storage_platform(
+            voting_enabled,
+            sumeragi_v2_validator_storage_supported(),
+        )?;
         let construction_guard = Arc::clone(&output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
@@ -4754,9 +4772,22 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn validator_storage_platform_gate_rejects_voters_and_allows_observers() {
+        assert_eq!(
+            require_validator_storage_platform(true, false),
+            Err(V2LaneWorkError::UnsupportedValidatorStoragePlatform),
+            "every voter must fail before opening any key-specific signing guard"
+        );
+        assert_eq!(require_validator_storage_platform(false, false), Ok(()));
+        assert_eq!(require_validator_storage_platform(true, true), Ok(()));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn native_amx_adapter_opens_with_bounded_production_like_limits() {
+        assert!(sumeragi_v2_validator_storage_supported());
+
         let limits = limits_with_native_capacity(4_096, 512);
         let (adapter, _) = fixture_at_height_inner_with_limits(
             wire::ConsensusMode::Permissioned,
@@ -5895,6 +5926,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             adapter.context.chain_id.clone(),
             AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(transaction_key.private_key());
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -6827,6 +6859,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             adapter.context.chain_id.clone(),
             AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(transaction_key.private_key());
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -6949,6 +6982,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             adapter.context.chain_id.clone(),
             AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(transaction_key.private_key());
         let entrypoint_hash = transaction.hash_as_entrypoint();

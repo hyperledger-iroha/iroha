@@ -6,7 +6,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
     private static let fixturePrivateKeyHex =
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
-    func testEd25519TransferWithFeeSponsorEncodes() throws {
+    func testEd25519TransferWithSponsorProgramEncodes() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Ed25519 transaction encoder unavailable")
         guard let privateKeyBytes = Data(hexString: Self.fixturePrivateKeyHex) else {
@@ -16,13 +16,19 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let authority = AccountId.make(publicKey: try signingKey.publicKey())
         let sponsorKeypair = try Keypair(privateKeyBytes: Data(repeating: 0x12, count: 32))
         let sponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
+        let programId = try FeeSponsorProgramId(sponsor: sponsor, name: "wallet_fx")
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "2",
                                       destination: authority,
                                       description: "fee-sponsor",
-                                      feeSponsor: sponsor,
+                                      feePayment: .sponsor(
+                                          programId: programId,
+                                          programRevision: 1,
+                                          chargeLimits: [],
+                                          gasLimit: nil
+                                      ),
                                       ttlMs: 120)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                   signingKey: signingKey,
@@ -51,6 +57,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                                       quantity: "5",
                                       destination: authority,
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 120)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                   signingKey: signingKey,
@@ -78,7 +85,8 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinitionId,
                                   quantity: "42",
                                   destination: authority,
-                                  ttlMs: 90)
+                                  ttlMs: 90,
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let envelope = try SwiftTransactionEncoder.encodeMint(request: request,
                                                               signingKey: signingKey,
                                                               creationTimeMs: 1_717_000_000)
@@ -100,6 +108,7 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                                       quantity: "7",
                                       destination: authority,
                                       description: "secp256k1-transfer",
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 240)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                   signingKey: signingKey,

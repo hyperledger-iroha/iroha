@@ -457,6 +457,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
                        aliasDomain: String?,
                        aliasDataspaceId: UInt64,
                        alias: String,
+                       feePayment: FeePaymentIntent,
                        signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let instructionPayload = try encodeInstruction(
             accountId: accountId,
@@ -469,6 +470,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
             authority: authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
+            feePayment: feePayment,
             instructionPayload: instructionPayload
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
@@ -490,6 +492,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
         chainId: String, authority: String, creationTimeMs: UInt64, ttlMs: UInt64?,
         expectedDeployNonce: UInt64, contractAddress: String, codeHash: Data,
         contractAlias: String, leaseExpiryMs: UInt64?, expectedPreviousContractAddress: String?,
+        feePayment: FeePaymentIntent,
         signingKey: SigningKey
     ) throws -> SignedTransactionEnvelope {
         var payload = CanonicalNoritoWriter()
@@ -506,7 +509,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
         wire.writeField(CanonicalNorito.encodeBytesVec(framed))
         let transactionPayload = try encodeTransactionPayload(
             chainId: chainId, authority: authority, creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs, instructionPayload: wire.data
+            ttlMs: ttlMs, feePayment: feePayment, instructionPayload: wire.data
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
         let signed = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
@@ -553,6 +556,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
                                                  authority: String,
                                                  creationTimeMs: UInt64,
                                                  ttlMs: UInt64?,
+                                                 feePayment: FeePaymentIntent,
                                                  instructionPayload: Data) throws -> Data {
         let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
         var transactionPayload = CanonicalNoritoWriter()
@@ -562,6 +566,7 @@ private enum SingleInstructionSwiftNoritoEncoder {
         transactionPayload.writeField(executablePayload)
         transactionPayload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
         transactionPayload.writeField(encodeNoneOption())
+        transactionPayload.writeField(try feePayment.canonicalNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
         return transactionPayload.data
     }
@@ -654,10 +659,8 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.emptyAssetDefinitionId
         }
         let destination = ids.accountIds["destination"] ?? transfer.destination
-        let feeSponsor = try transfer.feeSponsor.map {
-            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
-        }
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(transfer.quantity).canonicalString
+        let feePaymentJSON = try transfer.feePayment.canonicalJSONData()
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
@@ -668,7 +671,7 @@ struct SwiftTransactionEncoder {
                                                          assetDefinitionId: assetDefinitionId,
                                                          quantity: quantity,
                                                          destination: destination,
-                                                         feeSponsor: feeSponsor,
+                                                         feePaymentJSON: feePaymentJSON,
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
@@ -704,6 +707,7 @@ struct SwiftTransactionEncoder {
                                                      assetDefinitionId: assetDefinitionId,
                                                      quantity: quantity,
                                                      destination: destination,
+                                                     feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
@@ -739,6 +743,7 @@ struct SwiftTransactionEncoder {
                                                      assetDefinitionId: assetDefinitionId,
                                                      quantity: quantity,
                                                      destination: destination,
+                                                     feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
@@ -776,6 +781,7 @@ struct SwiftTransactionEncoder {
                                                        payloadEphemeral: request.payload.ephemeralPublicKey,
                                                        payloadNonce: request.payload.nonce,
                                                        payloadCiphertext: request.payload.ciphertext,
+                                                       feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                        privateKey: privateKey,
                                                        algorithm: signingKey.algorithm)
         }
@@ -813,6 +819,7 @@ struct SwiftTransactionEncoder {
                                                          inputs: request.flattenedInputs,
                                                          proofJSON: proofJSON,
                                                          rootHint: request.rootHint,
+                                                         feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
@@ -847,6 +854,7 @@ struct SwiftTransactionEncoder {
                                                            outputs: request.flattenedOutputs,
                                                            proofJSON: proofJSON,
                                                            rootHint: request.rootHint,
+                                                           feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                            privateKey: privateKey,
                                                            algorithm: signingKey.algorithm)
         }
@@ -888,6 +896,7 @@ struct SwiftTransactionEncoder {
                 transferVerifyingKey: transferVk,
                 unshieldVerifyingKey: unshieldVk,
                 shieldVerifyingKey: shieldVk,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -921,6 +930,7 @@ struct SwiftTransactionEncoder {
                                                                  ttlMs: request.ttlMs,
                                                                  accountId: ids.accountIds["account"] ?? request.accountId,
                                                                  specJSON: specJSON,
+                                                                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                  privateKey: privateKey,
                                                                  algorithm: signingKey.algorithm)
         }
@@ -963,6 +973,7 @@ struct SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 accountId: canonicalAccountId,
                 receiptJSON: receiptJSON,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1001,6 +1012,7 @@ struct SwiftTransactionEncoder {
             aliasDomain: aliasDomain,
             aliasDataspaceId: request.aliasDataspaceId,
             alias: alias,
+            feePayment: request.feePayment,
             signingKey: signingKey
         )
     }
@@ -1029,6 +1041,7 @@ struct SwiftTransactionEncoder {
             contractAddress: request.contractAddress, codeHash: codeHash,
             contractAlias: request.contractAlias, leaseExpiryMs: request.leaseExpiryMs,
             expectedPreviousContractAddress: request.expectedPreviousContractAddress,
+            feePayment: request.feePayment,
             signingKey: signingKey
         )
     }
@@ -1057,6 +1070,7 @@ struct SwiftTransactionEncoder {
                 objectId: target.objectId,
                 key: request.key,
                 valueJson: request.value.data,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1087,6 +1101,7 @@ struct SwiftTransactionEncoder {
                 targetKind: target.targetKind,
                 objectId: target.objectId,
                 key: request.key,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1120,6 +1135,7 @@ struct SwiftTransactionEncoder {
                 abiVersion: request.abiVersion,
                 window: windowTuple,
                 modeCode: request.mode?.rawValue,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1155,6 +1171,7 @@ struct SwiftTransactionEncoder {
                 amount: request.amount,
                 durationBlocks: request.durationBlocks,
                 direction: request.direction.rawValue,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1185,6 +1202,7 @@ struct SwiftTransactionEncoder {
                 electionId: request.electionId,
                 proofB64: request.proofB64,
                 publicInputs: publicInputs,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1364,6 +1382,7 @@ struct SwiftTransactionEncoder {
                 preimageHashHex: request.preimageHashHex,
                 windowLower: request.window.lower,
                 windowUpper: request.window.upper,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1392,6 +1411,7 @@ struct SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 referendumId: request.referendumId,
                 proposalIdHex: request.proposalIdHex,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )
@@ -1428,6 +1448,7 @@ struct SwiftTransactionEncoder {
                 candidatesCount: request.candidatesCount,
                 derivedBy: request.derivedBy.rawValue,
                 membersJson: membersJson,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
             )

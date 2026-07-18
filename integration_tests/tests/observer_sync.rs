@@ -157,11 +157,10 @@ fn observer_node_catches_up() -> Result<()> {
     // 1st block: set note = "v1"
     println!("observer_sync: submitting v1");
     let t1_lo = now_ms();
-    client.submit_blocking(SetKeyValue::account(
-        alice.clone(),
-        key.clone(),
-        norito::json!("v1"),
-    ))?;
+    client.submit_blocking(
+        SetKeyValue::account(alice.clone(), key.clone(), norito::json!("v1")),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     println!("observer_sync: v1 committed");
     // Wait until validators reach total >= 2 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 2).await })?;
@@ -170,7 +169,10 @@ fn observer_node_catches_up() -> Result<()> {
     // 2nd block: set note = "v2"
     let _t2_lo = now_ms();
     println!("observer_sync: submitting v2");
-    client.submit_blocking(SetKeyValue::account(alice, key, norito::json!("v2")))?;
+    client.submit_blocking(
+        SetKeyValue::account(alice, key, norito::json!("v2")),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     println!("observer_sync: v2 committed");
     // Wait until validators reach total >= 3 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 3).await })?;
@@ -181,7 +183,10 @@ fn observer_node_catches_up() -> Result<()> {
     let key2: Name = "znote".parse().unwrap();
     let _t3_lo = now_ms();
     println!("observer_sync: submitting v3");
-    client.submit_blocking(SetKeyValue::account(alice2, key2, norito::json!("v3")))?;
+    client.submit_blocking(
+        SetKeyValue::account(alice2, key2, norito::json!("v3")),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     println!("observer_sync: v3 committed");
 
     // Wait until validators reach total >= 4 and observer catches up
@@ -191,11 +196,14 @@ fn observer_node_catches_up() -> Result<()> {
     // 4th block: set note = "v4"
     let t4_lo = now_ms();
     println!("observer_sync: submitting v4");
-    client.submit_blocking(SetKeyValue::account(
-        ALICE_ID.clone(),
-        "note".parse::<Name>().unwrap(),
-        norito::json!("v4"),
-    ))?;
+    client.submit_blocking(
+        SetKeyValue::account(
+            ALICE_ID.clone(),
+            "note".parse::<Name>().unwrap(),
+            norito::json!("v4"),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     println!("observer_sync: v4 committed");
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 5).await })?;
     wait_for_observer(5)?;
@@ -203,11 +211,14 @@ fn observer_node_catches_up() -> Result<()> {
     // 5th block: set znote = "v5"
     let t5_lo = now_ms();
     println!("observer_sync: submitting v5");
-    client.submit_blocking(SetKeyValue::account(
-        ALICE_ID.clone(),
-        "znote".parse::<Name>().unwrap(),
-        norito::json!("v5"),
-    ))?;
+    client.submit_blocking(
+        SetKeyValue::account(
+            ALICE_ID.clone(),
+            "znote".parse::<Name>().unwrap(),
+            norito::json!("v5"),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     println!("observer_sync: v5 committed");
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 6).await })?;
     wait_for_observer(6)?;

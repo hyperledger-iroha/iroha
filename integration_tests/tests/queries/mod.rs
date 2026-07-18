@@ -115,7 +115,10 @@ fn query_basic_scenarios() -> eyre::Result<()> {
         let domain_id: DomainId = DomainId::try_new("domain1-txs", "universal")?;
         ensure_domain_registration_lease_for_network(&network, &domain_id)?;
         let register_domain = Register::domain(Domain::new(domain_id));
-        client.submit_blocking(register_domain.clone())?;
+        client.submit_blocking(
+            register_domain.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let txs = client.query(FindTransactions).execute_all()?;
         let TransactionEntrypoint::External(entrypoint) = txs[0].entrypoint() else {

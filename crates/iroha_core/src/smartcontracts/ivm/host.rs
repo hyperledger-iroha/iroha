@@ -16948,15 +16948,16 @@ seiyaku StaleRuntimeBinding {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "gas_limit".parse().expect("static metadata key"),
-            Json::new(1_000_000_u64),
-        );
-        let tx = TransactionBuilder::new(ChainId::from("test-chain"), authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::ContractCall(invocation))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("test-chain"),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(1_000_000),
+            ),
+        )
+        .with_executable(Executable::ContractCall(invocation))
+        .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut stx = block.transaction();
         let result = crate::executor::Executor::Initial

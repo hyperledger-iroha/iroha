@@ -14,12 +14,13 @@ use iroha::{
     config::Config,
     data_model::{
         account::{AccountId, address::ChainDiscriminantGuard},
-        isi::Log,
+        isi::{InstructionBox, Log},
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
         nexus::UniversalAccountId,
         prelude::{FindTransactions, HashOf, QueryBuilderExt, TransactionEntrypoint},
+        transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
@@ -31,7 +32,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{CliOutputFormat, Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
 
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
@@ -135,9 +136,9 @@ pub struct WriteCanary {
     /// Prefix used for the generated account alias.
     #[arg(long, default_value = DEFAULT_ALIAS_PREFIX)]
     pub alias_prefix: String,
-    /// Gas asset definition id inserted into transaction metadata.
+    /// Faucet asset definition expected in the onboarding funding response.
     #[arg(long, default_value = DEFAULT_GAS_ASSET_ID)]
-    pub gas_asset_id: String,
+    pub faucet_asset_id: String,
     /// Owner-only regular file containing the exact account-onboarding route token.
     #[arg(long, value_name = "PATH")]
     pub onboarding_token_file: PathBuf,
@@ -154,7 +155,8 @@ pub struct WriteCanary {
 
 impl Run for WriteCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let receipt = run_write_canary(context.config(), &self)?;
+        let fee_payment = context.transaction_fee_payment()?;
+        let receipt = run_write_canary(context.config(), &self, fee_payment)?;
         render_report(context, self.json, &receipt)?;
         ensure_write_canary_succeeded(&receipt)
     }
@@ -318,7 +320,11 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     )
 }
 
-fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
+fn run_write_canary(
+    config: &Config,
+    args: &WriteCanary,
+    fee_payment: FeePaymentIntent,
+) -> Result<Value> {
     let public_root = normalize_root_url(&args.public_root)?;
     let onboarding_token = read_onboarding_token_file(&args.onboarding_token_file)?;
     // Account literals in both onboarding and faucet payloads must use the
@@ -361,7 +367,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
             onboarding.status
         ));
         let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
         return report_value(
             "taira_write_canary",
             "fail",
@@ -379,7 +385,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
                 "account onboarding response was invalid: {error:#}"
             ));
             let mut extra = Map::new();
-            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
             return report_value(
                 "taira_write_canary",
                 "fail",
@@ -416,7 +422,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
             onboarding_terminal.as_deref().unwrap_or("not_observed")
         ));
         let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
         return report_value(
             "taira_write_canary",
             "fail",
@@ -430,7 +436,11 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
 
     let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
     let faucet_contract =
-        validate_faucet_response(faucet.body.as_ref(), &signer.account_id, &args.gas_asset_id);
+        validate_faucet_response(
+            faucet.body.as_ref(),
+            &signer.account_id,
+            &args.faucet_asset_id,
+        );
     push_check(
         &mut checks,
         "accounts_faucet",
@@ -451,7 +461,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     };
     if !failures.is_empty() {
         let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
         return report_value(
             "taira_write_canary",
             "fail",
@@ -484,7 +494,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
             faucet_terminal.as_deref().unwrap_or("not_observed")
         ));
         let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
         return report_value(
             "taira_write_canary",
             "fail",
@@ -513,19 +523,20 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     }
 
     let client = IrohaClient::new(canary_config.clone());
-    let mut metadata = metadata_with_gas_asset(&args.gas_asset_id)?;
+    let mut metadata = Metadata::default();
     insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
     let message = canary_message();
     let instruction = Log::new(LogLevel::INFO, message.clone());
-    let transaction = client
-        .try_build_transaction([instruction], metadata)
-        .wrap_err("failed to build Taira canary transaction")?;
+    let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
+    let (transaction, fee_quote) =
+        quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+            .wrap_err("failed to quote and sign Taira canary transaction")?;
     let signed_hash = transaction.hash();
     let entrypoint_hash = HashOf::new(&TransactionEntrypoint::External(transaction.clone()));
 
     client
         .submit_transaction(&transaction)
-        .map_err(|err| hint_submit_error(err, &args.gas_asset_id))?;
+        .map_err(hint_submit_error)?;
     let wait = client
         .wait_for_transaction_terminal_status(
             signed_hash,
@@ -558,7 +569,15 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
 
     let status = if failures.is_empty() { "ok" } else { "fail" };
     let mut extra = Map::new();
-    insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+    insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
+    extra.insert(
+        "fee_payment".into(),
+        norito::json::to_value(&fee_quote.intent).wrap_err("serialize fee payment receipt")?,
+    );
+    extra.insert(
+        "fee_quote".into(),
+        norito::json::to_value(&fee_quote).wrap_err("serialize fee quote receipt")?,
+    );
     extra.insert("message".into(), Value::String(message));
     extra.insert("faucet_tx_hash".into(), Value::String(faucet_tx_hash));
     extra.insert("ping_tx_hash".into(), Value::String(wait.hash.clone()));
@@ -666,7 +685,9 @@ fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<
         "chain_discriminant",
         "account_id",
         "alias",
-        "gas_asset_id",
+        "faucet_asset_id",
+        "fee_payment",
+        "fee_quote",
         "faucet_tx_hash",
         "ping_tx_hash",
         "applied_block_height",
@@ -1016,7 +1037,7 @@ fn insert_write_receipt_identity(
     extra: &mut Map,
     signer: &CanarySigner,
     alias: &str,
-    gas_asset_id: &str,
+    faucet_asset_id: &str,
 ) {
     extra.insert("chain".into(), Value::String(DEFAULT_CHAIN_ID.to_owned()));
     extra.insert(
@@ -1030,8 +1051,8 @@ fn insert_write_receipt_identity(
     extra.insert("alias".into(), Value::String(alias.to_owned()));
     extra.insert("generated_signer".into(), Value::from(signer.generated));
     extra.insert(
-        "gas_asset_id".into(),
-        Value::String(gas_asset_id.to_owned()),
+        "faucet_asset_id".into(),
+        Value::String(faucet_asset_id.to_owned()),
     );
 }
 
@@ -1401,14 +1422,6 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     total
 }
 
-fn metadata_with_gas_asset(gas_asset_id: &str) -> Result<Metadata> {
-    let mut metadata = Metadata::default();
-    if !gas_asset_id.trim().is_empty() {
-        insert_string_metadata(&mut metadata, "gas_asset_id", gas_asset_id.trim())?;
-    }
-    Ok(metadata)
-}
-
 fn insert_string_metadata(metadata: &mut Metadata, key: &str, value: &str) -> Result<()> {
     metadata.insert(Name::from_str(key)?, IrohaJson::new(value.to_owned()));
     Ok(())
@@ -1465,11 +1478,11 @@ fn escape_toml(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn hint_submit_error(err: eyre::Report, gas_asset_id: &str) -> eyre::Report {
+fn hint_submit_error(err: eyre::Report) -> eyre::Report {
     let text = format!("{err:#}");
-    if text.contains("gas_asset_id") || text.contains("GasAsset") {
+    if text.contains("fee intent") || text.contains("fee_payment") {
         eyre!(
-            "{text}\nTaira requires transaction metadata `gas_asset_id`; this command used `{gas_asset_id}`. Re-check that the public endpoint accepts this asset definition id."
+            "{text}\nTaira requires the exact signature-bound `FeePaymentIntent` returned by `/v1/fees/quote`; re-quote after any payload or sponsor-program revision change."
         )
     } else if text.contains("route_unavailable") || text.contains("ROUTE_UNRESOLVED") {
         eyre!(
@@ -1526,7 +1539,11 @@ fn error_value(code: &str, message: &str) -> Value {
 mod tests {
     use super::*;
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_torii_shared::uri as torii_uri;
+    use iroha::data_model::nexus::FeeDebitSource;
+    use iroha_torii_shared::{
+        FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
+        uri as torii_uri,
+    };
     use std::{
         io::Write as _,
         net::{TcpListener, TcpStream},
@@ -1955,6 +1972,28 @@ mod tests {
                 )
             }
             ("GET", "/v1/node/capabilities") => MockResponse::text(404, "not advertised"),
+            ("POST", path) if path == torii_uri::FEES_QUOTE => {
+                let request = json::from_str::<FeeQuoteRequest>(&request.body)
+                    .expect("decode fee quote request");
+                let response = FeeQuoteResponse {
+                    intent: request.payload.fee_payment,
+                    observation: FeeQuoteObservation {
+                        ledger_time_ms: 1,
+                        next_block_height: 42,
+                        route_dataspace_id: None,
+                    },
+                    components: Vec::new(),
+                    capacities: Vec::new(),
+                    decision: FeeQuoteDecision::Accepted {
+                        debit_source: FeeDebitSource::Account(request.payload.authority),
+                        program_revision: None,
+                    },
+                };
+                MockResponse::json(
+                    200,
+                    json::to_value(&response).expect("encode fee quote response"),
+                )
+            }
             ("POST", path) if path == torii_uri::TRANSACTION => MockResponse::text(200, ""),
             ("GET", "/v1/pipeline/transactions/status") => {
                 let hash = Url::parse(&format!("http://localhost{}", request.path))
@@ -2223,17 +2262,22 @@ mod tests {
     #[test]
     fn write_canary_mock_success_returns_redacted_receipt() {
         let onboarding_token_file = test_onboarding_token_file();
-        let server = spawn_mock_http(9, |request| write_canary_mock_response(request, 202));
+        let server = spawn_mock_http(10, |request| write_canary_mock_response(request, 202));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
-            gas_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
+            faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
             onboarding_token_file: onboarding_token_file.path().to_path_buf(),
             write_config: None,
             use_config_signer: false,
             json: true,
         };
-        let report = run_write_canary(&crate::fallback_config(), &args).expect("write canary");
+        let report = run_write_canary(
+            &crate::fallback_config(),
+            &args,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("write canary");
         let requests = finish_mock(server);
         let rendered = compact_json(&report);
 
@@ -2244,6 +2288,8 @@ mod tests {
         assert!(!rendered.contains("private_key"));
         assert!(requests.iter().any(|request| request.method == "POST"
             && path_only(&request.path) == torii_uri::TRANSACTION));
+        assert!(requests.iter().any(|request| request.method == "POST"
+            && path_only(&request.path) == torii_uri::FEES_QUOTE));
         let onboarding = requests
             .iter()
             .find(|request| {
@@ -2384,13 +2430,18 @@ mod tests {
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
-            gas_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
+            faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
             onboarding_token_file: onboarding_token_file.path().to_path_buf(),
             write_config: None,
             use_config_signer: false,
             json: true,
         };
-        let report = run_write_canary(&crate::fallback_config(), &args).expect("write canary");
+        let report = run_write_canary(
+            &crate::fallback_config(),
+            &args,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("write canary");
         let requests = finish_mock(server);
         let failures = report
             .as_object()
@@ -2412,11 +2463,11 @@ mod tests {
     }
 
     #[test]
-    fn submit_failure_hints_cover_missing_gas_and_route_unavailable() {
-        let missing_gas = hint_submit_error(eyre!("missing gas_asset_id"), DEFAULT_GAS_ASSET_ID);
-        assert!(format!("{missing_gas:#}").contains("Taira requires transaction metadata"));
+    fn submit_failure_hints_cover_invalid_fee_intent_and_route_unavailable() {
+        let invalid_fee = hint_submit_error(eyre!("invalid fee_payment intent"));
+        assert!(format!("{invalid_fee:#}").contains("/v1/fees/quote"));
 
-        let route = hint_submit_error(eyre!("route_unavailable"), DEFAULT_GAS_ASSET_ID);
+        let route = hint_submit_error(eyre!("route_unavailable"));
         assert!(format!("{route:#}").contains("ingress or lane routing"));
     }
 
@@ -2444,14 +2495,6 @@ mod tests {
                 .expect("challenge");
         assert_eq!(challenge.len(), 32);
         assert_ne!(challenge, [0_u8; 32]);
-    }
-
-    #[test]
-    fn metadata_with_gas_asset_inserts_string_value() {
-        let metadata = metadata_with_gas_asset(DEFAULT_GAS_ASSET_ID).expect("metadata");
-        let key = Name::from_str("gas_asset_id").expect("key");
-        let rendered = metadata.get(&key).expect("gas asset").to_string();
-        assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
     }
 
     #[test]

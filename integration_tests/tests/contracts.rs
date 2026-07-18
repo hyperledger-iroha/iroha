@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
 
-use std::str::FromStr as _;
 use std::time::{Duration, Instant};
+use std::{num::NonZeroU64, str::FromStr as _};
 
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
@@ -479,10 +479,17 @@ pub(super) fn deploy_contract_locally_signed(
                 chunk_count,
             }));
         }
-        client.submit_all_blocking_with_metadata(instructions, metadata.clone())?;
+        client.submit_all_blocking_with_metadata(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            metadata.clone(),
+        )?;
     }
-    client
-        .submit_blocking_with_metadata(RegisterSmartContractCode { manifest }, metadata.clone())?;
+    client.submit_blocking_with_metadata(
+        RegisterSmartContractCode { manifest },
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    )?;
     client.submit_blocking_with_metadata(
         CommitContractDeployment {
             expected_deploy_nonce: deploy_nonce,
@@ -786,9 +793,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_direct",
                 Some(&payload),
                 None,
-                None,
-                None,
-                100_000,
+                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
             )
         }
     });
@@ -805,9 +810,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_via_helper",
                 Some(&payload),
                 None,
-                None,
-                None,
-                100_000,
+                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
             )
         }
     });
@@ -1296,8 +1299,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             norito::json::to_value("hajimari").expect("serialize entrypoint"),
         ),
         (
-            "gas_limit",
-            norito::json::to_value(&10_000u64).expect("serialize gas limit"),
+            "fee_payment",
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ))
+            .expect("serialize fee payment intent"),
         ),
     ])
     .expect("serialize hajimari body");
@@ -1369,8 +1376,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             norito::json::to_value("verify").expect("serialize entrypoint"),
         ),
         (
-            "gas_limit",
-            norito::json::to_value(&10_000u64).expect("serialize gas limit"),
+            "fee_payment",
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ))
+            .expect("serialize fee payment intent"),
         ),
     ])
     .expect("serialize verify body");

@@ -349,9 +349,11 @@ fn submit_or_tolerate_timeout(
     context: &str,
 ) -> Result<Option<()>> {
     let instruction = instruction.into();
-    let tx = clients
-        .current()
-        .build_transaction([instruction.clone()], Metadata::default());
+    let tx = clients.current().build_transaction(
+        [instruction.clone()],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     submit_tx_or_skip(clients, &tx, context)
 }
 
@@ -502,10 +504,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         decimal_definition.clone(),
     ] {
         let register_instruction: InstructionBox = Register::asset_definition(definition).into();
-        if let Err(err) = clients
-            .next()
-            .submit_blocking::<InstructionBox>(register_instruction)
-        {
+        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            register_instruction,
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             eprintln!(
                 "Skipping asset mint coverage: failed to register test asset definition: {err}"
             );
@@ -545,10 +547,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         asset_id.clone(),
     )
     .into();
-    if let Err(err) = clients
-        .next()
-        .submit_blocking::<InstructionBox>(mint_instruction)
-    {
+    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        mint_instruction,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("Skipping asset mint coverage: integer mint failed: {err}");
         return Ok(());
     }
@@ -566,10 +568,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         big_asset_id.clone(),
     )
     .into();
-    if let Err(err) = clients
-        .next()
-        .submit_blocking::<InstructionBox>(mint_instruction)
-    {
+    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        mint_instruction,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("Skipping asset mint coverage: large integer mint failed: {err}");
         return Ok(());
     }
@@ -592,10 +594,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         decimal_asset_id.clone(),
     )
     .into();
-    if let Err(err) = clients
-        .next()
-        .submit_blocking::<InstructionBox>(mint_instruction)
-    {
+    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        mint_instruction,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("Skipping asset mint coverage: decimal mint failed: {err}");
         return Ok(());
     }
@@ -621,7 +623,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let sum = decimal_quantity
         .checked_add(quantity2)
         .ok_or_else(|| eyre::eyre!("overflow"))?;
-    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(mint) {
+    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        mint,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("Skipping asset mint coverage: fractional mint failed: {err}");
         return Ok(());
     }
@@ -688,10 +693,10 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                     .with_name(definition.name().to_string()),
             )
             .into();
-            if let Err(err) = clients
-                .next()
-                .submit_blocking::<InstructionBox>(register_instruction)
-            {
+            if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+                register_instruction,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ) {
                 eprintln!(
                     "Skipping exchange asset coverage: failed to register test asset definition: {err}"
                 );
@@ -704,9 +709,11 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
             Mint::asset_quantity(200_u32, buyer_eth.clone()).into(),
         ];
-        let seed_tx = clients
-            .current()
-            .build_transaction(seed_instructions, Metadata::default());
+        let seed_tx = clients.current().build_transaction(
+            seed_instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
         if submit_tx_or_skip(&mut clients, &seed_tx, "seed exchange balances")?.is_none() {
             return Ok(());
         }
@@ -731,40 +738,42 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
 
         let alice_id = ALICE_ID.clone();
         {
-            let mut alice_can_transfer_asset =
-                |asset_id: AssetId, owner_key_pair: KeyPair| -> Result<()> {
-                    let permission = CanTransferAsset {
-                        asset: asset_id.clone(),
-                    };
-                    let instruction = Grant::account_permission(permission, alice_id.clone());
-                    let transaction = TransactionBuilder::new(
-                        ChainId::from("00000000-0000-0000-0000-000000000000"),
-                        asset_id.account().clone(),
-                    )
-                    .with_instructions([instruction])
-                    .sign(owner_key_pair.private_key());
-
-                    if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
-                        .is_none()
-                    {
-                        return Ok(());
-                    }
-                    status = match status_or_skip(
-                        sync_after_submission(
-                            &network,
-                            &rt,
-                            clients.next(),
-                            last_non_empty_height,
-                            "grant transfer permission",
-                        ),
-                        "grant transfer permission",
-                    )? {
-                        Some(status) => status,
-                        None => return Ok(()),
-                    };
-                    last_non_empty_height = status.blocks_non_empty;
-                    Ok::<(), eyre::Report>(())
+            let mut alice_can_transfer_asset = |asset_id: AssetId,
+                                                owner_key_pair: KeyPair|
+             -> Result<()> {
+                let permission = CanTransferAsset {
+                    asset: asset_id.clone(),
                 };
+                let instruction = Grant::account_permission(permission, alice_id.clone());
+                let transaction = TransactionBuilder::new(
+                    ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    asset_id.account().clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([instruction])
+                .sign(owner_key_pair.private_key());
+
+                if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
+                    .is_none()
+                {
+                    return Ok(());
+                }
+                status = match status_or_skip(
+                    sync_after_submission(
+                        &network,
+                        &rt,
+                        clients.next(),
+                        last_non_empty_height,
+                        "grant transfer permission",
+                    ),
+                    "grant transfer permission",
+                )? {
+                    Some(status) => status,
+                    None => return Ok(()),
+                };
+                last_non_empty_height = status.blocks_non_empty;
+                Ok::<(), eyre::Report>(())
+            };
             alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
             alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
         }
@@ -776,9 +785,11 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Transfer::asset_quantity(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_quantity(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx = clients
-            .current()
-            .build_transaction(transfer_instructions, Metadata::default());
+        let transfer_tx = clients.current().build_transaction(
+            transfer_instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
         if submit_tx_or_skip(&mut clients, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
@@ -853,10 +864,10 @@ fn transfer_asset_definition() -> Result<()> {
             .with_name(asset_definition_id.name().to_string()),
     )
     .into();
-    if let Err(err) = clients
-        .next()
-        .submit_blocking::<InstructionBox>(register_instruction)
-    {
+    if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+        register_instruction,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!(
             "Skipping transfer asset-definition coverage: failed to register test asset definition: {err}"
         );
@@ -939,10 +950,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         let register_instruction: InstructionBox =
             Register::asset_definition(asset_definition.clone()).into();
-        if let Err(err) = clients
-            .next()
-            .submit_blocking::<InstructionBox>(register_instruction)
-        {
+        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            register_instruction,
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             eprintln!(
                 "Skipping integer-only asset spec coverage: failed to register test asset definition: {err}"
             );
@@ -983,7 +994,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let dest_asset_id = AssetId::new(asset_definition_id.clone(), dest_id.clone());
         for op in isi(fractional_value) {
             let client = clients.next();
-            match client.submit_blocking::<InstructionBox>(op) {
+            match client.submit_blocking::<InstructionBox>(
+                op,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ) {
                 Ok(_) => panic!("Should be rejected due to non integer value"),
                 Err(err) => {
                     if let Some(reason) = sandbox::sandbox_reason(&eyre!(err.to_string())) {
@@ -1018,10 +1032,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         let mint_instruction: InstructionBox =
             Mint::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients
-            .next()
-            .submit_blocking::<InstructionBox>(mint_instruction)
-        {
+        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            mint_instruction,
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             eprintln!("Skipping integer-only asset spec coverage: integer mint failed: {err}");
             return Ok(());
         }
@@ -1034,10 +1048,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         let burn_instruction: InstructionBox =
             Burn::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients
-            .next()
-            .submit_blocking::<InstructionBox>(burn_instruction)
-        {
+        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            burn_instruction,
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             eprintln!("Skipping integer-only asset spec coverage: integer burn failed: {err}");
             return Ok(());
         }
@@ -1045,10 +1059,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         let transfer_instruction: InstructionBox =
             Transfer::asset_quantity(asset_id.clone(), integer_quantity, dest_id.clone()).into();
-        if let Err(err) = clients
-            .next()
-            .submit_blocking::<InstructionBox>(transfer_instruction)
-        {
+        if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
+            transfer_instruction,
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             eprintln!("Skipping integer-only asset spec coverage: integer transfer failed: {err}");
             return Ok(());
         }

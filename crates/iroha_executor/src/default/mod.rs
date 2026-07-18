@@ -55,6 +55,13 @@ use iroha_smart_contract::data_model::{
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
+        nexus::{
+            ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
+            CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+            PauseFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
+            RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
+            UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
+        },
         offline::{
             ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
             RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
@@ -935,6 +942,44 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetLaneRelayEmergencyValidators>() {
             nexus::visit_set_lane_relay_emergency_validators(executor, isi);
             return;
+        }
+        // Core performs the consensus-critical proof, lifecycle, immutable-revision, vault,
+        // and exact delegated-permission checks for the typed fee-program surface.
+        if let Some(isi) = any.downcast_ref::<RegisterVerifiedLaneRelay>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterVerifiedFeeSponsorVaultAllocation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CreateFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<StageFeeSponsorProgramRevision>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateFeeSponsorProgramRevision>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<PauseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<BeginCloseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CloseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<EnrollFeeSponsorBeneficiary>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<UnenrollFeeSponsorBeneficiary>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<FundFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<WithdrawFeeSponsorProgram>() {
+            execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<TransferBox>() {
             executor.visit_transfer(isi);
@@ -2383,14 +2428,9 @@ pub mod domain {
             AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(permission) => {
                 &permission.domain == domain_id
             }
-            AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(permission) => {
-                &permission.domain == domain_id
-            }
-            AnyPermission::CanUseFeeSponsorForAccount(permission) => {
-                &permission.domain == domain_id
-            }
-            AnyPermission::CanUseFeeSponsor(_)
-            | AnyPermission::CanManageFeeSponsorPolicy(_)
+            AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
@@ -2681,15 +2721,14 @@ pub mod account {
             AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
                 permission.account == *account_id
             }
-            AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
-            AnyPermission::CanUseFeeSponsorForAccount(permission) => {
-                permission.sponsor == *account_id || permission.beneficiary == *account_id
-            }
-            AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(permission) => {
+            AnyPermission::CanManageFeeSponsorProgram(permission) => {
                 permission.sponsor == *account_id
             }
-            AnyPermission::CanManageFeeSponsorPolicy(permission) => {
-                permission.sponsor == *account_id
+            AnyPermission::CanEnrollFeeSponsorProgram(permission) => {
+                permission.program_id.sponsor == *account_id
+            }
+            AnyPermission::CanWithdrawFeeSponsorProgram(permission) => {
+                permission.program_id.sponsor == *account_id
             }
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
@@ -3064,10 +3103,9 @@ pub mod asset_definition {
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
-            | AnyPermission::CanUseFeeSponsor(_)
-            | AnyPermission::CanUseFeeSponsorForAccount(_)
-            | AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(_)
-            | AnyPermission::CanManageFeeSponsorPolicy(_) => false,
+            | AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
         }
     }
 }
@@ -3985,15 +4023,6 @@ pub mod role {
             let any_permission = AnyPermission::try_from(permission).map_err(|_| {
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             })?;
-            if matches!(
-                &any_permission,
-                AnyPermission::CanUseFeeSponsorForAccount(_)
-            ) {
-                return Err(ValidationFail::NotPermitted(
-                    "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
-                        .to_owned(),
-                ));
-            }
             match operation {
                 RoleDelegationOperation::Grant => {
                     crate::permission::ValidateGrantRevoke::validate_grant(
@@ -4056,15 +4085,6 @@ pub mod role {
             let permission = $isi.object();
 
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
-                if matches!(
-                    &any_permission,
-                    AnyPermission::CanUseFeeSponsorForAccount(_)
-                ) {
-                    deny!(
-                        $executor,
-                        "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
-                    );
-                }
                 if !$executor.context().curr_block.is_genesis() {
                     if !find_account_roles($executor.context().authority.clone(), $executor.host())
                         .any(|authority_role_id| authority_role_id == role_id)
@@ -4123,15 +4143,6 @@ pub mod role {
             let any_permission = AnyPermission::try_from(permission).map_err(|_| {
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             })?;
-            if matches!(
-                &any_permission,
-                AnyPermission::CanUseFeeSponsorForAccount(_)
-            ) {
-                return Err(ValidationFail::NotPermitted(
-                    "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
-                        .to_owned(),
-                ));
-            }
             if !context.curr_block.is_genesis() {
                 crate::permission::ValidateGrantRevoke::validate_grant(
                     &any_permission,
@@ -4556,10 +4567,9 @@ pub mod trigger {
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
-            | AnyPermission::CanUseFeeSponsor(_)
-            | AnyPermission::CanUseFeeSponsorForAccount(_)
-            | AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(_)
-            | AnyPermission::CanManageFeeSponsorPolicy(_) => false,
+            | AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
         }
     }
 
@@ -4575,9 +4585,8 @@ pub mod trigger {
             },
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::{
-                CanEnrollFeeSponsorPolicyForAccountDomain,
-                CanPublishSpaceDirectoryManifestForAccountDomain, CanUseFeeSponsor,
-                CanUseFeeSponsorForAccount,
+                CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
+                CanPublishSpaceDirectoryManifestForAccountDomain, CanWithdrawFeeSponsorProgram,
             },
             sccp::CanManageSccpGovernance,
             sorafs::{
@@ -4597,7 +4606,7 @@ pub mod trigger {
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
             domain::DomainId,
-            name::Name,
+            nexus::FeeSponsorProgramId,
         };
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -4733,48 +4742,61 @@ pub mod trigger {
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
 
-            let permission = Permission::from(AnyPermission::CanUseFeeSponsor(CanUseFeeSponsor {
-                sponsor: sponsor.clone(),
-                policy: "default".parse().expect("fee sponsor policy name is valid"),
-            }));
+            let program_id = FeeSponsorProgramId::new(
+                sponsor.clone(),
+                "default"
+                    .parse()
+                    .expect("fee sponsor program name is valid"),
+            );
+            let permissions = [
+                Permission::from(AnyPermission::CanManageFeeSponsorProgram(
+                    CanManageFeeSponsorProgram {
+                        sponsor: sponsor.clone(),
+                    },
+                )),
+                Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
+                    CanEnrollFeeSponsorProgram {
+                        program_id: program_id.clone(),
+                    },
+                )),
+                Permission::from(AnyPermission::CanWithdrawFeeSponsorProgram(
+                    CanWithdrawFeeSponsorProgram { program_id },
+                )),
+            ];
 
-            assert!(
-                !domain::is_permission_domain_associated(&permission, &domain_id),
-                "fee sponsor permission should not bind to domains"
-            );
-            assert!(
-                !domain::is_permission_domain_associated(&permission, &other_domain),
-                "fee sponsor permission should not bind to unrelated domains"
-            );
-            assert!(
-                account::is_permission_account_associated(&permission, &sponsor),
-                "fee sponsor permission should bind to sponsor account"
-            );
-            assert!(
-                !account::is_permission_account_associated(&permission, &other_account),
-                "fee sponsor permission should not bind to unrelated accounts"
-            );
-            assert!(
-                !asset_definition::is_permission_asset_definition_associated(
+            for permission in permissions {
+                assert!(!domain::is_permission_domain_associated(
                     &permission,
-                    &asset_definition_id
-                ),
-                "fee sponsor permission should not bind to asset definitions"
-            );
-            assert!(
-                !is_permission_trigger_associated(&permission, &trigger_id),
-                "fee sponsor permission should not bind to triggers"
-            );
+                    &domain_id
+                ));
+                assert!(!domain::is_permission_domain_associated(
+                    &permission,
+                    &other_domain
+                ));
+                assert!(account::is_permission_account_associated(
+                    &permission,
+                    &sponsor
+                ));
+                assert!(!account::is_permission_account_associated(
+                    &permission,
+                    &other_account
+                ));
+                assert!(
+                    !asset_definition::is_permission_asset_definition_associated(
+                        &permission,
+                        &asset_definition_id
+                    )
+                );
+                assert!(!is_permission_trigger_associated(&permission, &trigger_id));
+            }
         }
 
         #[test]
-        fn scoped_cbdc_permission_associations_are_exact() {
+        fn account_domain_manifest_and_program_associations_remain_independent() {
             let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL domain must be valid");
             let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL domain must be valid");
             let sponsor = sample_account_id(0x31, &hbl_domain);
-            let beneficiary = sample_account_id(0x32, &hbl_domain);
             let unrelated = sample_account_id(0x33, &ubl_domain);
-            let policy: Name = "retail".parse().expect("retail sponsor policy");
 
             let publisher = Permission::from(
                 AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(
@@ -4793,15 +4815,15 @@ pub mod trigger {
                 &ubl_domain
             ));
 
-            let enrollment =
-                Permission::from(AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(
-                    CanEnrollFeeSponsorPolicyForAccountDomain {
-                        sponsor: sponsor.clone(),
-                        policy: policy.clone(),
-                        domain: hbl_domain.clone(),
-                    },
-                ));
-            assert!(domain::is_permission_domain_associated(
+            let enrollment = Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
+                CanEnrollFeeSponsorProgram {
+                    program_id: FeeSponsorProgramId::new(
+                        sponsor.clone(),
+                        "retail".parse().expect("retail sponsor program"),
+                    ),
+                },
+            ));
+            assert!(!domain::is_permission_domain_associated(
                 &enrollment,
                 &hbl_domain
             ));
@@ -4811,34 +4833,7 @@ pub mod trigger {
             ));
             assert!(!account::is_permission_account_associated(
                 &enrollment,
-                &beneficiary
-            ));
-
-            let exact_use = Permission::from(AnyPermission::CanUseFeeSponsorForAccount(
-                CanUseFeeSponsorForAccount {
-                    sponsor: sponsor.clone(),
-                    policy,
-                    beneficiary: beneficiary.clone(),
-                    domain: hbl_domain.clone(),
-                },
-            ));
-            assert!(domain::is_permission_domain_associated(
-                &exact_use,
-                &hbl_domain
-            ));
-            assert!(!domain::is_permission_domain_associated(
-                &exact_use,
-                &ubl_domain
-            ));
-            assert!(account::is_permission_account_associated(
-                &exact_use, &sponsor
-            ));
-            assert!(account::is_permission_account_associated(
-                &exact_use,
-                &beneficiary
-            ));
-            assert!(!account::is_permission_account_associated(
-                &exact_use, &unrelated
+                &unrelated
             ));
         }
 
@@ -5739,14 +5734,6 @@ pub mod permission {
             let permission = $isi.object();
 
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
-                if let AnyPermission::CanUseFeeSponsorForAccount(token) = &any_permission
-                    && token.beneficiary != account_id
-                {
-                    deny!(
-                        $executor,
-                        "CanUseFeeSponsorForAccount may only be granted to or revoked from its exact beneficiary"
-                    );
-                }
                 if !$executor.context().curr_block.is_genesis() {
                     if let Err(error) = crate::permission::ValidateGrantRevoke::$method(
                         &any_permission,
@@ -5793,15 +5780,13 @@ mod governed_offline_permission_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
+        nexus::FeeSponsorProgramId,
         permission::Permission as PermissionObject,
-        prelude::{
-            AccountId, DomainId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail,
-        },
+        prelude::{AccountId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail},
     };
     use iroha_executor_data_model::permission::{
         nexus::{
-            CanEnrollFeeSponsorPolicyForAccountDomain, CanManageFeeSponsorPolicy, CanUseFeeSponsor,
-            CanUseFeeSponsorForAccount,
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
         },
         offline::{
             CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
@@ -5999,27 +5984,21 @@ mod governed_offline_permission_tests {
         let sponsor = account(45);
         let outsider = account(46);
         let context = TestExecutor::post_genesis(outsider.clone());
-        let domain = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let program_id = FeeSponsorProgramId::new(
+            sponsor.clone(),
+            "retail".parse().expect("retail program name"),
+        );
         let permissions = [
-            PermissionObject::from(CanUseFeeSponsor {
-                sponsor: sponsor.clone(),
-                policy: "retail".parse().expect("retail policy"),
-            }),
-            PermissionObject::from(CanEnrollFeeSponsorPolicyForAccountDomain {
-                sponsor: sponsor.clone(),
-                policy: "retail".parse().expect("retail policy"),
-                domain,
-            }),
-            PermissionObject::from(CanManageFeeSponsorPolicy {
+            PermissionObject::from(CanManageFeeSponsorProgram {
                 sponsor: sponsor.clone(),
             }),
-            PermissionObject::from(CanUseFeeSponsorForAccount {
-                sponsor: sponsor.clone(),
-                policy: "retail".parse().expect("retail policy"),
-                beneficiary: outsider.clone(),
-                domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+            PermissionObject::from(CanEnrollFeeSponsorProgram {
+                program_id: program_id.clone(),
             }),
+            PermissionObject::from(CanWithdrawFeeSponsorProgram { program_id }),
         ];
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(CanSetParameters)]);
 
         for (index, permission) in permissions.into_iter().enumerate() {
             let role = role_with_permissions(
@@ -6042,6 +6021,7 @@ mod governed_offline_permission_tests {
                 assert!(matches!(error, ValidationFail::NotPermitted(_)));
             }
         }
+        test_override::replace_permissions(previous);
     }
 
     #[test]
@@ -6107,10 +6087,7 @@ mod governed_offline_permission_tests {
                 .expect("role id"),
             sponsor.clone(),
         )
-        .add_permission(CanUseFeeSponsor {
-            sponsor,
-            policy: "retail".parse().expect("retail policy"),
-        });
+        .add_permission(CanManageFeeSponsorProgram { sponsor });
         let registration = Register::role(role);
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanManageRoles)]);

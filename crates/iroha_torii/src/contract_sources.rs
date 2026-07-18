@@ -1476,7 +1476,11 @@ mod tests {
         let chain: dm::ChainId = "test-chain".parse().expect("chain");
         let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
-        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        let mut builder = dm::TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
         let signed = builder
             .with_instructions(instructions)

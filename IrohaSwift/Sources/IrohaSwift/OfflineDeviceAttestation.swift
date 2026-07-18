@@ -636,6 +636,7 @@ public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public let chainId: String
     public let authority: String
     public let registration: KagemushaDeviceAttestationRegistration
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
@@ -643,12 +644,14 @@ public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public init(chainId: String,
                 authority: String,
                 registration: KagemushaDeviceAttestationRegistration,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.registration = registration
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
         self.nonce = nonce
         self.metadata = metadata
@@ -1440,6 +1443,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: request.ttlMs,
             nonce: request.nonce,
+            feePayment: request.feePayment,
             instructionPayload: instruction,
             metadata: request.metadata
         )
@@ -1473,6 +1477,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         nonce: UInt32?,
+        feePayment: FeePaymentIntent,
         instructionPayload: Data,
         metadata: [String: ToriiJSONValue]
     ) throws -> Data {
@@ -1483,6 +1488,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         payload.writeField(encodeExecutable(instructionPayload))
         payload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
         payload.writeField(try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32))
+        payload.writeField(try feePayment.canonicalNorito())
         payload.writeField(try CanonicalNorito.encodeMetadata(metadata))
         return payload.data
     }

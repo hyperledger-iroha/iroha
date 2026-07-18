@@ -32,13 +32,13 @@ fn publish_and_expire(client: &Client) -> Result<()> {
 
     client.submit_all([InstructionBox::from(PublishSpaceDirectoryManifest {
         manifest: manifest.clone(),
-    })])?;
+    })], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))?;
 
     client.submit_all([InstructionBox::from(ExpireSpaceDirectoryManifest {
         uaid: manifest.uaid,
         dataspace: manifest.dataspace,
         expired_epoch: manifest.expiry_epoch.expect("expiry_epoch set"),
-    })])?;
+    })], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))?;
     Ok(())
 }
 

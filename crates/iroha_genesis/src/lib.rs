@@ -540,10 +540,19 @@ pub mod genesis_instructions_json {
         isi::{
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
-            Transfer, TransferBox, domain_link::SetAccountAliasBinding, register::RegisterBox,
+            Transfer, TransferBox,
+            domain_link::SetAccountAliasBinding,
+            nexus::{
+                ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+                EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
+            },
+            register::RegisterBox,
         },
         metadata::Metadata,
-        nexus::{LaneId, UniversalAccountId},
+        nexus::{
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
+            UniversalAccountId,
+        },
         parameter::Parameter,
         permission::Permission,
         prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
@@ -656,6 +665,21 @@ pub mod genesis_instructions_json {
                             }
                             "ActivatePublicLaneValidator" => {
                                 try_decode_activate_public_lane_validator(inner.clone())?
+                            }
+                            "CreateFeeSponsorProgram" => {
+                                try_decode_create_fee_sponsor_program(inner.clone())?
+                            }
+                            "StageFeeSponsorProgramRevision" => {
+                                try_decode_stage_fee_sponsor_program_revision(inner.clone())?
+                            }
+                            "EnrollFeeSponsorBeneficiary" => {
+                                try_decode_enroll_fee_sponsor_beneficiary(inner.clone())?
+                            }
+                            "FundFeeSponsorProgram" => {
+                                try_decode_fund_fee_sponsor_program(inner.clone())?
+                            }
+                            "ActivateFeeSponsorProgramRevision" => {
+                                try_decode_activate_fee_sponsor_program_revision(inner.clone())?
                             }
                             _ => None,
                         };
@@ -1105,6 +1129,119 @@ pub mod genesis_instructions_json {
         Ok(Some(InstructionBox::from(activate)))
     }
 
+    fn object_fields(
+        inner: Value,
+        instruction: &str,
+    ) -> Result<BTreeMap<String, Value>, json::Error> {
+        match inner {
+            Value::Object(fields) => Ok(fields),
+            other => Err(json::Error::Message(format!(
+                "expected object for {instruction} fields, found {other:?}"
+            ))),
+        }
+    }
+
+    fn take_typed<T>(
+        fields: &mut BTreeMap<String, Value>,
+        field: &'static str,
+    ) -> Result<T, json::Error>
+    where
+        T: norito::json::JsonDeserialize,
+    {
+        norito::json::value::from_value(
+            fields
+                .remove(field)
+                .ok_or_else(|| json::Error::missing_field(field))?,
+        )
+    }
+
+    fn try_decode_create_fee_sponsor_program(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "CreateFeeSponsorProgram")?;
+        let program = take_typed::<FeeSponsorProgram>(&mut fields, "program")?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(CreateFeeSponsorProgram {
+            program,
+        })))
+    }
+
+    fn try_decode_stage_fee_sponsor_program_revision(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "StageFeeSponsorProgramRevision")?;
+        let revision = take_typed::<FeeSponsorProgramRevision>(&mut fields, "revision")?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(StageFeeSponsorProgramRevision {
+            revision,
+        })))
+    }
+
+    fn try_decode_enroll_fee_sponsor_beneficiary(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "EnrollFeeSponsorBeneficiary")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let beneficiary = parse_account_id(
+            &take_string(&mut fields, "beneficiary")?,
+            "fee sponsor beneficiary",
+        )?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(EnrollFeeSponsorBeneficiary {
+            program_id,
+            beneficiary,
+        })))
+    }
+
+    fn try_decode_fund_fee_sponsor_program(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "FundFeeSponsorProgram")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let asset_definition_id =
+            AssetDefinitionId::from_str(&take_string(&mut fields, "asset_definition_id")?)
+                .map_err(|error| json::Error::Message(format!("invalid sponsor asset: {error}")))?;
+        let amount = Quantity::try_from_numeric(parse_numeric(
+            fields
+                .remove("amount")
+                .ok_or_else(|| json::Error::missing_field("amount"))?,
+        )?)
+        .map_err(|error| json::Error::Message(format!("invalid sponsor amount: {error}")))?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(FundFeeSponsorProgram {
+            program_id,
+            asset_definition_id,
+            amount,
+        })))
+    }
+
+    fn try_decode_activate_fee_sponsor_program_revision(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "ActivateFeeSponsorProgramRevision")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let revision = parse_u64(
+            fields
+                .remove("revision")
+                .ok_or_else(|| json::Error::missing_field("revision"))?,
+            "fee sponsor revision",
+        )?;
+        let activate_at_height = parse_u64(
+            fields
+                .remove("activate_at_height")
+                .ok_or_else(|| json::Error::missing_field("activate_at_height"))?,
+            "fee sponsor activation height",
+        )?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(
+            ActivateFeeSponsorProgramRevision {
+                program_id,
+                revision,
+                activate_at_height,
+            },
+        )))
+    }
+
     fn take_string(
         fields: &mut BTreeMap<String, Value>,
         field: &'static str,
@@ -1173,6 +1310,20 @@ pub mod genesis_instructions_json {
             Value::Number(Number::I64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
+            other => Err(json::Error::Message(format!(
+                "expected numeric {label} value, found {other:?}"
+            ))),
+        }
+    }
+
+    fn parse_u64(value: Value, label: &'static str) -> Result<u64, json::Error> {
+        match value {
+            Value::String(s) => s
+                .parse::<u64>()
+                .map_err(|err| json::Error::Message(format!("invalid {label}: {err}"))),
+            Value::Number(Number::U64(value)) => Ok(value),
+            Value::Number(Number::I64(value)) => u64::try_from(value)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             other => Err(json::Error::Message(format!(
                 "expected numeric {label} value, found {other:?}"
             ))),
@@ -1484,6 +1635,102 @@ pub mod genesis_instructions_json {
             return Some(Value::Object(outer));
         }
 
+        if let Some(create) = instruction
+            .as_any()
+            .downcast_ref::<CreateFeeSponsorProgram>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program".to_owned(),
+                norito::json::value::to_value(create.program()).ok()?,
+            );
+            let mut outer = Map::new();
+            outer.insert("CreateFeeSponsorProgram".to_owned(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(stage) = instruction
+            .as_any()
+            .downcast_ref::<StageFeeSponsorProgramRevision>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "revision".to_owned(),
+                norito::json::value::to_value(stage.revision()).ok()?,
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "StageFeeSponsorProgramRevision".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(enroll) = instruction
+            .as_any()
+            .downcast_ref::<EnrollFeeSponsorBeneficiary>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(enroll.program_id()).ok()?,
+            );
+            fields.insert(
+                "beneficiary".to_owned(),
+                Value::String(account_literal(enroll.beneficiary())?),
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "EnrollFeeSponsorBeneficiary".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(fund) = instruction.as_any().downcast_ref::<FundFeeSponsorProgram>() {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(fund.program_id()).ok()?,
+            );
+            fields.insert(
+                "asset_definition_id".to_owned(),
+                Value::String(fund.asset_definition_id().canonical_address()),
+            );
+            fields.insert(
+                "amount".to_owned(),
+                Value::String(fund.amount().to_string()),
+            );
+            let mut outer = Map::new();
+            outer.insert("FundFeeSponsorProgram".to_owned(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(activate) = instruction
+            .as_any()
+            .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(activate.program_id()).ok()?,
+            );
+            fields.insert(
+                "revision".to_owned(),
+                Value::Number(Number::U64(*activate.revision())),
+            );
+            fields.insert(
+                "activate_at_height".to_owned(),
+                Value::Number(Number::U64(*activate.activate_at_height())),
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "ActivateFeeSponsorProgramRevision".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
         None
     }
 
@@ -1531,11 +1778,21 @@ pub mod genesis_instructions_json {
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                nexus::{
+                    ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+                    EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+                    StageFeeSponsorProgramRevision,
+                },
                 staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
             },
             level::Level,
             metadata::Metadata,
-            nexus::{DataSpaceId, LaneId},
+            nexus::{
+                DataSpaceId, FeeSponsorAssetBudget, FeeSponsorEligibility,
+                FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
+                FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
+                FeeSponsorRuleSelector, LaneId,
+            },
             parameter::{Parameter, TransactionParameter},
             permission::Permission,
             prelude::{
@@ -1574,6 +1831,94 @@ pub mod genesis_instructions_json {
             let parsed = norito::json::from_str::<Value>(&out).expect("parse serialized JSON");
             let array = parsed.as_array().expect("instructions array");
             assert!(array.first().unwrap().is_object());
+        }
+
+        #[test]
+        fn fee_sponsor_lifecycle_uses_structured_genesis_json() {
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "default".parse().expect("program name"),
+            );
+            let fee_asset_id = AssetDefinitionId::new(
+                DomainId::try_new("universal", "universal").expect("domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let revision = FeeSponsorProgramRevision {
+                program_id: program_id.clone(),
+                revision: 1,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![FeeSponsorRule {
+                    id: "onboarding".parse().expect("rule name"),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![FeeSponsorRuleSelector::NativeInstruction(
+                        FeeSponsorNativeInstructionSelector {
+                            wire_id: RegisterBox::WIRE_ID.to_owned(),
+                            asset_definition_id: None,
+                        },
+                    )],
+                }],
+                asset_budgets: vec![FeeSponsorAssetBudget {
+                    asset_definition_id: fee_asset_id.clone(),
+                    per_transaction: Quantity::from(10_u64),
+                    per_block: Quantity::from(100_u64),
+                    per_program_epoch: Quantity::from(1_000_u64),
+                    per_beneficiary_epoch: Quantity::from(100_u64),
+                    reserve_floor: Quantity::from(10_u64),
+                    epoch_length_blocks: NonZeroU64::new(100).expect("non-zero"),
+                }],
+            };
+            let instructions = vec![
+                InstructionBox::from(CreateFeeSponsorProgram {
+                    program: FeeSponsorProgram::new(program_id.clone()),
+                }),
+                InstructionBox::from(StageFeeSponsorProgramRevision { revision }),
+                InstructionBox::from(EnrollFeeSponsorBeneficiary {
+                    program_id: program_id.clone(),
+                    beneficiary: ALICE_ID.clone(),
+                }),
+                InstructionBox::from(FundFeeSponsorProgram {
+                    program_id: program_id.clone(),
+                    asset_definition_id: fee_asset_id,
+                    amount: Quantity::from(1_000_u64),
+                }),
+                InstructionBox::from(ActivateFeeSponsorProgramRevision {
+                    program_id,
+                    revision: 1,
+                    activate_at_height: 1,
+                }),
+            ];
+
+            let value = instructions_to_value(&instructions);
+            let array = value.as_array().expect("instruction array");
+            for (value, expected_key) in array.iter().zip([
+                "CreateFeeSponsorProgram",
+                "StageFeeSponsorProgramRevision",
+                "EnrollFeeSponsorBeneficiary",
+                "FundFeeSponsorProgram",
+                "ActivateFeeSponsorProgramRevision",
+            ]) {
+                assert!(
+                    value
+                        .as_object()
+                        .is_some_and(|object| object.contains_key(expected_key)),
+                    "missing structured {expected_key}: {value:?}"
+                );
+            }
+
+            let decoded = from_value(&value).expect("decode structured fee sponsor lifecycle");
+            assert_eq!(decoded.len(), instructions.len());
+            assert!(
+                decoded[0]
+                    .as_any()
+                    .downcast_ref::<CreateFeeSponsorProgram>()
+                    .is_some()
+            );
+            assert!(
+                decoded[4]
+                    .as_any()
+                    .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+                    .is_some()
+            );
         }
 
         #[test]
@@ -4629,8 +4974,12 @@ impl RawGenesisTransaction {
                     encoded.len()
                 );
             }
-            let mut builder = TransactionBuilder::new(chain.clone(), genesis_account.clone())
-                .with_instructions(instructions);
+            let mut builder = TransactionBuilder::new(
+                chain.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(instructions);
             builder.set_creation_time(Duration::from_millis(
                 genesis_creation_base_ms.saturating_add(
                     u64::try_from(tx_index).expect("too many genesis transactions"),

@@ -165,7 +165,7 @@ applications do not need to duplicate Torii pagination, compatibility retries,
 or account-asset matching logic:
 
 ```python
-from iroha_python import ToriiClient
+from iroha_python import ToriiClient, authority_fee_payment
 
 client = ToriiClient("https://taira.sora.org")
 
@@ -196,7 +196,12 @@ call = client.call_contract_and_wait(
     contract_alias="boi-lock::is",
     entrypoint="create_lock",
     payload={"amount": "10"},
-    gas_limit=1_500_000,
+    fee_payment=authority_fee_payment(
+        # The app endpoint quotes this exact draft and replaces only the
+        # charge maxima before signing.
+        charge_limits=[],
+        gas_limit=1_500_000,
+    ),
 )
 
 policy = client.get_sns_policy(2)
@@ -239,12 +244,15 @@ client.update_zk_verifying_key({
 ```
 
 ZK-capable assets can be registered and moved through the same transaction
-draft helpers, without shelling out to JavaScript tooling:
+draft helpers, without shelling out to JavaScript tooling. Each
+`*_fee_payment` below is the recommended intent returned by `/v1/fees/quote`
+for that exact unsigned payload:
 
 ```python
 client.register_zk_asset_and_wait(
     chain_id="local",
     authority="<asset-owner>",
+    fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     vk_transfer="halo2/ipa:vk_transfer",
@@ -254,6 +262,7 @@ client.register_zk_asset_and_wait(
 client.shield_asset_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=shield_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     from_account_id="<payer>",
@@ -273,6 +282,7 @@ prepared_proof = {
 client.zk_transfer_prepared_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     inputs=["aa" * 32],
@@ -284,6 +294,7 @@ client.zk_transfer_prepared_and_wait(
 client.unshield_prepared_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=unshield_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     to_account_id="<recipient>",
@@ -347,7 +358,9 @@ client.revoke_dataspace_manifest(
 ```
 
 For dataspace-scoped balances, build the concrete asset bucket with
-`compose_asset_id` and submit mutations through the SDK transaction helpers:
+`compose_asset_id` and submit mutations through the SDK transaction helpers.
+`mint_fee_payment` and `transfer_fee_payment` are recommended intents quoted
+for their respective exact unsigned payloads:
 
 ```python
 asset_id = client.compose_asset_id(
@@ -359,6 +372,7 @@ asset_id = client.compose_asset_id(
 client.mint_asset_and_wait(
     chain_id="local",
     authority="<asset-owner>",
+    fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_id=asset_id,
     quantity="100",
@@ -367,6 +381,7 @@ client.mint_asset_and_wait(
 client.transfer_assets_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
     transfers=[
         {
@@ -393,10 +408,16 @@ register/merge, lifecycle controls, and per-lot metadata updates.
 ```python
 from decimal import Decimal
 
-from iroha_python import TransactionConfig, TransactionDraft
+from iroha_python import TransactionConfig, TransactionDraft, authority_fee_payment
 
 draft = TransactionDraft(
-    TransactionConfig(chain_id="local", authority="<canonical_i105_account_id>")
+    TransactionConfig(
+        chain_id="local",
+        authority="<canonical_i105_account_id>",
+        # The payer and gas bound are fixed before quoting; Torii supplies the
+        # exact charge maxima for this payload.
+        fee_payment=authority_fee_payment(charge_limits=[]),
+    )
 )
 
 draft.register_rwa(
@@ -825,9 +846,19 @@ returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:
 
 ```python
-from iroha_python import TransactionConfig, TransactionDraft, Ed25519KeyPair
+from iroha_python import (
+    Ed25519KeyPair,
+    TransactionConfig,
+    TransactionDraft,
+    authority_fee_payment,
+)
 
-config = TransactionConfig(chain_id="dev-chain", authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", ttl_ms=120_000)
+config = TransactionConfig(
+    chain_id="dev-chain",
+    authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+    fee_payment=authority_fee_payment(charge_limits=[]),
+    ttl_ms=120_000,
+)
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
@@ -841,11 +872,44 @@ draft.register_domain("wonderland") \
      .mint_asset_quantity("norito:<asset-id-hex>", 10)
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
-envelope = draft.sign_with_keypair(pair)
+envelope, fee_quote = draft.quote_and_sign(client, pair.private_key)
 receipt = client.submit_transaction_envelope(envelope)
 if isinstance(receipt, dict):
     print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
+
+To request sponsorship, bind the draft to one exact program and immutable
+revision before quoting:
+
+```python
+from iroha_python import sponsor_fee_payment
+
+program_id = f"{sponsor_account_id}/wallet_payments"
+requested_fee_payment = sponsor_fee_payment(
+    program_id,
+    3,
+    charge_limits=[],
+)
+
+config = TransactionConfig(
+    chain_id="dev-chain",
+    authority=authority_account_id,
+    fee_payment=requested_fee_payment,
+    ttl_ms=120_000,
+)
+envelope, quote = TransactionDraft(config).register_domain("payments").quote_and_sign(
+    client,
+    pair.private_key,
+)
+```
+
+`quote_and_sign` calls account-signed `POST /v1/fees/quote`, verifies that the
+returned intent retained the payer, exact program/revision, and gas bound, and
+replaces only the charge maxima. Use
+`client.get_fee_sponsor_program(program_id, canonical_auth=auth)` to inspect the
+exact lifecycle record before constructing a sponsored draft. Metadata keys
+named `fee_sponsor`, `gas_asset_id`, or `gas_limit` are retired and rejected;
+sponsor failure never falls back to the authority.
 
 Apply metadata updates or transfer ownership without dropping to raw Norito:
 

@@ -102,6 +102,11 @@ if ! rg -q 'pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_co
   exit 1
 fi
 
+# Reject comment/string stuffing and semantic drift in the executable helper,
+# adapter call, TC-order regression, and Verus operator bodies before root-only
+# `--no-cheating` verification starts.
+python3 "$REPO_ROOT/scripts/formal/check_sumeragi_v2_proof_ledger.py" --check-production-causal-fifo
+
 # Keep the explicit Verus-to-TLA action-name table from silently drifting.
 # This is a spelling/existence guard, not a claim that two independently
 # parsed action bodies are already proved equivalent.

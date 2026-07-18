@@ -1165,6 +1165,7 @@ fn overlay_v2_effect_status(
                 | SumeragiV2QueueKind::RuntimeProgress
                 | SumeragiV2QueueKind::RuntimeCompletion
                 | SumeragiV2QueueKind::EffectCompletion
+                | SumeragiV2QueueKind::EffectDispatch
         )
     });
     for (queue, snapshot) in [
@@ -1174,6 +1175,10 @@ fn overlay_v2_effect_status(
         (
             SumeragiV2QueueKind::EffectCompletion,
             effect_status.effect_completion_queue,
+        ),
+        (
+            SumeragiV2QueueKind::EffectDispatch,
+            effect_status.effect_dispatch_queue,
         ),
     ] {
         let oldest_age = (snapshot.depth != 0).then(|| {
@@ -1242,10 +1247,15 @@ fn quorum_is_complete(quorum: &SumeragiV2VoteQuorumStatus) -> bool {
 
 fn queue_is_starved(queue: &SumeragiV2QueueStatus) -> bool {
     // `Ingress` is the retained semantic-admission/equivocation table, not a
-    // serviceable queue. Queue age remains useful context, but only eligible
-    // service debt can prove that reserved work repeatedly lost dispatch.
-    queue.queue != SumeragiV2QueueKind::Ingress
-        && queue.depth != 0
+    // serviceable queue. `EffectDispatch` is a reserved strict FIFO attempted
+    // before the runtime advances; pending-work exhaustion makes its head
+    // temporarily ineligible rather than scheduler-starved. Queue age remains
+    // useful context, but only genuine eligible-skip debt can prove that
+    // reserved work repeatedly lost dispatch.
+    !matches!(
+        queue.queue,
+        SumeragiV2QueueKind::Ingress | SumeragiV2QueueKind::EffectDispatch
+    ) && queue.depth != 0
         && queue.service_debt >= FAIR_SERVICE_CLASS_COUNT
 }
 
@@ -1733,6 +1743,7 @@ mod v2_liveness_watchdog_tests {
             pending_store_bytes: 0,
             queued_runtime_completions: 0,
             effect_completion_queue: lane(112),
+            effect_dispatch_queue: lane(8),
             runtime_queues: RuntimeQueueSnapshot {
                 normal: lane(64),
                 progress: lane(80),
@@ -2291,6 +2302,7 @@ mod v2_liveness_watchdog_tests {
                     | SumeragiV2QueueKind::RuntimeProgress
                     | SumeragiV2QueueKind::RuntimeCompletion
                     | SumeragiV2QueueKind::EffectCompletion
+                    | SumeragiV2QueueKind::EffectDispatch
                     | SumeragiV2QueueKind::NetworkIngress
             )),
             "no successor-owned queue may overlay the predecessor"
@@ -2985,6 +2997,50 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
+    fn effect_dispatch_overlay_exposes_age_without_claiming_scheduler_starvation() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let captured_at = Instant::now();
+        set_v2_status_at(status(), captured_at);
+        let mut effects = effect_status(Duration::from_secs(1), captured_at);
+        effects.effect_dispatch_queue = RuntimeQueueLaneSnapshot {
+            depth: 2,
+            capacity: 8,
+            oldest_age: Some(Duration::from_millis(500)),
+            max_service_debt: 2,
+        };
+        set_v2_effect_status(effects.clone());
+
+        let below_threshold =
+            v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
+        let dispatch = below_threshold
+            .liveness
+            .queues
+            .iter()
+            .find(|queue| queue.queue == SumeragiV2QueueKind::EffectDispatch)
+            .expect("effect dispatch queue");
+        assert_eq!(dispatch.depth, 2);
+        assert_eq!(dispatch.capacity, 8);
+        assert_eq!(dispatch.oldest_age_ms, Some(2_500));
+        assert_eq!(dispatch.service_debt, 2);
+        assert_ne!(
+            below_threshold.liveness.blocker,
+            Some(SumeragiV2LivenessBlocker::SchedulerStarvation),
+            "EffectDispatch never participates in scheduler skip rotation"
+        );
+
+        effects.effect_dispatch_queue.max_service_debt = 3;
+        set_v2_effect_status(effects);
+        let full_rotation = v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
+        assert_ne!(
+            full_rotation.liveness.blocker,
+            Some(SumeragiV2LivenessBlocker::SchedulerStarvation),
+            "EffectDispatch capacity retries cannot constitute scheduler skip debt"
+        );
+        clear_v2_status();
+    }
+
+    #[test]
     fn live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
@@ -3628,12 +3684,6 @@ pub struct NexusFeeSnapshot {
     pub charged_via_payer_total: u64,
     /// Successful debits that used a sponsor account.
     pub charged_via_sponsor_total: u64,
-    /// Rejections because sponsorship was disabled.
-    pub sponsor_disabled_total: u64,
-    /// Rejections because the sponsor did not authorize the payer.
-    pub sponsor_unauthorized_total: u64,
-    /// Rejections because the fee exceeded `sponsor_max_fee`.
-    pub sponsor_cap_exceeded_total: u64,
     /// Failures due to config/asset parsing errors.
     pub config_errors_total: u64,
     /// Failures while executing the fee debit.
@@ -3663,27 +3713,6 @@ pub enum NexusFeeEvent {
         amount: Quantity,
         /// Asset definition id string.
         asset_id: String,
-    },
-    /// Sponsorship was disabled.
-    SponsorDisabled {
-        /// Account attempting to sponsor the fee.
-        payer_id: String,
-    },
-    /// Sponsor did not authorize the payer.
-    SponsorUnauthorized {
-        /// Sponsor account that was requested.
-        sponsor_id: String,
-        /// Transaction authority that attempted to use the sponsor.
-        authority_id: String,
-    },
-    /// Sponsorship exceeded configured cap.
-    SponsorCapExceeded {
-        /// Account that attempted to sponsor.
-        payer_id: String,
-        /// Maximum allowed fee.
-        max_fee: Quantity,
-        /// Attempted fee.
-        attempted_fee: Quantity,
     },
     /// Fee debit failed to apply.
     TransferFailed {
@@ -4448,34 +4477,6 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
             guard.last_payer = Some(payer_kind);
             guard.last_payer_id = Some(payer_id);
             guard.last_error = None;
-        }
-        NexusFeeEvent::SponsorDisabled { payer_id } => {
-            guard.sponsor_disabled_total = guard.sponsor_disabled_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(payer_id);
-            guard.last_error = Some("sponsorship disabled".to_string());
-        }
-        NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id,
-            authority_id,
-        } => {
-            guard.sponsor_unauthorized_total = guard.sponsor_unauthorized_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(sponsor_id);
-            guard.last_error = Some(format!(
-                "sponsor not authorized for authority {authority_id}"
-            ));
-        }
-        NexusFeeEvent::SponsorCapExceeded {
-            payer_id,
-            max_fee,
-            attempted_fee,
-        } => {
-            guard.sponsor_cap_exceeded_total = guard.sponsor_cap_exceeded_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(payer_id);
-            guard.last_amount = Some(attempted_fee);
-            guard.last_error = Some(format!("sponsor_max_fee exceeded (max={max_fee})"));
         }
         NexusFeeEvent::TransferFailed {
             payer_kind,

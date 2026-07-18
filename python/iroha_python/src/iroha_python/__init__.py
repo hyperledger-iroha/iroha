@@ -960,6 +960,8 @@ _BASE_EXPORTS = [
 _CRYPTO_EXPORTS: List[str] = [
     "TransactionConfig",
     "TransactionDraft",
+    "authority_fee_payment",
+    "sponsor_fee_payment",
     "NexusAppClient",
     "NexusAppConfig",
     "NexusAppError",
@@ -1121,7 +1123,12 @@ _CRYPTO_EXPORTS: List[str] = [
 ]
 
 try:
-    from .tx import TransactionConfig, TransactionDraft
+    from .tx import (
+        TransactionConfig,
+        TransactionDraft,
+        authority_fee_payment,
+        sponsor_fee_payment,
+    )
     from .nexus_app import (
         NexusAppClient,
         NexusAppConfig,

@@ -1112,6 +1112,48 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
+    /// <summary>Quotes the exact unsigned transaction payload using account-signed Torii auth.</summary>
+    public async Task<ToriiFeeQuoteResponse> QuoteFeesAsync(
+        UnsignedTransactionPayload payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        RequireCanonicalRequestCredentials("/v1/fees/quote");
+        if (!string.Equals(
+                Options.CanonicalRequestCredentials!.AccountId,
+                payload.Authority,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Canonical request account must equal the unsigned transaction authority.");
+        }
+
+        var response = await PostAsync<ToriiFeeQuoteRequest, ToriiFeeQuoteResponse>(
+            "/v1/fees/quote",
+            new ToriiFeeQuoteRequest { Payload = payload },
+            cancellationToken: cancellationToken);
+        ValidateFeeQuoteResponse(response, payload.FeePayment, "fee quote response");
+        return response;
+    }
+
+    /// <summary>Looks up one exact on-chain sponsor program using account-signed Torii auth.</summary>
+    public async Task<ToriiFeeSponsorProgram> GetFeeSponsorProgramAsync(
+        FeeSponsorProgramId programId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(programId);
+        RequireCanonicalRequestCredentials("/v1/fee-sponsor-programs/by-id");
+        var response = await PostAsync<ToriiFeeSponsorProgramLookupRequest, ToriiFeeSponsorProgram>(
+            "/v1/fee-sponsor-programs/by-id",
+            new ToriiFeeSponsorProgramLookupRequest { ProgramId = programId.ToString() },
+            cancellationToken: cancellationToken);
+        if (response.Id != programId)
+        {
+            throw new JsonException("Fee sponsor program lookup returned a different program id.");
+        }
+        return response;
+    }
+
     public async Task<ToriiContractCodeView> GetContractCodeViewAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
@@ -1187,6 +1229,32 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
         ValidateMultisigResponse(response, "multisig response");
         return response;
+    }
+
+    public async Task<ToriiMultisigResponse> ApproveMultisigAsync(
+        ToriiMultisigApproveRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigApproveRequest(request);
+        var response = await PostAsync<ToriiMultisigApproveRequest, ToriiMultisigResponse>(
+            "/v1/multisig/approve",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
+        ValidateMultisigResponse(response, "multisig approval response");
+        return response;
+    }
+
+    public async Task<ToriiMultisigCancelResponse> CancelMultisigAsync(
+        ToriiMultisigCancelRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigCancelRequest(request);
+        return await PostAsync<ToriiMultisigCancelRequest, ToriiMultisigCancelResponse>(
+            "/v1/multisig/cancel",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
     }
 
     public async Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
@@ -1788,6 +1856,15 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new InvalidOperationException(
                 $"VPN route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
+    }
+
+    private void RequireCanonicalRequestCredentials(string route)
+    {
+        if (Options.CanonicalRequestCredentials is null)
+        {
+            throw new InvalidOperationException(
+                $"Route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
         }
     }
 
@@ -2882,6 +2959,40 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateContractCallResponse(ToriiContractCallResponse response, string context)
     {
         ToriiContractCallJson.ValidateContractCallResponse(response, context);
+    }
+
+    private static void ValidateFeeQuoteResponse(
+        ToriiFeeQuoteResponse response,
+        FeePaymentIntent requestedIntent,
+        string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        if (response.Intent is null)
+        {
+            throw new JsonException($"{context}.intent must not be null.");
+        }
+        if (!requestedIntent.HasSamePayerAndGasBound(response.Intent))
+        {
+            throw new JsonException(
+                $"{context}.intent changed the selected payer, sponsor revision, or gas bound.");
+        }
+        if (response.Observation is null || response.Observation.NextBlockHeight == 0)
+        {
+            throw new JsonException($"{context}.observation.next_block_height must be positive.");
+        }
+        if (response.Decision?.Value?.DebitSource is null
+            || !string.Equals(response.Decision.Status, "accepted", StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.decision must be accepted with a debit source.");
+        }
+        if (response.Components is null || response.Capacities is null)
+        {
+            throw new JsonException($"{context} component and capacity arrays must not be null.");
+        }
+        if (!response.Components.SequenceEqual(response.Intent.ChargeLimits))
+        {
+            throw new JsonException($"{context}.components must equal the returned intent charge limits.");
+        }
     }
 
     private static void ValidateContractViewResponse(ToriiContractViewResponse response, string context)
@@ -5647,9 +5758,17 @@ public sealed partial class ToriiClient : IDisposable
             nameof(request.ContractAddress),
             nameof(request.ContractAlias),
             requireTarget: true);
-        if (request.GasLimit == 0)
+        if (request.CreationTimeMilliseconds == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive.");
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+        if (request.TransactionTimeToLiveMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.TransactionTimeToLiveMilliseconds),
+                "Transaction TTL must be positive when provided.");
         }
 
         return request with
@@ -5661,8 +5780,10 @@ public sealed partial class ToriiClient : IDisposable
             ContractAddress = contractAddress,
             ContractAlias = contractAlias,
             Entrypoint = NormalizeOptionalExactValue(request.Entrypoint, nameof(request.Entrypoint)),
-            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: true),
         };
     }
 
@@ -5688,6 +5809,24 @@ public sealed partial class ToriiClient : IDisposable
         };
     }
 
+    private static FeePaymentIntent NormalizeFeePaymentIntent(
+        FeePaymentIntent? feePayment,
+        string paramName,
+        bool requireGasLimit)
+    {
+        if (feePayment is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+        if (requireGasLimit && !feePayment.GasLimit.HasValue)
+        {
+            throw new ArgumentException(
+                "Fee payment must include a positive gas limit for contract execution.",
+                paramName);
+        }
+        return feePayment;
+    }
+
     private static ToriiMultisigProposeRequest NormalizeMultisigProposeRequest(
         ToriiMultisigProposeRequest request)
     {
@@ -5696,46 +5835,8 @@ public sealed partial class ToriiClient : IDisposable
             request.MultisigAccountAlias);
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
-        if (request.CreationTimeMilliseconds == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.CreationTimeMilliseconds),
-                "Creation time must be positive when provided.");
-        }
-
-        return request with
-        {
-            MultisigAccountId = multisigAccountId,
-            MultisigAccountAlias = multisigAccountAlias,
-            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
-                request.SignerAccountId,
-                nameof(request.SignerAccountId)),
-            PublicKeyHex = publicKeyHex,
-            SignatureBase64 = signatureBase64,
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
-            Instructions = NormalizeExactBase64List(
-                request.Instructions,
-                nameof(request.Instructions),
-                allowEmpty: false),
-        };
-    }
-
-    private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
-        ToriiMultisigContractCallProposeRequest request)
-    {
-        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
-            request.MultisigAccountId,
-            request.MultisigAccountAlias);
         var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
-        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
-        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
         ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
-        if (request.GasLimit.HasValue && request.GasLimit.Value == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive when provided.");
-        }
-
         if (request.CreationTimeMilliseconds == 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -5753,12 +5854,150 @@ public sealed partial class ToriiClient : IDisposable
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
-            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            Instructions = NormalizeExactBase64List(
+                request.Instructions,
+                nameof(request.Instructions),
+                allowEmpty: false),
         };
+    }
+
+    private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
+        ToriiMultisigContractCallProposeRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        var (contractAddress, contractAlias) = NormalizeContractTarget(
+            request.ContractAddress,
+            request.ContractAlias,
+            nameof(request.ContractAddress),
+            nameof(request.ContractAlias),
+            requireTarget: true);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            ContractAddress = contractAddress,
+            ContractAlias = contractAlias,
+            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: true),
+        };
+    }
+
+    private static ToriiMultisigApproveRequest NormalizeMultisigApproveRequest(
+        ToriiMultisigApproveRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            ProposalId = request.ProposalId is null
+                ? null
+                : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
+            InstructionsHash = request.InstructionsHash is null
+                ? null
+                : NormalizeExactSizedHex(request.InstructionsHash, nameof(request.InstructionsHash), 32),
+        };
+    }
+
+    private static ToriiMultisigCancelRequest NormalizeMultisigCancelRequest(
+        ToriiMultisigCancelRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            ProposalId = request.ProposalId is null
+                ? null
+                : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
+            InstructionsHash = request.InstructionsHash is null
+                ? null
+                : NormalizeExactSizedHex(request.InstructionsHash, nameof(request.InstructionsHash), 32),
+        };
+    }
+
+    private static void ValidateMultisigProposalSelector(string? proposalId, string? instructionsHash)
+    {
+        if (proposalId is null && instructionsHash is null)
+        {
+            throw new ArgumentException(
+                "Provide either proposal_id or instructions_hash.",
+                nameof(proposalId));
+        }
     }
 
     private static ToriiMultisigContractCallApproveRequest NormalizeMultisigContractCallApproveRequest(
@@ -5794,6 +6033,10 @@ public sealed partial class ToriiClient : IDisposable
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
             ProposalId = request.ProposalId is null
                 ? null
                 : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
@@ -6525,9 +6768,6 @@ public sealed partial class ToriiClient : IDisposable
                 request.SubmittedEpoch,
                 nameof(request.SubmittedEpoch),
                 allowZero: true),
-            GasAssetId = request.GasAssetId is null
-                ? null
-                : NormalizeExactValue(request.GasAssetId, nameof(request.GasAssetId)),
             Alias = request.Alias is null
                 ? null
                 : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),

@@ -13029,6 +13029,7 @@ mod tests {
                 self.chain_id.clone(),
                 self.account_id.clone(),
                 &self.time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions(instructions)
             .sign(self.account_keypair.private_key());
@@ -15016,7 +15017,12 @@ mod tests {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");
             let key_pair = checked_keypair();
             let authority = AccountId::new(key_pair.public_key().clone());
-            TransactionBuilder::new(chain_id, authority).sign(key_pair.private_key())
+            TransactionBuilder::new(
+                chain_id,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(key_pair.private_key())
         }
 
         let header = BlockHeader::new(

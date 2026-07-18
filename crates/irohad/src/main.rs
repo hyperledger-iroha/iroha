@@ -6427,7 +6427,7 @@ impl Iroha {
             Arc::clone(&state),
             local_validator_account_id.clone(),
             config.common.key_pair.clone(),
-            config.soracloud_runtime.submission.gas_asset_id.clone(),
+            config.soracloud_runtime.submission.clone(),
         ));
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
@@ -10874,7 +10874,7 @@ mod tests {
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .with_instructions([
                     InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
                     InstructionBox::from(Register::account(Account::new(bls_account_id.clone()))),

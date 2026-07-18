@@ -154,9 +154,10 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi,
-        PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
-        PrivateKaigiTransaction, TransactionSubmissionReceipt,
+        Executable, FeePaymentIntent, IvmProved, PrivateCreateKaigi, PrivateEndKaigi,
+        PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
+        PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        TransactionSubmissionReceipt,
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
@@ -10289,11 +10290,28 @@ fn configure_transaction_builder(
     Ok(builder)
 }
 
+fn parse_fee_payment_intent(fee_payment_json: &str) -> napi::Result<FeePaymentIntent> {
+    let intent = norito::json::from_str::<FeePaymentIntent>(fee_payment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee payment intent JSON: {err}"),
+        )
+    })?;
+    intent.validate().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee payment intent: {err}"),
+        )
+    })?;
+    Ok(intent)
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_executable_transaction(
     chain_id: ChainId,
     authority: AccountId,
     executable: Executable,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
     creation_time_ms: Option<i64>,
@@ -10303,7 +10321,7 @@ fn assemble_executable_transaction(
     algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority).with_executable(executable),
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
         metadata,
         attachments,
         creation_time_ms,
@@ -10328,6 +10346,7 @@ fn assemble_transaction(
     chain_id: ChainId,
     authority: AccountId,
     instructions: Vec<InstructionBox>,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -10346,6 +10365,7 @@ fn assemble_transaction(
         chain_id,
         authority,
         Executable::from(instructions),
+        fee_payment,
         metadata,
         None,
         creation_time_ms,
@@ -10473,9 +10493,13 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<Buffer> {
     let tx = decode_signed_transaction(bytes.as_ref())?;
-    let mut builder = TransactionBuilder::new(tx.chain().clone(), tx.authority().clone())
-        .with_executable(tx.instructions().clone())
-        .with_metadata(tx.metadata().clone());
+    let mut builder = TransactionBuilder::new(
+        tx.chain().clone(),
+        tx.authority().clone(),
+        tx.fee_payment_intent().clone(),
+    )
+    .with_executable(tx.instructions().clone())
+    .with_metadata(tx.metadata().clone());
 
     if let Some(nonce) = tx.nonce() {
         builder.set_nonce(nonce);
@@ -13174,6 +13198,17 @@ pub struct JsTransactionPayload {
     pub payload_hash: Buffer,
 }
 
+/// Exact unsigned transaction draft used by the fee quote-to-sign flow.
+#[napi(object)]
+pub struct JsTransactionPayloadDraft {
+    /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
+    pub payload_json: String,
+    /// Bare adaptive-Norito transaction payload bytes before the quote is applied.
+    pub payload_bytes: Buffer,
+    /// Iroha transaction prehash for the draft payload.
+    pub payload_hash: Buffer,
+}
+
 /// Input accepted by the external-signature transaction finalizer.
 #[napi(object)]
 pub struct JsExternalTransactionSignature {
@@ -13707,6 +13742,7 @@ pub fn build_transfer_asset_payload(
     source_asset_holding_id: String,
     quantity: String,
     destination_account_id: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13782,6 +13818,7 @@ pub fn build_transfer_asset_payload(
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
     let quantity = parse_positive_transfer_quantity(&quantity)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     if metadata_json
         .as_ref()
         .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
@@ -13795,7 +13832,7 @@ pub fn build_transfer_asset_payload(
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(ChainId::from(chain_id), authority)
+        TransactionBuilder::new(ChainId::from(chain_id), authority, fee_payment)
             .with_instructions([instruction]),
         metadata,
         None,
@@ -13936,6 +13973,7 @@ pub fn build_register_domain_transaction(
     chain_id: String,
     authority: String,
     domain_id: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13957,10 +13995,12 @@ pub fn build_register_domain_transaction(
     let domain_metadata = parse_metadata_payload("domain", metadata_json)?;
     let new_domain = Domain::new(domain_id).with_metadata(domain_metadata);
     let instruction: InstructionBox = Register::<Domain>::domain(new_domain).into();
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     assemble_transaction(
         chain_id,
         authority,
         vec![instruction],
+        fee_payment,
         Metadata::default(),
         creation_time_ms,
         ttl_ms,
@@ -13975,6 +14015,7 @@ fn build_transaction_from_instructions_json(
     chain_id: ChainId,
     authority: AccountId,
     instructions_json: Vec<String>,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13984,11 +14025,13 @@ fn build_transaction_from_instructions_json(
 ) -> napi::Result<JsSignedTransaction> {
     let instructions = parse_instruction_payloads(instructions_json)?;
 
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     assemble_transaction(
         chain_id,
         authority,
         instructions,
+        fee_payment,
         metadata,
         creation_time_ms,
         ttl_ms,
@@ -13998,6 +14041,117 @@ fn build_transaction_from_instructions_json(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_transaction_payload_from_instructions_json(
+    chain_id: ChainId,
+    authority: AccountId,
+    instructions_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let instructions = parse_instruction_payloads(instructions_json)?;
+    if instructions.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "instructions must be a non-empty array",
+        ));
+    }
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions(instructions),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
+}
+
+/// Build, but do not sign, the exact arbitrary-instruction payload sent to fee quoting.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_transaction_payload(
+    chain_id: String,
+    authority: String,
+    instructions_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    build_transaction_payload_from_instructions_json(
+        chain_id,
+        authority,
+        instructions_json,
+        fee_payment_json,
+        metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )
+}
+
+fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
+    draft.has_same_payer_and_gas_bound(quoted)
+}
+
+/// Replace only an unsigned payload's fee limits with the quote result and sign it.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sign_quoted_transaction_payload(
+    payload_json: String,
+    quoted_fee_payment_json: String,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transaction payload JSON: {err}"),
+        )
+    })?;
+    let quoted_fee_payment = parse_fee_payment_intent(&quoted_fee_payment_json)?;
+    if !same_fee_payer_selection(&payload.fee_payment, &quoted_fee_payment) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted fee intent changed the selected payer, exact sponsor program revision, or gas bound",
+        ));
+    }
+    payload.fee_payment = quoted_fee_payment;
+    let builder = TransactionBuilder::from_payload(payload).map_err(norito_to_napi)?;
+    let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
+    let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
+    let signed = sign_js_transaction(builder, &private_key, "quoted JavaScript payload")?;
+    let signed_bytes = Encode::encode(&signed);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_bytes),
+        hash: Buffer::from(signed.hash().as_ref().to_vec()),
+    })
+}
+
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -14005,6 +14159,7 @@ pub fn build_transaction(
     chain_id: String,
     authority: String,
     instructions_json: Vec<String>,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -14022,6 +14177,7 @@ pub fn build_transaction(
         chain_id,
         authority,
         instructions_json,
+        fee_payment_json,
         metadata_json,
         creation_time_ms,
         ttl_ms,
@@ -14039,6 +14195,7 @@ pub fn build_ivm_proved_transaction(
     authority: String,
     proved_json: String,
     attachment_json: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -14063,12 +14220,14 @@ pub fn build_ivm_proved_transaction(
             format!("invalid ProofAttachment json: {err}"),
         )
     })?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
 
     assemble_executable_transaction(
         chain_id,
         authority,
         Executable::IvmProved(proved),
+        fee_payment,
         metadata,
         Some(ProofAttachmentList(vec![attachment])),
         creation_time_ms,
@@ -21454,6 +21613,106 @@ seiyaku Privacy {
         }
     }
 
+    fn authority_fee_payment_json() -> String {
+        norito::json::to_json(&FeePaymentIntent::authority(Vec::new(), None))
+            .expect("serialize authority fee payment")
+    }
+
+    fn authority_fee_payment_json_with_gas(gas_limit: u64) -> String {
+        norito::json::to_json(&FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(gas_limit),
+        ))
+        .expect("serialize authority fee payment with gas")
+    }
+
+    #[test]
+    fn quoted_payload_signer_changes_only_fee_limits_and_rejects_payer_substitution() {
+        let keypair =
+            KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519).expect("authority key");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
+            DomainId::try_new("quote-flow", "universal").expect("domain id"),
+        ))
+        .into();
+        let instruction_json = json::to_json(
+            &instruction_to_json_value(&instruction).expect("instruction JSON value"),
+        )
+        .expect("instruction JSON");
+        let draft = build_transaction_payload(
+            "quote-flow-chain".to_owned(),
+            authority_i105,
+            vec![instruction_json],
+            authority_fee_payment_json(),
+            None,
+            Some(1_700_000_000_000),
+            Some(60_000),
+            Some(7),
+        )
+        .expect("unsigned transaction draft");
+        let mut expected: TransactionPayload =
+            json::from_json(&draft.payload_json).expect("decode exact draft JSON");
+        let fee_asset = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("fee domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let quoted_intent = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset,
+                "42".parse().expect("fee quantity"),
+            )],
+            None,
+        );
+        let quoted_intent_json = json::to_json(&quoted_intent).expect("quote intent JSON");
+        let (_, secret) = keypair.private_key().to_bytes();
+        let result = sign_quoted_transaction_payload(
+            draft.payload_json.clone(),
+            quoted_intent_json,
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect("sign quoted payload");
+        let signed = decode_signed_transaction(result.signed_transaction.as_ref())
+            .expect("decode signed transaction");
+        expected.fee_payment = quoted_intent;
+        assert_eq!(signed.payload(), &expected);
+        signed
+            .verify_signature()
+            .expect("quoted signature verifies");
+
+        let gas_error = sign_quoted_transaction_payload(
+            draft.payload_json.clone(),
+            authority_fee_payment_json_with_gas(1),
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quote must not substitute the signed gas bound");
+        assert!(gas_error.reason.contains("gas bound"));
+
+        let substituted = FeePaymentIntent::sponsor(
+            iroha_data_model::nexus::FeeSponsorProgramId::new(
+                authority,
+                "substituted".parse().expect("program name"),
+            ),
+            1,
+            Vec::new(),
+            None,
+        );
+        let error = sign_quoted_transaction_payload(
+            draft.payload_json,
+            json::to_json(&substituted).expect("substituted intent JSON"),
+            Uint8Array::from(secret),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quote must not substitute the selected payer");
+        assert!(error.reason.contains("changed the selected payer"));
+    }
+
     #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
         let authority_key =
@@ -21481,6 +21740,7 @@ seiyaku Privacy {
             source,
             "1.25".to_owned(),
             destination_i105,
+            authority_fee_payment_json(),
             Some(r#"{"memo":"native","order":2}"#.to_owned()),
             Some(1_700_000_000_000),
             Some(5_000),
@@ -21562,6 +21822,7 @@ seiyaku Privacy {
                 source.clone(),
                 "1".to_owned(),
                 wrong_network_i105,
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21583,6 +21844,7 @@ seiyaku Privacy {
                     source.clone(),
                     invalid_quantity.clone(),
                     other_i105.clone(),
+                    authority_fee_payment_json(),
                     None,
                     Some(1),
                     None,
@@ -21599,6 +21861,7 @@ seiyaku Privacy {
                 other_source,
                 "1".to_owned(),
                 other_i105.clone(),
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21613,6 +21876,7 @@ seiyaku Privacy {
                 source.clone(),
                 "0".to_owned(),
                 other_i105.clone(),
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21627,6 +21891,7 @@ seiyaku Privacy {
             source,
             "1".to_owned(),
             other_i105,
+            authority_fee_payment_json(),
             None,
             Some(1),
             None,
@@ -21685,7 +21950,11 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1));
         let signed = builder.sign(keypair.private_key());
         let mut versioned = vec![1];
@@ -21712,7 +21981,12 @@ seiyaku Privacy {
                 .into();
 
         let tx = sign_js_transaction(
-            TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
+            TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([instruction]),
             keypair.private_key(),
             "test",
         )
@@ -21721,6 +21995,42 @@ seiyaku Privacy {
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed JS transaction should verify");
+    }
+
+    #[test]
+    fn sign_transaction_preserves_exact_fee_payment_intent() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "fee-intent-preservation".parse().expect("valid chain id");
+        let fee_asset = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("fee domain"),
+            "xor".parse().expect("fee asset name"),
+        );
+        let intent = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset,
+                Quantity::from(42_u32),
+            )],
+            NonZeroU64::new(9_000),
+        );
+        let mut builder = TransactionBuilder::new(chain_id, authority, intent.clone());
+        builder.set_creation_time(Duration::from_millis(1));
+        let original = builder.sign(keypair.private_key());
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        let resigned = sign_transaction(
+            Uint8Array::from(Encode::encode(&original)),
+            Uint8Array::from(secret),
+        )
+        .expect("re-sign transaction");
+        let decoded =
+            decode_signed_transaction(resigned.as_ref()).expect("decode re-signed transaction");
+
+        assert_eq!(decoded.fee_payment_intent(), &intent);
+        decoded
+            .verify_signature()
+            .expect("re-signed transaction verifies");
     }
 
     #[test]
@@ -21880,16 +22190,20 @@ seiyaku Privacy {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let transaction = TransactionBuilder::new(ChainId::from("js-contract-call"), authority)
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash,
-                    entrypoint: "run".to_owned(),
-                    arguments: None,
-                },
-            ))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("js-contract-call"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash,
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            },
+        ))
+        .sign(keypair.private_key());
         let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
@@ -21936,6 +22250,7 @@ seiyaku Privacy {
             chain_id.clone(),
             authority.clone(),
             vec![instruction_json],
+            authority_fee_payment_json(),
             None,
             Some(1_700_000_000_000),
             Some(5_000),
@@ -21993,7 +22308,8 @@ seiyaku Privacy {
             account_json_literal(&authority),
             proved_json,
             attachment_json,
-            Some(r#"{"gas_limit":1000}"#.to_owned()),
+            authority_fee_payment_json_with_gas(1_000),
+            None,
             Some(1_700_000_000_000),
             Some(5_000),
             Some(42),
@@ -22168,6 +22484,7 @@ seiyaku Privacy {
             chain_id.to_string(),
             authority_i105,
             vec![instruction_json],
+            authority_fee_payment_json(),
             None,
             None,
             None,
@@ -22223,6 +22540,7 @@ seiyaku Privacy {
             chain_id,
             authority,
             Vec::new(),
+            authority_fee_payment_json(),
             None,
             None,
             None,

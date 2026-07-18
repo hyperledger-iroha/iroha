@@ -23,6 +23,7 @@ class TransactionPayload(
     val executable: Executable = Executable.ivm(byteArrayOf()),
     val timeToLiveMs: Long? = null,
     val nonce: Int? = null,
+    val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
     private val _metadata: Map<String, JsonValue> = metadata.toMap()
@@ -52,6 +53,7 @@ class TransactionPayload(
         executable: Executable = this.executable,
         timeToLiveMs: Long? = this.timeToLiveMs,
         nonce: Int? = this.nonce,
+        feePayment: FeePaymentIntent = this.feePayment,
         metadata: Map<String, JsonValue> = this.metadata,
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
@@ -60,6 +62,7 @@ class TransactionPayload(
         executable = executable,
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
+        feePayment = feePayment,
         metadata = metadata,
     )
 
@@ -72,6 +75,7 @@ class TransactionPayload(
             && executable == other.executable
             && timeToLiveMs == other.timeToLiveMs
             && nonce == other.nonce
+            && feePayment == other.feePayment
             && _metadata == other._metadata
     }
 
@@ -82,6 +86,7 @@ class TransactionPayload(
         result = 31 * result + executable.hashCode()
         result = 31 * result + (timeToLiveMs?.hashCode() ?: 0)
         result = 31 * result + (nonce?.hashCode() ?: 0)
+        result = 31 * result + feePayment.hashCode()
         result = 31 * result + _metadata.hashCode()
         return result
     }

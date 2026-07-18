@@ -200,7 +200,10 @@ fn executor_upgrade_should_work() -> Result<()> {
 
     let admin_account = Account::new(admin_id.clone());
     let register_admin_account = Register::account(admin_account);
-    client.submit_blocking(register_admin_account)?;
+    client.submit_blocking(
+        register_admin_account,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that admin isn't allowed to transfer alice's rose by default
     let rose_def: AssetDefinitionId = AssetDefinitionId::new(
@@ -209,9 +212,13 @@ fn executor_upgrade_should_work() -> Result<()> {
     );
     let alice_rose = AssetId::new(rose_def, ALICE_ID.clone());
     let transfer_alice_rose = Transfer::asset_quantity(alice_rose, 1u32, admin_id.clone());
-    let transfer_rose_tx = TransactionBuilder::new(chain_id.clone(), admin_id.clone())
-        .with_instructions([transfer_alice_rose.clone()])
-        .sign(&admin_private_key);
+    let transfer_rose_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        admin_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer_alice_rose.clone()])
+    .sign(&admin_private_key);
     let _ = client
         .submit_transaction_blocking(&transfer_rose_tx)
         .expect_err("Should fail");
@@ -220,9 +227,13 @@ fn executor_upgrade_should_work() -> Result<()> {
 
     // Check that admin can transfer alice's rose now
     // Creating new transaction instead of cloning, because we need to update it's creation time
-    let transfer_rose_tx = TransactionBuilder::new(chain_id, admin_id.clone())
-        .with_instructions([transfer_alice_rose])
-        .sign(&admin_private_key);
+    let transfer_rose_tx = TransactionBuilder::new(
+        chain_id,
+        admin_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer_alice_rose])
+    .sign(&admin_private_key);
     client
         .submit_transaction_blocking(&transfer_rose_tx)
         .expect("Should succeed");
@@ -314,7 +325,10 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
     let test_role_id: RoleId = "TEST_ROLE".parse()?;
     let test_role = Role::new(test_role_id.clone(), ALICE_ID.clone())
         .add_permission(can_unregister_domain.clone());
-    client.submit_blocking(Register::role(test_role))?;
+    client.submit_blocking(
+        Register::role(test_role),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that permission exists
     wait_for_executor_permission_names(
@@ -407,7 +421,10 @@ fn executor_custom_instructions_simple() -> Result<()> {
 
     // Give 1 rose to bob
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    client.submit_blocking(Mint::asset_quantity(1_u32, bob_rose.clone()))?;
+    client.submit_blocking(
+        Mint::asset_quantity(1_u32, bob_rose.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that bob has 1 rose
     wait_for_asset_value(
@@ -422,7 +439,10 @@ fn executor_custom_instructions_simple() -> Result<()> {
         asset_definition: asset_definition_id,
         quantity: Numeric::from(1u32),
     };
-    client.submit_blocking(InstructionBox::from(isi))?;
+    client.submit_blocking(
+        InstructionBox::from(isi),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that bob has 2 roses
     wait_for_asset_value(
@@ -460,7 +480,10 @@ fn executor_custom_instructions_complex() -> Result<()> {
         "rose".parse().unwrap(),
     );
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    client.submit_blocking(Mint::asset_quantity(6_u32, bob_rose.clone()))?;
+    client.submit_blocking(
+        Mint::asset_quantity(6_u32, bob_rose.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     // Check that bob has 6 roses
     wait_for_asset_value(
@@ -482,7 +505,10 @@ fn executor_custom_instructions_complex() -> Result<()> {
         let then: InstructionBox = then.into();
         let then = CoreExpr::new(then);
         let isi = ConditionalExpr::new(condition, then);
-        client.submit_blocking(InstructionBox::from(isi))?;
+        client.submit_blocking(
+            InstructionBox::from(isi),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         Ok(())
     };
     burn_bob_rose_if_more_then_5()?;
@@ -672,10 +698,18 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
         ),
     ));
-    client.submit_blocking_with_metadata(register_trigger, additional_fuel(30_000_000))?;
+    client.submit_blocking_with_metadata(
+        register_trigger,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        additional_fuel(30_000_000),
+    )?;
 
     let execute_trigger = ExecuteTrigger::new(trigger_id);
-    client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(90_000_000))?;
+    client.submit_blocking_with_metadata(
+        execute_trigger.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        additional_fuel(90_000_000),
+    )?;
 
     wait_for_asset_value(
         &client,
@@ -684,8 +718,11 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
         "executor fuel trigger mint",
     )?;
 
-    let res =
-        client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(80_000_000));
+    let res = client.submit_blocking_with_metadata(
+        execute_trigger.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        additional_fuel(80_000_000),
+    );
     assert!(matches!(
         res.expect_err("transaction should fail")
             .downcast_ref::<TransactionRejectionReason>()
@@ -770,14 +807,22 @@ fn define_custom_parameter() -> Result<()> {
     let too_long_domain_name = DomainId::try_new("1".repeat(2_usize.pow(5)), "universal")?;
     ensure_domain_registration_lease_for_network(&network, &too_long_domain_name)?;
     let create_domain = Register::domain(Domain::new(too_long_domain_name));
-    let _err = client.submit_blocking(create_domain.clone()).unwrap_err();
+    let _err = client
+        .submit_blocking(
+            create_domain.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .unwrap_err();
 
     let parameter = DomainLimits {
         id_len: 2_u32.pow(6),
     }
     .into();
     let set_param_isi = SetParameter::new(parameter);
-    client.submit_all_blocking::<InstructionBox>([set_param_isi.into(), create_domain.into()])?;
+    client.submit_all_blocking::<InstructionBox>(
+        [set_param_isi.into(), create_domain.into()],
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     Ok(())
 }
@@ -785,7 +830,10 @@ fn define_custom_parameter() -> Result<()> {
 fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     let upgrade_executor = Upgrade::new(Executor::new(load_sample_ivm(executor)));
     client
-        .submit_blocking(upgrade_executor)
+        .submit_blocking(
+            upgrade_executor,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Have you set IvmFuelConfig::Auto?")?;
     Ok(())
 }

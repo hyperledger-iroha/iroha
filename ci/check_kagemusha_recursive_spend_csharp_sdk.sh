@@ -25,7 +25,7 @@ test -f "${client}"
 test -f "${models}"
 
 grep -Fq 'KagemushaRequiredBridgeAbiVersion = ToriiKagemushaTransport.BridgeAbiVersion' "${client}"
-grep -Fq 'internal const int BridgeAbiVersion = 20;' "${models}"
+grep -Fq 'internal const int BridgeAbiVersion = 21;' "${models}"
 grep -Fq 'internal const int ManifestVersion = 4;' "${models}"
 grep -Fq 'internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;' "${models}"
 grep -Fq 'internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;' "${models}"
@@ -40,4 +40,4 @@ if grep -REni '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:spa
   exit 1
 fi
 
-echo "Kagemusha C# boundary passed: ABI-20/V4 Torii DTOs are present without a native prover claim."
+echo "Kagemusha C# boundary passed: ABI-21/V4 Torii DTOs are present without a native prover claim."

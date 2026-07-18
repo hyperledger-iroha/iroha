@@ -495,14 +495,7 @@ pub(crate) struct PipelinePreflightFees {
     pub per_byte_fee: iroha_primitives::numeric::Quantity,
     pub per_instruction_fee: iroha_primitives::numeric::Quantity,
     pub per_gas_unit_fee: iroha_primitives::numeric::Quantity,
-    pub sponsorship_enabled: bool,
-    pub sponsor_max_fee: iroha_primitives::numeric::Quantity,
-    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Quantity,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub canonical_sponsor_account_id: Option<String>,
-    pub fee_receipts_activation_height: u64,
-    pub external_settlement_enabled: bool,
-    pub burn_from_unix_timestamp_ms: u64,
+    pub sponsor_vault_custody_account_id: String,
     pub settlement_mode: String,
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
@@ -577,7 +570,11 @@ fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> 
         "derive dummy accepted transaction fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let mut builder = TransactionBuilder::new(chain_id, authority);
+    let mut builder = TransactionBuilder::new(
+        chain_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(0));
     let tx = builder
         .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -2593,21 +2590,6 @@ pub struct RetailRecipientRouteResponseDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
-#[norito(deny_unknown_fields)]
-/// Exact fee sponsor policy identifier accepted by `/v1/fee-sponsor-policies/by-id`.
-pub struct FeeSponsorPolicyByIdRequestDto {
-    /// Canonical sponsor account id.
-    pub sponsor_account_id: String,
-    /// Sponsor-local policy name.
-    pub policy_name: String,
-}
-
-#[derive(
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
 /// Response payload returned by `/v1/retail/recipients/lookup`.
 pub struct RetailRecipientLookupResponseDto {
     /// Whether the bank confirmed the account, alias, FI, and recipient name.
@@ -3652,10 +3634,90 @@ fn sign_app_api_scaffold_transaction(
     authority: AccountId,
     context: &str,
 ) -> Result<SignedTransaction> {
+    if builder.payload().authority != authority {
+        return Err(app_api_transaction_signing_error(
+            context,
+            "scaffold authority does not match the exact unsigned payload",
+        ));
+    }
     let scaffold_key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .map_err(|err| app_api_scaffold_key_error(context, err))?;
-    sign_app_api_transaction(builder, scaffold_key.private_key(), context)
-        .map(|tx| tx.with_authority(authority))
+    let signature = Signature::try_new(scaffold_key.private_key(), &builder.payload_hash_bytes())
+        .map_err(|err| app_api_transaction_signing_error(context, err))?;
+    Ok(builder.build_with_signature(signature))
+}
+
+#[cfg(feature = "app_api")]
+fn quote_app_api_transaction_builder(
+    builder: TransactionBuilder,
+    queue: &Queue,
+    state: &CoreState,
+    context: &str,
+) -> Result<TransactionBuilder> {
+    let mut payload = builder
+        .into_payload()
+        .map_err(|err| app_api_transaction_signing_error(context, err))?;
+    let route = queue
+        .route_payload_with_state(&payload, state)
+        .map_err(|_| {
+            conversion_error(format!(
+                "failed to quote {context} transaction fees: {}",
+                iroha_data_model::nexus::FeeRejectionCode::InvalidProgramConfiguration
+            ))
+        })?;
+    let latest_header = state.latest_block_header_fast();
+    let observation_time_ms = latest_header
+        .as_ref()
+        .map_or(0, |header| header.creation_time_ms);
+    let next_block_height = latest_header
+        .as_ref()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let nexus = state.nexus_snapshot();
+    let pipeline = state.pipeline_snapshot();
+    let quote = {
+        let world = state.world_view();
+        iroha_core::executor::quote_nexus_fee_admission_draft(
+            &world,
+            &nexus,
+            &pipeline,
+            &payload,
+            observation_time_ms,
+            next_block_height,
+            Some(route.dataspace_id),
+        )
+    }
+    .map_err(|error| {
+        conversion_error(format!(
+            "failed to quote {context} transaction fees: {}",
+            error.code()
+        ))
+    })?;
+    if !payload
+        .fee_payment
+        .has_same_payer_and_gas_bound(&quote.recommended_intent)
+    {
+        return Err(conversion_error(format!(
+            "failed to quote {context} transaction fees: quote changed the selected payer, sponsor revision, or gas bound"
+        )));
+    }
+    payload.fee_payment = quote.recommended_intent;
+    TransactionBuilder::from_payload(payload)
+        .map_err(|err| app_api_transaction_signing_error(context, err))
+}
+
+#[cfg(feature = "app_api")]
+fn quote_and_sign_app_api_transaction(
+    builder: TransactionBuilder,
+    private_key: &iroha_crypto::PrivateKey,
+    queue: &Queue,
+    state: &CoreState,
+    context: &str,
+) -> Result<SignedTransaction> {
+    sign_app_api_transaction(
+        quote_app_api_transaction_builder(builder, queue, state, context)?,
+        private_key,
+        context,
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -3779,8 +3841,12 @@ mod app_api_transaction_signing_tests {
         );
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = sign_app_api_transaction(
-            TransactionBuilder::new(chain_id, authority.clone())
-                .with_instructions([Log::new(Level::INFO, "app-api checked signing".to_owned())]),
+            TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "app-api checked signing".to_owned())]),
             key_pair.private_key(),
             "/test/app-api-transaction-signing",
         )
@@ -3789,6 +3855,39 @@ mod app_api_transaction_signing_tests {
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed transaction should verify");
+    }
+
+    #[test]
+    fn app_api_quote_first_signing_preserves_typed_fee_fields_and_drops_no_payload_data() {
+        let app = crate::mk_app_state_for_tests();
+        let key_pair = checked_app_api_fixture_keypair(
+            b"iroha:torii:routing:test:app-api-quote-first-signing".to_vec(),
+            "derive Torii app-api quote-first signing fixture key",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut builder = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "quote-first signing".to_owned())]);
+        builder.set_creation_time(Duration::from_millis(42));
+
+        let tx = quote_and_sign_app_api_transaction(
+            builder,
+            key_pair.private_key(),
+            app.queue.as_ref(),
+            app.state.as_ref(),
+            "/test/app-api-quote-first-signing",
+        )
+        .expect("Core quote and checked signing should succeed");
+
+        assert_eq!(tx.authority(), &authority);
+        assert_eq!(tx.creation_time(), Duration::from_millis(42));
+        assert!(tx.metadata().is_empty());
+        assert!(tx.fee_payment_intent().validate().is_ok());
+        tx.verify_signature()
+            .expect("quote-first signed transaction should verify");
     }
 
     #[test]
@@ -3805,9 +3904,15 @@ mod app_api_transaction_signing_tests {
             .clone(),
         );
         let tx = sign_app_api_scaffold_transaction(
-            TransactionBuilder::new(chain_id, requested_authority.clone()).with_instructions([
-                Log::new(Level::INFO, "app-api scaffold transaction".to_owned()),
-            ]),
+            TransactionBuilder::new(
+                chain_id,
+                requested_authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                "app-api scaffold transaction".to_owned(),
+            )]),
             requested_authority.clone(),
             "/test/app-api-scaffold",
         )
@@ -3815,7 +3920,7 @@ mod app_api_transaction_signing_tests {
 
         assert_eq!(tx.authority(), &requested_authority);
         tx.verify_signature()
-            .expect_err("scaffold signature is not meant to verify after restoring authority");
+            .expect_err("placeholder scaffold signature is not controlled by the authority");
     }
 
     #[test]
@@ -3952,8 +4057,12 @@ mod app_api_transaction_signing_tests {
         );
         let authority = AccountId::new(authority_key.public_key().clone());
         let chain_id: ChainId = "sccp-authority-binding-test".parse().expect("chain id");
-        let builder = TransactionBuilder::new(chain_id, authority.clone())
-            .with_instructions([Log::new(Level::INFO, "SCCP authority binding".to_owned())]);
+        let builder = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "SCCP authority binding".to_owned())]);
         let attacker_signature =
             Signature::try_new(attacker_key.private_key(), &builder.payload_hash_bytes())
                 .expect("sign with attacker key");
@@ -7233,6 +7342,7 @@ mod sccp_first_release_api_tests {
                 .parse()
                 .expect("Taira chain id"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
@@ -8227,6 +8337,10 @@ mod sccp_first_release_api_tests {
                 .expect("derive submit JSON authority");
         let request = BridgeProofSubmitDto {
             authority: AccountId::new(key_pair.public_key().clone()),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                None,
+            ),
             signature_b64: None,
             transaction_payload_b64: None,
             destination_proof_b64: "AA==".to_owned(),
@@ -8272,6 +8386,14 @@ mod sccp_first_release_api_tests {
             .expect("request object")
             .clone();
         assert!(missing.remove("destination_proof_b64").is_some());
+        assert!(norito::json::from_value::<BridgeProofSubmitDto>(Value::Object(missing)).is_err());
+
+        let mut missing = norito::json::from_str::<Value>(&encoded)
+            .expect("submit request JSON value")
+            .as_object()
+            .expect("submit request object")
+            .clone();
+        assert!(missing.remove("fee_payment").is_some());
         assert!(norito::json::from_value::<BridgeProofSubmitDto>(Value::Object(missing)).is_err());
     }
 
@@ -8373,7 +8495,11 @@ mod sccp_first_release_api_tests {
         .expect("derive generic SCCP signer");
         let authority = AccountId::new(key_pair.public_key().clone());
         let creation_time_ms = 1_700_000_000_777_u64;
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof.clone())]);
         let payload_bytes = builder.encode_payload();
@@ -8523,6 +8649,10 @@ mod sccp_first_release_api_tests {
         .expect("derive native submit JSON authority");
         let request = BridgeMessageSubmitDto {
             authority: AccountId::new(key_pair.public_key().clone()),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                None,
+            ),
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: "AA==".to_owned(),
@@ -8543,6 +8673,16 @@ mod sccp_first_release_api_tests {
             .expect("native request object")
             .clone();
         assert!(missing.remove("native_proof_b64").is_some());
+        assert!(
+            norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
+        );
+
+        let mut missing = norito::json::from_str::<Value>(&encoded)
+            .expect("native request JSON value")
+            .as_object()
+            .expect("native request object")
+            .clone();
+        assert!(missing.remove("fee_payment").is_some());
         assert!(
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
@@ -9460,13 +9600,10 @@ pub(crate) fn build_pipeline_preflight_response(
             per_byte_fee: nexus.fees.per_byte_fee,
             per_instruction_fee: nexus.fees.per_instruction_fee,
             per_gas_unit_fee: nexus.fees.per_gas_unit_fee,
-            sponsorship_enabled: nexus.fees.sponsorship_enabled,
-            sponsor_max_fee: nexus.fees.sponsor_max_fee,
-            sponsor_verified_balance_safety_floor: nexus.fees.sponsor_verified_balance_safety_floor,
-            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id,
-            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
-            external_settlement_enabled: nexus.fees.external_settlement_enabled,
-            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            sponsor_vault_custody_account_id: nexus
+                .fees
+                .sponsor_vault_custody_account_id
+                .to_string(),
             settlement_mode: match nexus.fees.settlement_mode {
                 NexusFeeSettlementMode::Direct => "direct",
                 NexusFeeSettlementMode::LaneRelayBurn => "lane_relay_burn",
@@ -9826,37 +9963,6 @@ fn unique_commitment_index(commitments: &[[u8; 32]], commitment: &[u8; 32]) -> R
         }
     }
     found.ok_or_else(zk_merkle_not_found)
-}
-
-#[cfg(feature = "app_api")]
-fn canonical_gas_asset_definition_id(state: &CoreState, asset_literal: &str) -> Result<String> {
-    let selector = asset_literal.trim();
-    if selector.is_empty() {
-        return Err(conversion_error(
-            "gas_asset_id must not be empty".to_owned(),
-        ));
-    }
-
-    let world = state.world_view();
-    let now_ms = asset_alias_observation_time_ms(state);
-    resolve_asset_definition_selector(&world, selector, now_ms)
-        .map(|asset_id| asset_id.to_string())
-        .map_err(|_| {
-            conversion_error(format!(
-                "invalid gas_asset_id `{selector}`; expected canonical Base58 asset definition id or active asset alias"
-            ))
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_contract_call_gas_asset_id(
-    state: &CoreState,
-    gas_asset_id: Option<&str>,
-) -> Result<Option<String>> {
-    match gas_asset_id {
-        Some(asset_id) => canonical_gas_asset_definition_id(state, asset_id).map(Some),
-        None => strict_default_pipeline_gas_asset_id(state),
-    }
 }
 
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
@@ -10281,29 +10387,6 @@ mod zk_roots_selector_tests {
         (state, definition_id)
     }
 
-    fn set_gas_accepted_assets_parameter(
-        state: &std::sync::Arc<iroha_core::state::State>,
-        payload: Json,
-    ) {
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let custom = iroha_data_model::parameter::CustomParameter::new(
-            iroha_data_model::parameter::CustomParameterId(
-                "ivm_gas_accepted_assets".parse().expect("parameter id"),
-            ),
-            payload,
-        );
-        block
-            .world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
-        block
-            .commit()
-            .expect("commit gas accepted assets parameter");
-    }
-
     fn seed_zk_asset_frontier_for_test(
         state: &std::sync::Arc<iroha_core::state::State>,
         definition_id: &AssetDefinitionId,
@@ -10402,39 +10485,6 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
-    fn normalize_contract_call_gas_asset_id_canonicalizes_alias_literal() {
-        let (state, definition_id) = selector_state();
-        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#main"))
-            .expect("alias should canonicalize");
-
-        assert_eq!(normalized, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn normalize_contract_call_gas_asset_id_canonicalizes_trimmed_alias_literal() {
-        let (state, definition_id) = selector_state();
-        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("  usd#main  "))
-            .expect("trimmed alias should canonicalize");
-
-        assert_eq!(normalized, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn normalize_contract_call_gas_asset_id_uses_pipeline_default() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), None)
-            .expect("default gas asset should canonicalize");
-
-        assert_eq!(normalized, Some(definition_id.to_string()));
-    }
-
-    #[test]
     fn resolve_asset_definition_selector_rejects_prefixed_literal() {
         let (state, _) = selector_state();
         let view = state.world_view();
@@ -10522,268 +10572,15 @@ mod zk_roots_selector_tests {
         assert_ne!(definition_id, other_definition);
     }
 
-    #[tokio::test]
-    async fn canonical_gas_asset_definition_id_rejects_blank_literal() {
-        let (state, _) = selector_state();
-        let err = canonical_gas_asset_definition_id(state.as_ref(), "   ")
-            .expect_err("blank gas asset id should fail");
-
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-            )) if message == "gas_asset_id must not be empty"
-        ));
+    #[test]
+    fn typed_fee_payment_validation_rejects_missing_contract_gas() {
+        let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        assert!(validate_app_api_fee_payment(&intent, false).is_ok());
+        assert!(validate_app_api_fee_payment(&intent, true).is_err());
     }
 
     #[test]
-    fn canonical_gas_asset_definition_id_accepts_base58_literal() {
-        let (state, definition_id) = selector_state();
-
-        let canonical =
-            canonical_gas_asset_definition_id(state.as_ref(), &definition_id.to_string())
-                .expect("base58 gas asset id should canonicalize");
-
-        assert_eq!(canonical, definition_id.to_string());
-    }
-
-    #[test]
-    fn normalize_contract_call_gas_asset_id_rejects_invalid_pipeline_default() {
-        let (mut state, _) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["  usd#missing  ".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        normalize_contract_call_gas_asset_id(state.as_ref(), None)
-            .expect_err("invalid default gas assets must fail closed");
-    }
-
-    #[test]
-    fn normalize_contract_call_gas_asset_id_rejects_invalid_explicit_literal() {
-        let (state, _) = selector_state();
-        let err = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#missing"))
-            .expect_err("invalid explicit gas asset should fail");
-
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-            )) if message
-                == "invalid gas_asset_id `usd#missing`; expected canonical Base58 asset definition id or active asset alias"
-        ));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_prefers_custom_parameter_over_pipeline_default() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#missing".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-        set_gas_accepted_assets_parameter(&state, Json::new(vec!["usd#main".to_owned()]));
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_payload_is_invalid() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-        set_gas_accepted_assets_parameter(&state, Json::new("not-a-list"));
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_entries_are_blank() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-        set_gas_accepted_assets_parameter(
-            &state,
-            Json::new(vec!["   ".to_owned(), "\t".to_owned(), "".to_owned()]),
-        );
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_list_is_empty() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-        set_gas_accepted_assets_parameter(&state, Json::new(Vec::<String>::new()));
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_uses_first_non_empty_custom_entry() {
-        let (state, definition_id) = selector_state();
-        set_gas_accepted_assets_parameter(
-            &state,
-            Json::new(vec![
-                "   ".to_owned(),
-                "usd#main".to_owned(),
-                "usd#missing".to_owned(),
-            ]),
-        );
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_rejects_invalid_custom_entry() {
-        let (state, _) = selector_state();
-        set_gas_accepted_assets_parameter(&state, Json::new(vec!["  usd#missing  ".to_owned()]));
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, None);
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_returns_none_when_unconfigured() {
-        let (state, _) = selector_state();
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, None);
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_skips_blank_pipeline_entries() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn default_pipeline_gas_asset_id_returns_none_when_pipeline_entries_are_only_blank() {
-        let (mut state, _) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "\t".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        let selected = default_pipeline_gas_asset_id(state.as_ref());
-
-        assert_eq!(selected, None);
-    }
-
-    #[test]
-    fn metadata_with_default_gas_asset_inserts_selected_asset_id() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        let metadata = metadata_with_default_gas_asset(state.as_ref());
-        let gas_asset_id = metadata
-            .get("gas_asset_id")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-
-        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
-    }
-
-    #[test]
-    fn fee_sponsor_metadata_with_default_gas_asset_preserves_real_fee_metadata() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-
-        let metadata = build_fee_sponsor_metadata_with_default_gas_asset(
-            state.as_ref(),
-            Some("sponsor@boi.is2"),
-        );
-        let gas_asset_id = metadata
-            .get("gas_asset_id")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let fee_sponsor = metadata
-            .get("fee_sponsor")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-
-        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
-        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@boi.is2"));
-    }
-
-    #[test]
-    fn explicit_fee_metadata_inserts_deploy_sponsor_and_gas_limit() {
-        let mut metadata = Metadata::default();
-
-        apply_explicit_fee_metadata(
-            &mut metadata,
-            Some("xor#sora"),
-            Some("sponsor@sora"),
-            Some(10_000_000),
-        )
-        .expect("fee metadata should be valid");
-
-        let gas_asset_id = metadata
-            .get("gas_asset_id")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let fee_sponsor = metadata
-            .get("fee_sponsor")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<String>().ok());
-        let gas_limit = metadata
-            .get("gas_limit")
-            .cloned()
-            .and_then(|value| value.try_into_any_norito::<u64>().ok());
-
-        assert_eq!(gas_asset_id.as_deref(), Some("xor#sora"));
-        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@sora"));
-        assert_eq!(gas_limit, Some(10_000_000));
-    }
-
-    #[test]
-    fn multisig_propose_metadata_with_default_gas_asset_forwards_validation_fee_policy_metadata() {
-        let (mut state, definition_id) = selector_state();
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
-        std::sync::Arc::get_mut(&mut state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
+    fn multisig_propose_metadata_forwards_only_non_fee_metadata() {
         let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
         let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
             Some("7".to_owned()),
@@ -10793,9 +10590,7 @@ mod zk_roots_selector_tests {
         )
         .expect("valid policy metadata");
 
-        let metadata = build_multisig_propose_metadata_with_default_gas_asset(
-            state.as_ref(),
-            Some("sponsor@boi.is2"),
+        let metadata = build_multisig_propose_metadata_with_validation_fee(
             Some("memo"),
             validation_fee_policy_metadata.as_ref().map(
                 |(version, hash, instruction_index, transfer_entry_index)| {
@@ -10829,7 +10624,9 @@ mod zk_roots_selector_tests {
             .cloned()
             .and_then(|value| value.try_into_any_norito::<u64>().ok());
 
-        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+        assert_eq!(gas_asset_id, None);
+        assert!(metadata.get("fee_sponsor").is_none());
+        assert!(metadata.get("gas_limit").is_none());
         assert_eq!(policy_version, Some(7));
         assert_eq!(instruction_index, Some(1));
         assert_eq!(transfer_entry_index, Some(2));
@@ -10930,15 +10727,6 @@ mod zk_roots_selector_tests {
             )
             .is_err()
         );
-    }
-
-    #[tokio::test]
-    async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
-        let (state, _) = selector_state();
-
-        let metadata = metadata_with_default_gas_asset(state.as_ref());
-
-        assert!(metadata.is_empty());
     }
 
     #[tokio::test]
@@ -12779,9 +12567,13 @@ mod multisig_guard_tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let tx = TransactionBuilder::new(chain_id, multisig_id.clone().into())
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(signer_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            multisig_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(Vec::new().into()))
+        .sign(signer_keypair.private_key());
 
         let rejection = reject_direct_multisig_signing(&state, &tx);
         match rejection {
@@ -12815,9 +12607,13 @@ mod multisig_guard_tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let tx = TransactionBuilder::new(chain_id, signatory_id.clone().into())
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(signer.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            signatory_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(Vec::new().into()))
+        .sign(signer.private_key());
 
         let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
@@ -12851,9 +12647,13 @@ mod multisig_guard_tests {
         let state = State::new_for_testing(world, kura, query_handle);
 
         let custom: InstructionBox = CustomInstruction::new("multisig-envelope").into();
-        let tx = TransactionBuilder::new(chain_id, multisig_id.clone().into())
-            .with_executable(Executable::Instructions(vec![custom].into()))
-            .sign(signer_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            multisig_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(vec![custom].into()))
+        .sign(signer_keypair.private_key());
 
         let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
@@ -16285,7 +16085,7 @@ struct NormalizedAssetTransfer {
     amount: iroha_primitives::numeric::Quantity,
     destination: AccountId,
     memo: Option<String>,
-    fee_sponsor: Option<String>,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     creation_time_ms: u64,
     transaction_ttl_ms: u64,
     intent: AssetTransferIntentDto,
@@ -16558,7 +16358,7 @@ fn normalize_asset_transfer_request_shape(
         amount,
         destination,
         memo,
-        fee_sponsor,
+        fee_payment,
         creation_time_ms,
         transaction_ttl_ms,
         public_key_hex,
@@ -16590,11 +16390,7 @@ fn normalize_asset_transfer_request_shape(
     let parsed_amount = amount.clone();
     let parsed_destination = exact_asset_transfer_account(&destination, "destination")?;
     let memo = exact_asset_transfer_memo(memo)?;
-    let fee_sponsor = fee_sponsor
-        .map(|literal| {
-            exact_asset_transfer_account(&literal, "fee_sponsor").map(|account| account.to_string())
-        })
-        .transpose()?;
+    validate_app_api_fee_payment(&fee_payment, false)?;
 
     let signing_state = match (public_key_hex.as_deref(), signature_base64.as_deref()) {
         (None, None) => AssetTransferSigningState::Prepare,
@@ -16628,7 +16424,7 @@ fn normalize_asset_transfer_request_shape(
         amount,
         destination,
         memo: memo.clone(),
-        fee_sponsor: fee_sponsor.clone(),
+        fee_payment: fee_payment.clone(),
         creation_time_ms,
         transaction_ttl_ms,
     };
@@ -16640,7 +16436,7 @@ fn normalize_asset_transfer_request_shape(
             amount: parsed_amount,
             destination: parsed_destination,
             memo,
-            fee_sponsor,
+            fee_payment,
             creation_time_ms,
             transaction_ttl_ms,
             intent,
@@ -16670,16 +16466,15 @@ impl NormalizedAssetTransfer {
                 IrohaJson::new(memo.clone()),
             );
         }
-        if let Some(fee_sponsor) = &self.fee_sponsor {
-            metadata.insert(
-                Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`"),
-                IrohaJson::new(fee_sponsor.clone()),
-            );
-        }
-        let mut builder = TransactionBuilder::new(chain_id.clone(), self.authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            self.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.transaction_ttl_ms));
         builder
+            .with_fee_payment_intent(self.fee_payment.clone())
             .with_metadata(metadata)
             .with_instructions::<InstructionBox>([instruction])
     }
@@ -16960,8 +16755,9 @@ mod asset_transfer_request_tests {
             amount: "1.25".parse().expect("canonical quantity"),
             destination: destination.to_string(),
             memo: Some("invoice 42".to_owned()),
-            fee_sponsor: Some(
-                AccountId::new(fixture_keypair(0x33).public_key().clone()).to_string(),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                None,
             ),
             creation_time_ms: NOW_MS - 1_000,
             transaction_ttl_ms: 60_000,
@@ -17089,6 +16885,9 @@ mod asset_transfer_request_tests {
             "asset_id",
             "scope",
             "to",
+            "fee_sponsor",
+            "gas_asset_id",
+            "gas_limit",
         ] {
             value
                 .as_object_mut()
@@ -17131,7 +16930,7 @@ mod asset_transfer_request_tests {
         assert!(transaction.nonce().is_none());
         assert!(transaction.attachments().is_none());
         assert!(transaction.multisig_signatures().is_none());
-        assert_eq!(transaction.metadata().iter().len(), 2);
+        assert_eq!(transaction.metadata().iter().len(), 1);
         assert_eq!(
             transaction
                 .metadata()
@@ -17140,13 +16939,8 @@ mod asset_transfer_request_tests {
                 .as_deref(),
             Some("invoice 42")
         );
-        assert_eq!(
-            transaction
-                .metadata()
-                .get(&Name::from_str("fee_sponsor").unwrap())
-                .and_then(|value| value.clone().try_into_any_norito::<String>().ok()),
-            transfer.fee_sponsor
-        );
+        assert!(transaction.metadata().get("fee_sponsor").is_none());
+        assert_eq!(transaction.payload().fee_payment, transfer.fee_payment);
 
         let Executable::Instructions(instructions) = transaction.instructions() else {
             panic!("asset transfer must use an instruction executable")
@@ -17309,9 +17103,11 @@ mod asset_transfer_request_tests {
         changed.memo = Some("changed memo".to_owned());
         hostile.push(("memo metadata", changed));
         let mut changed = base_request.clone();
-        changed.fee_sponsor =
-            Some(AccountId::new(fixture_keypair(0x42).public_key().clone()).to_string());
-        hostile.push(("fee sponsor metadata", changed));
+        changed.fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(42),
+        );
+        hostile.push(("fee payment", changed));
         let mut changed = base_request.clone();
         changed.creation_time_ms -= 1;
         hostile.push(("creation time", changed));
@@ -17715,17 +17511,16 @@ async fn submit_contract_call_request(
         payload,
         creation_time_ms,
         transaction_ttl_ms,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
+        fee_payment,
     } = req;
 
-    if gas_limit == 0 {
-        return Err(conversion_error("gas_limit must be positive".to_owned()));
-    }
-    let gas_asset_id =
-        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
-    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
+    fee_payment
+        .validate()
+        .map_err(|err| conversion_error(format!("invalid fee_payment: {err}")))?;
+    let gas_limit = fee_payment
+        .gas_limit()
+        .map(NonZeroU64::get)
+        .ok_or_else(|| conversion_error("fee_payment.gas_limit is required".to_owned()))?;
 
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
@@ -17768,13 +17563,14 @@ async fn submit_contract_call_request(
         contract_alias.as_ref(),
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
-        gas_asset_id.as_deref(),
-        fee_sponsor_literal.as_deref(),
-        gas_limit,
     );
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+    let mut builder = dm::TransactionBuilder::new(
+        (*chain_id).clone(),
+        authority.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     if let Some(transaction_ttl_ms) = transaction_ttl_ms {
         builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
@@ -17787,6 +17583,7 @@ async fn submit_contract_call_request(
     };
     let builder = builder
         .with_metadata(metadata)
+        .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
@@ -17823,8 +17620,7 @@ async fn submit_contract_call_request(
                 entrypoint: response_entrypoint.clone(),
                 entrypoint_hash_hex: Some(entrypoint_hash_hex),
                 gas_limit,
-                gas_asset_id: gas_asset_id.clone(),
-                fee_sponsor: fee_sponsor_literal.clone(),
+                fee_payment: fee_payment.clone(),
                 payload_digest_hex: &payload_digest_hex,
             }),
         });
@@ -17902,8 +17698,7 @@ async fn submit_contract_call_request(
                 entrypoint: response_entrypoint.clone(),
                 entrypoint_hash_hex: Some(entrypoint_hash_hex),
                 gas_limit,
-                gas_asset_id: gas_asset_id.clone(),
-                fee_sponsor: fee_sponsor_literal.clone(),
+                fee_payment: fee_payment.clone(),
                 payload_digest_hex: &payload_digest_hex,
             }),
         });
@@ -17942,8 +17737,7 @@ async fn submit_contract_call_request(
             entrypoint: response_entrypoint,
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
             gas_limit,
-            gas_asset_id,
-            fee_sponsor: fee_sponsor_literal,
+            fee_payment,
             payload_digest_hex: &payload_digest_hex,
         }),
     })
@@ -18143,43 +17937,17 @@ fn decode_sccp_transaction_payload_b64(
 }
 
 #[cfg(feature = "app_api")]
-fn validate_sccp_transaction_metadata(state: &CoreState, metadata: &Metadata) -> Result<()> {
+fn validate_sccp_transaction_metadata(metadata: &Metadata) -> Result<()> {
     if metadata.is_empty() {
         return Ok(());
     }
-    let mut entries = metadata.iter();
-    let Some((key, value)) = entries.next() else {
-        return Ok(());
-    };
-    let gas_asset_key = Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-    if entries.next().is_some() || key != &gas_asset_key {
-        return Err(conversion_error(
-            "SCCP transaction metadata must be empty or contain only gas_asset_id".to_owned(),
-        ));
-    }
-    let gas_asset_id = value
-        .clone()
-        .try_into_any_norito::<String>()
-        .map_err(|_| conversion_error("SCCP gas_asset_id metadata must be a string".to_owned()))?;
-    if gas_asset_id.is_empty() || gas_asset_id.trim() != gas_asset_id {
-        return Err(conversion_error(
-            "SCCP gas_asset_id metadata must be a nonblank canonical asset definition id"
-                .to_owned(),
-        ));
-    }
-    let canonical = canonical_gas_asset_definition_id(state, &gas_asset_id)?;
-    if canonical != gas_asset_id {
-        return Err(conversion_error(
-            "SCCP gas_asset_id metadata must use the canonical Base58 asset definition id"
-                .to_owned(),
-        ));
-    }
-    Ok(())
+    Err(conversion_error(
+        "SCCP transaction metadata must be empty; fee selection belongs in fee_payment".to_owned(),
+    ))
 }
 
 #[cfg(feature = "app_api")]
 fn exact_sccp_transaction_builder(
-    state: &CoreState,
     chain_id: &ChainId,
     authority: &AccountId,
     creation_time_ms: u64,
@@ -18208,7 +17976,7 @@ fn exact_sccp_transaction_builder(
             "prepared SCCP transaction payload must not contain a TTL or nonce".to_owned(),
         ));
     }
-    validate_sccp_transaction_metadata(state, &payload.metadata)?;
+    validate_sccp_transaction_metadata(&payload.metadata)?;
     let Executable::Instructions(instructions) = &payload.instructions else {
         return Err(conversion_error(
             "prepared SCCP transaction payload must contain instructions".to_owned(),
@@ -18235,10 +18003,15 @@ fn exact_sccp_transaction_builder(
 
     // TransactionBuilder currently owns the public construction boundary. Rehydrate every field
     // from the decoded payload, never from live defaults, and require byte identity before signing.
-    let mut builder = TransactionBuilder::new(payload.chain.clone(), payload.authority.clone());
+    let mut builder = TransactionBuilder::new(
+        payload.chain.clone(),
+        payload.authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(payload.creation_time_ms));
     let builder = builder
         .with_executable(payload.instructions.clone())
+        .with_fee_payment_intent(payload.fee_payment.clone())
         .with_metadata(payload.metadata.clone());
     if builder.encode_payload() != canonical_payload_bytes {
         return Err(sccp_internal_error(
@@ -18251,7 +18024,7 @@ fn exact_sccp_transaction_builder(
 
 #[cfg(feature = "app_api")]
 fn build_exact_sccp_signed_transaction(
-    state: &CoreState,
+    _state: &CoreState,
     chain_id: &ChainId,
     authority: &AccountId,
     creation_time_ms: u64,
@@ -18262,7 +18035,6 @@ fn build_exact_sccp_signed_transaction(
 ) -> Result<SignedTransaction> {
     let (payload, payload_bytes) = decode_sccp_transaction_payload_b64(transaction_payload_b64)?;
     let builder = exact_sccp_transaction_builder(
-        state,
         chain_id,
         authority,
         creation_time_ms,
@@ -18553,18 +18325,12 @@ pub fn handle_post_contract_call_simulate(
         contract_alias,
         entrypoint,
         payload,
-        gas_asset_id,
-        fee_sponsor,
         gas_limit,
     } = req;
 
     if gas_limit == 0 {
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
-    let gas_asset_id =
-        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
-    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
-
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
     let PreparedContractCall {
@@ -18590,34 +18356,21 @@ pub fn handle_post_contract_call_simulate(
         payload,
         gas_limit,
     ) {
-        Ok(result) => {
-            let _metadata = build_contract_call_metadata(
-                &manifest,
-                &contract_address,
-                &code_hash,
-                contract_alias.as_ref(),
-                Some(resolved_entrypoint),
-                result.normalized_payload.as_ref(),
-                gas_asset_id.as_deref(),
-                fee_sponsor_literal.as_deref(),
-                gas_limit,
-            );
-            ContractCallSimulateResponseDto {
-                ok: true,
-                dataspace: dataspace.clone(),
-                contract_address: Some(contract_address.clone()),
-                code_hash_hex: hex::encode(code_hash.as_ref()),
-                abi_hash_hex: hex::encode(abi_hash.as_ref()),
-                entrypoint: resolved_entrypoint.to_owned(),
-                normalized_payload: result.normalized_payload,
-                gas_limit,
-                gas_used: result.gas_used,
-                queued_instructions: result.queued_instructions,
-                result: result.result,
-                error: None,
-                vm_diagnostic: None,
-            }
-        }
+        Ok(result) => ContractCallSimulateResponseDto {
+            ok: true,
+            dataspace: dataspace.clone(),
+            contract_address: Some(contract_address.clone()),
+            code_hash_hex: hex::encode(code_hash.as_ref()),
+            abi_hash_hex: hex::encode(abi_hash.as_ref()),
+            entrypoint: resolved_entrypoint.to_owned(),
+            normalized_payload: result.normalized_payload,
+            gas_limit,
+            gas_used: result.gas_used,
+            queued_instructions: result.queued_instructions,
+            result: result.result,
+            error: None,
+            vm_diagnostic: None,
+        },
         Err(err) => ContractCallSimulateResponseDto {
             ok: false,
             dataspace,
@@ -18654,6 +18407,7 @@ enum PreparedBridgeProofSubmit {
 #[cfg(feature = "app_api")]
 fn prepare_bridge_proof_submit(
     chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
     state: Arc<CoreState>,
     req: BridgeProofSubmitDto,
 ) -> Result<PreparedBridgeProofSubmit> {
@@ -18663,11 +18417,13 @@ fn prepare_bridge_proof_submit(
 
     let BridgeProofSubmitDto {
         authority,
+        fee_payment,
         signature_b64,
         transaction_payload_b64,
         destination_proof_b64,
         creation_time_ms,
     } = req;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     validate_sccp_taira_chain_id(chain_id.as_ref())?;
     let direct_submit = validate_sccp_submit_signing_state(
         &authority,
@@ -18737,6 +18493,12 @@ fn prepare_bridge_proof_submit(
                 .expect("validated direct SCCP signature"),
             "bridge proof",
         )?;
+        if !fee_payment.has_same_payer_and_gas_bound(&tx.payload().fee_payment) {
+            return Err(conversion_error(
+                "prepared SCCP payload changed the requested payer, sponsor revision, or gas bound"
+                    .to_owned(),
+            ));
+        }
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         PreparedBridgeProofSubmit::Direct {
             transaction: tx,
@@ -18761,13 +18523,17 @@ fn prepare_bridge_proof_submit(
         let instruction: dm::InstructionBox =
             dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
         let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into(), fee_payment);
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
-        let builder = builder
-            .with_metadata(strict_metadata_with_default_gas_asset(state.as_ref())?)
-            .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
-                instruction,
-            ])));
+        let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+            instruction,
+        ])));
+        let builder = quote_app_api_transaction_builder(
+            builder,
+            queue.as_ref(),
+            state.as_ref(),
+            "SCCP bridge-proof preparation",
+        )?;
         let transaction_payload_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
@@ -18813,8 +18579,12 @@ pub(crate) async fn handle_post_bridge_proof_submit(
                     "invalid closed SCCP bridge-proof submission JSON: {error}"
                 ))
             })?;
-        let prepared =
-            prepare_bridge_proof_submit(Arc::clone(&chain_id), Arc::clone(&state), request)?;
+        let prepared = prepare_bridge_proof_submit(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            request,
+        )?;
         let (body, charge_prepare_egress) = match prepared {
             PreparedBridgeProofSubmit::Direct {
                 transaction,
@@ -18881,11 +18651,13 @@ fn prepare_bridge_message_submit(
 
     let BridgeMessageSubmitDto {
         authority,
+        fee_payment,
         signature_b64,
         transaction_payload_b64,
         native_proof_b64,
         creation_time_ms,
     } = req;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     validate_sccp_taira_chain_id(chain_id.as_ref())?;
     let direct_submit = validate_sccp_submit_signing_state(
         &authority,
@@ -18972,12 +18744,19 @@ fn prepare_bridge_message_submit(
                 .expect("validated direct SCCP signature"),
             "bridge message",
         )?;
+        if !fee_payment.has_same_payer_and_gas_bound(&tx.payload().fee_payment) {
+            return Err(conversion_error(
+                "prepared SCCP payload changed the requested payer, sponsor revision, or gas bound"
+                    .to_owned(),
+            ));
+        }
         let routing_plan = scaffold_transaction_routing_plan(
             chain_id.as_ref(),
             queue.as_ref(),
             state.as_ref(),
             &authority,
             creation_time_ms,
+            tx.payload().fee_payment.clone(),
             tx.metadata().clone(),
             tx.instructions().clone(),
             "/v1/bridge/messages",
@@ -19007,13 +18786,17 @@ fn prepare_bridge_message_submit(
         let instruction: dm::InstructionBox =
             dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
         let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into(), fee_payment);
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
-        let builder = builder
-            .with_metadata(strict_metadata_with_default_gas_asset(state.as_ref())?)
-            .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
-                instruction,
-            ])));
+        let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+            instruction,
+        ])));
+        let builder = quote_app_api_transaction_builder(
+            builder,
+            queue.as_ref(),
+            state.as_ref(),
+            "SCCP bridge-message preparation",
+        )?;
         let transaction_payload_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
@@ -20514,9 +20297,6 @@ fn build_contract_call_metadata(
     contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&str>,
-    gas_limit: u64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
     let contract_address_key =
@@ -20574,37 +20354,23 @@ fn build_contract_call_metadata(
             }
         }
     }
-    if let Some(asset_id) = gas_asset_id {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id.to_owned()));
-    }
-    if let Some(sponsor) = fee_sponsor {
-        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
-        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_owned()));
-    }
-    let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
-    metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
     metadata
 }
 
 #[cfg(feature = "app_api")]
-fn normalize_fee_sponsor_literal(fee_sponsor: Option<String>) -> Result<Option<String>> {
-    let Some(fee_sponsor) = fee_sponsor else {
-        return Ok(None);
-    };
-    let fee_sponsor = fee_sponsor.trim();
-    if fee_sponsor.is_empty() {
+fn validate_app_api_fee_payment(
+    fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
+    require_gas_limit: bool,
+) -> Result<()> {
+    fee_payment
+        .validate()
+        .map_err(|error| conversion_error(format!("invalid fee_payment: {error}")))?;
+    if require_gas_limit && fee_payment.gas_limit().is_none() {
         return Err(conversion_error(
-            "fee_sponsor must be a non-empty account literal".to_owned(),
+            "fee_payment.gas_limit is required for contract execution".to_owned(),
         ));
     }
-    if fee_sponsor.chars().any(char::is_whitespace) {
-        return Err(conversion_error(
-            "fee_sponsor must not contain whitespace".to_owned(),
-        ));
-    }
-    Ok(Some(fee_sponsor.to_owned()))
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -20730,31 +20496,8 @@ fn append_canonical_multisig_validation_fee_marker(
 }
 
 #[cfg(feature = "app_api")]
-fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
+fn build_multisig_propose_metadata(memo: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
-    if let Some(fee_sponsor) = fee_sponsor {
-        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
-        metadata.insert(sponsor_key, IrohaJson::new(fee_sponsor.to_owned()));
-    }
-    metadata
-}
-
-#[cfg(feature = "app_api")]
-fn build_fee_sponsor_metadata_with_default_gas_asset(
-    state: &CoreState,
-    fee_sponsor: Option<&str>,
-) -> Metadata {
-    let mut metadata = metadata_with_default_gas_asset(state);
-    if let Some(fee_sponsor) = fee_sponsor {
-        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
-        metadata.insert(sponsor_key, IrohaJson::new(fee_sponsor.to_owned()));
-    }
-    metadata
-}
-
-#[cfg(feature = "app_api")]
-fn build_multisig_propose_metadata(fee_sponsor: Option<&str>, memo: Option<&str>) -> Metadata {
-    let mut metadata = build_fee_sponsor_metadata(fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
@@ -20763,17 +20506,11 @@ fn build_multisig_propose_metadata(fee_sponsor: Option<&str>, memo: Option<&str>
 }
 
 #[cfg(feature = "app_api")]
-fn build_multisig_propose_metadata_with_default_gas_asset(
-    state: &CoreState,
-    fee_sponsor: Option<&str>,
+fn build_multisig_propose_metadata_with_validation_fee(
     memo: Option<&str>,
     validation_fee_policy_metadata: Option<(u64, &str, Option<u64>, Option<u64>)>,
 ) -> Metadata {
-    let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
-    if let Some(memo) = memo {
-        let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
-        metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
-    }
+    let mut metadata = build_multisig_propose_metadata(memo);
     if let Some((policy_version, policy_hash, instruction_index, transfer_entry_index)) =
         validation_fee_policy_metadata
     {
@@ -20815,14 +20552,22 @@ fn scaffold_transaction_routing_plan(
     state: &CoreState,
     routing_authority: &AccountId,
     creation_time_ms: u64,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     metadata: Metadata,
     executable: Executable,
     context: &'static str,
 ) -> Result<RoutingPlan> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), routing_authority.clone());
+    let mut builder = TransactionBuilder::new(
+        chain_id.clone(),
+        routing_authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let tx = sign_app_api_scaffold_transaction(
-        builder.with_metadata(metadata).with_executable(executable),
+        builder
+            .with_fee_payment_intent(fee_payment)
+            .with_metadata(metadata)
+            .with_executable(executable),
         routing_authority.clone(),
         context,
     )?;
@@ -20844,6 +20589,7 @@ fn multisig_immediate_execution_routing_plan(
     state: &CoreState,
     routing_authority: &AccountId,
     creation_time_ms: u64,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     metadata: Metadata,
     executable: Executable,
     context: &'static str,
@@ -20854,6 +20600,7 @@ fn multisig_immediate_execution_routing_plan(
         state,
         routing_authority,
         creation_time_ms,
+        fee_payment,
         metadata,
         executable,
         context,
@@ -20866,18 +20613,13 @@ fn derive_multisig_contract_call_trigger_id(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     payload: Option<&IrohaJson>,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&str>,
-    gas_limit: u64,
     code_hash: &Hash,
 ) -> Result<iroha_data_model::trigger::TriggerId> {
     let payload_repr = payload
         .map(|value| norito::json::to_json(value).unwrap_or_else(|_| "<payload>".to_owned()))
         .unwrap_or_default();
-    let fee_sponsor_repr = fee_sponsor.map(str::to_owned).unwrap_or_default();
-    let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
@@ -20895,9 +20637,6 @@ fn build_multisig_contract_call_instructions(
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     arguments: Option<&[u8]>,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&str>,
-    gas_limit: u64,
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
 ) -> Result<(
@@ -20920,9 +20659,6 @@ fn build_multisig_contract_call_instructions(
         contract_address,
         entrypoint,
         payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
         code_hash,
     )?;
     let trigger_metadata = build_contract_call_metadata(
@@ -20932,9 +20668,6 @@ fn build_multisig_contract_call_instructions(
         contract_alias,
         Some(entrypoint),
         payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
     );
     let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
         .for_trigger(trigger_id.clone());
@@ -22684,17 +22417,11 @@ mod multisig_contract_call_tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let asset_definition =
-            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
-
         let first = derive_multisig_contract_call_trigger_id(
             &multisig,
             &contract_address,
             "main",
             Some(&payload),
-            Some(asset_definition.as_str()),
-            None,
-            5_000,
             &code_hash,
         )
         .expect("trigger id");
@@ -22703,9 +22430,6 @@ mod multisig_contract_call_tests {
             &contract_address,
             "main",
             Some(&payload),
-            Some(asset_definition.as_str()),
-            None,
-            5_000,
             &code_hash,
         )
         .expect("trigger id");
@@ -22716,9 +22440,6 @@ mod multisig_contract_call_tests {
             &contract_address,
             "alternate",
             Some(&payload),
-            Some(asset_definition.as_str()),
-            None,
-            5_000,
             &code_hash,
         )
         .expect("trigger id");
@@ -22751,10 +22472,6 @@ mod multisig_contract_call_tests {
         }]));
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
-        let asset_definition =
-            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
-        let sponsor = multisig.to_string();
-
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
             &contract_address,
@@ -22762,9 +22479,6 @@ mod multisig_contract_call_tests {
             "main",
             Some(&payload),
             None,
-            Some(asset_definition.as_str()),
-            Some(sponsor.as_str()),
-            5_000,
             &manifest,
             &code_hash,
         )
@@ -22841,9 +22555,6 @@ mod multisig_contract_call_tests {
                 entrypoint,
                 Some(payload),
                 None,
-                None,
-                None,
-                300_000,
                 &manifest,
                 &code_hash,
             )
@@ -23210,7 +22921,7 @@ mod multisig_contract_call_tests {
     }
 
     #[test]
-    fn contract_call_metadata_keeps_only_fee_fields() {
+    fn contract_call_metadata_excludes_retired_fee_fields() {
         let manifest = manifest::ContractManifest {
             seiyaku_name: None,
             code_hash: None,
@@ -23228,17 +22939,6 @@ mod multisig_contract_call_tests {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
-        let sponsor = iroha_data_model::account::AccountId::of(
-            super::checked_routing_fixture_keypair(
-                0xeb,
-                iroha_crypto::Algorithm::Ed25519,
-                "derive multisig contract-call metadata sponsor key",
-            )
-            .public_key()
-            .clone(),
-        );
-        let sponsor = sponsor.to_string();
-
         let metadata = build_contract_call_metadata(
             &manifest,
             &contract_address,
@@ -23246,20 +22946,16 @@ mod multisig_contract_call_tests {
             None,
             Some("create_mint_request"),
             Some(&IrohaJson::new(norito::json!({ "amount": 7 }))),
-            Some("xor#test"),
-            Some(sponsor.as_str()),
-            300_000,
         );
-        assert_eq!(
-            metadata.iter().count(),
-            7,
-            "contract identity and exact payload should stay alongside the fee metadata"
-        );
+        assert_eq!(metadata.iter().count(), 4);
         assert!(metadata.get("gov_contract_address").is_none());
         assert!(metadata.get("contract_address").is_some());
         assert!(metadata.get("contract_code_hash").is_some());
         assert!(metadata.get("contract_entrypoint").is_some());
         assert!(metadata.get("contract_payload").is_some());
+        assert!(metadata.get("gas_asset_id").is_none());
+        assert!(metadata.get("fee_sponsor").is_none());
+        assert!(metadata.get("gas_limit").is_none());
     }
 
     #[test]
@@ -23271,10 +22967,9 @@ mod multisig_contract_call_tests {
         assert!(normalize_transaction_memo(Some("  ".to_owned())).is_none());
         assert!(normalize_transaction_memo(None).is_none());
 
-        let metadata =
-            build_multisig_propose_metadata(Some("sponsor@boi.is2"), Some("QR invoice 42"));
+        let metadata = build_multisig_propose_metadata(Some("QR invoice 42"));
         let json = metadata_to_json(&metadata);
-        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@boi.is2"));
+        assert!(json.get("fee_sponsor").is_none());
         assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
     }
 
@@ -24863,19 +24558,34 @@ mod multisig_selector_tests {
         )
         .to_string();
         let propose = format!(
-            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","contract_alias":"pkdeploy_issuance_swap_sbp::sbp","entrypoint":"swap","payload":{{"swap_id":"swap_1","pkr_amount":"7600","treasury_amount":"100"}},"unexpected":true}}"#,
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","contract_alias":"pkdeploy_issuance_swap_sbp::sbp","entrypoint":"swap","payload":{{"swap_id":"swap_1","pkr_amount":"7600","treasury_amount":"100"}},"fee_payment":{{"payer":"authority","value":{{"charge_limits":[],"gas_limit":10000}}}},"fee_sponsor":"{account}"}}"#,
         );
         assert!(
             norito::json::from_str::<MultisigContractCallProposeDto>(&propose).is_err(),
-            "contract-call propose must reject unknown fields",
+            "contract-call propose must reject the retired fee_sponsor field",
         );
 
         let approve = format!(
-            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","unexpected":true}}"#,
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","fee_payment":{{"payer":"authority","value":{{"charge_limits":[]}}}},"gas_asset_id":"xor#sora"}}"#,
         );
         assert!(
             norito::json::from_str::<MultisigContractCallApproveDto>(&approve).is_err(),
-            "contract-call approve must reject unknown fields",
+            "contract-call approve must reject the retired gas_asset_id field",
+        );
+
+        let direct = format!(
+            r#"{{"authority":"{account}","contract_alias":"pkdeploy_issuance_swap_sbp::sbp","entrypoint":"swap","fee_payment":{{"payer":"authority","value":{{"charge_limits":[],"gas_limit":10000}}}},"gas_limit":10000}}"#,
+        );
+        assert!(
+            norito::json::from_str::<ContractCallDto>(&direct).is_err(),
+            "direct contract call must reject the retired metadata gas_limit field",
+        );
+        let simulate = format!(
+            r#"{{"authority":"{account}","contract_alias":"pkdeploy_issuance_swap_sbp::sbp","entrypoint":"swap","gas_limit":10000,"fee_sponsor":"{account}"}}"#,
+        );
+        assert!(
+            norito::json::from_str::<ContractCallSimulateDto>(&simulate).is_err(),
+            "contract simulation must reject fee-payer selection",
         );
     }
 
@@ -25107,9 +24817,10 @@ mod multisig_selector_tests {
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: 10_000,
+                fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    std::num::NonZeroU64::new(10_000),
+                ),
             }),
         )
         .await
@@ -25150,9 +24861,10 @@ mod multisig_selector_tests {
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: 10_000,
+                fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    std::num::NonZeroU64::new(10_000),
+                ),
             }),
         )
         .await;
@@ -25188,9 +24900,10 @@ mod multisig_selector_tests {
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: 10_000,
+                fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    std::num::NonZeroU64::new(10_000),
+                ),
             }),
         )
         .await;
@@ -25243,9 +24956,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: Some(10_000),
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
         .await
@@ -26279,7 +25990,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_123),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -26319,7 +26030,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_124),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -26396,7 +26107,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_125),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
             }),
@@ -26453,9 +26164,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: Some(10_000),
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
         .await
@@ -26528,9 +26237,7 @@ seiyaku BytesPayloadNormalizeTest {
                 contract_alias: None,
                 entrypoint: "create".to_owned(),
                 payload: Some(request_payload.clone()),
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: Some(10_000),
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
         .await
@@ -26566,9 +26273,6 @@ seiyaku BytesPayloadNormalizeTest {
             "create",
             Some(&normalized_payload),
             arguments.as_deref(),
-            None,
-            None,
-            10_000,
             &manifest,
             &code_hash,
         )
@@ -26607,7 +26311,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26656,7 +26360,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26681,7 +26385,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some("00".repeat(32)),
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26706,7 +26410,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some("  ".to_owned()),
                 signature_b64: Some("  ".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26751,7 +26455,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some("not hex".to_owned()),
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26781,7 +26485,7 @@ seiyaku BytesPayloadNormalizeTest {
                     public_key_hex: Some(hex::encode(public_key)),
                     signature_b64: Some("AQID".to_owned()),
                     creation_time_ms: Some(1_700_000_000_345),
-                    fee_sponsor: None,
+                    fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                     memo: None,
                     validation_fee_policy_version: None,
                     validation_fee_policy_hash: None,
@@ -26819,7 +26523,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some(other_public_key_hex),
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26849,7 +26553,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some(signer_public_key_hex.clone()),
                 signature_b64: Some("not base64".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26875,7 +26579,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some(signer_public_key_hex),
                 signature_b64: Some(forged_signature_b64),
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -26919,18 +26623,15 @@ seiyaku BytesPayloadNormalizeTest {
         let state = build_state(world);
         install_paynet_routing_state(state.as_ref());
         let (queue, mut event_receiver) = build_paynet_routing_queue();
+        let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
         let direct_plan = multisig_immediate_execution_routing_plan(
             chain_id.as_ref(),
             queue.as_ref(),
             state.as_ref(),
             &signer_account_id,
             creation_time_ms,
-            build_multisig_propose_metadata_with_default_gas_asset(
-                state.as_ref(),
-                None,
-                None,
-                None,
-            ),
+            fee_payment.clone(),
+            build_multisig_propose_metadata_with_validation_fee(None, None),
             dm::Executable::Instructions(ConstVec::from(inner_instructions.clone())),
             ENDPOINT_MULTISIG_PROPOSE,
         )
@@ -26950,16 +26651,17 @@ seiyaku BytesPayloadNormalizeTest {
             multisig_account_id.clone(),
             proposal_hash,
         )));
-        let mut builder =
-            dm::TransactionBuilder::new(chain_id.as_ref().clone(), signer_account_id.clone());
+        let mut builder = dm::TransactionBuilder::new(
+            chain_id.as_ref().clone(),
+            signer_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         let signed = sign_app_api_transaction(
             builder
-                .with_metadata(build_multisig_propose_metadata_with_default_gas_asset(
-                    state.as_ref(),
-                    None,
-                    None,
-                    None,
+                .with_fee_payment_intent(fee_payment.clone())
+                .with_metadata(build_multisig_propose_metadata_with_validation_fee(
+                    None, None,
                 ))
                 .with_instructions(transaction_instructions),
             signer_keypair.private_key(),
@@ -26983,7 +26685,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: Some(public_key_hex),
                 signature_b64: Some(signature_b64),
                 creation_time_ms: Some(creation_time_ms),
-                fee_sponsor: None,
+                fee_payment,
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -27041,6 +26743,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.as_ref(),
             &signer_account_id,
             current_time_millis(),
+            dm::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
             dm::Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
@@ -27088,7 +26791,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
@@ -27123,7 +26826,7 @@ seiyaku BytesPayloadNormalizeTest {
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
-            fee_sponsor: None,
+            fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
@@ -27262,7 +26965,7 @@ seiyaku BytesPayloadNormalizeTest {
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
-            fee_sponsor: None,
+            fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
@@ -27312,7 +27015,7 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_456),
-                fee_sponsor: None,
+                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -27364,17 +27067,9 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias,
         entrypoint,
         payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
+        fee_payment,
     } = req;
-    if gas_limit.is_some_and(|value| value == 0) {
-        return Err(conversion_error("gas_limit must be positive".to_owned()));
-    }
-    let gas_limit = gas_limit.unwrap_or(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT);
-    let gas_asset_id =
-        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
-    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    validate_app_api_fee_payment(&fee_payment, true)?;
     let selector_alias_literal = selected_multisig_alias_literal(&selector);
     reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
@@ -27422,9 +27117,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias.as_ref(),
         Some(&entrypoint),
         normalized_payload.as_ref(),
-        gas_asset_id.as_deref(),
-        fee_sponsor.as_deref(),
-        gas_limit,
     );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
@@ -27433,9 +27125,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         &entrypoint,
         normalized_payload.as_ref(),
         arguments.as_deref(),
-        gas_asset_id.as_deref(),
-        fee_sponsor.as_deref(),
-        gas_limit,
         &manifest,
         &code_hash,
     )?;
@@ -27457,10 +27146,14 @@ pub async fn handle_post_contract_call_multisig_propose(
         )));
     }
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    let mut builder = dm::TransactionBuilder::new(
+        (*chain_id).clone(),
+        signer_account_id.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
+        .with_fee_payment_intent(fee_payment.clone())
         .with_metadata(tx_metadata.clone())
         .with_instructions(transaction_instructions);
 
@@ -27518,6 +27211,7 @@ pub async fn handle_post_contract_call_multisig_propose(
                 state.as_ref(),
                 &signer_account_id,
                 creation_time_ms,
+                fee_payment.clone(),
                 tx_metadata.clone(),
                 dm::Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
@@ -27614,11 +27308,11 @@ pub async fn handle_post_contract_call_multisig_approve(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        fee_sponsor,
+        fee_payment,
         proposal_id,
         instructions_hash,
     } = req;
-    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -27632,14 +27326,14 @@ pub async fn handle_post_contract_call_multisig_approve(
     let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    let mut builder = dm::TransactionBuilder::new(
+        (*chain_id).clone(),
+        signer_account_id.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
-            state.as_ref(),
-            fee_sponsor.as_deref(),
-        ))
+        .with_fee_payment_intent(fee_payment)
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
@@ -27755,11 +27449,11 @@ pub async fn handle_post_multisig_cancel(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        fee_sponsor,
+        fee_payment,
         proposal_id,
         instructions_hash,
     } = req;
-    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -27792,34 +27486,34 @@ pub async fn handle_post_multisig_cancel(
     let (action, creation_time_ms, builder) = if existing_cancel_state.is_some() {
         let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), cancel_hash);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-        let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+        let mut builder = dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            signer_account_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         (
             "APPROVE".to_owned(),
             creation_time_ms,
             builder
-                .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
-                    state.as_ref(),
-                    fee_sponsor.as_deref(),
-                ))
+                .with_fee_payment_intent(fee_payment.clone())
                 .with_instructions([dm::InstructionBox::from(approve_instruction)]),
         )
     } else {
         let propose_instruction =
             MultisigPropose::new(multisig_account_id.clone(), cancel_instructions, None);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-        let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+        let mut builder = dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            signer_account_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         (
             "PROPOSE".to_owned(),
             creation_time_ms,
             builder
-                .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
-                    state.as_ref(),
-                    fee_sponsor.as_deref(),
-                ))
+                .with_fee_payment_intent(fee_payment)
                 .with_instructions([dm::InstructionBox::from(propose_instruction)]),
         )
     };
@@ -27957,7 +27651,7 @@ pub async fn handle_post_multisig_propose(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        fee_sponsor,
+        fee_payment,
         memo,
         validation_fee_policy_version,
         validation_fee_policy_hash,
@@ -27965,7 +27659,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_transfer_entry_index,
         instructions,
     } = req;
-    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     let memo = normalize_transaction_memo(memo);
     let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
         validation_fee_policy_version,
@@ -28004,12 +27698,13 @@ pub async fn handle_post_multisig_propose(
     }
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    let mut builder = dm::TransactionBuilder::new(
+        (*chain_id).clone(),
+        signer_account_id.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let tx_metadata = build_multisig_propose_metadata_with_default_gas_asset(
-        state.as_ref(),
-        fee_sponsor.as_deref(),
+    let tx_metadata = build_multisig_propose_metadata_with_validation_fee(
         memo.as_deref(),
         validation_fee_policy_metadata.as_ref().map(
             |(version, hash, instruction_index, transfer_entry_index)| {
@@ -28023,6 +27718,7 @@ pub async fn handle_post_multisig_propose(
         ),
     );
     let builder = builder
+        .with_fee_payment_intent(fee_payment.clone())
         .with_metadata(tx_metadata.clone())
         .with_instructions(transaction_instructions);
 
@@ -28077,6 +27773,7 @@ pub async fn handle_post_multisig_propose(
                     state.as_ref(),
                     &signer_account_id,
                     creation_time_ms,
+                    fee_payment.clone(),
                     tx_metadata.clone(),
                     dm::Executable::Instructions(ConstVec::from(proposal_instructions.clone())),
                     ENDPOINT_MULTISIG_PROPOSE,
@@ -28165,11 +27862,11 @@ pub async fn handle_post_multisig_approve(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        fee_sponsor,
+        fee_payment,
         proposal_id,
         instructions_hash,
     } = req;
-    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    validate_app_api_fee_payment(&fee_payment, false)?;
     reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -28183,14 +27880,14 @@ pub async fn handle_post_multisig_approve(
     let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    let mut builder = dm::TransactionBuilder::new(
+        (*chain_id).clone(),
+        signer_account_id.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
-            state.as_ref(),
-            fee_sponsor.as_deref(),
-        ))
+        .with_fee_payment_intent(fee_payment)
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
@@ -29440,12 +29137,16 @@ pub async fn handle_post_vk_register(
         id,
         record: vk_record,
     };
-    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_metadata(tx_metadata)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/zk/vk/register",
     )?;
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
@@ -29485,12 +29186,16 @@ pub async fn handle_post_vk_update(
         id,
         record: vk_record,
     };
-    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_metadata(tx_metadata)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/zk/vk/update",
     )?;
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
@@ -29776,102 +29481,6 @@ fn dataspace_alias_for_contract_address(
 }
 
 #[cfg(feature = "app_api")]
-fn configured_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
-    let world = state.world_view();
-    let key =
-        Name::from_str("ivm_gas_accepted_assets").expect("static gas-accepted-assets parameter");
-    let parameter_id = iroha_data_model::parameter::CustomParameterId(key);
-    world
-        .parameters()
-        .custom()
-        .get(&parameter_id)
-        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-        .and_then(|assets| {
-            assets
-                .into_iter()
-                .map(|asset| asset.trim().to_owned())
-                .find(|asset| !asset.is_empty())
-        })
-        .or_else(|| {
-            state
-                .pipeline_snapshot()
-                .gas
-                .accepted_assets
-                .into_iter()
-                .map(|asset| asset.trim().to_owned())
-                .find(|asset| !asset.is_empty())
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn strict_default_pipeline_gas_asset_id(state: &CoreState) -> Result<Option<String>> {
-    configured_pipeline_gas_asset_id(state)
-        .map(|configured_asset| {
-            canonical_gas_asset_definition_id(state, &configured_asset).map(Some)
-        })
-        .unwrap_or(Ok(None))
-}
-
-#[cfg(feature = "app_api")]
-fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
-    match strict_default_pipeline_gas_asset_id(state) {
-        Ok(asset_id) => asset_id,
-        Err(err) => {
-            iroha_logger::warn!(?err, "rejecting a noncanonical default gas asset id");
-            None
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn strict_metadata_with_default_gas_asset(state: &CoreState) -> Result<Metadata> {
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = strict_default_pipeline_gas_asset_id(state)? {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
-    }
-    Ok(metadata)
-}
-
-#[cfg(feature = "app_api")]
-fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = default_pipeline_gas_asset_id(state) {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
-    }
-    metadata
-}
-
-#[cfg(feature = "app_api")]
-fn apply_explicit_fee_metadata(
-    metadata: &mut Metadata,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&str>,
-    gas_limit: Option<u64>,
-) -> Result<()> {
-    if let Some(asset_id) = gas_asset_id {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id.to_owned()));
-    }
-    if let Some(sponsor) = fee_sponsor {
-        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
-        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_owned()));
-    }
-    if let Some(gas_limit) = gas_limit {
-        if gas_limit == 0 {
-            return Err(conversion_error("gas_limit must be positive".to_owned()));
-        }
-        let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
-        metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
 #[derive(
     Clone,
     Debug,
@@ -29900,9 +29509,8 @@ pub struct AssetTransferRequestDto {
     /// Optional, bounded, control-free memo stored as transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
-    /// Optional exact canonical I105 fee-sponsor account stored as metadata.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Explicit transaction creation time in Unix epoch milliseconds.
     pub creation_time_ms: u64,
     /// Explicit transaction time-to-live in milliseconds.
@@ -29937,10 +29545,8 @@ pub struct AssetTransferIntentDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub memo: Option<String>,
-    /// Canonical fee-sponsor account, when supplied.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub fee_sponsor: Option<String>,
+    /// Exact signature-bound fee payment intent.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Transaction creation time embedded in the payload.
     pub creation_time_ms: u64,
     /// Transaction time-to-live embedded in the payload.
@@ -30042,6 +29648,7 @@ pub struct AssetTransferResponseDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for invoking a deployed contract.
+#[norito(deny_unknown_fields)]
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -30071,14 +29678,8 @@ pub struct ContractCallDto {
     /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
-    /// Optional gas asset id forwarded to transaction metadata.
-    #[norito(default)]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
-    #[norito(default)]
-    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
-    /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
-    pub gas_limit: u64,
+    /// Explicit payer selection, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
 
 #[cfg(feature = "app_api")]
@@ -30090,6 +29691,7 @@ pub struct ContractCallDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for simulating a deployed contract call without submitting a transaction.
+#[norito(deny_unknown_fields)]
 pub struct ContractCallSimulateDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -30104,13 +29706,7 @@ pub struct ContractCallSimulateDto {
     /// Optional Norito JSON payload forwarded to the contract.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
-    /// Optional gas asset id forwarded to transaction metadata.
-    #[norito(default)]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
-    #[norito(default)]
-    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
-    /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
+    /// Caller-specified execution gas limit (must be positive).
     pub gas_limit: u64,
 }
 
@@ -30169,14 +29765,10 @@ pub struct OperationReceiptDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_used: Option<u64>,
-    /// Optional gas asset identifier.
+    /// Exact signature-bound fee payment used by this transaction.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub fee_sponsor: Option<String>,
+    pub fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
     /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
@@ -30250,8 +29842,7 @@ struct ContractCallReceiptInput<'a> {
     entrypoint: Option<String>,
     entrypoint_hash_hex: Option<String>,
     gas_limit: u64,
-    gas_asset_id: Option<String>,
-    fee_sponsor: Option<String>,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     payload_digest_hex: &'a str,
 }
 
@@ -30271,8 +29862,7 @@ fn contract_call_operation_receipt(input: ContractCallReceiptInput<'_>) -> Opera
         entrypoint_hash_hex: input.entrypoint_hash_hex,
         gas_limit: Some(input.gas_limit),
         gas_used: None,
-        gas_asset_id: input.gas_asset_id,
-        fee_sponsor: input.fee_sponsor,
+        fee_payment: Some(input.fee_payment),
         payload_digest_hex: input.payload_digest_hex.to_owned(),
     }
 }
@@ -30360,6 +29950,8 @@ fn reject_unknown_json_object_fields(
 pub struct BridgeProofSubmitDto {
     /// Account authorizing the bridge-proof submission.
     pub authority: iroha_data_model::account::AccountId,
+    /// Exact authority or sponsor-program selection to place in a prepared payload.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional detached signature (canonical padded base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
@@ -30381,6 +29973,7 @@ pub struct BridgeProofSubmitDto {
 #[norito(deny_unknown_fields)]
 struct BridgeProofSubmitDtoWire {
     authority: iroha_data_model::account::AccountId,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     #[norito(default)]
     signature_b64: Option<String>,
     #[norito(default)]
@@ -30395,6 +29988,7 @@ impl From<BridgeProofSubmitDtoWire> for BridgeProofSubmitDto {
     fn from(wire: BridgeProofSubmitDtoWire) -> Self {
         let BridgeProofSubmitDtoWire {
             authority,
+            fee_payment,
             signature_b64,
             transaction_payload_b64,
             destination_proof_b64,
@@ -30402,6 +29996,7 @@ impl From<BridgeProofSubmitDtoWire> for BridgeProofSubmitDto {
         } = wire;
         Self {
             authority,
+            fee_payment,
             signature_b64,
             transaction_payload_b64,
             destination_proof_b64,
@@ -30419,6 +30014,7 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             parser,
             &[
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "destination_proof_b64",
@@ -30433,6 +30029,7 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             value,
             &[
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "destination_proof_b64",
@@ -30492,6 +30089,8 @@ pub struct BridgeSubmitResponseDto {
 pub struct BridgeMessageSubmitDto {
     /// Account authorizing the bridge-message submission.
     pub authority: iroha_data_model::account::AccountId,
+    /// Exact authority or sponsor-program selection to place in a prepared payload.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional detached signature (canonical padded base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
@@ -30513,6 +30112,7 @@ pub struct BridgeMessageSubmitDto {
 #[norito(deny_unknown_fields)]
 struct BridgeMessageSubmitDtoWire {
     authority: iroha_data_model::account::AccountId,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     #[norito(default)]
     signature_b64: Option<String>,
     #[norito(default)]
@@ -30527,6 +30127,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
     fn from(wire: BridgeMessageSubmitDtoWire) -> Self {
         let BridgeMessageSubmitDtoWire {
             authority,
+            fee_payment,
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
@@ -30534,6 +30135,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
         } = wire;
         Self {
             authority,
+            fee_payment,
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
@@ -30551,6 +30153,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
             parser,
             &[
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
@@ -30565,6 +30168,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
             value,
             &[
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
@@ -30763,6 +30367,7 @@ pub struct MultisigAccountSelectorDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for proposing a generic multisig instruction batch.
+#[norito(deny_unknown_fields)]
 pub struct MultisigProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -30781,9 +30386,8 @@ pub struct MultisigProposeDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional fee sponsor account literal forwarded to transaction metadata.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
@@ -30812,6 +30416,7 @@ pub struct MultisigProposeDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for approving a generic multisig proposal.
+#[norito(deny_unknown_fields)]
 pub struct MultisigApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -30830,9 +30435,8 @@ pub struct MultisigApproveDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional fee sponsor account literal forwarded to transaction metadata.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -30880,15 +30484,8 @@ pub struct MultisigContractCallProposeDto {
     /// Optional payload forwarded to the contract.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
-    /// Optional gas asset id forwarded to transaction metadata.
-    #[norito(default)]
-    pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account literal for gas/fees.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
-    /// Optional gas limit (must be > 0 when provided).
-    #[norito(default)]
-    pub gas_limit: Option<u64>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
 
 #[cfg(feature = "app_api")]
@@ -30919,9 +30516,8 @@ pub struct MultisigContractCallApproveDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional fee sponsor account literal forwarded to transaction metadata.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -30935,10 +30531,7 @@ mod multisig_native_norito_dto_tests {
     use super::{
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
-    use iroha_data_model::{
-        account::{AccountController, AccountId},
-        smart_contract::ContractAlias,
-    };
+    use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
     use norito::NoritoSerialize;
 
     fn bare_payload_with_flags<T: NoritoSerialize>(
@@ -30984,9 +30577,10 @@ mod multisig_native_norito_dto_tests {
             ),
             entrypoint: "create_mint_request".to_owned(),
             payload: Some(IrohaJson::new(norito::json::Value::from(111_u64))),
-            gas_asset_id: None,
-            fee_sponsor: Some("sponsor@sbp".to_owned()),
-            gas_limit: Some(10_000),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                std::num::NonZeroU64::new(10_000),
+            ),
         };
 
         let bytes = norito::to_bytes(&request).expect("encode request");
@@ -31010,56 +30604,35 @@ mod multisig_native_norito_dto_tests {
         let payload = decoded.payload.expect("payload");
         let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
         assert_eq!(payload.as_u64(), Some(111));
-        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@sbp"));
+        assert_eq!(
+            decoded
+                .fee_payment
+                .gas_limit()
+                .map(std::num::NonZeroU64::get),
+            Some(10_000)
+        );
     }
 
     #[test]
-    fn multisig_propose_decodes_android_native_norito_fixture() {
+    fn retired_multisig_sponsor_metadata_native_fixture_is_rejected() {
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
 
-        let decoded: MultisigProposeDto =
-            norito::decode_from_bytes(&bytes).expect("decode Android native multisig propose DTO");
-
-        assert_eq!(decoded.instructions.len(), 2);
-        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
-        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
+        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
+            .expect_err("retired metadata fee sponsor fixture must not decode");
     }
 
     #[test]
-    fn multisig_propose_decodes_android_native_norito_multisig_account_fixture() {
+    fn retired_multisig_account_sponsor_metadata_native_fixture_is_rejected() {
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
 
-        let decoded: MultisigProposeDto =
-            norito::decode_from_bytes(&bytes).expect("decode native multisig AccountId DTO");
-
-        let multisig_account = decoded
-            .selector
-            .multisig_account_id
-            .as_ref()
-            .expect("multisig account id");
-        match multisig_account.controller() {
-            AccountController::Multisig(policy) => {
-                assert_eq!(policy.version(), 1);
-                assert_eq!(policy.threshold(), 1);
-                assert_eq!(policy.members().len(), 1);
-                assert_eq!(policy.members()[0].weight(), 1);
-            }
-            AccountController::Single(_) => panic!("expected native multisig account id"),
-        }
-        assert!(decoded.selector.multisig_account_alias.is_none());
-        assert!(matches!(
-            decoded.signer_account_id.controller(),
-            AccountController::Single(_)
-        ));
-        assert_eq!(decoded.instructions.len(), 1);
-        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
-        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
+        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
+            .expect_err("retired multisig metadata fee sponsor fixture must not decode");
     }
 }
 
@@ -31072,6 +30645,7 @@ mod multisig_native_norito_dto_tests {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for canceling a multisig proposal through a multisig action.
+#[norito(deny_unknown_fields)]
 pub struct MultisigCancelRequestDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31090,9 +30664,8 @@ pub struct MultisigCancelRequestDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional fee sponsor account literal forwarded to transaction metadata.
-    #[norito(default)]
-    pub fee_sponsor: Option<String>,
+    /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional target proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -31663,9 +31236,6 @@ pub struct RegisterPinManifestDto {
     pub content_length: u64,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
-    /// Optional gas asset id to attach to the server-built registration transaction.
-    #[norito(default)]
-    pub gas_asset_id: Option<String>,
     /// Optional alias binding to associate with the manifest.
     #[norito(default)]
     pub alias: Option<PinAliasDto>,
@@ -32638,12 +32208,16 @@ pub async fn handle_post_contract_alias_set(
         )),
         None => dm::InstructionBox::from(SetContractAlias::clear(contract_address.clone())),
     };
-    let metadata = metadata_with_default_gas_asset(&state);
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), authority)
-            .with_metadata(metadata)
-            .with_instructions(std::iter::once(instruction)),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(std::iter::once(instruction)),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/contracts/aliases",
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -32762,20 +32336,16 @@ pub async fn handle_post_sorafs_register_manifest(
         successor_digest,
     );
 
-    let gas_asset_id =
-        normalize_contract_call_gas_asset_id(state.as_ref(), req.gas_asset_id.as_deref())?;
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
-    }
-
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_metadata(metadata)
-            .with_instructions([dm::InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([dm::InstructionBox::from(isi)]),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/sorafs/pin/register",
     )?;
 
@@ -32886,10 +32456,16 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     let record_for_node = record.clone();
     let isi = sorafs::RegisterCapacityDeclaration { record };
 
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_instructions([dm::InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([dm::InstructionBox::from(isi)]),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/sorafs/capacity/declare",
     )?;
 
@@ -33014,10 +32590,16 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
 
     let isi = sorafs::RecordCapacityTelemetry { record };
 
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_instructions([dm::InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([dm::InstructionBox::from(isi)]),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/sorafs/capacity/telemetry",
     )?;
 
@@ -33549,10 +33131,16 @@ pub async fn handle_post_sorafs_register_capacity_dispute(
     );
 
     let isi = sorafs::RegisterCapacityDispute { record };
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_instructions([dm::InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            req.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([dm::InstructionBox::from(isi)]),
         &req.private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         "/v1/sorafs/capacity/dispute",
     )?;
 
@@ -36504,7 +36092,6 @@ mod sorafs_pin_tests {
             chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
             content_length: manifest.content_length,
             submitted_epoch: 5,
-            gas_asset_id: None,
             alias: None,
             successor_of_hex: None,
         }
@@ -36916,7 +36503,6 @@ mod sorafs_pin_tests {
             chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
             content_length: manifest.content_length,
             submitted_epoch: 5,
-            gas_asset_id: None,
             alias: Some(PinAliasDto {
                 namespace: "sora".into(),
                 name: "docs".into(),
@@ -37331,9 +36917,13 @@ mod sorafs_capacity_tests {
         let policy = dm::MultisigPolicy::new(1, members).expect("policy");
         let authority = dm::AccountId::new_multisig(policy);
 
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.into())
-            .with_instructions([dm::Log::new(dm::Level::INFO, "too many signatures".into())])
-            .sign_multisig(signers.iter().map(iroha_crypto::KeyPair::private_key));
+        let tx = dm::TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([dm::Log::new(dm::Level::INFO, "too many signatures".into())])
+        .sign_multisig(signers.iter().map(iroha_crypto::KeyPair::private_key));
 
         let result = handle_transaction_with_metrics(
             Arc::clone(&chain_id),
@@ -38444,9 +38034,7 @@ struct ContractActivityProjection {
     contract_alias: Option<String>,
     contract_entrypoint: Option<String>,
     contract_payload: Option<norito::json::Value>,
-    gas_asset_id: Option<String>,
-    fee_sponsor: Option<String>,
-    gas_limit: Option<u64>,
+    fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
 
 #[cfg(feature = "app_api")]
@@ -38493,9 +38081,7 @@ struct ContractEventProjection {
     asset_ids: Vec<String>,
     numeric_fields: Map,
     payload: Option<norito::json::Value>,
-    gas_asset_id: Option<String>,
-    fee_sponsor: Option<String>,
-    gas_limit: Option<u64>,
+    fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
 
 #[cfg(feature = "app_api")]
@@ -39880,9 +39466,7 @@ fn contract_event_projection_from_tx(
         tx_metadata_string(tx, "contract_event_provenance").unwrap_or_else(|| "derived".to_owned());
     let module = tx_metadata_string(tx, "contract_module")
         .unwrap_or_else(|| contract_event_module(contract_alias.as_deref(), &contract_address));
-    let gas_asset_id = tx_metadata_string(tx, "gas_asset_id");
-    let fee_sponsor = tx_metadata_string(tx, "fee_sponsor");
-    let gas_limit = tx_metadata_u64(tx, "gas_limit");
+    let fee_payment = tx_fee_projection(tx);
     let (mut participants, mut asset_ids, numeric_fields) = payload
         .as_ref()
         .map(collect_contract_event_payload_fields)
@@ -39890,11 +39474,16 @@ fn contract_event_projection_from_tx(
     if let Some(authority) = base.authority.as_ref() {
         participants.push(authority.clone());
     }
-    if let Some(fee_sponsor) = fee_sponsor.as_ref() {
-        participants.push(fee_sponsor.clone());
-    }
-    if let Some(gas_asset_id) = gas_asset_id.as_ref() {
-        asset_ids.push(gas_asset_id.clone());
+    if let Some(intent) = fee_payment.as_ref() {
+        if let Some((program_id, _)) = intent.sponsor_program() {
+            participants.push(program_id.sponsor.to_string());
+        }
+        asset_ids.extend(
+            intent
+                .charge_limits()
+                .iter()
+                .map(|limit| limit.asset_definition_id.to_string()),
+        );
     }
     participants.sort();
     participants.dedup();
@@ -39919,9 +39508,7 @@ fn contract_event_projection_from_tx(
         asset_ids,
         numeric_fields,
         payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
+        fee_payment,
     })
 }
 
@@ -42010,6 +41597,7 @@ fn contract_activity_projection_from_tx(
 ) -> Option<ContractActivityProjection> {
     let base = project_tx(tx, &None);
     let contract_address = tx_metadata_string(tx, "contract_address")?;
+    let fee_payment = tx_fee_projection(tx);
     Some(ContractActivityProjection {
         authority: base.authority,
         timestamp_ms: base.timestamp_ms,
@@ -42019,10 +41607,26 @@ fn contract_activity_projection_from_tx(
         contract_alias: tx_metadata_string(tx, "contract_alias"),
         contract_entrypoint: tx_metadata_string(tx, "contract_entrypoint"),
         contract_payload: tx_metadata_json_value(tx, "contract_payload"),
-        gas_asset_id: tx_metadata_string(tx, "gas_asset_id"),
-        fee_sponsor: tx_metadata_string(tx, "fee_sponsor"),
-        gas_limit: tx_metadata_u64(tx, "gas_limit"),
+        fee_payment,
     })
+}
+
+#[cfg(feature = "app_api")]
+fn tx_fee_projection(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<iroha_data_model::transaction::FeePaymentIntent> {
+    use iroha_data_model::transaction::TransactionEntrypoint;
+
+    let intent = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => Some(signed.fee_payment_intent().clone()),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(reveal.signed_transaction().fee_payment_intent().clone())
+        }
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::PrivateKaigi(_)
+        | TransactionEntrypoint::Time(_) => None,
+    };
+    intent
 }
 
 #[cfg(feature = "app_api")]
@@ -44876,10 +44480,11 @@ mod tx_query_filter_tests {
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
         metadata: dm::Metadata,
+        fee_payment: dm::FeePaymentIntent,
     ) -> iroha_data_model::query::CommittedTransaction {
         let chain: dm::ChainId = "test-chain".parse().unwrap();
         // Build External signed tx with explicit creation time using the provided authority/key.
-        let mut builder = dm::TransactionBuilder::new(chain, authority.clone());
+        let mut builder = dm::TransactionBuilder::new(chain, authority.clone(), fee_payment);
         builder.set_creation_time(core::time::Duration::from_millis(created_ms));
         builder = builder.with_metadata(metadata);
         builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(Vec::new())));
@@ -44927,6 +44532,7 @@ mod tx_query_filter_tests {
             entry_hash_override,
             result_ok,
             dm::Metadata::default(),
+            dm::FeePaymentIntent::authority(Vec::new(), None),
         )
     }
 
@@ -44945,7 +44551,64 @@ mod tx_query_filter_tests {
             entry_hash_override,
             result_ok,
             metadata,
+            dm::FeePaymentIntent::authority(Vec::new(), None),
         )
+    }
+
+    #[test]
+    fn tx_fee_projection_uses_typed_authority_and_sponsor_intents() {
+        use std::num::NonZeroU64;
+
+        let (authority, keypair) = account_with_key();
+        let pipeline_asset = test_asset_definition_id();
+        let pipeline_limit = dm::FeeChargeLimit::new(
+            dm::FeeChargeKind::PipelineGas,
+            pipeline_asset.clone(),
+            dm::Quantity::from(100_u32),
+        );
+        let authority_intent =
+            dm::FeePaymentIntent::authority(vec![pipeline_limit.clone()], NonZeroU64::new(42));
+        let authority_tx = build_external_tx(
+            &authority,
+            &keypair,
+            1,
+            None,
+            true,
+            dm::Metadata::default(),
+            authority_intent.clone(),
+        );
+        assert_eq!(tx_fee_projection(&authority_tx), Some(authority_intent));
+
+        let program_id = dm::FeeSponsorProgramId::new(
+            authority.clone(),
+            "projection-program".parse().expect("program name"),
+        );
+        let sponsor_intent =
+            dm::FeePaymentIntent::sponsor(program_id, 7, vec![pipeline_limit], NonZeroU64::new(99));
+        let sponsor_tx = build_external_tx(
+            &authority,
+            &keypair,
+            2,
+            None,
+            true,
+            dm::Metadata::default(),
+            sponsor_intent.clone(),
+        );
+        assert_eq!(tx_fee_projection(&sponsor_tx), Some(sponsor_intent));
+
+        let mut legacy_metadata = dm::Metadata::default();
+        legacy_metadata.insert("gas_limit".parse().unwrap(), Json::new(1_u64));
+        assert!(
+            dm::TransactionBuilder::new(
+                "test-chain".parse().unwrap(),
+                authority,
+                dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
+            )
+            .with_metadata(legacy_metadata)
+            .try_sign(keypair.private_key())
+            .is_err(),
+            "legacy fee metadata cannot enter the projection surface"
+        );
     }
 
     fn make_external_tx_with_instructions(
@@ -44955,7 +44618,11 @@ mod tx_query_filter_tests {
         instructions: Vec<dm::InstructionBox>,
     ) -> iroha_data_model::query::CommittedTransaction {
         let chain: dm::ChainId = "test-chain".parse().unwrap();
-        let mut builder = dm::TransactionBuilder::new(chain, authority.clone());
+        let mut builder = dm::TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(core::time::Duration::from_millis(created_ms));
         builder = builder.with_instructions(instructions);
         let signed = builder.sign(keypair.private_key());
@@ -46167,7 +45834,11 @@ mod explorer_lookup_tests {
         let mut hashes = Vec::new();
         let mut txs = Vec::new();
         for (index, instructions) in instruction_batches.into_iter().enumerate() {
-            let mut builder = dm::TransactionBuilder::new(chain.clone(), authority.clone());
+            let mut builder = dm::TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
             builder.set_creation_time(Duration::from_millis(1_710_000_000_000 + index as u64));
             let signed = builder
                 .with_instructions(instructions)
@@ -46220,7 +45891,11 @@ mod explorer_lookup_tests {
             0x22,
             "derive Kura-only explorer authority fixture key",
         );
-        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        let mut builder = dm::TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
         let signed = builder
             .with_instructions(instructions)
@@ -46809,9 +46484,13 @@ mod tx_query_integration_smoke {
 
         let (authority, keypair) = account_with_key();
         let chain: dm::ChainId = "test-chain".parse().unwrap();
-        let tx = dm::TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(keypair.private_key());
+        let tx = dm::TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<dm::InstructionBox>([log_instruction()])
+        .sign(keypair.private_key());
         let versioned = tx.encode_versioned();
         let bare = norito::codec::Encode::encode(&tx);
         let framed = norito::to_bytes(&tx).expect("encode framed signed transaction");
@@ -47132,7 +46811,11 @@ mod tx_query_integration_smoke {
         let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
         let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
-        let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
+        let mut bldr_asset = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            actor_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         bldr_asset.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_asset = bldr_asset
             .with_instructions::<dm::InstructionBox>([mint.into()])
@@ -47140,7 +46823,11 @@ mod tx_query_integration_smoke {
         let entry_hash_asset = format!("{}", signed_asset.hash_as_entrypoint());
         let tx_asset = AcceptedTransaction::new_unchecked(Cow::Owned(signed_asset));
 
-        let mut bldr_log = dm::TransactionBuilder::new(chain_id, actor_id.clone().into());
+        let mut bldr_log = dm::TransactionBuilder::new(
+            chain_id,
+            actor_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         bldr_log.set_creation_time(core::time::Duration::from_millis(1100));
         let signed_log = bldr_log
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -47282,7 +46969,11 @@ mod tx_query_integration_smoke {
         let source_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
         let recipient_asset_id = dm::AssetId::new(def_id.clone(), bob_id.account().clone());
         let unrelated_asset_id = dm::AssetId::new(def_id.clone(), exec_id.account().clone());
-        let mut tx_builder = dm::TransactionBuilder::new(chain_id, alice_id.account().clone());
+        let mut tx_builder = dm::TransactionBuilder::new(
+            chain_id,
+            alice_id.account().clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_000));
         let signed_transfer = tx_builder
             .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
@@ -47475,17 +47166,22 @@ mod tx_query_integration_smoke {
                 "min_out": 95
             })),
         );
-        metadata.insert(
-            "gas_asset_id".parse().unwrap(),
-            dm::Json::new("xor#universal"),
+        let gas_asset_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa");
+        let fee_payment = dm::FeePaymentIntent::sponsor(
+            dm::FeeSponsorProgramId::new(
+                authority.clone(),
+                "contract-activity".parse().expect("program name"),
+            ),
+            1,
+            vec![dm::FeeChargeLimit::new(
+                dm::FeeChargeKind::PipelineGas,
+                gas_asset_id.clone(),
+                dm::Quantity::from(1_000_u32),
+            )],
+            std::num::NonZeroU64::new(100_000),
         );
-        metadata.insert(
-            "fee_sponsor".parse().unwrap(),
-            dm::Json::new(authority.to_string()),
-        );
-        metadata.insert("gas_limit".parse().unwrap(), dm::Json::new(100_000_u64));
 
-        let mut tx_builder = dm::TransactionBuilder::new(chain_id, authority.clone());
+        let mut tx_builder = dm::TransactionBuilder::new(chain_id, authority.clone(), fee_payment);
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
         let signed = tx_builder
             .with_metadata(metadata)
@@ -47546,8 +47242,17 @@ mod tx_query_integration_smoke {
             items[0]["contract_payload"]["amount_in"].as_u64(),
             Some(100)
         );
-        assert_eq!(items[0]["gas_asset_id"].as_str(), Some("xor#universal"));
-        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
+        assert_eq!(items[0]["fee_payment"]["payer"].as_str(), Some("sponsor"));
+        assert_eq!(
+            items[0]["fee_payment"]["value"]["gas_limit"].as_u64(),
+            Some(100_000)
+        );
+        assert_eq!(
+            items[0]["fee_payment"]["value"]["charge_limits"][0]["asset_definition_id"]
+                .as_str()
+                .expect("projected fee asset"),
+            gas_asset_id.to_string()
+        );
     }
 
     #[tokio::test]
@@ -47613,14 +47318,22 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
         // tx_a: authority acc_a at t=1000ms
-        let mut bldr_a = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut bldr_a = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         bldr_a.set_creation_time(core::time::Duration::from_millis(1000));
         let tx_a = bldr_a
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx_a = AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
         // tx_b: authority acc_a at t=2000ms
-        let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut bldr_b = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         bldr_b.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = bldr_b
             .with_instructions::<dm::InstructionBox>([dm::Log::new(
@@ -47633,7 +47346,11 @@ mod tx_query_integration_smoke {
         let tx_b = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
 
         // tx_c: authority acc_a at t=2000ms (different entrypoint hash)
-        let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut bldr_c = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         bldr_c.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = bldr_c
             .with_instructions::<dm::InstructionBox>([dm::Log::new(
@@ -47812,8 +47529,11 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let mut accepted = Vec::new();
         for i in 0..5u64 {
-            let mut builder =
-                dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
+            let mut builder = dm::TransactionBuilder::new(
+                chain_id.clone(),
+                actor_id.clone().into(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
             builder.set_creation_time(core::time::Duration::from_millis(1_000 + i * 250));
             let signed = builder
                 .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -47941,7 +47661,11 @@ mod tx_query_integration_smoke {
         };
 
         // tx1: t=1000, result_ok=true, capture entrypoint hash string
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -47949,7 +47673,11 @@ mod tx_query_integration_smoke {
         let entry_hash1_str = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
         // tx2: t=2000, result_ok=true
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48062,7 +47790,11 @@ mod tx_query_integration_smoke {
             "derive requested-format account fixture key",
         );
         let account = dm::AccountId::new(kp.public_key().clone());
-        let mut builder = dm::TransactionBuilder::new(chain_id.clone(), account.clone());
+        let mut builder = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(core::time::Duration::from_millis(1000));
         let signed = builder
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48158,7 +47890,11 @@ mod tx_query_integration_smoke {
         };
 
         // tx for A at 1000, tx for B at 2000
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48166,7 +47902,11 @@ mod tx_query_integration_smoke {
         let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48274,14 +48014,22 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
 
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1500));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(900));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48384,14 +48132,22 @@ mod tx_query_integration_smoke {
             let p = v.world().parameters();
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48502,21 +48258,33 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
         // Build four transactions across three authorities and different timestamps
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_c.clone());
+        let mut b3 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_c.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b3.set_creation_time(core::time::Duration::from_millis(3000));
         let signed3 = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -48526,7 +48294,11 @@ mod tx_query_integration_smoke {
             .sign(kp_c.private_key());
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(signed3));
 
-        let mut b4 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b4 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b4.set_creation_time(core::time::Duration::from_millis(2500));
         let signed4 = b4
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -48679,21 +48451,33 @@ mod tx_query_integration_smoke {
         };
 
         // Three external transactions with the same authority
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b3 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b3.set_creation_time(core::time::Duration::from_millis(3));
         let tx3 = b3
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48879,7 +48663,11 @@ mod tx_query_integration_smoke {
         };
 
         // Two transactions with distinct entrypoint hashes
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(10));
         let signed1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -48887,7 +48675,11 @@ mod tx_query_integration_smoke {
         let entry1 = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(20));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -49101,14 +48893,22 @@ mod tx_query_integration_smoke {
         };
 
         // A: success, A: failure
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(100));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -49337,16 +49137,22 @@ mod tx_query_integration_smoke {
         };
 
         // tx_success: authority == B, deterministic success
-        let mut success_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
+        let mut success_builder = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         success_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let signed_success = success_builder
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx_success = AcceptedTransaction::new_unchecked(Cow::Owned(signed_success));
         // tx_fail_c: failure due to missing account
-        let mut fail_c_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
+        let mut fail_c_builder = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         fail_c_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_c = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_c = fail_c_builder
@@ -49355,8 +49161,11 @@ mod tx_query_integration_smoke {
         let tx_fail_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
         // tx_fail_d: failure due to missing account (unregister non-existent)
-        let mut unregister_missing_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
+        let mut unregister_missing_builder = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_d = dm::Unregister::domain(DomainId::try_new("void", "universal").unwrap());
         let signed_d = unregister_missing_builder
@@ -49365,8 +49174,11 @@ mod tx_query_integration_smoke {
         let tx_fail_d = AcceptedTransaction::new_unchecked(Cow::Owned(signed_d));
 
         // tx_fail_e: another failure case (duplicate domain register)
-        let mut duplicate_domain_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
+        let mut duplicate_domain_builder = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         duplicate_domain_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_e = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_e = duplicate_domain_builder
@@ -49529,7 +49341,11 @@ mod tx_query_integration_smoke {
         };
 
         // A_true@1000
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut b1 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -49537,7 +49353,11 @@ mod tx_query_integration_smoke {
         let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
         // A_false@2000 (fail)
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut b2 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -49548,7 +49368,11 @@ mod tx_query_integration_smoke {
         let entry_hash_b = format!("{}", signed_b.hash_as_entrypoint());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
         // A_false@2000 (fail)
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
+        let mut b3 = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b3.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -49972,19 +49796,31 @@ mod app_api_integration_tests {
             let p = v.world().parameters();
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
-        let mut b1 = TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = TransactionBuilder::new(
+            chain_id.clone(),
+            acc_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let tx1 = b1
             .with_instructions::<InstructionBox>([])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-        let mut b2 = TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b2 = TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
             .with_instructions::<InstructionBox>([])
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-        let mut b3 = TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b3 = TransactionBuilder::new(
+            chain_id.clone(),
+            acc_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b3.set_creation_time(core::time::Duration::from_millis(3000));
         let tx3 = b3
             .with_instructions::<InstructionBox>([])
@@ -57054,12 +56890,16 @@ mod transaction_ingress_overload_tests {
         label: &str,
     ) -> SignedTransaction {
         let authority = AccountId::new(key_pair.public_key().clone());
-        TransactionBuilder::new(chain_id.clone(), authority)
-            .with_instructions([InstructionBox::from(Log::new(
-                Level::INFO,
-                label.to_owned(),
-            ))])
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(Log::new(
+            Level::INFO,
+            label.to_owned(),
+        ))])
+        .sign(key_pair.private_key())
     }
 
     fn checked_transaction_ingress_keypair(seed: u8, context: &'static str) -> KeyPair {
@@ -57500,10 +57340,14 @@ mod validation_fee_torii_ingress_tests {
         } else {
             Metadata::default()
         };
-        TransactionBuilder::new(state.chain_id.clone(), user.clone())
-            .with_instructions(instructions)
-            .with_metadata(metadata)
-            .sign(user_key_pair.private_key())
+        TransactionBuilder::new(
+            state.chain_id.clone(),
+            user.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata)
+        .sign(user_key_pair.private_key())
     }
 
     async fn submit_via_public_transaction_handler(
@@ -57698,10 +57542,14 @@ mod validation_fee_torii_ingress_tests {
             )
         };
         let signed = |instructions: Vec<InstructionBox>, coordinate| {
-            TransactionBuilder::new(state.chain_id.clone(), user.clone())
-                .with_instructions(instructions)
-                .with_metadata(metadata_for_policy(&policy, coordinate))
-                .sign(user_key_pair.private_key())
+            TransactionBuilder::new(
+                state.chain_id.clone(),
+                user.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(instructions)
+            .with_metadata(metadata_for_policy(&policy, coordinate))
+            .sign(user_key_pair.private_key())
         };
 
         let exact_queue = queue();
@@ -57974,9 +57822,13 @@ mod lane_admission_metrics_tests {
         );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
-        let tx = TransactionBuilder::new(chain_id.as_ref().clone(), account_id)
-            .with_instructions([InstructionBox::from(instruction)])
-            .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.as_ref().clone(),
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(instruction)])
+        .sign(key_pair.private_key());
 
         handle_transaction_with_metrics(
             Arc::clone(&chain_id),
@@ -58223,9 +58075,13 @@ mod hot_path_load_profile_tests {
         let tx_telemetry = direct_metrics_telemetry();
         for index in 0..TX_WARMUP_SAMPLES {
             let instruction = Log::new(Level::INFO, format!("torii-load-profile-warmup-{index}"));
-            let tx = TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
-                .with_instructions([InstructionBox::from(instruction)])
-                .sign(tx_key_pair.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.as_ref().clone(),
+                tx_authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([InstructionBox::from(instruction)])
+            .sign(tx_key_pair.private_key());
             let decision = handle_transaction_with_metrics(
                 Arc::clone(&chain_id),
                 Arc::clone(&tx_queue),
@@ -58241,9 +58097,13 @@ mod hot_path_load_profile_tests {
         let transactions = (0..TX_SAMPLES)
             .map(|index| {
                 let instruction = Log::new(Level::INFO, format!("torii-load-profile-{index}"));
-                TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
-                    .with_instructions([InstructionBox::from(instruction)])
-                    .sign(tx_key_pair.private_key())
+                TransactionBuilder::new(
+                    chain_id.as_ref().clone(),
+                    tx_authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([InstructionBox::from(instruction)])
+                .sign(tx_key_pair.private_key())
             })
             .collect::<Vec<_>>();
         let mut tx_samples = Vec::with_capacity(TX_SAMPLES);
@@ -59389,21 +59249,12 @@ fn contract_activity_projections_to_json(
             if let Some(payload) = it.contract_payload.as_ref() {
                 m.insert("contract_payload".into(), payload.clone());
             }
-            if let Some(gas_asset_id) = it.gas_asset_id.as_ref() {
+            if let Some(fee_payment) = it.fee_payment.as_ref() {
                 m.insert(
-                    "gas_asset_id".into(),
-                    norito::json::Value::from(gas_asset_id.clone()),
+                    "fee_payment".into(),
+                    norito::json::to_value(fee_payment)
+                        .expect("typed fee payment projection must serialize"),
                 );
-            }
-            if let Some(fee_sponsor_literal) = it.fee_sponsor.as_ref() {
-                if let Some(display) =
-                    crate::account_literal::display_from_literal(fee_sponsor_literal)
-                {
-                    m.insert("fee_sponsor".into(), norito::json::Value::from(display));
-                }
-            }
-            if let Some(gas_limit) = it.gas_limit {
-                m.insert("gas_limit".into(), norito::json::Value::from(gas_limit));
             }
             norito::json::Value::Object(m)
         })
@@ -59497,19 +59348,12 @@ fn contract_event_projection_to_json_value(it: &ContractEventProjection) -> nori
     if let Some(payload) = it.payload.as_ref() {
         m.insert("payload".into(), payload.clone());
     }
-    if let Some(gas_asset_id) = it.gas_asset_id.as_ref() {
+    if let Some(fee_payment) = it.fee_payment.as_ref() {
         m.insert(
-            "gas_asset_id".into(),
-            norito::json::Value::from(gas_asset_id.clone()),
+            "fee_payment".into(),
+            norito::json::to_value(fee_payment)
+                .expect("typed fee payment projection must serialize"),
         );
-    }
-    if let Some(fee_sponsor_literal) = it.fee_sponsor.as_ref() {
-        if let Some(display) = crate::account_literal::display_from_literal(fee_sponsor_literal) {
-            m.insert("fee_sponsor".into(), norito::json::Value::from(display));
-        }
-    }
-    if let Some(gas_limit) = it.gas_limit {
-        m.insert("gas_limit".into(), norito::json::Value::from(gas_limit));
     }
     norito::json::Value::Object(m)
 }
@@ -62083,16 +61927,26 @@ mod tx_projection_display_tests {
                 "amount_in": 10,
                 "min_out": 9
             })),
-            gas_asset_id: Some("xor#universal".into()),
-            fee_sponsor: Some(account.to_string()),
-            gas_limit: Some(100_000),
+            fee_payment: Some(iroha_data_model::transaction::FeePaymentIntent::sponsor(
+                iroha_data_model::nexus::FeeSponsorProgramId::new(
+                    account.clone(),
+                    "projection".parse().expect("program name"),
+                ),
+                1,
+                Vec::new(),
+                std::num::NonZeroU64::new(100_000),
+            )),
         };
 
         let items = contract_activity_projections_to_json(&[projection]);
         assert_eq!(items[0]["contract_entrypoint"].as_str(), Some("route_swap"));
-        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
+        assert_eq!(items[0]["fee_payment"]["payer"].as_str(), Some("sponsor"));
+        assert_eq!(
+            items[0]["fee_payment"]["value"]["gas_limit"].as_u64(),
+            Some(100_000)
+        );
         assert_eq!(items[0]["contract_payload"]["amount_in"].as_u64(), Some(10));
-        assert!(items[0].get("fee_sponsor").is_some());
+        assert!(items[0].get("fee_sponsor").is_none());
     }
 
     fn sample_contract_activity_index() -> ContractActivityIndex {
@@ -62108,9 +61962,7 @@ mod tx_projection_display_tests {
                 contract_alias: Some("dlmm_router".into()),
                 contract_entrypoint: Some("route_swap".into()),
                 contract_payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractActivityProjection {
                 authority: Some(alice.to_string()),
@@ -62121,9 +61973,7 @@ mod tx_projection_display_tests {
                 contract_alias: Some("dlmm_router".into()),
                 contract_entrypoint: Some("cancel_swap".into()),
                 contract_payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractActivityProjection {
                 authority: Some(bob.to_string()),
@@ -62134,9 +61984,7 @@ mod tx_projection_display_tests {
                 contract_alias: Some("other_router".into()),
                 contract_entrypoint: Some("route_swap".into()),
                 contract_payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractActivityProjection {
                 authority: Some(alice.to_string()),
@@ -62147,9 +61995,7 @@ mod tx_projection_display_tests {
                 contract_alias: Some("dlmm_router".into()),
                 contract_entrypoint: Some("route_swap".into()),
                 contract_payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
         ];
         let mut index = ContractActivityIndex::default();
@@ -62252,9 +62098,15 @@ mod tx_projection_display_tests {
                 "amount_in": 10,
                 "min_out": 9
             })),
-            gas_asset_id: Some("xor#universal".into()),
-            fee_sponsor: Some(account.to_string()),
-            gas_limit: Some(100_000),
+            fee_payment: Some(iroha_data_model::transaction::FeePaymentIntent::sponsor(
+                iroha_data_model::nexus::FeeSponsorProgramId::new(
+                    account.clone(),
+                    "projection".parse().expect("program name"),
+                ),
+                1,
+                Vec::new(),
+                std::num::NonZeroU64::new(100_000),
+            )),
         };
 
         let items = contract_event_projections_to_json(&[projection]);
@@ -62262,6 +62114,7 @@ mod tx_projection_display_tests {
         assert_eq!(items[0]["block_height"].as_u64(), Some(9));
         assert_eq!(items[0]["numeric_fields"]["amount_in"].as_u64(), Some(10));
         assert_eq!(items[0]["asset_ids"][0].as_str(), Some("xor#universal"));
+        assert_eq!(items[0]["fee_payment"]["payer"].as_str(), Some("sponsor"));
     }
 
     fn sample_contract_event_index() -> ContractEventIndex {
@@ -62286,9 +62139,7 @@ mod tx_projection_display_tests {
                 asset_ids: vec!["xor#universal".into()],
                 numeric_fields: Map::new(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractEventProjection {
                 event_id: "hash-2:0".into(),
@@ -62308,9 +62159,7 @@ mod tx_projection_display_tests {
                 asset_ids: vec!["xor#universal".into()],
                 numeric_fields: Map::new(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractEventProjection {
                 event_id: "hash-3:0".into(),
@@ -62330,9 +62179,7 @@ mod tx_projection_display_tests {
                 asset_ids: vec!["usdt#soraswap.universal".into()],
                 numeric_fields: Map::new(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
             ContractEventProjection {
                 event_id: "hash-4:0".into(),
@@ -62352,9 +62199,7 @@ mod tx_projection_display_tests {
                 asset_ids: vec!["xor#universal".into(), "usdt#soraswap.universal".into()],
                 numeric_fields: Map::new(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
         ];
         let mut index = ContractEventIndex::default();
@@ -62480,9 +62325,7 @@ mod tx_projection_display_tests {
             asset_ids: Vec::new(),
             numeric_fields: Map::new(),
             payload: Some(payload),
-            gas_asset_id: None,
-            fee_sponsor: None,
-            gas_limit: None,
+            fee_payment: None,
         }
     }
 
@@ -62866,9 +62709,7 @@ mod tx_projection_display_tests {
                 asset_ids: Vec::new(),
                 numeric_fields: Map::new(),
                 payload: None,
-                gas_asset_id: None,
-                fee_sponsor: None,
-                gas_limit: None,
+                fee_payment: None,
             },
         );
         let params = ContractEventGetParams {
@@ -66289,13 +66130,24 @@ pub async fn handle_v1_confidential_relay_submit(
     let source_tx_hash_hex = hex::encode(source_tx.hash().as_ref());
     let instruction = relayable_zk_transfer_instruction(&source_tx)?;
 
-    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_instructions([instruction])
-        .with_metadata(source_tx.metadata().clone());
-    if let Some(attachments) = source_tx.attachments().cloned() {
+    let attachments = source_tx.attachments().cloned();
+    let mut builder = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        signer.authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .with_metadata(source_tx.metadata().clone());
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
+    let mut builder = quote_app_api_transaction_builder(
+        builder,
+        app.queue.as_ref(),
+        app.state.as_ref(),
+        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
+    )?;
+    if let Some(attachments) = attachments {
         builder = builder.with_attachments(attachments);
     }
-    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = sign_app_api_transaction(
         builder,
         &signer.private_key.0,
@@ -66401,20 +66253,15 @@ fn ensure_authenticated_onboarding_domain(
 }
 
 #[cfg(feature = "app_api")]
-fn onboarding_fee_sponsor_permission(
-    fee_sponsor: Option<&iroha_config::parameters::actual::ToriiOnboardingFeeSponsor>,
+fn onboarding_fee_sponsor_enrollment(
+    program_id: Option<&iroha_data_model::nexus::FeeSponsorProgramId>,
     beneficiary: &AccountId,
-    authenticated_domain: &iroha_data_model::domain::DomainId,
-) -> Option<Permission> {
-    fee_sponsor.map(|fee_sponsor| {
-        Permission::from(
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
-                sponsor: fee_sponsor.account.clone(),
-                policy: fee_sponsor.policy.clone(),
-                beneficiary: beneficiary.clone(),
-                domain: authenticated_domain.clone(),
-            },
-        )
+) -> Option<InstructionBox> {
+    program_id.map(|program_id| {
+        InstructionBox::from(iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
+            program_id: program_id.clone(),
+            beneficiary: beneficiary.clone(),
+        })
     })
 }
 
@@ -66473,33 +66320,25 @@ mod onboarding_domain_scope_tests {
     }
 
     #[test]
-    fn onboarding_alias_fee_sponsor_grant_is_exact_to_domain_and_beneficiary() {
-        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        let fee_sponsor = iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
-            account: ALICE_ID.clone(),
-            policy: "retail".parse().expect("retail policy"),
-        };
+    fn onboarding_alias_fee_sponsor_enrollment_is_exact_to_program_and_beneficiary() {
+        let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+            ALICE_ID.clone(),
+            "retail".parse().expect("retail program"),
+        );
 
-        let permission = onboarding_fee_sponsor_permission(Some(&fee_sponsor), &BOB_ID, &hbl)
-            .expect("configured sponsor must emit one exact permission");
-        assert_eq!(permission.name().to_string(), "CanUseFeeSponsorForAccount");
-        assert_ne!(permission.name().to_string(), "CanUseFeeSponsor");
-        let decoded = permission
-            .payload()
-            .try_into_any_norito::<
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
-            >()
-            .expect("decode exact fee sponsor permission");
-        assert_eq!(decoded.sponsor, ALICE_ID.clone());
-        assert_eq!(decoded.policy.to_string(), "retail");
-        assert_eq!(decoded.beneficiary, BOB_ID.clone());
-        assert_eq!(decoded.domain, hbl);
+        let instruction = onboarding_fee_sponsor_enrollment(Some(&program_id), &BOB_ID)
+            .expect("configured sponsor must emit one exact enrollment");
+        let decoded = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary>()
+            .expect("exact fee sponsor enrollment instruction");
+        assert_eq!(decoded.program_id(), &program_id);
+        assert_eq!(decoded.beneficiary(), &*BOB_ID);
     }
 
     #[test]
     fn onboarding_alias_absent_fee_sponsor_emits_no_permission() {
-        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        assert!(onboarding_fee_sponsor_permission(None, &BOB_ID, &hbl).is_none());
+        assert!(onboarding_fee_sponsor_enrollment(None, &BOB_ID).is_none());
     }
 }
 
@@ -66757,9 +66596,9 @@ pub async fn handle_v1_accounts_onboard(
             normalized.as_str(),
             "CanResolveAccountAlias"
                 | "CanManageAccountAlias"
-                | "CanUseFeeSponsor"
-                | "CanUseFeeSponsorForAccount"
-                | "CanEnrollFeeSponsorPolicyForAccountDomain"
+                | "CanManageFeeSponsorProgram"
+                | "CanEnrollFeeSponsorProgram"
+                | "CanWithdrawFeeSponsorProgram"
         ) {
             return Err(onboarding_invalid_request(
                 "scoped onboarding permissions must use the configured typed scopes",
@@ -66777,16 +66616,8 @@ pub async fn handle_v1_accounts_onboard(
         )));
     }
 
-    if let Some(permission) = onboarding_fee_sponsor_permission(
-        signer.fee_sponsor.as_ref(),
-        &account_id,
-        &authenticated_domain,
-    ) {
-        permission_instructions.push(InstructionBox::from(Grant::account_permission(
-            permission,
-            account_id.clone(),
-        )));
-    }
+    let fee_sponsor_enrollment =
+        onboarding_fee_sponsor_enrollment(signer.fee_sponsor_program_id.as_ref(), &account_id);
 
     let auto_renew_enabled = signer.alias_auto_renew_enabled;
     let mut auto_renew_instructions = Vec::new();
@@ -66834,6 +66665,7 @@ pub async fn handle_v1_accounts_onboard(
     ));
     instructions.push(InstructionBox::from(register));
     instructions.extend(permission_instructions);
+    instructions.extend(fee_sponsor_enrollment);
     instructions.extend(auto_renew_instructions);
     if should_publish_manifest {
         let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
@@ -66863,12 +66695,20 @@ pub async fn handle_v1_accounts_onboard(
         instructions.push(InstructionBox::from(publish));
     }
 
-    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
-    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_metadata(tx_metadata)
-        .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        signer.authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = sign_app_api_transaction(builder, &signer.private_key.0, ENDPOINT_ACCOUNTS_ONBOARD)?;
+    let tx = quote_and_sign_app_api_transaction(
+        builder,
+        &signer.private_key.0,
+        app.queue.as_ref(),
+        app.state.as_ref(),
+        ENDPOINT_ACCOUNTS_ONBOARD,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -67025,12 +66865,20 @@ pub async fn handle_v1_accounts_faucet(
         account_id.clone(),
     )));
 
-    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
-    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
-        .with_metadata(tx_metadata)
-        .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        faucet.authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = sign_app_api_transaction(builder, &faucet.private_key.0, ENDPOINT_ACCOUNTS_FAUCET)?;
+    let tx = quote_and_sign_app_api_transaction(
+        builder,
+        &faucet.private_key.0,
+        app.queue.as_ref(),
+        app.state.as_ref(),
+        ENDPOINT_ACCOUNTS_FAUCET,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -67260,41 +67108,39 @@ pub async fn handle_v1_accounts_onboard_multisig(
         auto_renew_instructions = instructions;
     }
 
-    let fee_sponsor_permission = onboarding_fee_sponsor_permission(
-        signer.fee_sponsor.as_ref(),
+    let fee_sponsor_enrollment = onboarding_fee_sponsor_enrollment(
+        signer.fee_sponsor_program_id.as_ref(),
         &multisig_account,
-        &authenticated_domain,
     );
-    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
-    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_metadata(tx_metadata)
-        .with_instructions({
-            let mut instructions = vec![
-                InstructionBox::from(
-                    iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
-                        alias_label,
-                        multisig_account.clone(),
-                        signer.authority.clone(),
-                        lease_term_years,
-                        None,
-                    ),
-                ),
-                InstructionBox::from(register),
-                InstructionBox::from(bind_alias),
-            ];
-            if let Some(permission) = fee_sponsor_permission {
-                instructions.push(InstructionBox::from(Grant::account_permission(
-                    permission,
+    let mut builder = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        signer.authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions({
+        let mut instructions = vec![
+            InstructionBox::from(
+                iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+                    alias_label,
                     multisig_account.clone(),
-                )));
-            }
-            instructions.extend(auto_renew_instructions);
-            instructions
-        });
+                    signer.authority.clone(),
+                    lease_term_years,
+                    None,
+                ),
+            ),
+            InstructionBox::from(register),
+            InstructionBox::from(bind_alias),
+        ];
+        instructions.extend(fee_sponsor_enrollment);
+        instructions.extend(auto_renew_instructions);
+        instructions
+    });
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = sign_app_api_transaction(
+    let tx = quote_and_sign_app_api_transaction(
         builder,
         &signer.private_key.0,
+        app.queue.as_ref(),
+        app.state.as_ref(),
         ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -67471,17 +67317,22 @@ pub async fn handle_post_v1_account_alias_renew(
             .as_ref()
             .map_or(1, |signer| signer.alias_lease_term_years.max(1))
     });
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
-            .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
-            .with_instructions([InstructionBox::from(
-                iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
-                    alias,
-                    authority_id.clone(),
-                    term_years,
-                ),
-            )]),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(
+            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                alias,
+                authority_id.clone(),
+                term_years,
+            ),
+        )]),
         &req.private_key.0,
+        app.queue.as_ref(),
+        app.state.as_ref(),
         ENDPOINT_ACCOUNT_ALIAS_RENEW,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -67720,11 +67571,16 @@ pub async fn handle_post_v1_account_alias_auto_renew(
         }
     }
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
-            .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &req.private_key.0,
+        app.queue.as_ref(),
+        app.state.as_ref(),
         ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -68926,10 +68782,16 @@ pub async fn handle_post_space_directory_manifest_publish(
     }
 
     let isi = PublishSpaceDirectoryManifest { manifest };
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.into())
-            .with_instructions([InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(isi)]),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH,
     )?;
 
@@ -68976,10 +68838,16 @@ pub async fn handle_post_space_directory_manifest_revoke(
         revoked_epoch,
         reason,
     };
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.into())
-            .with_instructions([InstructionBox::from(isi)]),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(isi)]),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE,
     )?;
 
@@ -73067,7 +72935,11 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Issuance within 1h/24h/7d: mint 100 to Alice.
         let mint_ms = now_ms.saturating_sub(50 * 60 * 1000);
-        let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone().into());
+        let mut txb_mint = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            exec_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         txb_mint.set_creation_time(core::time::Duration::from_millis(mint_ms));
         let signed_mint = txb_mint
             .with_instructions::<dm::InstructionBox>([dm::Mint::asset_quantity(
@@ -73080,8 +72952,11 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Velocity: one transfer 2h ago (outside 1h, inside 24h/7d).
         let transfer_ms = now_ms.saturating_sub(2 * 60 * 60 * 1000);
-        let mut txb_transfer =
-            dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
+        let mut txb_transfer = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         txb_transfer.set_creation_time(core::time::Duration::from_millis(transfer_ms));
         let signed_transfer = txb_transfer
             .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
@@ -73108,7 +72983,11 @@ mod explorer_asset_definition_econometrics_tests {
             2_u32,
         );
         let batch = dm::TransferAssetBatch::new(vec![entry_a, entry_b]);
-        let mut txb_batch = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
+        let mut txb_batch = dm::TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         txb_batch.set_creation_time(core::time::Duration::from_millis(batch_ms));
         let signed_batch = txb_batch
             .with_instructions::<dm::InstructionBox>([batch.into()])
@@ -73117,7 +72996,11 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Issuance within 30d series but outside 7d: burn 5 from Bob.
         let burn_ms = now_ms.saturating_sub(10 * 24 * 60 * 60 * 1000);
-        let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone().into());
+        let mut txb_burn = dm::TransactionBuilder::new(
+            chain_id,
+            bob_id.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         txb_burn.set_creation_time(core::time::Duration::from_millis(burn_ms));
         let signed_burn = txb_burn
             .with_instructions::<dm::InstructionBox>([dm::Burn::asset_quantity(
@@ -77123,10 +77006,16 @@ pub async fn handle_post_v1_subscription_plan(
         )),
     ];
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTION_PLANS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -77346,10 +77235,16 @@ pub async fn handle_post_v1_subscription_create(
         }
     }
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -77599,10 +77494,16 @@ pub async fn handle_post_v1_subscription_pause(
         )));
     }
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -77726,10 +77627,16 @@ pub async fn handle_post_v1_subscription_resume(
             state.ivm_admission_cycle_limit(),
         ),
     )));
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -77833,10 +77740,16 @@ pub async fn handle_post_v1_subscription_cancel(
         }
     }
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -77919,10 +77832,16 @@ pub async fn handle_post_v1_subscription_keep(
         IrohaJson::new(subscription_state.clone()),
     ))];
 
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -78021,10 +77940,16 @@ pub async fn handle_post_v1_subscription_charge_now(
             state.ivm_admission_cycle_limit(),
         ),
     )));
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions(instructions),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -78078,10 +78003,16 @@ pub async fn handle_post_v1_subscription_usage(
         delta,
     };
     let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
-    let tx = sign_app_api_transaction(
-        TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_instructions([InstructionBox::from(instruction)]),
+    let tx = quote_and_sign_app_api_transaction(
+        TransactionBuilder::new(
+            (*chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(instruction)]),
         &private_key.0,
+        queue.as_ref(),
+        state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -78258,7 +78189,7 @@ mod subscription_api_tests {
                 allowed_permissions: std::collections::BTreeSet::new(),
                 alias_resolve_dataspaces: std::collections::BTreeSet::new(),
                 alias_resolve_domains: std::collections::BTreeSet::new(),
-                fee_sponsor: None,
+                fee_sponsor_program_id: None,
                 alias_lease_term_years: 1,
                 alias_auto_renew_enabled: true,
                 alias_auto_renew_retry_backoff_ms: 500,
@@ -78295,8 +78226,12 @@ mod subscription_api_tests {
             )
             .expect("onboarding auto-renew instructions");
         let onboarding_tx = sign_app_api_transaction(
-            TransactionBuilder::new((*app.chain_id).clone(), provider.clone())
-                .with_instructions(onboarding_instructions),
+            TransactionBuilder::new(
+                (*app.chain_id).clone(),
+                provider.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(onboarding_instructions),
             ALICE_KEYPAIR.private_key(),
             ENDPOINT_ACCOUNTS_ONBOARD,
         )

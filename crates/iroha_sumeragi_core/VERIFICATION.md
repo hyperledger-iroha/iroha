@@ -585,7 +585,27 @@ production reducer can be described as deductively verified:
    proved against the production gate. No shared generated semantics or
    cross-tool theorem yet proves those Verus definitions equivalent to the
    independently parsed TLA+ operator bodies. Crash, restart, and epoch-boundary
-   actions also remain outside the executable `Reducer::step` map.
+   actions also remain outside the executable `Reducer::step` map. The live
+   adapter now calls one source-bound `prepend_causal_continuation` kernel, and
+   `production_reverse_push_front_refines_fifo` encodes its exact
+   continuation-before-old-tail sequence relation. Separate Verus induction
+   theorems prove that the projected first-owner filter excludes every prior
+   owner, retains every emitted identity that was not previously owned, has
+   unique values, and is a stable subsequence of the emitted batch.
+   Given a unique old causal queue whose identities are all included in the
+   supplied owner set, the batch theorem preserves that prefix and appends a
+   disjoint unique suffix. Concrete inverted-owner and recursive-append
+   witnesses pin the two corresponding semantic mutations. A token-aware
+   source gate binds those contracts and proof bodies to real direct children
+   of `verus!`, rejecting comments, literals, macros, and `cfg` replacements.
+   The abstract stable first-owner filter remains conditional: `drive_effects` does not itself own
+   scheduler-wide coalescing, and these integer sequences
+   are not a proved identity map from executable effects to TLA+ candidates.
+
+   TODO: discharge the remaining machine-checked production effect-to-TLA
+   candidate identity/ownership mapping and the Completion-capacity
+   product-rank proof before promoting this seam or the temporal liveness
+   obligation.
 6. **Temporal liveness.** This module proves safety-style transition
    preservation only. Fair delivery, timeout-certificate progress, rotating
    honest leaders, repeated runtime invocation, terminating body service, and

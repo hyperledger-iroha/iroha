@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.norito;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -11,11 +12,17 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeeChargeKind;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -36,6 +43,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
   private static final TypeAdapter<String> JSON_VALUE_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
+  private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
   private static final TypeAdapter<Long> UINT32_AS_LONG_ADAPTER = NoritoAdapters.uint(32);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
@@ -55,10 +63,32 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
   private static final long EXECUTABLE_IVM_TAG = 2L;
   private static final long EXECUTABLE_IVM_PROVED_TAG = 3L;
+  private static final long FEE_PAYER_AUTHORITY_TAG = 0L;
+  private static final long FEE_PAYER_SPONSOR_TAG = 1L;
+  private static final long FEE_CHARGE_NEXUS_TAG = 0L;
+  private static final long FEE_CHARGE_PIPELINE_GAS_TAG = 1L;
   private static final TypeAdapter<Optional<Long>> TTL_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(64));
   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(32));
+  private static final TypeAdapter<Optional<Long>> GAS_LIMIT_ADAPTER =
+      NoritoAdapters.option(NoritoAdapters.uint(64));
+  private static final TypeAdapter<FeeChargeKind> FEE_CHARGE_KIND_ADAPTER =
+      new FeeChargeKindAdapter();
+  private static final TypeAdapter<String> ASSET_DEFINITION_ID_ADAPTER =
+      new AssetDefinitionIdAdapter();
+  private static final TypeAdapter<NumericV1.QuantityValue> QUANTITY_ADAPTER =
+      new QuantityAdapter();
+  private static final TypeAdapter<List<FeeChargeLimit>> FEE_CHARGE_LIMIT_LIST_ADAPTER =
+      NoritoAdapters.sequence(new FeeChargeLimitAdapter());
+  private static final TypeAdapter<FeeSponsorProgramId> FEE_SPONSOR_PROGRAM_ID_ADAPTER =
+      new FeeSponsorProgramIdAdapter();
+  private static final TypeAdapter<FeePaymentIntent.Authority> AUTHORITY_FEE_PAYMENT_ADAPTER =
+      new AuthorityFeePaymentAdapter();
+  private static final TypeAdapter<FeePaymentIntent.Sponsor> SPONSOR_FEE_PAYMENT_ADAPTER =
+      new SponsorFeePaymentAdapter();
+  private static final TypeAdapter<FeePaymentIntent> FEE_PAYMENT_ADAPTER =
+      new FeePaymentIntentAdapter();
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, JsonValue>> METADATA_ADAPTER = new MetadataAdapter();
   private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
@@ -73,6 +103,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
     encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
     encodeSizedField(encoder, NONCE_ADAPTER, value.nonce().map(Integer::longValue));
+    encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
     encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
   }
 
@@ -84,6 +115,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
     final Optional<Long> ttl = decodeSizedField(decoder, TTL_ADAPTER);
     final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
+    final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
     final Map<String, JsonValue> metadata =
         new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
 
@@ -93,6 +125,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             .setAuthority(authority)
             .setCreationTimeMs(creationTimeMs)
             .setExecutable(executable)
+            .setFeePayment(feePayment)
             .setMetadata(metadata);
     ttl.ifPresent(builder::setTimeToLiveMs);
     nonceRaw.ifPresent(value -> builder.setNonce(Math.toIntExact(value)));
@@ -113,6 +146,157 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   static InstructionBox decodeInstructionBox(final byte[] encoded) {
     return NoritoCodec.decode(encoded, new InstructionAdapter(), INSTRUCTION_BOX_SCHEMA);
+  }
+
+  private static final class FeePaymentIntentAdapter implements TypeAdapter<FeePaymentIntent> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final FeePaymentIntent value) {
+      if (value instanceof FeePaymentIntent.Authority) {
+        ENUM_TAG_ADAPTER.encode(encoder, FEE_PAYER_AUTHORITY_TAG);
+        encodeSizedField(
+            encoder, AUTHORITY_FEE_PAYMENT_ADAPTER, (FeePaymentIntent.Authority) value);
+        return;
+      }
+      if (value instanceof FeePaymentIntent.Sponsor) {
+        ENUM_TAG_ADAPTER.encode(encoder, FEE_PAYER_SPONSOR_TAG);
+        encodeSizedField(encoder, SPONSOR_FEE_PAYMENT_ADAPTER, (FeePaymentIntent.Sponsor) value);
+        return;
+      }
+      throw new IllegalArgumentException("Unknown FeePaymentIntent subtype");
+    }
+
+    @Override
+    public FeePaymentIntent decode(final NoritoDecoder decoder) {
+      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+      if (tag == FEE_PAYER_AUTHORITY_TAG) {
+        return decodeSizedField(decoder, AUTHORITY_FEE_PAYMENT_ADAPTER);
+      }
+      if (tag == FEE_PAYER_SPONSOR_TAG) {
+        return decodeSizedField(decoder, SPONSOR_FEE_PAYMENT_ADAPTER);
+      }
+      throw new IllegalArgumentException("Unknown FeePaymentIntent discriminant: " + tag);
+    }
+  }
+
+  private static final class AuthorityFeePaymentAdapter
+      implements TypeAdapter<FeePaymentIntent.Authority> {
+    @Override
+    public void encode(
+        final NoritoEncoder encoder, final FeePaymentIntent.Authority value) {
+      encodeSizedField(encoder, FEE_CHARGE_LIMIT_LIST_ADAPTER, value.chargeLimits());
+      encodeSizedField(encoder, GAS_LIMIT_ADAPTER, Optional.ofNullable(value.gasLimit()));
+    }
+
+    @Override
+    public FeePaymentIntent.Authority decode(final NoritoDecoder decoder) {
+      final List<FeeChargeLimit> limits =
+          decodeSizedField(decoder, FEE_CHARGE_LIMIT_LIST_ADAPTER);
+      final Optional<Long> gasLimit = decodeSizedField(decoder, GAS_LIMIT_ADAPTER);
+      return (FeePaymentIntent.Authority)
+          FeePaymentIntent.authority(limits, gasLimit.orElse(null));
+    }
+  }
+
+  private static final class SponsorFeePaymentAdapter
+      implements TypeAdapter<FeePaymentIntent.Sponsor> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final FeePaymentIntent.Sponsor value) {
+      encodeSizedField(encoder, FEE_SPONSOR_PROGRAM_ID_ADAPTER, value.programId());
+      encodeSizedField(encoder, UINT64_ADAPTER, value.programRevision());
+      encodeSizedField(encoder, FEE_CHARGE_LIMIT_LIST_ADAPTER, value.chargeLimits());
+      encodeSizedField(encoder, GAS_LIMIT_ADAPTER, Optional.ofNullable(value.gasLimit()));
+    }
+
+    @Override
+    public FeePaymentIntent.Sponsor decode(final NoritoDecoder decoder) {
+      final FeeSponsorProgramId programId =
+          decodeSizedField(decoder, FEE_SPONSOR_PROGRAM_ID_ADAPTER);
+      final long programRevision = decodeSizedField(decoder, UINT64_ADAPTER);
+      final List<FeeChargeLimit> limits =
+          decodeSizedField(decoder, FEE_CHARGE_LIMIT_LIST_ADAPTER);
+      final Optional<Long> gasLimit = decodeSizedField(decoder, GAS_LIMIT_ADAPTER);
+      return (FeePaymentIntent.Sponsor)
+          FeePaymentIntent.sponsor(programId, programRevision, limits, gasLimit.orElse(null));
+    }
+  }
+
+  private static final class FeeSponsorProgramIdAdapter
+      implements TypeAdapter<FeeSponsorProgramId> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final FeeSponsorProgramId value) {
+      encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.sponsor());
+      encodeSizedField(encoder, STRING_ADAPTER, value.name());
+    }
+
+    @Override
+    public FeeSponsorProgramId decode(final NoritoDecoder decoder) {
+      return new FeeSponsorProgramId(
+          decodeSizedField(decoder, ACCOUNT_ID_ADAPTER),
+          decodeSizedField(decoder, STRING_ADAPTER));
+    }
+  }
+
+  private static final class FeeChargeLimitAdapter implements TypeAdapter<FeeChargeLimit> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final FeeChargeLimit value) {
+      encodeSizedField(encoder, FEE_CHARGE_KIND_ADAPTER, value.kind());
+      encodeSizedField(encoder, ASSET_DEFINITION_ID_ADAPTER, value.assetDefinitionId());
+      encodeSizedField(
+          encoder, QUANTITY_ADAPTER, NumericV1.QuantityValue.parseCanonical(value.maxAmount()));
+    }
+
+    @Override
+    public FeeChargeLimit decode(final NoritoDecoder decoder) {
+      return new FeeChargeLimit(
+          decodeSizedField(decoder, FEE_CHARGE_KIND_ADAPTER),
+          decodeSizedField(decoder, ASSET_DEFINITION_ID_ADAPTER),
+          decodeSizedField(decoder, QUANTITY_ADAPTER).toString());
+    }
+  }
+
+  private static final class FeeChargeKindAdapter implements TypeAdapter<FeeChargeKind> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final FeeChargeKind value) {
+      ENUM_TAG_ADAPTER.encode(
+          encoder,
+          value == FeeChargeKind.NEXUS ? FEE_CHARGE_NEXUS_TAG : FEE_CHARGE_PIPELINE_GAS_TAG);
+    }
+
+    @Override
+    public FeeChargeKind decode(final NoritoDecoder decoder) {
+      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+      if (tag == FEE_CHARGE_NEXUS_TAG) return FeeChargeKind.NEXUS;
+      if (tag == FEE_CHARGE_PIPELINE_GAS_TAG) return FeeChargeKind.PIPELINE_GAS;
+      throw new IllegalArgumentException("Unknown FeeChargeKind discriminant: " + tag);
+    }
+  }
+
+  private static final class AssetDefinitionIdAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      encodeFixedByteArray(encoder, AssetDefinitionIdEncoder.parseAddressBytes(value));
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      return AssetDefinitionIdEncoder.encodeFromBytes(
+          decodeFixedByteArray(decoder, 16, "AssetDefinitionId"));
+    }
+  }
+
+  private static final class QuantityAdapter implements TypeAdapter<NumericV1.QuantityValue> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final NumericV1.QuantityValue value) {
+      encodeSizedBigInt(encoder, value.mantissa());
+      encodeSizedField(encoder, UINT32_ADAPTER, (long) value.scale());
+    }
+
+    @Override
+    public NumericV1.QuantityValue decode(final NoritoDecoder decoder) {
+      return NumericV1.QuantityValue.of(
+          decodeSizedBigInt(decoder),
+          Math.toIntExact(decodeSizedField(decoder, UINT32_ADAPTER)));
+    }
   }
 
   private static void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {
@@ -211,7 +395,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encoder,
           NoritoAdapters.option(UINT64_ADAPTER),
           Optional.ofNullable(value.creationTimeMs()));
-      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.feeSponsor()));
+      encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
       encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.memo()));
       encodeSizedField(
           encoder,
@@ -509,6 +693,95 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Trailing bytes after field payload");
     }
     return value;
+  }
+
+  private static void encodeFixedByteArray(
+      final NoritoEncoder encoder, final byte[] bytes) {
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    for (final byte value : bytes) {
+      encoder.writeLength(1L, compact);
+      encoder.writeByte(value);
+    }
+  }
+
+  private static byte[] decodeFixedByteArray(
+      final NoritoDecoder decoder, final int length, final String fieldName) {
+    final byte[] out = new byte[length];
+    final boolean compact = (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    for (int index = 0; index < length; index++) {
+      if (decoder.readLength(compact) != 1L) {
+        throw new IllegalArgumentException(
+            fieldName + " element " + index + " must contain exactly one byte");
+      }
+      out[index] = (byte) decoder.readByte();
+    }
+    return out;
+  }
+
+  private static void encodeSizedBigInt(
+      final NoritoEncoder encoder, final BigInteger value) {
+    final NoritoEncoder child = encoder.childEncoder();
+    final byte[] bytes = toTwosComplementLittleEndian(value);
+    child.writeUInt(bytes.length, 32);
+    child.writeBytes(bytes);
+    final byte[] payload = child.toByteArray();
+    encoder.writeLength(payload.length, (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    encoder.writeBytes(payload);
+  }
+
+  private static BigInteger decodeSizedBigInt(final NoritoDecoder decoder) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("numeric mantissa payload too large");
+    }
+    final NoritoDecoder child =
+        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags(), decoder.flagsHint());
+    final long byteLength = child.readUInt(32);
+    if (byteLength > 64L) {
+      throw new IllegalArgumentException("numeric mantissa exceeds 512 bits");
+    }
+    final byte[] bytes = child.readBytes((int) byteLength);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after numeric mantissa payload");
+    }
+    final BigInteger value = fromTwosComplementLittleEndian(bytes);
+    if (!Arrays.equals(toTwosComplementLittleEndian(value), bytes)) {
+      throw new IllegalArgumentException("Numeric mantissa is not canonical");
+    }
+    return value;
+  }
+
+  private static BigInteger fromTwosComplementLittleEndian(final byte[] bytes) {
+    if (bytes.length == 0) return BigInteger.ZERO;
+    final byte[] reversed = bytes.clone();
+    reverse(reversed);
+    return new BigInteger(reversed);
+  }
+
+  private static byte[] toTwosComplementLittleEndian(final BigInteger value) {
+    if (value.signum() == 0) return new byte[0];
+    final byte[] result = value.toByteArray();
+    reverse(result);
+    int length = result.length;
+    if (value.signum() > 0) {
+      while (length > 1 && result[length - 1] == 0 && (result[length - 2] & 0x80) == 0) {
+        length--;
+      }
+    } else {
+      while (length > 1 && result[length - 1] == (byte) 0xff
+          && (result[length - 2] & 0x80) != 0) {
+        length--;
+      }
+    }
+    return length == result.length ? result : Arrays.copyOf(result, length);
+  }
+
+  private static void reverse(final byte[] bytes) {
+    for (int left = 0, right = bytes.length - 1; left < right; left++, right--) {
+      final byte value = bytes[left];
+      bytes[left] = bytes[right];
+      bytes[right] = value;
+    }
   }
 
   private static String decodeAuthorityField(final NoritoDecoder decoder) {

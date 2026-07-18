@@ -60,7 +60,8 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionSubmissionReceipt,
+        signed::TransactionBuilder,
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
@@ -99,7 +100,7 @@ mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -149,6 +150,7 @@ const ERR_ACCOUNT_LIST: c_int = -30;
 const ERR_INVALID_NONCE: c_int = -31;
 const ERR_TRANSACTION_SIGN: c_int = -32;
 const ERR_SM2_SIGN: c_int = -33;
+const ERR_FEE_PAYMENT: c_int = -34;
 const ERR_FETCH_PLAN_JSON: c_int = -100;
 const ERR_FETCH_PROVIDERS_JSON: c_int = -101;
 const ERR_FETCH_OPTIONS_JSON: c_int = -102;
@@ -221,6 +223,7 @@ enum BridgeError {
     SecpSign,
     SecpVerify,
     TransactionSign,
+    FeePayment,
     ConnectKeypair,
     DetachedTransactionScaffold,
     DetachedTransactionSignature,
@@ -271,6 +274,7 @@ impl BridgeError {
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
             BridgeError::TransactionSign => ERR_TRANSACTION_SIGN,
+            BridgeError::FeePayment => ERR_FEE_PAYMENT,
             BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,
             BridgeError::DetachedTransactionScaffold => ERR_DETACHED_TRANSACTION_SCAFFOLD,
             BridgeError::DetachedTransactionSignature => ERR_DETACHED_TRANSACTION_SIGNATURE,
@@ -789,89 +793,18 @@ fn parse_name(value: String) -> BridgeResult<Name> {
     Name::from_str(&value).map_err(|_| BridgeError::MetadataKey)
 }
 
-unsafe fn parse_optional_account_id_bridge(
-    ptr: *const c_char,
+unsafe fn parse_fee_payment_intent_bridge(
+    ptr: *const c_uchar,
     len: c_ulong,
-) -> BridgeResult<Option<AccountId>> {
+) -> BridgeResult<FeePaymentIntent> {
     if ptr.is_null() || len == 0 {
-        return Ok(None);
+        return Err(BridgeError::FeePayment);
     }
-    let raw = unsafe { read_string_bridge(ptr, len)? };
-    parse_account_id(raw).map(Some)
-}
-
-fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(fee_sponsor) = fee_sponsor {
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("fee_sponsor is a valid metadata key"),
-            Json::new(fee_sponsor.to_string()),
-        );
-    }
-    metadata
-}
-
-unsafe fn parse_optional_string_bridge(
-    ptr: *const c_char,
-    len: c_ulong,
-) -> BridgeResult<Option<String>> {
-    if ptr.is_null() || len == 0 {
-        return Ok(None);
-    }
-    unsafe { read_string_bridge(ptr, len) }.map(Some)
-}
-
-unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
-    let mut metadata = Metadata::default();
-    if ptr.is_null() || len == 0 {
-        return Ok(metadata);
-    }
-    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
-    let value: norito::json::Value =
-        norito::json::from_slice(bytes).map_err(|_| BridgeError::MetadataValue)?;
-    let object = value.as_object().ok_or(BridgeError::MetadataValue)?;
-    for (key, value) in object {
-        let name = Name::from_str(key).map_err(|_| BridgeError::MetadataKey)?;
-        let json = Json::from_norito_value_ref(value).map_err(|_| BridgeError::MetadataValue)?;
-        metadata.insert(name, json);
-    }
-    Ok(metadata)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_validation_fee_metadata(
-    mut metadata: Metadata,
-    policy_version: u64,
-    policy_hash: String,
-    fee_instruction_index: u64,
-    fee_sponsor: Option<AccountId>,
-    memo: Option<String>,
-) -> BridgeResult<Metadata> {
-    metadata.insert(
-        Name::from_str("validation_fee_policy_version").expect("static metadata key"),
-        Json::new(policy_version),
-    );
-    metadata.insert(
-        Name::from_str("validation_fee_policy_hash").expect("static metadata key"),
-        Json::new(policy_hash),
-    );
-    metadata.insert(
-        Name::from_str("validation_fee_instruction_index").expect("static metadata key"),
-        Json::new(fee_instruction_index),
-    );
-    if let Some(fee_sponsor) = fee_sponsor {
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static metadata key"),
-            Json::new(fee_sponsor.to_string()),
-        );
-    }
-    if let Some(memo) = memo {
-        let memo_key = Name::from_str("memo").expect("static metadata key");
-        if metadata.get(&memo_key).is_none() {
-            metadata.insert(memo_key, Json::new(memo));
-        }
-    }
-    Ok(metadata)
+    let bytes = unsafe { slice::from_raw_parts(ptr, len as usize) };
+    let intent =
+        norito::json::from_slice::<FeePaymentIntent>(bytes).map_err(|_| BridgeError::FeePayment)?;
+    intent.validate().map_err(|_| BridgeError::FeePayment)?;
+    Ok(intent)
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -5844,6 +5777,7 @@ fn encode_asset_transaction<F>(
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
+    fee_payment: FeePaymentIntent,
     private_key: PrivateKey,
     build_executable: F,
 ) -> BridgeResult<(Vec<u8>, [u8; 32])>
@@ -5856,6 +5790,7 @@ where
         creation_time_ms,
         ttl_option,
         None,
+        fee_payment,
         private_key,
         build_executable,
     )
@@ -5867,6 +5802,7 @@ fn encode_asset_transaction_with_nonce<F>(
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
     nonce_option: Option<NonZeroU32>,
+    fee_payment: FeePaymentIntent,
     private_key: PrivateKey,
     build_executable: F,
 ) -> BridgeResult<(Vec<u8>, [u8; 32])>
@@ -5879,6 +5815,7 @@ where
         creation_time_ms,
         ttl_option,
         nonce_option,
+        fee_payment,
         Metadata::default(),
         private_key,
         build_executable,
@@ -5892,6 +5829,7 @@ fn encode_asset_transaction_with_nonce_and_metadata<F>(
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
     nonce_option: Option<NonZeroU32>,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     private_key: PrivateKey,
     build_executable: F,
@@ -5900,8 +5838,45 @@ where
     F: FnOnce() -> Executable,
 {
     let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
-    let mut builder = TransactionBuilder::new(chain_id, authority);
+    let mut builder = TransactionBuilder::new(chain_id, authority, fee_payment);
     builder = builder.with_executable(build_executable());
+    if !metadata.is_empty() {
+        builder = builder.with_metadata(metadata);
+    }
+    if let Some(ttl) = ttl_duration {
+        builder.set_ttl(ttl);
+    }
+    if let Some(nonce) = nonce_option {
+        builder.set_nonce(nonce);
+    }
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let signed = builder
+        .try_sign(&private_key)
+        .map_err(|_| BridgeError::TransactionSign)?;
+    let signed_bytes = signed.encode_versioned();
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(signed.hash().as_ref());
+    Ok((signed_bytes, hash))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_asset_transaction_with_nonce_fee_payment_and_metadata<F>(
+    chain_id: ChainId,
+    authority: AccountId,
+    creation_time_ms: u64,
+    ttl_option: Option<NonZeroU64>,
+    nonce_option: Option<NonZeroU32>,
+    fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    private_key: PrivateKey,
+    build_executable: F,
+) -> BridgeResult<(Vec<u8>, [u8; 32])>
+where
+    F: FnOnce() -> Executable,
+{
+    let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
+    let mut builder = TransactionBuilder::new(chain_id, authority, fee_payment)
+        .with_executable(build_executable());
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
     }
@@ -5926,6 +5901,7 @@ fn encode_instruction_transaction(
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
+    fee_payment: FeePaymentIntent,
     private_key: PrivateKey,
     instruction: InstructionBox,
 ) -> BridgeResult<(Vec<u8>, [u8; 32])> {
@@ -5934,6 +5910,7 @@ fn encode_instruction_transaction(
         authority,
         creation_time_ms,
         ttl_option,
+        fee_payment,
         private_key,
         move || Executable::from([instruction]),
     )
@@ -7582,7 +7559,7 @@ struct KagemushaRecursiveSpendArtifactIngestV4 {
     failed: bool,
 }
 
-/// One separately authenticated ABI-20 release retained in canonical
+/// One separately authenticated ABI-21 release retained in canonical
 /// Eq/role then Ep/role manifest order.
 struct KagemushaRecursiveSpendInstalledArtifactSetV4 {
     promotion_record: iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
@@ -7741,7 +7718,7 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
     }
 }
 
-/// Mode-safe view consumed by the one real ABI-20 prover/verifier lifecycle.
+/// Mode-safe view consumed by the one real ABI-21 prover/verifier lifecycle.
 /// Production and the explicitly feature-gated candidate lab provide separate
 /// registries and authentication rules, but converge only after their artifact
 /// payloads have been semantically validated by the core KRV4 parser.
@@ -8210,7 +8187,7 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
     }
 }
 
-// Keep ABI-20 handles in a positive JNI-safe namespace and resolve them only
+// Keep ABI-21 handles in a positive JNI-safe namespace and resolve them only
 // through the V4 registry.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_NAMESPACE_V4: u64 = 0x4b34_0000_0000_0000;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_COUNTER_MASK_V4: u64 = 0x0000_ffff_ffff_ffff;
@@ -8233,7 +8210,7 @@ static KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_ARTIFACT_REGISTRY_V4: OnceLock<
 static KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_INSTALLED_ARTIFACT_SET_V4: OnceLock<
     Mutex<Option<Arc<KagemushaCandidateEvidenceLabInstalledArtifactSetV4>>>,
 > = OnceLock::new();
-// ABI-20 has exactly four authenticated files per parity: Params, PK, VK,
+// ABI-21 has exactly four authenticated files per parity: Params, PK, VK,
 // and Bootstrap. Circuit parameters are carried inside the manifest profile.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4: usize = 8;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V4: usize =
@@ -8649,7 +8626,7 @@ const KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_VERSION_V4: u16 = 4;
 const KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4: usize = 4 * 1024;
 const KAGEMUSHA_OUTPUT_MEMBERSHIP_PATHS_MAX_BYTES_V4: usize = 16 * 1024;
 
-/// Canonical next-zero cursor retained atomically with every ABI-20 branch.
+/// Canonical next-zero cursor retained atomically with every ABI-21 branch.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 struct KagemushaOutputMembershipFrontierV4 {
     version: u16,
@@ -11875,7 +11852,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_
     bridge_result_to_code(result)
 }
 
-/// Retired ABI-20 authorization-template finalizer.
+/// Retired ABI-21 authorization-template finalizer.
 ///
 /// The signature is retained verbatim for binary compatibility. Placeholder
 /// authorization templates are no longer admitted, so this entrypoint clears
@@ -12303,7 +12280,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_v
     bridge_result_to_code(result)
 }
 
-/// Decode and validate an opaque ABI-20 bundle, returning its wallet-safe typed summary.
+/// Decode and validate an opaque ABI-21 bundle, returning its wallet-safe typed summary.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
     bundle_norito_ptr: *const c_uchar,
@@ -12333,7 +12310,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
     bridge_result_to_code(result)
 }
 
-/// Build one canonical, cryptographically validated ABI-20 next-zero frontier.
+/// Build one canonical, cryptographically validated ABI-21 next-zero frontier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_frontier_build_v4(
     leaf_index: u32,
@@ -12569,7 +12546,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_branch_validat
     bridge_result_to_code(result)
 }
 
-/// Build and fully verify the canonical provenance for a first-origin ABI-20 bundle.
+/// Build and fully verify the canonical provenance for a first-origin ABI-21 bundle.
 ///
 /// This boundary intentionally accepts one anchor/proof pair: a freshly initialized
 /// branch has exactly one top-up origin. Merged provenance is produced only by the
@@ -12653,7 +12630,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
     bridge_result_to_code(result)
 }
 
-/// Canonically decode and fully verify provenance for one ABI-20 bundle.
+/// Canonically decode and fully verify provenance for one ABI-21 bundle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4(
     bundle_norito_ptr: *const c_uchar,
@@ -12693,7 +12670,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
     bridge_result_to_code(result)
 }
 
-/// Return the exact ABI-20/V4 recursive-spend capability contract.
+/// Return the exact ABI-21/V4 recursive-spend capability contract.
 ///
 /// Symbol presence is not a readiness signal. Availability requires one live
 /// authenticated eight-artifact release with both verifier and prover material.
@@ -12758,7 +12735,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v
     bridge_result_to_code(result)
 }
 
-/// Bind stable roster bytes to the separate ABI-20 roster reference without
+/// Bind stable roster bytes to the separate ABI-21 roster reference without
 /// reinterpreting the V4 manifest as an ABI-19 release.
 fn verify_kagemusha_topup_roster_binding_v4(
     roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
@@ -12837,7 +12814,7 @@ fn verify_kagemusha_topup_provenance_against_installed_v4(
 
 /// Validate one branch provenance inventory against an already selected,
 /// mode-safe artifact set. Candidate-lab callers must not re-enter the
-/// production registry while executing the shared ABI-20 lifecycle.
+/// production registry while executing the shared ABI-21 lifecycle.
 fn validate_kagemusha_topup_provenance_for_bundle_against_installed_v4(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     provenance: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -13048,7 +13025,7 @@ fn decode_kagemusha_recursive_spend_manifest_v4(
     Ok((manifest, expected_manifest_sha256))
 }
 
-/// Begin bounded streaming of one complete, manifest-bound ABI-20 package.
+/// Begin bounded streaming of one complete, manifest-bound ABI-21 package.
 ///
 /// The caller supplies an opaque `KRV4KEY` file. The canonical manifest and
 /// one unique framed-file digest are pinned before allocating an anonymous
@@ -13395,7 +13372,7 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
     Ok(())
 }
 
-/// Authenticate a promoted release and atomically install its exact eight ABI-20
+/// Authenticate a promoted release and atomically install its exact eight ABI-21
 /// Params/PK/VK/Bootstrap artifacts. No V3 handle, manifest, or unsigned
 /// candidate participates.
 #[allow(clippy::too_many_arguments)]
@@ -13566,7 +13543,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
     bridge_result_to_code(result)
 }
 
-/// Copy the SHA-256 identity of the currently installed authenticated ABI-20 release.
+/// Copy the SHA-256 identity of the currently installed authenticated ABI-21 release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4(
     out_manifest_sha256: *mut c_uchar,
@@ -14261,7 +14238,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_shield_build_unsigned_v4
     bridge_result_to_code(result)
 }
 
-/// Compute the authorization digest for a canonical unsigned ABI-20 top-up.
+/// Compute the authorization digest for a canonical unsigned ABI-21 top-up.
 ///
 /// Recursive init happens locally only after Torii returns the finalized
 /// top-up anchor and consensus proof, so no lineage proving artifact is
@@ -14772,7 +14749,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
 
 /// Candidate-lab initialization boundary. It differs only in the separately
 /// validated candidate registry; proof generation and verification call the
-/// same ABI-20 implementation as production.
+/// same ABI-21 implementation as production.
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4(
@@ -15147,18 +15124,20 @@ mod detached_transaction_scaffold_tests {
         configure: impl FnOnce(&mut TransactionBuilder),
     ) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
-        let mut builder =
-            TransactionBuilder::new(ChainId::from("detached-bridge-test"), authority.clone())
-                .with_executable(executable)
-                .with_metadata({
-                    let mut metadata = Metadata::default();
-                    metadata.insert("gas_limit".parse().expect("metadata key"), 9_000_000_u64);
-                    metadata.insert(
-                        "nested".parse().expect("metadata key"),
-                        Json::from("{\"z\":2,\"a\":[true,null]}"),
-                    );
-                    metadata
-                });
+        let mut builder = TransactionBuilder::new(
+            ChainId::from("detached-bridge-test"),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(9_000_000)),
+        )
+        .with_executable(executable)
+        .with_metadata({
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "nested".parse().expect("metadata key"),
+                Json::from("{\"z\":2,\"a\":[true,null]}"),
+            );
+            metadata
+        });
         builder.set_creation_time(Duration::from_millis(1_700_000_000_123));
         builder.set_ttl(Duration::from_millis(60_000));
         configure(&mut builder);
@@ -15336,13 +15315,16 @@ mod detached_transaction_scaffold_tests {
         let authority = AccountId::new(keypair.public_key().clone());
         let contract = contract_scaffold(&keypair).instructions().clone();
         let placeholder = fixture_keypair(0xA1);
-        let with_attachments =
-            TransactionBuilder::new(ChainId::from("detached-bridge-test"), authority.clone())
-                .with_executable(contract)
-                .with_attachments(ProofAttachmentList(Vec::new()))
-                .try_sign(placeholder.private_key())
-                .unwrap()
-                .with_authority(authority);
+        let with_attachments = TransactionBuilder::new(
+            ChainId::from("detached-bridge-test"),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(contract)
+        .with_attachments(ProofAttachmentList(Vec::new()))
+        .try_sign(placeholder.private_key())
+        .unwrap()
+        .with_authority(authority);
         assert!(
             inspect_detached_transaction_scaffold(&with_attachments.encode_versioned()).is_err()
         );
@@ -16891,13 +16873,13 @@ mod kagemusha_bridge_tests {
     #[test]
     fn kagemusha_topup_shield_v4_rejects_noncanonical_local_archive() {
         let error = kagemusha_topup_shield_build_unsigned_from_archive_v4(b"not-an-archive")
-            .expect_err("ABI-20 must reject a non-canonical local top-up archive");
+            .expect_err("ABI-21 must reject a non-canonical local top-up archive");
         assert_eq!(error.code(), ERR_KAGEMUSHA_PROVE);
     }
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 20);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 21);
     }
 
     #[test]
@@ -17827,7 +17809,7 @@ mod kagemusha_bridge_tests {
         assert!(java_kagemusha_count_v1(3, "branchClaims").is_err());
         assert_eq!(
             KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1, 1,
-            "the stable V2 projection tuple remains version 1 under ABI 20"
+            "the stable V2 projection tuple remains version 1 under ABI 21"
         );
 
         let source = include_str!("lib.rs");
@@ -18092,47 +18074,43 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn java_gas_metadata_requires_paired_asset_and_positive_limit() {
-        let canonical_asset = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-        let metadata = java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 1)
-            .expect("valid gas metadata");
-        let gas_asset_key = Name::from_str("gas_asset_id").expect("metadata key");
-        let gas_limit_key = Name::from_str("gas_limit").expect("metadata key");
-        assert_eq!(
-            metadata.get(&gas_asset_key),
-            Some(&Json::new(canonical_asset))
-        );
-        assert_eq!(metadata.get(&gas_limit_key), Some(&Json::new(7u64)));
+    fn java_fee_payment_intent_requires_typed_valid_json() {
+        let intent = java_fee_payment_intent_from_json(
+            br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}}"#,
+        )
+        .expect("valid authority fee payment");
+        assert_eq!(intent.gas_limit().map(NonZeroU64::get), Some(7));
+        assert!(intent.charge_limits().is_empty());
+
+        let no_gas = java_fee_payment_intent_from_json(
+            br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#,
+        )
+        .expect("explicit null gas limit");
+        assert_eq!(no_gas.gas_limit(), None);
 
         assert!(
-            java_gas_metadata_from_parts(None, 0, 0)
-                .expect("omitted gas metadata")
-                .is_empty()
+            java_fee_payment_intent_from_json(
+                br#"{"payer":"authority","value":{"charge_limits":[],"gas_asset_id":"xor#universal"}}"#,
+            )
+            .is_err()
         );
-        assert_eq!(
-            java_gas_metadata_from_parts(None, 7, 1).expect_err("limit without asset must fail"),
-            "gasAssetId is required when gasLimit is set"
+        assert!(
+            java_fee_payment_intent_from_json(
+                br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":0}}"#,
+            )
+            .is_err()
         );
-        assert_eq!(
-            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 0)
-                .expect_err("asset without limit must fail"),
-            "gasLimit is required when gasAssetId is set"
-        );
-        assert_eq!(
-            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 0, 1)
-                .expect_err("zero gas limit must fail"),
-            "gasLimit must be positive"
-        );
-        assert_eq!(
-            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), -1, 1)
-                .expect_err("negative gas limit must fail"),
-            "gasLimit must be positive"
-        );
-        assert_eq!(
-            java_gas_metadata_from_parts(Some("xor#universal".to_owned()), 7, 1)
-                .expect_err("textual gas asset alias must fail"),
-            "gasAssetId must be a canonical asset definition id"
-        );
+    }
+
+    #[test]
+    fn c_fee_payment_intent_is_required_and_rejects_legacy_fields() {
+        let missing = unsafe { parse_fee_payment_intent_bridge(ptr::null(), 0) };
+        assert!(matches!(missing, Err(BridgeError::FeePayment)));
+
+        let legacy = br#"{"payer":"authority","value":{"charge_limits":[],"fee_sponsor":"alice"}}"#;
+        let invalid =
+            unsafe { parse_fee_payment_intent_bridge(legacy.as_ptr(), legacy.len() as c_ulong) };
+        assert!(matches!(invalid, Err(BridgeError::FeePayment)));
     }
 
     #[test]
@@ -18144,6 +18122,7 @@ mod kagemusha_bridge_tests {
             authority.clone(),
             1_736_000_000_000,
             None,
+            FeePaymentIntent::authority(Vec::new(), None),
             keypair.private_key().clone(),
             || Executable::from(Vec::<InstructionBox>::new()),
         )
@@ -18650,6 +18629,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -18692,111 +18673,26 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             private_key,
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
 
         let asset_id =
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            || {
-                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
-                Executable::from([InstructionBox::from(transfer)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_sponsor_ptr: *const c_char,
-    fee_sponsor_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let inputs = unsafe {
-            gather_asset_tx_inputs(AssetInputPointers {
-                chain_ptr,
-                chain_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                quantity_ptr,
-                quantity_len,
-                destination_ptr,
-                destination_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-
-        let fee_sponsor =
-            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
-        let metadata = build_fee_sponsor_metadata(fee_sponsor);
-
-        let AssetTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-
-        let asset_id =
-            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            metadata,
-            private_key,
-            || {
-                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
-                Executable::from([InstructionBox::from(transfer)])
-            },
-        )?;
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
+                chain_id,
+                authority,
+                creation_time_ms,
+                ttl,
+                nonce,
+                fee_payment,
+                Metadata::default(),
+                private_key,
+                || {
+                    let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
+                    Executable::from([InstructionBox::from(transfer)])
+                },
+            )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -18823,6 +18719,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -18870,115 +18768,26 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             private_key,
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
 
         let asset_id =
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            private_key,
-            || {
-                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
-                Executable::from([InstructionBox::from(transfer)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    quantity_ptr: *const c_char,
-    quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_sponsor_ptr: *const c_char,
-    fee_sponsor_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let inputs = unsafe {
-            gather_asset_tx_inputs_with_parser(
-                AssetInputPointers {
-                    chain_ptr,
-                    chain_len,
-                    authority_ptr,
-                    authority_len,
-                    asset_definition_ptr,
-                    asset_definition_len,
-                    quantity_ptr,
-                    quantity_len,
-                    destination_ptr,
-                    destination_len,
-                    ttl_ms,
-                    ttl_present,
-                    private_key_ptr,
-                    private_key_len,
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
+                chain_id,
+                authority,
+                creation_time_ms,
+                ttl,
+                nonce,
+                fee_payment,
+                Metadata::default(),
+                private_key,
+                || {
+                    let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
+                    Executable::from([InstructionBox::from(transfer)])
                 },
-                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
-            )?
-        };
-        let fee_sponsor =
-            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
-        let metadata = build_fee_sponsor_metadata(fee_sponsor);
-
-        let AssetTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-
-        let asset_id =
-            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            metadata,
-            private_key,
-            || {
-                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
-                Executable::from([InstructionBox::from(transfer)])
-            },
-        )?;
+            )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19031,140 +18840,6 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    nonce: u32,
-    nonce_present: c_uchar,
-    principal_asset_definition_ptr: *const c_char,
-    principal_asset_definition_len: c_ulong,
-    principal_quantity_ptr: *const c_char,
-    principal_quantity_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    fee_asset_definition_ptr: *const c_char,
-    fee_asset_definition_len: c_ulong,
-    fee_quantity_ptr: *const c_char,
-    fee_quantity_len: c_ulong,
-    treasury_ptr: *const c_char,
-    treasury_len: c_ulong,
-    policy_version: u64,
-    policy_hash_ptr: *const c_char,
-    policy_hash_len: c_ulong,
-    fee_instruction_index: u64,
-    fee_sponsor_ptr: *const c_char,
-    fee_sponsor_len: c_ulong,
-    memo_ptr: *const c_char,
-    memo_len: c_ulong,
-    metadata_json_ptr: *const c_char,
-    metadata_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let inputs = unsafe {
-            gather_asset_tx_inputs(AssetInputPointers {
-                chain_ptr,
-                chain_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr: principal_asset_definition_ptr,
-                asset_definition_len: principal_asset_definition_len,
-                quantity_ptr: principal_quantity_ptr,
-                quantity_len: principal_quantity_len,
-                destination_ptr,
-                destination_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-
-        let fee_asset_definition =
-            unsafe { read_string_bridge(fee_asset_definition_ptr, fee_asset_definition_len) }?;
-        let fee_quantity = unsafe { read_string_bridge(fee_quantity_ptr, fee_quantity_len) }?;
-        let treasury = unsafe { read_string_bridge(treasury_ptr, treasury_len) }?;
-        let policy_hash = unsafe { read_string_bridge(policy_hash_ptr, policy_hash_len) }?;
-        let fee_sponsor =
-            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
-        let memo = unsafe { parse_optional_string_bridge(memo_ptr, memo_len)? };
-        let metadata =
-            unsafe { parse_metadata_object_bridge(metadata_json_ptr, metadata_json_len)? };
-        let metadata = build_validation_fee_metadata(
-            metadata,
-            policy_version,
-            policy_hash,
-            fee_instruction_index,
-            fee_sponsor,
-            memo,
-        )?;
-
-        let (fee_asset_definition, fee_asset_scope) =
-            parse_asset_definition_with_balance_scope(fee_asset_definition)?;
-        let fee_quantity = parse_quantity(fee_quantity)?;
-        let treasury = parse_destination(treasury)?;
-
-        let AssetTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            asset_scope,
-            destination,
-            quantity,
-            ttl,
-            private_key,
-        } = inputs;
-        let nonce = parse_nonce(nonce, nonce_present != 0)?;
-
-        let principal_asset_id =
-            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let fee_asset_id = AssetId::with_scope(
-            fee_asset_definition.clone(),
-            authority.clone(),
-            fee_asset_scope,
-        );
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            nonce,
-            metadata,
-            private_key,
-            || {
-                let principal_transfer =
-                    Transfer::asset_quantity(principal_asset_id, quantity, destination);
-                let fee_transfer = Transfer::asset_quantity(fee_asset_id, fee_quantity, treasury);
-                Executable::from([
-                    InstructionBox::from(principal_transfer),
-                    InstructionBox::from(fee_transfer),
-                ])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
     chain_ptr: *const c_char,
     chain_len: c_ulong,
@@ -19187,6 +18862,8 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
     payload_nonce_len: c_ulong,
     payload_ciphertext_ptr: *const c_uchar,
     payload_ciphertext_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -19253,11 +18930,14 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
         let authority = inputs.authority;
         let private_key = inputs.private_key;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction = zk::Shield::new(
@@ -19302,6 +18982,8 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
     payload_nonce_len: c_ulong,
     payload_ciphertext_ptr: *const c_uchar,
     payload_ciphertext_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -19375,11 +19057,14 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
             private_key,
         } = inputs;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction = zk::Shield::new(
@@ -19422,6 +19107,8 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction(
     proof_json_len: c_ulong,
     root_hint_ptr: *const c_uchar,
     root_hint_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -19469,11 +19156,14 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction(
         let ttl = inputs.ttl;
         let private_key = inputs.private_key;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction = zk::Unshield::new(
@@ -19517,6 +19207,8 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction_alg(
     proof_json_len: c_ulong,
     root_hint_ptr: *const c_uchar,
     root_hint_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -19571,11 +19263,14 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction_alg(
             private_key,
         } = inputs;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction = zk::Unshield::new(
@@ -19617,6 +19312,8 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction(
     proof_json_len: c_ulong,
     root_hint_ptr: *const c_uchar,
     root_hint_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -19663,11 +19360,14 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction(
             private_key,
         } = inputs;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction =
@@ -19703,6 +19403,8 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction_al
     proof_json_len: c_ulong,
     root_hint_ptr: *const c_uchar,
     root_hint_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -19754,11 +19456,14 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction_al
             private_key,
         } = inputs;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             || {
                 let instruction =
@@ -19798,6 +19503,8 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     vk_shield_ptr: *const c_char,
     vk_shield_len: c_ulong,
     vk_shield_present: c_uchar,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -19846,11 +19553,20 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             vk_shield,
         );
 
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            {
                 let register = register.clone();
                 move || Executable::from([InstructionBox::from(register.clone())])
-            })?;
+            },
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19883,6 +19599,8 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     vk_shield_ptr: *const c_char,
     vk_shield_len: c_ulong,
     vk_shield_present: c_uchar,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -19933,11 +19651,20 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             vk_shield,
         );
 
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            {
                 let register = register.clone();
                 move || Executable::from([InstructionBox::from(register.clone())])
-            })?;
+            },
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19963,6 +19690,8 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
     key_len: c_ulong,
     value_ptr: *const c_uchar,
     value_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -19994,11 +19723,14 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
         let private_key = parse_private_key(key_slice)?;
 
         let instruction = build_set_metadata_instruction(target, key, value);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             instruction,
         )?;
@@ -20027,6 +19759,8 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
     key_len: c_ulong,
     value_ptr: *const c_uchar,
     value_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20060,11 +19794,14 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
 
         let instruction = build_set_metadata_instruction(target, key, value);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             instruction,
         )?;
@@ -20091,6 +19828,8 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
     object_len: c_ulong,
     key_ptr: *const c_char,
     key_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20120,11 +19859,14 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
         let private_key = parse_private_key(key_slice)?;
 
         let instruction = build_remove_metadata_instruction(target, key);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             instruction,
         )?;
@@ -20151,6 +19893,8 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
     object_len: c_ulong,
     key_ptr: *const c_char,
     key_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20182,11 +19926,14 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
 
         let instruction = build_remove_metadata_instruction(target, key);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             instruction,
         )?;
@@ -20221,6 +19968,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     window_present: c_uchar,
     mode_code: u8,
     mode_present: c_uchar,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20298,11 +20047,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             manifest_provenance: Some(manifest_provenance),
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(proposal),
         )?;
@@ -20337,6 +20089,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     window_present: c_uchar,
     mode_code: u8,
     mode_present: c_uchar,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20416,11 +20170,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             manifest_provenance: Some(manifest_provenance),
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(proposal),
         )?;
@@ -20450,6 +20207,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
     amount_len: c_ulong,
     duration_blocks: u64,
     direction: u8,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20491,11 +20250,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             direction,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ballot),
         )?;
@@ -20525,6 +20287,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
     amount_len: c_ulong,
     duration_blocks: u64,
     direction: u8,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20568,11 +20332,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             direction,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ballot),
         )?;
@@ -20600,6 +20367,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
     proof_b64_len: c_ulong,
     public_inputs_ptr: *const c_uchar,
     public_inputs_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20645,11 +20414,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             public_inputs_json,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ballot),
         )?;
@@ -20677,6 +20449,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
     proof_b64_len: c_ulong,
     public_inputs_ptr: *const c_uchar,
     public_inputs_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20724,11 +20498,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             public_inputs_json,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ballot),
         )?;
@@ -20756,6 +20533,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
     preimage_hash_len: c_ulong,
     window_lower: u64,
     window_upper: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20795,11 +20574,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             at_window,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(enact),
         )?;
@@ -20827,6 +20609,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
     preimage_hash_len: c_ulong,
     window_lower: u64,
     window_upper: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20868,11 +20652,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             at_window,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(enact),
         )?;
@@ -20898,6 +20685,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
     referendum_id_len: c_ulong,
     proposal_id_ptr: *const c_char,
     proposal_id_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -20931,11 +20720,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             proposal_id,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(finalize),
         )?;
@@ -20961,6 +20753,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
     referendum_id_len: c_ulong,
     proposal_id_ptr: *const c_char,
     proposal_id_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -20996,11 +20790,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             proposal_id,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(finalize),
         )?;
@@ -21027,6 +20824,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -21069,11 +20868,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             derived_by,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(persist),
         )?;
@@ -21100,6 +20902,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -21144,11 +20948,14 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             derived_by,
         };
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(persist),
         )?;
@@ -21538,6 +21345,9 @@ mod accel_tests {
 
     use super::*;
 
+    const AUTHORITY_FEE_PAYMENT_JSON: &[u8] =
+        br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#;
+
     fn fixture_key_pair(seed: u8) -> KeyPair {
         let mut material = [0u8; 32];
         let domain = b"connect-accel-test-seed";
@@ -21670,6 +21480,8 @@ mod accel_tests {
                     nonce.len() as c_ulong,
                     ciphertext.as_ptr(),
                     ciphertext.len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                     private.as_ptr(),
                     private.len() as c_ulong,
                     algorithm as u8,
@@ -21701,6 +21513,8 @@ mod accel_tests {
                     nonce.len() as c_ulong,
                     ciphertext.as_ptr(),
                     ciphertext.len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                     private.as_ptr(),
                     private.len() as c_ulong,
                     &mut out_signed_ptr,
@@ -22131,6 +21945,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private_key.as_ptr(),
                 private_key.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22226,6 +22042,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private_key.as_ptr(),
                 private_key.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22270,6 +22088,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private_key.as_ptr(),
                 private_key.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22314,6 +22134,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private_key.as_ptr(),
                 private_key.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22357,6 +22179,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22404,6 +22228,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22452,6 +22278,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22494,6 +22322,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 Algorithm::Ed25519 as u8,
@@ -22516,20 +22346,23 @@ mod accel_tests {
     }
 
     #[test]
-    fn transfer_encoder_with_fee_sponsor_sets_metadata() {
+    fn transfer_encoder_requires_typed_sponsor_payment() {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
-        let fee_sponsor = sample_destination("paynet", 2);
-        let fee_sponsor_literal = fee_sponsor.to_str().expect("utf8 fee sponsor");
+        let sponsor_account = sample_destination("paynet", 2);
+        let sponsor_literal = sponsor_account.to_str().expect("utf8 sponsor account");
+        let fee_payment = format!(
+            r#"{{"payer":"sponsor","value":{{"program_id":{{"sponsor":"{sponsor_literal}","name":"wallet"}},"program_revision":3,"charge_limits":[],"gas_limit":null}}}}"#
+        );
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
         let mut out_hash = [0u8; 32];
         let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+            connect_norito_encode_transfer_signed_transaction(
                 chain.as_ptr(),
                 chain.as_bytes().len() as c_ulong,
                 authority.as_ptr(),
@@ -22545,8 +22378,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
-                fee_sponsor.as_ptr(),
-                fee_sponsor.as_bytes().len() as c_ulong,
+                fee_payment.as_ptr(),
+                fee_payment.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22557,51 +22390,16 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let signed = decode_signed(out_signed_ptr, out_signed_len);
-        let metadata_key = Name::from_str("fee_sponsor").expect("metadata key");
-        let metadata_value = signed
-            .payload()
-            .metadata
-            .get(&metadata_key)
-            .expect("fee sponsor metadata should be present");
-        assert_eq!(metadata_value, &Json::new(fee_sponsor_literal));
+        let (program_id, revision) = signed
+            .fee_payment_intent()
+            .sponsor_program()
+            .expect("typed sponsor program");
+        assert_eq!(program_id.to_string(), format!("{sponsor_literal}/wallet"));
+        assert_eq!(revision, 3);
+        assert!(signed.metadata().is_empty());
         unsafe {
             free(out_signed_ptr as *mut _);
         }
-    }
-
-    #[test]
-    fn validation_fee_metadata_preserves_explicit_memo() {
-        let memo_key = Name::from_str("memo").expect("metadata key");
-        let mut metadata = Metadata::default();
-        metadata.insert(memo_key.clone(), Json::new("explicit memo"));
-
-        let metadata = build_validation_fee_metadata(
-            metadata,
-            7,
-            "ab".repeat(32),
-            1,
-            None,
-            Some("fallback memo".to_owned()),
-        )
-        .expect("validation fee metadata");
-
-        assert_eq!(metadata.get(&memo_key), Some(&Json::new("explicit memo")));
-    }
-
-    #[test]
-    fn validation_fee_metadata_inserts_fallback_memo_when_missing() {
-        let metadata = build_validation_fee_metadata(
-            Metadata::default(),
-            7,
-            "ab".repeat(32),
-            1,
-            None,
-            Some("fallback memo".to_owned()),
-        )
-        .expect("validation fee metadata");
-
-        let memo_key = Name::from_str("memo").expect("metadata key");
-        assert_eq!(metadata.get(&memo_key), Some(&Json::new("fallback memo")));
     }
 
     #[test]
@@ -22633,6 +22431,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22678,6 +22478,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 Algorithm::Ed25519 as u8,
@@ -22724,6 +22526,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22769,6 +22573,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 Algorithm::Ed25519 as u8,
@@ -22945,6 +22751,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -22978,8 +22786,14 @@ mod accel_tests {
         let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
         let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            1,
+            None,
+            FeePaymentIntent::authority(Vec::new(), None),
+            private_key,
+            || {
                 let instruction = zk::Unshield::new_with_outputs(
                     asset_definition,
                     destination,
@@ -22990,8 +22804,9 @@ mod accel_tests {
                     Some([0x33_u8; 32]),
                 );
                 Executable::from([InstructionBox::from(instruction)])
-            })
-            .expect("encode unshield signed transaction");
+            },
+        )
+        .expect("encode unshield signed transaction");
         let signed = decode_signed_transaction(&signed_bytes).expect("decode signed transaction");
         assert_eq!(hash_bytes, *signed.hash().as_ref());
         match signed.instructions() {
@@ -23042,6 +22857,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23089,6 +22906,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23136,6 +22955,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23183,6 +23004,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23230,6 +23053,8 @@ mod accel_tests {
                 proof.as_bytes().len() as c_ulong,
                 ptr::null(),
                 0,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23438,6 +23263,8 @@ mod accel_tests {
                 quantity.as_bytes().len() as c_ulong,
                 destination.as_ptr(),
                 destination.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23497,6 +23324,8 @@ mod accel_tests {
                 spec_c.as_bytes().len() as c_ulong,
                 scoped_account.as_ptr(),
                 scoped_account.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23536,6 +23365,8 @@ mod accel_tests {
                 invalid_spec.as_bytes().len() as c_ulong,
                 authority.as_ptr(),
                 authority.as_bytes().len() as c_ulong,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -23624,6 +23455,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -23669,12 +23502,15 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
 
         let asset_id =
             AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
             nonce,
+            fee_payment,
             private_key,
             || {
                 let mint = Mint::asset_quantity(quantity, asset_id);
@@ -23707,6 +23543,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -23757,12 +23595,15 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
 
         let asset_id =
             AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
             nonce,
+            fee_payment,
             private_key,
             || {
                 let mint = Mint::asset_quantity(quantity, asset_id);
@@ -23791,6 +23632,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
     spec_len: c_ulong,
     account_ptr: *const c_char,
     account_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -23817,8 +23660,16 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let private_key = parse_private_key(key_slice)?;
         let spec = parse_multisig_spec_bytes(spec_ptr, spec_len)?;
 
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            {
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
@@ -23829,7 +23680,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                     );
                     Executable::from([InstructionBox::from(register)])
                 }
-            })?;
+            },
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -23852,6 +23704,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
     spec_len: c_ulong,
     account_ptr: *const c_char,
     account_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -23880,8 +23734,16 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
         let spec = parse_multisig_spec_bytes(spec_ptr, spec_len)?;
 
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            {
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
@@ -23892,7 +23754,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                     );
                     Executable::from([InstructionBox::from(register)])
                 }
-            })?;
+            },
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -23919,6 +23782,8 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -23963,12 +23828,15 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
         let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
             nonce,
+            fee_payment,
             private_key,
             || {
                 let burn = Burn::asset_quantity(quantity, asset_id);
@@ -23997,6 +23865,8 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
     account_len: c_ulong,
     receipt_ptr: *const c_char,
     receipt_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     out_signed_ptr: *mut *mut c_uchar,
@@ -24024,11 +23894,14 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
         validate_identifier_claim_account(&account, &receipt)?;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ClaimIdentifier { account, receipt }),
         )?;
@@ -24054,6 +23927,8 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
     account_len: c_ulong,
     receipt_ptr: *const c_char,
     receipt_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -24083,11 +23958,14 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
         validate_identifier_claim_account(&account, &receipt)?;
 
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
+            fee_payment,
             private_key,
             InstructionBox::from(ClaimIdentifier { account, receipt }),
         )?;
@@ -24117,6 +23995,8 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
     quantity_len: c_ulong,
     destination_ptr: *const c_char,
     destination_len: c_ulong,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
     algorithm_code: u8,
@@ -24166,12 +24046,15 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
         let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
             creation_time_ms,
             ttl,
             nonce,
+            fee_payment,
             private_key,
             || {
                 let burn = Burn::asset_quantity(quantity, asset_id);
@@ -25709,16 +25592,15 @@ fn java_optional_text_array(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_gas_metadata(
+fn java_fee_payment_intent(
     env: &mut jni::JNIEnv<'_>,
-    gas_asset_id: &jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
-) -> Result<Metadata, String> {
-    let gas_asset_id =
-        java_optional_text_array(env, gas_asset_id, gas_asset_id_present, "gasAssetId")?;
-    java_gas_metadata_from_parts(gas_asset_id, gas_limit, gas_limit_present)
+    fee_payment_json: &jni::objects::JByteArray<'_>,
+) -> Result<FeePaymentIntent, String> {
+    let mut bytes = read_java_byte_array(env, fee_payment_json, "feePaymentJson")
+        .ok_or_else(|| "invalid feePaymentJson bytes".to_owned())?;
+    let result = java_fee_payment_intent_from_json(&bytes);
+    bytes.fill(0);
+    result
 }
 
 #[cfg(any(
@@ -25727,36 +25609,13 @@ fn java_gas_metadata(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_gas_metadata_from_parts(
-    gas_asset_id: Option<String>,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
-) -> Result<Metadata, String> {
-    let mut metadata = Metadata::default();
-    match (gas_asset_id, gas_limit_present != 0) {
-        (None, false) => {}
-        (None, true) => {
-            return Err("gasAssetId is required when gasLimit is set".to_owned());
-        }
-        (Some(_), false) => {
-            return Err("gasLimit is required when gasAssetId is set".to_owned());
-        }
-        (Some(asset_id), true) => {
-            if gas_limit <= 0 {
-                return Err("gasLimit must be positive".to_owned());
-            }
-            parse_asset_definition(asset_id.clone())
-                .map_err(|_| "gasAssetId must be a canonical asset definition id".to_owned())?;
-            let name = Name::from_str("gas_asset_id")
-                .map_err(|_| "invalid gas_asset_id key".to_owned())?;
-            metadata.insert(name, Json::new(asset_id));
-            iroha_data_model::transaction::insert_transaction_gas_limit(
-                &mut metadata,
-                gas_limit as u64,
-            );
-        }
-    }
-    Ok(metadata)
+fn java_fee_payment_intent_from_json(bytes: &[u8]) -> Result<FeePaymentIntent, String> {
+    let intent = norito::json::from_slice::<FeePaymentIntent>(bytes)
+        .map_err(|err| format!("feePaymentJson must be canonical Norito JSON: {err}"))?;
+    intent
+        .validate()
+        .map_err(|err| format!("invalid feePayment: {err}"))?;
+    Ok(intent)
 }
 
 #[cfg(any(
@@ -25918,10 +25777,7 @@ fn java_native_encode_shield_signed_transaction(
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -25949,33 +25805,29 @@ fn java_native_encode_shield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let metadata = java_gas_metadata(
-            env,
-            &gas_asset_id,
-            gas_asset_id_present,
-            gas_limit,
-            gas_limit_present,
-        )?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms as u64,
-            ttl,
-            None,
-            metadata,
-            private_key,
-            || {
-                let instruction = zk::Shield::new(
-                    asset_definition,
-                    from_account,
-                    amount,
-                    note_commitment,
-                    payload,
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )
-        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
+                chain_id,
+                authority,
+                creation_time_ms as u64,
+                ttl,
+                None,
+                fee_payment,
+                Metadata::default(),
+                private_key,
+                || {
+                    let instruction = zk::Shield::new(
+                        asset_definition,
+                        from_account,
+                        amount,
+                        note_commitment,
+                        payload,
+                    );
+                    Executable::from([InstructionBox::from(instruction)])
+                },
+            )
+            .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {
@@ -26010,10 +25862,7 @@ fn java_native_encode_unshield_signed_transaction(
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -26047,35 +25896,31 @@ fn java_native_encode_unshield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let metadata = java_gas_metadata(
-            env,
-            &gas_asset_id,
-            gas_asset_id_present,
-            gas_limit,
-            gas_limit_present,
-        )?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms as u64,
-            ttl,
-            None,
-            metadata,
-            private_key,
-            || {
-                let instruction = zk::Unshield::new_with_outputs(
-                    asset_definition,
-                    destination,
-                    public_amount,
-                    inputs,
-                    outputs,
-                    proof,
-                    root_hint,
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )
-        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
+                chain_id,
+                authority,
+                creation_time_ms as u64,
+                ttl,
+                None,
+                fee_payment,
+                Metadata::default(),
+                private_key,
+                || {
+                    let instruction = zk::Unshield::new_with_outputs(
+                        asset_definition,
+                        destination,
+                        public_amount,
+                        inputs,
+                        outputs,
+                        proof,
+                        root_hint,
+                    );
+                    Executable::from([InstructionBox::from(instruction)])
+                },
+            )
+            .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {
@@ -26113,10 +25958,7 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -26164,24 +26006,20 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             vk_unshield,
             vk_shield,
         );
-        let metadata = java_gas_metadata(
-            env,
-            &gas_asset_id,
-            gas_asset_id_present,
-            gas_limit,
-            gas_limit_present,
-        )?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
-            chain_id,
-            authority,
-            creation_time_ms as u64,
-            ttl,
-            None,
-            metadata,
-            private_key,
-            move || Executable::from([InstructionBox::from(register)]),
-        )
-        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
+                chain_id,
+                authority,
+                creation_time_ms as u64,
+                ttl,
+                None,
+                fee_payment,
+                Metadata::default(),
+                private_key,
+                move || Executable::from([InstructionBox::from(register)]),
+            )
+            .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {
@@ -30116,7 +29954,7 @@ fn java_kagemusha_authenticated_artifact_set_v4_fields(
         || artifact_set.max_proof_bytes
             > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
-        return Err("artifactSet.maxProofBytes exceeds the ABI-20 V4 release limit".to_owned());
+        return Err("artifactSet.maxProofBytes exceeds the ABI-21 V4 release limit".to_owned());
     }
     if artifact_set.asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
         return Err("artifactSet.assetScale exceeds the offline payment limit".to_owned());
@@ -30171,7 +30009,7 @@ fn java_kagemusha_project_readiness_v4_fields(
     if readiness.required_bridge_abi_version
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
     {
-        return Err("required bridge ABI must be the exact ABI-20 V4 contract".to_owned());
+        return Err("required bridge ABI must be the exact ABI-21 V4 contract".to_owned());
     }
     if readiness.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 {
         return Err("maximum hop count does not match the protocol contract".to_owned());
@@ -30272,12 +30110,12 @@ fn java_kagemusha_project_readiness_v4_fields(
 
     let recursive_pair_present = !step_eq.is_empty() && !step_ep.is_empty();
     if step_eq.is_empty() != step_ep.is_empty() {
-        return Err("ABI-20 V4 recursive verifiers must be reported atomically".to_owned());
+        return Err("ABI-21 V4 recursive verifiers must be reported atomically".to_owned());
     }
     let artifact_set = match readiness.artifact_set.as_ref() {
         None => {
             if recursive_pair_present {
-                return Err("artifactSet is required with the ABI-20 V4 verifier pair".to_owned());
+                return Err("artifactSet is required with the ABI-21 V4 verifier pair".to_owned());
             }
             if readiness.proof_backend_available {
                 return Err(
@@ -30288,7 +30126,7 @@ fn java_kagemusha_project_readiness_v4_fields(
         }
         Some(artifact_set) => {
             if !recursive_pair_present {
-                return Err("artifactSet requires the ABI-20 V4 verifier pair".to_owned());
+                return Err("artifactSet requires the ABI-21 V4 verifier pair".to_owned());
             }
             java_kagemusha_authenticated_artifact_set_v4_fields(artifact_set)?;
             if artifact_set.activation_height > readiness.evaluated_block_height
@@ -30374,7 +30212,7 @@ fn java_kagemusha_project_readiness_v4_fields(
     if (readiness.artifact_set.is_none() && registry_blocker_count != 1)
         || (readiness.artifact_set.is_some() && registry_blocker_count != 0)
     {
-        return Err("artifactSet contradicts the ABI-20 V4 registry blocker set".to_owned());
+        return Err("artifactSet contradicts the ABI-21 V4 registry blocker set".to_owned());
     }
     let expected_recursive_lineage_supported = readiness.proof_backend_available
         && readiness.artifact_set.is_some()
@@ -30382,7 +30220,7 @@ fn java_kagemusha_project_readiness_v4_fields(
         && !step_ep.is_empty();
     if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
         return Err(
-            "recursiveLineageSupported must equal the exact authenticated ABI-20 lineage conjunction"
+            "recursiveLineageSupported must equal the exact authenticated ABI-21 lineage conjunction"
                 .to_owned(),
         );
     }
@@ -30404,7 +30242,7 @@ fn java_kagemusha_project_readiness_v4_fields(
         && !step_ep.is_empty()
         && readiness.blockers.is_empty();
     if readiness.ready != expected_ready {
-        return Err("ready must equal the complete ABI-20 runtime conjunction".to_owned());
+        return Err("ready must equal the complete ABI-21 runtime conjunction".to_owned());
     }
 
     let mut fields = vec![
@@ -31421,10 +31259,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -31442,10 +31277,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         payload_nonce,
         payload_ciphertext,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -31474,10 +31306,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -31495,10 +31324,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         proof_json,
         root_hint,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -31530,10 +31356,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -31554,10 +31377,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         vk_shield,
         vk_shield_present,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -31672,10 +31492,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -31693,10 +31510,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         payload_nonce,
         payload_ciphertext,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -31725,10 +31539,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -31746,10 +31557,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         proof_json,
         root_hint,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -31781,10 +31589,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
-    gas_asset_id: jni::objects::JByteArray<'_>,
-    gas_asset_id_present: jni::sys::jboolean,
-    gas_limit: jni::sys::jlong,
-    gas_limit_present: jni::sys::jboolean,
+    fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -31805,10 +31610,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         vk_shield,
         vk_shield_present,
         private_key,
-        gas_asset_id,
-        gas_asset_id_present,
-        gas_limit,
-        gas_limit_present,
+        fee_payment_json,
     )
 }
 
@@ -44352,7 +44154,11 @@ mod signed_transaction_fixture_tests {
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1));
         let tx = builder.sign(keypair.private_key());
         let versioned = tx.encode_versioned();
@@ -44369,7 +44175,11 @@ mod signed_transaction_fixture_tests {
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1));
         let tx = builder.sign(keypair.private_key());
         let bytes = tx.encode_versioned();
@@ -44383,7 +44193,11 @@ mod signed_transaction_fixture_tests {
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1));
         let tx = builder.sign(keypair.private_key());
         let versioned = tx.encode_versioned();

@@ -11,6 +11,9 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.FeeChargeKind;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -131,11 +134,23 @@ public final class TransactionPayloadFixtureTests {
           : name + ": TTL mismatch vs fixture metadata";
       assert Objects.equals(fixture.nonce(), payload.nonce())
           : name + ": nonce mismatch vs fixture metadata";
-      if ("typed_metadata_gas_limit".equals(name)) {
-        assert JsonValue.string("xor#universal").equals(payload.metadata().get("gas_asset_id"))
-            : name + ": gas asset metadata must be a JSON string";
-        assert JsonValue.number(1000L).equals(payload.metadata().get("gas_limit"))
-            : name + ": gas limit metadata must be a JSON number";
+      if ("typed_fee_payment_gas_limit".equals(name)) {
+        assert payload.feePayment() instanceof FeePaymentIntent.Authority
+            : name + ": payer must be authority";
+        assert Long.valueOf(1000L).equals(payload.feePayment().gasLimit())
+            : name + ": typed gas limit mismatch";
+        assert payload.feePayment().chargeLimits().size() == 1
+            : name + ": expected one typed fee charge";
+        final FeeChargeLimit charge = payload.feePayment().chargeLimits().get(0);
+        assert charge.kind() == FeeChargeKind.PIPELINE_GAS
+            : name + ": fee component mismatch";
+        assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(charge.assetDefinitionId())
+            : name + ": fee asset mismatch";
+        assert "1000".equals(charge.maxAmount()) : name + ": fee maximum mismatch";
+        assert !payload.metadata().containsKey("gas_asset_id")
+            : name + ": legacy gas asset metadata must be absent";
+        assert !payload.metadata().containsKey("gas_limit")
+            : name + ": legacy gas limit metadata must be absent";
         assert JsonValue.bool(true).equals(payload.metadata().get("checked"))
             : name + ": boolean metadata must be preserved";
       }

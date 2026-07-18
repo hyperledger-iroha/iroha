@@ -62,7 +62,7 @@
 //! into an unfinalized height.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     path::Path,
     sync::Arc,
@@ -71,7 +71,7 @@ use std::{
 
 use super::v2_core::{
     EquivocationKind, EventTag, ExactBodyOwnerProjection, ExactBodyRetirementAccounting,
-    TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
+    MAX_EFFECTS_PER_STEP, TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
     plan_exact_body_owner_rebind, plan_exact_body_retirement_accounting,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
@@ -581,6 +581,11 @@ pub(crate) struct EffectExecutorStatus {
     pub queued_runtime_completions: usize,
     /// Completed I/O work retained by the bounded effect-worker handoff.
     pub effect_completion_queue: RuntimeQueueLaneSnapshot,
+    /// Reducer effects retained until one bounded pending-work slot becomes available.
+    ///
+    /// This strict FIFO is attempted before runtime advancement and therefore
+    /// never reports eligible scheduler-skip debt.
+    pub effect_dispatch_queue: RuntimeQueueLaneSnapshot,
     /// Per-class serialized runtime ownership and fairness state.
     pub runtime_queues: RuntimeQueueSnapshot,
     /// View-aware no-progress threshold derived from the configured pacemaker.
@@ -642,7 +647,8 @@ pub(crate) trait V2EffectServices {
         previous: &BodyFetchTask,
         rebound: BodyFetchTask,
     ) -> Result<(), Self::Error>;
-    /// Cancel exact reconstruction work made stale by a certified view transition.
+    /// Cancel exact reconstruction work, whether still live or already held by
+    /// the bounded queued-reconstruction completion handoff.
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error>;
     /// Transfer one exact ordinary or hybrid reconstruction owner to the executor.
     ///
@@ -1361,6 +1367,47 @@ struct FinalityCompletion {
     artifact: wire::finality::V2FinalityArtifact,
 }
 
+/// One reducer-emitted causal suffix waiting for pending-work capacity.
+///
+/// The source reducer bounds every transition by [`MAX_EFFECTS_PER_STEP`], so
+/// retaining the unconsumed suffix preserves exact FIFO order without creating
+/// an independently growing adapter queue. This queue is intentionally
+/// volatile: after process restart each progress item is reconstructed from
+/// the source classified by [`RestartEffectSource`] rather than from this
+/// adapter memory.
+#[derive(Debug)]
+struct RetainedEffectBatch {
+    effects: VecDeque<AdapterEffect>,
+    oldest_at: Instant,
+}
+
+/// Exhaustive source inventory of effects which may create pending work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingWorkProducer {
+    Sign,
+    Fetch,
+    Store,
+    Validate,
+    Apply,
+}
+
+/// Restart authority for one reducer-emitted adapter effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestartEffectSource {
+    /// Safety-WAL outbound intent, signed message, QC, or TC.
+    DurableConsensusEvidence,
+    /// Reducer Missing state plus proposal/QC/lock/Decision retransmission.
+    BodyReconstruction,
+    /// Checksummed exact-body store catalog.
+    DurableBody,
+    /// Durable Decision plus the exact fsynced validation marker.
+    DurableDecision,
+    /// Recovered view owns fresh process-local cleanup; old services no longer exist.
+    RecoveredView,
+    /// Non-progress diagnostic; losing it in a process crash cannot orphan work.
+    DiagnosticOnly,
+}
+
 pub(crate) trait EffectRuntime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     fn step_recovery_effects(&mut self, now: Instant)
@@ -1709,6 +1756,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     validated_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     finality_completion: Option<FinalityCompletion>,
+    retained_effect_batch: Option<RetainedEffectBatch>,
     fatal_reason: Option<String>,
 }
 
@@ -1832,6 +1880,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
         self.fatal_reason.is_none()
             && !self.output_guard.restart_required()
+            && self.retained_effect_batch.is_none()
             && self.runtime.can_admit_network_message(message)
     }
 
@@ -1870,6 +1919,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) fn ready_to_finish(&self) -> bool {
         !self.output_guard.restart_required()
             && self.finality_completion.is_some()
+            && self.retained_effect_batch.is_none()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
     }
@@ -1978,8 +2028,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             validated_bodies: BTreeMap::new(),
             rejected_bodies: BTreeMap::new(),
             finality_completion: None,
+            retained_effect_batch: None,
             fatal_reason: None,
         })
+    }
+
+    /// Whether a new local proposal can reserve its first exact-body work owner.
+    ///
+    /// The runner checks this before consuming a prepared candidate or
+    /// registering outbound payload bytes. Reducer retransmission and local
+    /// completions continue while admission is deferred. This capacity rule is
+    /// runtime-independent so production and deterministic executor tests use
+    /// the same admission boundary.
+    pub(crate) fn can_admit_local_proposal(&self) -> bool {
+        self.fatal_reason.is_none()
+            && !self.output_guard.restart_required()
+            && self.retained_effect_batch.is_none()
+            && self.pending_work() < self.config.max_pending_work
     }
 
     /// Exact runtime FIFO capacity currently available to trusted completions.
@@ -2429,33 +2494,153 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Consume startup or reducer effects in their exact emitted order.
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
-        mut effects: Vec<AdapterEffect>,
+        effects: Vec<AdapterEffect>,
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
-        let decision = match self.reconcile_runtime_decision(services) {
-            Ok(decision) => decision,
-            Err(error) => return Err(self.close(error, services)),
-        };
-        if let Some(decision) = decision {
+        if let Err(error) = self.retain_effect_batch(effects) {
+            return Err(self.close(error, services));
+        }
+        self.drain_retained_effect_batch(services)
+            .map_err(|error| self.close(error, services))
+    }
+
+    /// Install one complete reducer transition before dispatching any prefix.
+    ///
+    /// Rejecting a second batch while debt exists is deliberate: only the
+    /// serialized runtime can establish causal order, and it is not stepped
+    /// again until this suffix drains. The bound is shared with the reducer's
+    /// source-level transition contract.
+    fn retain_effect_batch(
+        &mut self,
+        effects: Vec<AdapterEffect>,
+    ) -> Result<(), EffectExecutorError> {
+        if self.retained_effect_batch.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "a second reducer effect batch overtook retained causal dispatch debt".to_owned(),
+            ));
+        }
+        if effects.len() > MAX_EFFECTS_PER_STEP {
+            return Err(EffectExecutorError::Contract(format!(
+                "one reducer transition emitted {} effects above the source bound {MAX_EFFECTS_PER_STEP}",
+                effects.len()
+            )));
+        }
+        if effects.is_empty() {
+            return Ok(());
+        }
+        debug_assert!(effects.iter().all(|effect| {
+            Self::restart_effect_source(effect) != RestartEffectSource::DiagnosticOnly
+                || Self::pending_work_producer(effect).is_none()
+        }));
+        self.retained_effect_batch = Some(RetainedEffectBatch {
+            effects: effects.into(),
+            oldest_at: Instant::now(),
+        });
+        Ok(())
+    }
+
+    /// Drain the retained causal suffix in exact FIFO order.
+    ///
+    /// Pending-work exhaustion is the sole retryable adapter error. Every
+    /// other boundary failure remains fail-closed. Durable Decision ownership
+    /// is reconciled before every attempt so a suffix retained across a local
+    /// completion cannot resurrect work finality retired in the meantime.
+    fn drain_retained_effect_batch<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<usize, EffectExecutorError> {
+        let decision = self.reconcile_runtime_decision(services)?;
+        if let Some(decision) = decision
+            && let Some(batch) = self.retained_effect_batch.as_mut()
+        {
             // A single serialized runtime step may drain work that was queued before a
             // CommitQC and then install that Decision later in the same returned batch.
             // Decision reconciliation has already retired every competing owner, including
             // outbound proposal chunks. Retire the corresponding in-flight effects as well:
             // dispatching them would either resurrect terminal work or ask the transport for
             // chunks that finality has deliberately released.
-            effects.retain(|effect| Self::effect_survives_decision(effect, decision));
+            batch
+                .effects
+                .retain(|effect| Self::effect_survives_decision(effect, decision));
         }
-        let count = effects.len();
-        for effect in effects {
-            if let Err(error) = self.consume_one(effect, services) {
-                return Err(self.close(error, services));
+        if self
+            .retained_effect_batch
+            .as_ref()
+            .is_some_and(|batch| batch.effects.is_empty())
+        {
+            self.retained_effect_batch = None;
+        }
+
+        let mut consumed = 0usize;
+        loop {
+            let Some(effect) = self
+                .retained_effect_batch
+                .as_ref()
+                .and_then(|batch| batch.effects.front())
+                .cloned()
+            else {
+                break;
+            };
+            let pending_work_producer = Self::pending_work_producer(&effect);
+            match self.consume_one(effect, services) {
+                Ok(()) => {
+                    let batch = self
+                        .retained_effect_batch
+                        .as_mut()
+                        .expect("retained effect existed before successful dispatch");
+                    batch.effects.pop_front();
+                    consumed = consumed.checked_add(1).ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "retained effect dispatch count overflowed".to_owned(),
+                        )
+                    })?;
+                    if batch.effects.is_empty() {
+                        self.retained_effect_batch = None;
+                        break;
+                    }
+                }
+                Err(EffectExecutorError::PendingWorkCapacity { .. }) => {
+                    debug_assert!(pending_work_producer.is_some());
+                    break;
+                }
+                Err(error) => return Err(error),
             }
         }
-        if let Err(error) = self.publish_status(services) {
-            return Err(self.close(error, services));
+        self.publish_status(services)?;
+        Ok(consumed)
+    }
+
+    fn pending_work_producer(effect: &AdapterEffect) -> Option<PendingWorkProducer> {
+        match effect {
+            AdapterEffect::Sign { .. } => Some(PendingWorkProducer::Sign),
+            AdapterEffect::FetchBody { .. } => Some(PendingWorkProducer::Fetch),
+            AdapterEffect::StoreBody { .. } => Some(PendingWorkProducer::Store),
+            AdapterEffect::ValidateBody { .. } => Some(PendingWorkProducer::Validate),
+            AdapterEffect::Apply { .. } => Some(PendingWorkProducer::Apply),
+            AdapterEffect::Broadcast(_)
+            | AdapterEffect::EnterView { .. }
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
-        Ok(count)
+    }
+
+    fn restart_effect_source(effect: &AdapterEffect) -> RestartEffectSource {
+        match effect {
+            AdapterEffect::Sign { .. } | AdapterEffect::Broadcast(_) => {
+                RestartEffectSource::DurableConsensusEvidence
+            }
+            AdapterEffect::FetchBody { .. } | AdapterEffect::StoreBody { .. } => {
+                RestartEffectSource::BodyReconstruction
+            }
+            AdapterEffect::ValidateBody { .. } => RestartEffectSource::DurableBody,
+            AdapterEffect::Apply { .. } => RestartEffectSource::DurableDecision,
+            AdapterEffect::EnterView { .. } => RestartEffectSource::RecoveredView,
+            AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
+                RestartEffectSource::DiagnosticOnly
+            }
+        }
     }
 
     /// Return whether an already-emitted effect remains owned after durable finality.
@@ -2518,22 +2703,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
-        if let Err(error) = self.reconcile_runtime_decision(services) {
-            return Err(self.close(error, services));
+        if effects.len() > MAX_EFFECTS_PER_STEP {
+            return Err(self.close(
+                EffectExecutorError::Contract(format!(
+                    "one recovery transition emitted {} effects above the source bound {MAX_EFFECTS_PER_STEP}",
+                    effects.len()
+                )),
+                services,
+            ));
         }
-        let count = effects.len();
-        for effect in effects {
-            if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(&effect) {
+        for effect in &effects {
+            if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(effect) {
                 return Err(self.close(error, services));
             }
-            if let Err(error) = self.consume_one(effect, services) {
-                return Err(self.close(error, services));
-            }
         }
-        if let Err(error) = self.publish_status(services) {
+        if let Err(error) = self.retain_effect_batch(effects) {
             return Err(self.close(error, services));
         }
-        Ok(count)
+        self.drain_retained_effect_batch(services)
+            .map_err(|error| self.close(error, services))
     }
 
     /// Run at most one serialized runtime step and dispatch all of its effects.
@@ -2543,6 +2731,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        if self.retained_effect_batch.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services)
+                .map_err(|error| self.close(error, services))?;
+            return Ok(if count == 0 {
+                EffectExecutorStep::Idle
+            } else {
+                EffectExecutorStep::Advanced { effects: count }
+            });
+        }
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -2583,6 +2781,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        if self.retained_effect_batch.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services)
+                .map_err(|error| self.close(error, services))?;
+            return Ok(if count == 0 {
+                EffectExecutorStep::Idle
+            } else {
+                EffectExecutorStep::Advanced { effects: count }
+            });
+        }
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -3546,6 +3754,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 oldest_age: None,
                 max_service_debt: 0,
             },
+            effect_dispatch_queue: self.effect_dispatch_queue_snapshot(captured_at),
             runtime_queues: self.runtime.queue_snapshot(captured_at),
             watchdog_threshold: self.runtime.watchdog_threshold(),
         }
@@ -3637,7 +3846,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         ));
                     }
                 }
-                self.ensure_pending_slot()?;
+                self.ensure_signature_slot(services)?;
                 let id = self.allocate_work_id()?;
                 self.pending_signatures.insert(
                     id,
@@ -4456,7 +4665,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Ok(());
         }
 
-        self.ensure_pending_slot()?;
+        if self.pending_work() > self.config.max_pending_work {
+            return Err(EffectExecutorError::Contract(
+                "pending effect work exceeded its configured capacity".to_owned(),
+            ));
+        }
+        if self.pending_work() == self.config.max_pending_work {
+            // FetchBody is a reconstruction request, not successful body
+            // delivery. The reducer deliberately remains in Missing and its
+            // periodic proposal/QC/lock/Decision retransmission re-emits this
+            // exact request after capacity changes. Do not retain it in the
+            // causal effect suffix: an unresponsive Byzantine proposal source
+            // must never sit ahead of the timeout/signing path after GST.
+            iroha_logger::debug!(
+                height = round.height,
+                view = round.view,
+                certified = certificate.is_some(),
+                "deferred reconstructible Sumeragi v2 body fetch at pending-work capacity"
+            );
+            return Ok(());
+        }
         let work = self.plan_work_id()?;
         let request_plan = if let Some(certificate) = certificate {
             Some(self.plan_certified_fetch_request(
@@ -6547,6 +6775,119 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
     }
 
+    /// Reserve a signing slot, retiring one reconstructible fetch if needed.
+    ///
+    /// A durable signing intent is progress-critical and cannot depend on an
+    /// unresponsive body source. Selection is stable by `(class, work_id)`:
+    /// the oldest speculative fetch, then the oldest certified non-lock fetch,
+    /// then the oldest durable-lock fetch. The decided body is never eligible.
+    fn ensure_signature_slot<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        let pending_work = self.pending_work();
+        if pending_work < self.config.max_pending_work {
+            return Ok(());
+        }
+        if pending_work > self.config.max_pending_work {
+            return Err(EffectExecutorError::Contract(
+                "pending effect work exceeded its configured capacity".to_owned(),
+            ));
+        }
+
+        let selected = self
+            .pending_fetches
+            .iter()
+            .filter_map(|(work_id, pending)| {
+                let key = (pending.task.round, pending.task.subject);
+                if Some(key) == self.protected_decision {
+                    return None;
+                }
+                let class = if Some(key) == self.protected_lock {
+                    2u8
+                } else if pending.request_hash.is_none() {
+                    0
+                } else {
+                    1
+                };
+                Some(((class, *work_id), pending.clone()))
+            })
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, pending)| pending);
+        let Some(pending) = selected else {
+            return Err(EffectExecutorError::PendingWorkCapacity {
+                capacity: self.config.max_pending_work,
+            });
+        };
+
+        let key = (pending.task.round, pending.task.subject);
+        let expected_owner = BodyPipelineOwner {
+            tag: pending.task.tag,
+            manifest_hash: pending.task.manifest.as_ref().map(HashOf::new),
+        };
+        if self.body_pipeline_owners.get(&key) != Some(&expected_owner) {
+            return Err(EffectExecutorError::Contract(
+                "signature preemption found a body fetch without its exact pipeline owner"
+                    .to_owned(),
+            ));
+        }
+        if self.ready_bodies.contains_key(&key)
+            || self
+                .pending_stores
+                .values()
+                .any(|store| (store.task.manifest.round, store.task.manifest.subject) == key)
+            || self
+                .pending_validations
+                .values()
+                .any(|validation| (validation.task.round(), validation.task.subject()) == key)
+            || self.pending_applications.values().any(|application| {
+                (application.task.certificate.round, application.task.subject) == key
+            })
+        {
+            return Err(EffectExecutorError::Contract(
+                "signature preemption found a body fetch overlapping a later pipeline stage"
+                    .to_owned(),
+            ));
+        }
+        let retirement = self.plan_pending_fetch_retirement(&pending)?;
+        services
+            .cancel_body_fetch(&pending.task)
+            .map_err(service_error)?;
+        self.commit_pending_fetch_retirement(retirement);
+        let removed_owner = self.body_pipeline_owners.remove(&key);
+        debug_assert_eq!(removed_owner, Some(expected_owner));
+        iroha_logger::debug!(
+            work_id = pending.task.id().get(),
+            height = pending.task.round.height,
+            view = pending.task.round.view,
+            protected_lock = Some(key) == self.protected_lock,
+            certified = pending.request_hash.is_some(),
+            "preempted reconstructible body fetch for durable Sumeragi v2 signing"
+        );
+        self.ensure_pending_slot()
+    }
+
+    fn effect_dispatch_queue_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
+        self.retained_effect_batch.as_ref().map_or(
+            RuntimeQueueLaneSnapshot {
+                depth: 0,
+                capacity: MAX_EFFECTS_PER_STEP,
+                oldest_age: None,
+                max_service_debt: 0,
+            },
+            |batch| RuntimeQueueLaneSnapshot {
+                depth: batch.effects.len(),
+                capacity: MAX_EFFECTS_PER_STEP,
+                oldest_age: Some(now.saturating_duration_since(batch.oldest_at)),
+                // This suffix is always attempted before another runtime
+                // transition. Pending-work capacity can make its head
+                // temporarily ineligible, but the head never loses an
+                // eligible scheduler dispatch to another queue.
+                max_service_debt: 0,
+            },
+        )
+    }
+
     fn allocate_work_id(&mut self) -> Result<EffectWorkId, EffectExecutorError> {
         let id = EffectWorkId(self.next_work_id);
         self.next_work_id = self
@@ -6621,9 +6962,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 pub(crate) enum EffectExecutorStep {
     /// No timer or runtime command was ready.
     Idle,
-    /// One runtime transition advanced and all emitted effects were consumed.
+    /// One runtime transition advanced or a retained causal suffix made progress.
     Advanced {
-        /// Number of effects bound to external services or completions.
+        /// Number of effects bound during this call. Any capacity-blocked
+        /// suffix remains visible in the `EffectDispatch` status lane.
         effects: usize,
     },
 }
@@ -6634,10 +6976,10 @@ fn verify_signer_completion(
     request: &SignRequest,
     signature: &[u8],
 ) -> Result<(), String> {
-    let (signer, preimage) = match request {
-        SignRequest::Proposal(proposal) => (proposal.proposer, proposal.signature_preimage()),
-        SignRequest::Vote(vote) => (vote.signer, vote.signature_preimage()),
-        SignRequest::TimeoutVote(vote) => (vote.signer, vote.signature_preimage()),
+    let signer = match request {
+        SignRequest::Proposal(proposal) => proposal.proposer,
+        SignRequest::Vote(vote) => vote.signer,
+        SignRequest::TimeoutVote(vote) => vote.signer,
     };
     if local_validator != Some(signer) {
         return Err("signing request does not belong to the configured local validator".to_owned());
@@ -6648,7 +6990,10 @@ fn verify_signer_completion(
         .ok_or_else(|| "signing request index is outside the frozen roster".to_owned())?;
     let signature = Signature::try_from_bytes(signature).map_err(|error| error.to_string())?;
     signature
-        .verify(context.roster[index].validator.public_key(), &preimage)
+        .verify(
+            context.roster[index].validator.public_key(),
+            &request.signature_preimage(),
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -7451,6 +7796,7 @@ mod tests {
 
         fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
             self.check("sign")?;
+            self.effect_service_order.push("sign");
             self.sign_tasks.push(task);
             Ok(())
         }
@@ -8178,6 +8524,57 @@ mod tests {
         }
     }
 
+    fn timeout_sign(fixture: &Fixture, view: u64) -> AdapterEffect {
+        AdapterEffect::Sign {
+            tag: tag(view),
+            request: SignRequest::TimeoutVote(wire::TimeoutVote {
+                round: round(&fixture.context, view),
+                highest_prepare_qc: None,
+                signer: 0,
+                signature: Vec::new(),
+            }),
+        }
+    }
+
+    fn prepare_qc_for_subject(
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> wire::QuorumCertificate {
+        wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: fixture_execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        }
+    }
+
+    fn certified_sources(fixture: &Fixture, certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
+        certificate
+            .signers
+            .iter()
+            .map(|index| fixture.context.roster[*index as usize].validator.clone())
+            .collect()
+    }
+
+    fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::PayloadManifest {
+        let body = label.to_vec();
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
+            payload_hash: Hash::new(&body),
+        };
+        wire::PayloadManifest::derive(
+            &fixture.context,
+            fixture.manifest.round,
+            subject,
+            u64::try_from(body.len()).expect("payload length"),
+            std::slice::from_ref(&body),
+        )
+        .expect("payload manifest")
+    }
+
     fn pending_merge_validation(
         fixture: &Fixture,
     ) -> (
@@ -8339,7 +8736,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_configuration_and_pending_capacity_fail_closed() {
+    fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
         let fixture = Fixture::new();
         assert!(matches!(
             V2EffectExecutor::with_runtime(
@@ -8361,6 +8758,7 @@ mod tests {
             &fixture,
             fixture.manifest.clone(),
         );
+        assert!(executor.can_admit_local_proposal());
         let effects = vec![
             AdapterEffect::Sign {
                 tag: tag(0),
@@ -8370,13 +8768,726 @@ mod tests {
                 tag: tag(0),
                 request: SignRequest::Vote(vote(&fixture)),
             },
+            AdapterEffect::Sign {
+                tag: tag(0),
+                request: SignRequest::Vote(vote(&fixture)),
+            },
         ];
+        assert_eq!(
+            executor
+                .consume_effects(effects, &mut services)
+                .expect("retain the capacity-blocked causal suffix"),
+            1
+        );
+        assert_eq!(executor.status().pending_signatures, 1);
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 2);
+        assert_eq!(
+            executor.status().effect_dispatch_queue.capacity,
+            MAX_EFFECTS_PER_STEP
+        );
+        assert_eq!(executor.status().effect_dispatch_queue.max_service_debt, 0);
+        assert!(!executor.can_admit_local_proposal());
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+
+        let first = services.sign_tasks[0].clone();
+        let signature = Signature::new(
+            fixture.validator_keys[0].private_key(),
+            &first.request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        executor
+            .complete_consensus_signature(first.id(), signature, &mut services)
+            .expect("release the first signing slot");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("drain retained signing debt before another runtime step"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        assert_eq!(services.sign_tasks.len(), 2);
+        assert_eq!(executor.status().pending_signatures, 1);
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        assert_eq!(
+            executor.status().effect_dispatch_queue.max_service_debt,
+            0,
+            "capacity retry is not scheduler debt and cannot transfer between FIFO heads"
+        );
+
+        let second = services.sign_tasks[1].clone();
+        let signature = Signature::new(
+            fixture.validator_keys[0].private_key(),
+            &second.request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        executor
+            .complete_consensus_signature(second.id(), signature, &mut services)
+            .expect("release the second signing slot");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("drain the final retained signing effect"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        assert_eq!(services.sign_tasks.len(), 3);
+        assert_eq!(executor.status().pending_signatures, 1);
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(2, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+
+        // reducer.rs::on_proposal: an authenticated Proposal A with a missing
+        // body emits the ordinary reconstruction request.
+        fixture
+            .manifest
+            .validate(&fixture.context)
+            .expect("Proposal A manifest is structurally valid");
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }],
+                &mut services,
+            )
+            .expect("Proposal A starts ordinary reconstruction");
+        let proposal_a_work = services.fetch_tasks[0].id();
+
+        // reducer.rs::on_prepare_qc: a valid same-view PrepareQC for distinct
+        // subject B is independently progress-relevant and starts a certified
+        // reconstruction owner.
+        let (subject_b, _) = distinct_body(&fixture);
+        assert_ne!(subject_b, fixture.manifest.subject);
+        let prepare_b = prepare_qc_for_subject(fixture.manifest.round, subject_b);
+        prepare_b
+            .validate(&fixture.context)
+            .expect("distinct PrepareQC B is structurally valid");
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: prepare_b.round,
+                    subject: prepare_b.subject,
+                    manifest: None,
+                    certified_sources: certified_sources(&fixture, &prepare_b),
+                    certificate: Some(prepare_b.clone()),
+                }],
+                &mut services,
+            )
+            .expect("PrepareQC B starts certified reconstruction");
+        assert_eq!(executor.pending_work(), 2);
+
+        // reducer.rs::on_timeout: durable TimeoutVote signing must not fail
+        // closed behind either body source. It deterministically retires the
+        // lower-evidence Proposal A fetch and owns the released slot.
+        assert_eq!(
+            executor
+                .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+                .expect("timeout signing preempts reconstructible work"),
+            1
+        );
+        assert_eq!(services.cancelled_fetches, vec![proposal_a_work]);
+        assert_eq!(executor.pending_work(), 2);
+        assert_eq!(executor.pending_signatures.len(), 1);
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert!(executor.pending_fetches.values().all(|pending| {
+            pending.task.round == prepare_b.round && pending.task.subject == prepare_b.subject
+        }));
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+
+    #[test]
+    fn serialized_runtime_emits_proposal_a_prepare_qc_b_timeout_capacity_trace() {
+        let ProductionTransportFixture {
+            context,
+            validator_keys,
+            requester_key,
+            ..
+        } = ProductionTransportFixture::new();
+        let proofs = validator_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), proofs).expect("verified context");
+        let directory = TempDir::new().expect("serialized capacity-trace directory");
+        let (adapter, startup_effects) = SumeragiV2Adapter::open(
+            directory.path().join("capacity-trace-safety.wal"),
+            verified,
+            Some(0),
+            Generation::new(1),
+            [0x74; 32],
+            AdapterFingerprints {
+                node: Hash::new(b"capacity trace node"),
+                build: Hash::new(b"capacity trace build"),
+                config: Hash::new(b"capacity trace config"),
+            },
+        )
+        .expect("open source-faithful adapter");
+        assert!(startup_effects.is_empty());
+        let started = Instant::now();
+        let (runtime, startup_effects) = SerializedV2Runtime::new(
+            adapter,
+            startup_effects,
+            started,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("serialized runtime");
+        assert!(startup_effects.is_empty());
+        let mut executor = V2EffectExecutor::with_runtime(
+            runtime,
+            BTreeMap::new(),
+            context.clone(),
+            PeerId::new(requester_key.public_key().clone()),
+            Some(0),
+            EffectQueueConfig::new(2, 4, 1 << 20, 4),
+        )
+        .expect("capacity-two executor");
+        executor
+            .arm_live_clocks(started)
+            .expect("arm source-faithful timeout");
+        let mut services = FakeServices {
+            requester_key: Some(requester_key),
+            ..FakeServices::default()
+        };
+
+        let round = round(&context, 0);
+        let body_a = b"authenticated Proposal A body".to_vec();
+        let subject_a = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"Proposal A block")),
+            payload_hash: Hash::new(&body_a),
+        };
+        let manifest_a = wire::PayloadManifest::derive(
+            &context,
+            round,
+            subject_a,
+            u64::try_from(body_a.len()).expect("Proposal A length"),
+            std::slice::from_ref(&body_a),
+        )
+        .expect("Proposal A manifest");
+        let proposer = context.leader(0);
+        let mut proposal_a = wire::Proposal {
+            round,
+            proposer,
+            subject: subject_a,
+            manifest: manifest_a,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        proposal_a.signature = Signature::new(
+            validator_keys[usize::try_from(proposer).expect("leader index")].private_key(),
+            &proposal_a.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        executor
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal_a),
+            ))
+            .expect("authenticate Proposal A through production ingress");
+        for _ in 0..8 {
+            let _ = executor
+                .step(started, &mut services)
+                .expect("drive Proposal A reducer transition");
+            if executor.pending_fetches.len() == 1 {
+                break;
+            }
+        }
+        assert_eq!(executor.pending_fetches.len(), 1);
+        let proposal_a_work = services.fetch_tasks[0].id();
+
+        let body_b = b"distinct certified subject B".to_vec();
+        let subject_b = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"PrepareQC B block")),
+            payload_hash: Hash::new(&body_b),
+        };
+        let commitment_b = fixture_execution_commitment();
+        let signers = vec![0, 1, 2];
+        let vote_preimage = wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: subject_b,
+            execution_commitment: commitment_b,
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    validator_keys[usize::try_from(*signer).expect("signer index")].private_key(),
+                    &vote_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let prepare_b = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: subject_b,
+            execution_commitment: commitment_b,
+            signers,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate PrepareQC B"),
+        };
+        executor
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_b.clone()),
+            ))
+            .expect("authenticate distinct PrepareQC B through production ingress");
+        for _ in 0..8 {
+            let _ = executor
+                .step(started, &mut services)
+                .expect("drive PrepareQC B reducer transition");
+            if executor.pending_fetches.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(executor.pending_fetches.len(), 2);
+
+        let timeout_now = started + Duration::from_secs(30);
+        for _ in 0..8 {
+            let _ = executor
+                .step(timeout_now, &mut services)
+                .expect("drive durable timeout transition");
+            if !executor.pending_signatures.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(services.cancelled_fetches, vec![proposal_a_work]);
+        assert_eq!(executor.pending_signatures.len(), 1);
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert!(executor.pending_fetches.values().all(|pending| {
+            pending.task.round == prepare_b.round && pending.task.subject == prepare_b.subject
+        }));
         assert!(matches!(
-            executor.consume_effects(effects, &mut services),
-            Err(EffectExecutorError::PendingWorkCapacity { capacity: 1 })
+            services.sign_tasks.last().map(|task| &task.request),
+            Some(SignRequest::TimeoutVote(_))
         ));
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn full_capacity_certified_fetch_remains_missing_and_retransmit_later_adopts_it() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }],
+                &mut services,
+            )
+            .expect("fill the only slot with Proposal A reconstruction");
+        let proposal_a_task = services.fetch_tasks[0].clone();
+
+        let (subject_b, _) = distinct_body(&fixture);
+        let prepare_b = prepare_qc_for_subject(fixture.manifest.round, subject_b);
+        let fetch_b = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: prepare_b.round,
+            subject: prepare_b.subject,
+            manifest: None,
+            certified_sources: certified_sources(&fixture, &prepare_b),
+            certificate: Some(prepare_b.clone()),
+        };
+        executor
+            .consume_effects(vec![fetch_b.clone()], &mut services)
+            .expect("full-capacity Fetch is deferred as reducer reconstruction debt");
+        assert_eq!(services.fetch_tasks.len(), 1);
+        assert!(
+            !executor
+                .body_pipeline_owners
+                .contains_key(&(prepare_b.round, prepare_b.subject))
+        );
+        assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
+        assert!(!executor.status().fail_closed);
+
+        executor
+            .complete_body_reconstruction(
+                &proposal_a_task,
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("Proposal A reconstruction terminates and releases capacity");
+        executor
+            .consume_effects(vec![fetch_b], &mut services)
+            .expect("reducer retransmission re-emits certified Fetch B");
+        assert_eq!(services.fetch_tasks.len(), 2);
+        assert!(executor.pending_fetches.values().any(|pending| {
+            pending.task.round == prepare_b.round && pending.task.subject == prepare_b.subject
+        }));
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(4, 8, 1 << 20, 8));
+        let mut services = fixture.services();
+        let speculative_old = manifest_for_payload(&fixture, b"oldest speculative fetch");
+        let speculative_new = manifest_for_payload(&fixture, b"newer speculative fetch");
+        let certified = manifest_for_payload(&fixture, b"certified non-lock fetch");
+        let locked = manifest_for_payload(&fixture, b"durable locked fetch");
+
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: speculative_old.round,
+                    subject: speculative_old.subject,
+                    manifest: Some(speculative_old),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }],
+                &mut services,
+            )
+            .expect("start oldest speculative fetch");
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: speculative_new.round,
+                    subject: speculative_new.subject,
+                    manifest: Some(speculative_new),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }],
+                &mut services,
+            )
+            .expect("start newer speculative fetch");
+        let certified_qc = prepare_qc_for_subject(certified.round, certified.subject);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: certified.round,
+                    subject: certified.subject,
+                    manifest: None,
+                    certified_sources: certified_sources(&fixture, &certified_qc),
+                    certificate: Some(certified_qc),
+                }],
+                &mut services,
+            )
+            .expect("start certified non-lock fetch");
+        let locked_qc = prepare_qc_for_subject(locked.round, locked.subject);
+        executor.protected_lock = Some((locked.round, locked.subject));
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: locked.round,
+                    subject: locked.subject,
+                    manifest: None,
+                    certified_sources: certified_sources(&fixture, &locked_qc),
+                    certificate: Some(locked_qc),
+                }],
+                &mut services,
+            )
+            .expect("start protected locked fetch");
+        let fetch_ids = services
+            .fetch_tasks
+            .iter()
+            .map(BodyFetchTask::id)
+            .collect::<Vec<_>>();
+        assert_eq!(executor.pending_work(), 4);
+
+        for _ in 0..4 {
+            executor
+                .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+                .expect("each durable Sign owns one deterministically preempted slot");
+        }
+        assert_eq!(services.cancelled_fetches, fetch_ids);
+        assert!(executor.pending_fetches.is_empty());
+        assert_eq!(executor.pending_signatures.len(), 4);
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
+
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
+        let mut services = fixture.services();
+        let decided_qc = fixture.qc(wire::GlobalPhase::Prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: decided_qc.round,
+                    subject: decided_qc.subject,
+                    manifest: None,
+                    certified_sources: certified_sources(&fixture, &decided_qc),
+                    certificate: Some(decided_qc.clone()),
+                }],
+                &mut services,
+            )
+            .expect("start the exact decided-body fetch fixture");
+        executor.protected_decision = Some((decided_qc.round, decided_qc.subject));
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("decided fetch is protected and Sign remains bounded debt");
+        assert!(services.cancelled_fetches.is_empty());
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        assert!(!executor.status().fail_closed);
+        let decided_task = services.fetch_tasks[0].clone();
+        executor
+            .complete_body_reconstruction(
+                &decided_task,
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("exact decided Fetch terminates normally");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("retained Sign drains before another runtime transition"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        assert!(services.cancelled_fetches.is_empty());
+        assert_eq!(executor.pending_fetches.len(), 0);
+        assert_eq!(executor.pending_signatures.len(), 1);
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
+        let mut services = fixture.services();
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("fill signing capacity");
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("retain a second durable Sign");
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        assert!(matches!(
+            executor.consume_effects(
+                vec![AdapterEffect::Broadcast(proposal(&fixture))],
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("overtook retained causal dispatch debt")
+        ));
+        assert!(services.broadcasts.is_empty());
+
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let oversized = (0..=MAX_EFFECTS_PER_STEP)
+            .map(|_| AdapterEffect::Broadcast(proposal(&fixture)))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            executor.consume_effects(oversized, &mut services),
+            Err(EffectExecutorError::Contract(reason)) if reason.contains("source bound")
+        ));
+        assert!(services.broadcasts.is_empty());
         assert!(executor.status().fail_closed);
-        assert_eq!(services.closed.len(), 1);
+    }
+
+    #[test]
+    fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("fill signing capacity");
+        services.effect_service_order.clear();
+        let message = proposal(&fixture);
+        executor
+            .consume_effects(
+                vec![
+                    AdapterEffect::Broadcast(message.clone()),
+                    timeout_sign(&fixture, 0),
+                    AdapterEffect::ReportEquivocation {
+                        offender: fixture.context.roster[1].validator.clone(),
+                        round: fixture.manifest.round,
+                        kind: EquivocationKind::Vote,
+                    },
+                ],
+                &mut services,
+            )
+            .expect("dispatch prefix and retain exact causal suffix");
+        assert_eq!(services.effect_service_order, vec!["broadcast"]);
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 2);
+        let first = services.sign_tasks[0].clone();
+        let signature = Signature::new(
+            fixture.validator_keys[0].private_key(),
+            &first.request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        executor
+            .complete_consensus_signature(first.id(), signature, &mut services)
+            .expect("release retained FIFO head");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("drain exact retained suffix"),
+            EffectExecutorStep::Advanced { effects: 2 }
+        );
+        assert_eq!(
+            services.effect_service_order,
+            vec!["broadcast", "sign", "equivocation"]
+        );
+
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("fill signing capacity before Decision");
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        let exact_commit = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
+        );
+        executor
+            .consume_effects(
+                vec![
+                    timeout_sign(&fixture, 0),
+                    AdapterEffect::Broadcast(proposal(&fixture)),
+                    AdapterEffect::Broadcast(exact_commit.clone()),
+                ],
+                &mut services,
+            )
+            .expect("retain pre-Decision suffix");
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 3);
+        executor.runtime.decided_body =
+            Some((commit.round, commit.subject, commit.execution_commitment));
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("Decision refilters retained suffix before retry"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        assert_eq!(services.broadcasts, vec![exact_commit]);
+        assert_eq!(services.sign_tasks.len(), 1);
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
+        let fixture = Fixture::new();
+        let certificate = fixture.qc(wire::GlobalPhase::Commit);
+        let cases = [
+            (
+                timeout_sign(&fixture, 0),
+                Some(PendingWorkProducer::Sign),
+                RestartEffectSource::DurableConsensusEvidence,
+            ),
+            (
+                AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                },
+                Some(PendingWorkProducer::Fetch),
+                RestartEffectSource::BodyReconstruction,
+            ),
+            (
+                AdapterEffect::StoreBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                },
+                Some(PendingWorkProducer::Store),
+                RestartEffectSource::BodyReconstruction,
+            ),
+            (
+                AdapterEffect::ValidateBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                },
+                Some(PendingWorkProducer::Validate),
+                RestartEffectSource::DurableBody,
+            ),
+            (
+                AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: certificate.clone(),
+                },
+                Some(PendingWorkProducer::Apply),
+                RestartEffectSource::DurableDecision,
+            ),
+            (
+                AdapterEffect::Broadcast(proposal(&fixture)),
+                None,
+                RestartEffectSource::DurableConsensusEvidence,
+            ),
+            (
+                AdapterEffect::EnterView {
+                    tag: tag(1),
+                    certificate: timeout_at_view(&fixture, 0),
+                    protected_body: None,
+                },
+                None,
+                RestartEffectSource::RecoveredView,
+            ),
+            (
+                AdapterEffect::ReportEquivocation {
+                    offender: fixture.context.roster[1].validator.clone(),
+                    round: fixture.manifest.round,
+                    kind: EquivocationKind::Vote,
+                },
+                None,
+                RestartEffectSource::DiagnosticOnly,
+            ),
+            (
+                AdapterEffect::ReportInvalidCertifiedBody {
+                    subject: fixture.manifest.subject,
+                    certificate,
+                },
+                None,
+                RestartEffectSource::DiagnosticOnly,
+            ),
+        ];
+        for (effect, expected_producer, expected_restart_source) in cases {
+            assert_eq!(
+                V2EffectExecutor::<FakeRuntime>::pending_work_producer(&effect),
+                expected_producer
+            );
+            assert_eq!(
+                V2EffectExecutor::<FakeRuntime>::restart_effect_source(&effect),
+                expected_restart_source
+            );
+        }
     }
 
     #[test]

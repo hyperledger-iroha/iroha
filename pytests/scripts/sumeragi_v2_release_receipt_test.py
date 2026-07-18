@@ -72,6 +72,7 @@ SCENARIOS = (
     "authoritative_v2_finalizes_through_validator_restart",
     "taira_npos_leader_timeout_commits_within_rotation_bound",
     "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
+    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
 )
 SUMMARY_FIELDS = (
     "profile",
@@ -1037,6 +1038,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     f"test {test} ... ok"
                     for test in required_by_module[module_by_leg[leg_id]]
                 ]
+            elif leg_id in module_by_leg:
+                test_lines = [
+                    f"test {test} ... ok"
+                    for test in required_by_module[module_by_leg[leg_id]]
+                ]
             elif leg_id == "status-rust":
                 test_lines = [f"test {data_status_test} ... ok"]
             elif leg_id == "cross-sdk-rust":
@@ -1186,7 +1192,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     runs_dir.mkdir(parents=True)
     seed_logs = []
     summary_lines = ["\t".join(SUMMARY_FIELDS)]
-    for index in range(128):
+    seed_run_count = len(SCENARIOS) * 32
+    for index in range(seed_run_count):
         scenario = SCENARIOS[index // 32]
         seed_index = index % 32
         seed = scenario if seed_index == 0 else f"{scenario}:seed:{seed_index:02d}"
@@ -1237,8 +1244,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
-            "completed_runs": "128",
-            "expected_runs": "128",
+            "completed_runs": str(seed_run_count),
+            "expected_runs": str(seed_run_count),
             "summary_sha256": sha256(seed_summary),
         },
     )
@@ -2402,6 +2409,27 @@ def test_receipt_rejects_seed_exact_identity_mismatch(
         for line in completion.read_text(encoding="utf-8").splitlines()
     )
     fields[field] = replacement
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "exact release matrix" in result.stderr
+
+
+@pytest.mark.parametrize("field", ["completed_runs", "expected_runs"])
+def test_receipt_rejects_stale_four_scenario_seed_count(
+    tmp_path: Path, field: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    completion = evidence["seed_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields[field] = "128"
     write_tsv(completion, fields)
 
     result = run_writer(evidence, tmp_path / "receipt.json", writer)

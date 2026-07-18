@@ -134,6 +134,31 @@ callers. A host must choose cumulative budgets with enough headroom for
 temporary alignment copies and container metadata; accounting is intentionally
 conservative and may charge both a declared field body and a temporary copy.
 
+## Transaction Payload Layout
+
+`TransactionPayload` is an eight-field canonical struct. Its fields are encoded
+in this exact order, with the active per-field length-prefix rules:
+
+```text
+chain
+authority
+creation_time_ms
+instructions
+time_to_live_ms
+nonce
+fee_payment
+metadata
+```
+
+`fee_payment` is required; it is not an optional extension and it precedes
+`metadata` on wire. It contains either an authority payer or one exact sponsor
+program and immutable revision, followed by canonically ordered charge limits
+and the optional positive executable gas bound. The retired transaction
+metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are not alternate
+encodings of this field and are rejected by transaction construction and
+admission. SDK encoders and fixture exporters must use this eight-field layout;
+the former seven-field payload is not a supported compatibility format.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

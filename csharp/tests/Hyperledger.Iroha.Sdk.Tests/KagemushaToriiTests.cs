@@ -11,14 +11,14 @@ public sealed class KagemushaToriiTests
     private static readonly string TransactionHash = new('2', 64);
 
     [Fact]
-    public async Task ReadinessUsesTheStableRouteAndRequiresAbi20V4()
+    public async Task ReadinessUsesTheStableRouteAndRequiresAbi21V4()
     {
         using var handler = new KagemushaHandler(request =>
         {
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.Equal("/v1/offline/readiness", request.RequestUri!.AbsolutePath);
             Assert.Equal("coin#wonderland", ParseQuery(request.RequestUri.Query)["asset_definition_id"]);
-            return JsonResponse(UnavailableReadinessJson(20));
+            return JsonResponse(UnavailableReadinessJson(21));
         });
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
@@ -26,7 +26,7 @@ public sealed class KagemushaToriiTests
             "coin#wonderland",
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(20U, readiness.RequiredBridgeAbiVersion);
+        Assert.Equal(21U, readiness.RequiredBridgeAbiVersion);
         Assert.Equal(8U, readiness.MaxHops);
         Assert.False(readiness.Ready);
         Assert.False(readiness.ProofBackendAvailable);
@@ -35,9 +35,9 @@ public sealed class KagemushaToriiTests
     }
 
     [Fact]
-    public async Task ReadinessRejectsAbi19InsteadOfUpgradingIt()
+    public async Task ReadinessRejectsAbi20InsteadOfUpgradingIt()
     {
-        using var handler = new KagemushaHandler(_ => JsonResponse(UnavailableReadinessJson(19)));
+        using var handler = new KagemushaHandler(_ => JsonResponse(UnavailableReadinessJson(20)));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -45,7 +45,7 @@ public sealed class KagemushaToriiTests
                 "coin#wonderland",
                 TestContext.Current.CancellationToken));
 
-        Assert.Contains("required_bridge_abi_version must be 20", error.Message);
+        Assert.Contains("required_bridge_abi_version must be 21", error.Message);
     }
 
     [Fact]
@@ -142,7 +142,12 @@ public sealed class KagemushaToriiTests
                     "transaction_hash": "{{TransactionHash}}",
                     "finalized_block_height": 42,
                     "server_time_ms": 1234,
-                    "anchor": {"version": 3, "artifact_binding": {"version": 4}},
+                    "anchor": {
+                      "version": 3,
+                      "artifact_binding": {
+                        "version": 4
+                      }
+                    },
                     "finality_proof": {}
                   }
                 }

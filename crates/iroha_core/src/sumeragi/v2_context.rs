@@ -725,6 +725,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             "v2-context-signed-roster-test".into(),
             AccountId::new(authority.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(authority.private_key());

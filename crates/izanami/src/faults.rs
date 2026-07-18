@@ -851,7 +851,11 @@ impl FaultClient for iroha::client::Client {
     where
         I: Into<InstructionBox>,
     {
-        self.submit_blocking(instruction).map(|_| ())
+        self.submit_blocking(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .map(|_| ())
     }
 }
 

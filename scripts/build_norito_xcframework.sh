@@ -412,7 +412,6 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_free",
     "connect_norito_encode_transfer_signed_transaction",
     "connect_norito_encode_transfer_instruction_box",
-    "connect_norito_encode_validation_fee_transfer_signed_transaction",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",

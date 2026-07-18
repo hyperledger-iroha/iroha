@@ -2504,7 +2504,10 @@ async fn submit_instruction_with_retry(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match client.submit::<InstructionBox>(instruction.clone()) {
+        match client.submit::<InstructionBox>(
+            instruction.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(()),
             Err(err) if is_submit_timeout_error(&err) && Instant::now() < deadline => {
                 sleep(STATUS_POLL).await;
@@ -2919,10 +2922,10 @@ async fn submit_load_instruction_with_retry(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match harness
-            .primary_client
-            .submit::<InstructionBox>(instruction.clone())
-        {
+        match harness.primary_client.submit::<InstructionBox>(
+            instruction.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(()),
             Err(err)
                 if (is_submit_timeout_error(&err) || is_connect_error(&err))

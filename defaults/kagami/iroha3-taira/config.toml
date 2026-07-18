@@ -55,8 +55,7 @@ fee_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7u
 per_byte_fee = "0"
 per_gas_unit_fee = "0.00005"
 per_instruction_fee = "0.001"
-sponsor_max_fee = "0"
-sponsorship_enabled = true
+sponsor_vault_custody_account_id = "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
 
 [nexus.staking]
 stake_asset_id = "xor#universal"
@@ -123,8 +122,7 @@ profile = "writer"
 allowed_permissions = []
 authority = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 enabled = true
-fee_sponsor_account = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-fee_sponsor_policy = "default"
+fee_sponsor_program_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/default"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
 [[trusted_peers_pop]]

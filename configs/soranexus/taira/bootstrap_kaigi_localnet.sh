@@ -191,7 +191,7 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-}" \
   TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-}" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
-  TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT="${DPN_SPONSOR_ACCOUNT_ID:-$TAIRA_AUTHORITY}" \
+  TAIRA_ONBOARDING_FEE_SPONSOR_PROGRAM_ID="${DPN_SPONSOR_ACCOUNT_ID:-$TAIRA_AUTHORITY}/default" \
   SITE_BINDINGS_FILE="$SITE_BINDINGS_FILE" \
   LOCALNET_DIR="$LOCALNET_DIR" \
   python3 <<'PY'
@@ -214,16 +214,21 @@ block_budget_values = {
     ).strip(),
 }
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
-fee_sponsor_account = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT"]
+fee_sponsor_program_id = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_PROGRAM_ID"]
 site_bindings_file = str(Path(os.environ["SITE_BINDINGS_FILE"]).resolve())
 
 onboarding_block = f"""[torii.onboarding]
 enabled = true
 authority = "{authority}"
 private_key = "{private_key}"
-fee_sponsor_account = "{fee_sponsor_account}"
-fee_sponsor_policy = "default"
+fee_sponsor_program_id = "{fee_sponsor_program_id}"
 allowed_permissions = []
+"""
+
+soracloud_submission_block = f"""[soracloud_runtime.submission]
+fee_payer = "sponsor"
+fee_program_id = "{fee_sponsor_program_id}"
+fee_program_revision = 1
 """
 
 # Local bootstrap intentionally reuses the onboarding signer as the served faucet authority.
@@ -316,10 +321,18 @@ def ensure_sumeragi_block_budget(text: str) -> str:
 
 for path in sorted(localnet_dir.glob("peer*.toml")):
     text = path.read_text()
+    text = re.sub(
+        r'(?m)^fee_sponsor_program_id\s*=\s*"[^"]*"$',
+        f'fee_sponsor_program_id = "{fee_sponsor_program_id}"',
+        text,
+    )
     text = ensure_torii_max_content_len(text)
     text = ensure_sumeragi_block_budget(text)
     text = replace_or_insert(text, "sorafs.quota", quota_block)
     text = replace_or_insert(text, "sorafs.gateway.site_bindings", site_bindings_block)
+    text = replace_or_insert(
+        text, "soracloud_runtime.submission", soracloud_submission_block
+    )
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)
     text = replace_or_insert(text, "torii.faucet", faucet_block)
     path.write_text(text)
@@ -491,6 +504,10 @@ sponsor_account_id = os.environ["DPN_SPONSOR_ACCOUNT_ID"]
 fund_amount = str(int(os.environ["DPN_SPONSOR_FUND_AMOUNT"]))
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
 target_balance = f"{fee_asset_id}#{sponsor_account_id}"
+program_id = {"sponsor": sponsor_account_id, "name": "default"}
+
+if int(fund_amount) < 11:
+    raise SystemExit("DPN sponsor funding must be at least 11 fee-asset units")
 
 with path.open(encoding="utf-8") as fh:
     genesis = json.load(fh)
@@ -498,6 +515,7 @@ with path.open(encoding="utf-8") as fh:
 has_domain = False
 has_account = False
 has_funding = False
+has_program = False
 for tx in genesis.get("transactions", []):
     for instruction in tx.get("instructions", []):
         if not isinstance(instruction, dict):
@@ -514,6 +532,9 @@ for tx in genesis.get("transactions", []):
         mint = instruction.get("Mint", {}).get("Asset")
         if isinstance(mint, dict) and mint.get("destination") == target_balance:
             has_funding = True
+        create_program = instruction.get("CreateFeeSponsorProgram", {}).get("program")
+        if isinstance(create_program, dict) and create_program.get("id") == program_id:
+            has_program = True
 
 instructions = []
 if not has_domain:
@@ -550,9 +571,192 @@ if not has_funding:
             }
         }
     )
+if not has_program:
+    instructions.extend(
+        [
+            {
+                "CreateFeeSponsorProgram": {
+                    "program": {
+                        "id": program_id,
+                        "lifecycle": {"state": "staged"},
+                    }
+                }
+            },
+            {
+                "StageFeeSponsorProgramRevision": {
+                    "revision": {
+                        "program_id": program_id,
+                        "revision": 1,
+                        "eligibility": {"mode": "enrolled_or_route_default"},
+                        "rules": [
+                            {
+                                "id": "taira_writes",
+                                "effect": {"effect": "allow"},
+                                "selectors": [
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {"wire_id": "iroha.log"},
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {"wire_id": "iroha.register"},
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {"wire_id": "iroha.grant"},
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "nexus::EnrollFeeSponsorBeneficiary"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "identity::SetPrimaryAccountAlias"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {"wire_id": "iroha.contract.alias.set"},
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {"wire_id": "iroha.set_key_value"},
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::HeartbeatSoracloudModelHost"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::AdvertiseSoracloudInrouHost"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::ReconcileSoracloudInrouPlacements"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::SetSoracloudInrouReplicaRuntimeState"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::ClearSoracloudInrouReplicaRuntimeState"
+                                        },
+                                    },
+                                    {
+                                        "kind": "native_instruction",
+                                        "value": {
+                                            "wire_id": "soracloud::ReportSoracloudServiceLeaseUsage"
+                                        },
+                                    },
+                                ],
+                            }
+                        ],
+                        "asset_budgets": [
+                            {
+                                "asset_definition_id": fee_asset_id,
+                                "per_transaction": "10",
+                                "per_block": "100",
+                                "per_program_epoch": "1000",
+                                "per_beneficiary_epoch": "500",
+                                "reserve_floor": "1",
+                                "epoch_length_blocks": 3600,
+                            }
+                        ],
+                    }
+                }
+            },
+            {
+                "EnrollFeeSponsorBeneficiary": {
+                    "program_id": program_id,
+                    "beneficiary": sponsor_account_id,
+                }
+            },
+            {
+                "FundFeeSponsorProgram": {
+                    "program_id": program_id,
+                    "asset_definition_id": fee_asset_id,
+                    "amount": fund_amount,
+                }
+            },
+            {
+                "ActivateFeeSponsorProgramRevision": {
+                    "program_id": program_id,
+                    "revision": 1,
+                    "activate_at_height": 1,
+                }
+            },
+        ]
+    )
 
 if not instructions:
-    print("DPN domain/account/funding already present in genesis")
+    print("DPN domain/account/funding/sponsor program already present in genesis")
 else:
     transactions = genesis.setdefault("transactions", [])
     if transactions:
@@ -568,7 +772,7 @@ else:
     path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(
         "seeded DPN genesis state "
-        f"(domain={domain_id}, sponsor={sponsor_account_id}, amount={fund_amount})"
+        f"(domain={domain_id}, program={sponsor_account_id}/default, amount={fund_amount})"
     )
 PY
 }

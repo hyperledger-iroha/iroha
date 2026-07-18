@@ -181,7 +181,10 @@ where
     I: Into<InstructionBox>,
 {
     client
-        .submit_blocking(instruction)
+        .submit_blocking(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("submit {context}"))?;
     Ok(())
 }
@@ -190,7 +193,12 @@ fn submit_expect_err<I>(client: &Client, instruction: I, context: &str) -> Strin
 where
     I: Into<InstructionBox>,
 {
-    let err = client.submit_blocking(instruction).expect_err(context);
+    let err = client
+        .submit_blocking(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err(context);
     let mut text = format!("{err:?}");
     for cause in err.chain() {
         text.push_str(" | ");

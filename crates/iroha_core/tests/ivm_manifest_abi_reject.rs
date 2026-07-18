@@ -1,8 +1,7 @@
 //! Admission-time rejection when on-chain manifest `abi_hash` mismatches node policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use core::str::FromStr;
-use std::borrow::Cow;
+use std::{borrow::Cow, num::NonZeroU64};
 
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
@@ -12,11 +11,9 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     executor::{IvmAdmissionError, ValidationFail},
-    metadata::Metadata,
     prelude::*,
     smart_contract::manifest,
 };
-use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encoding};
 use nonzero_ext::nonzero;
 
@@ -76,11 +73,8 @@ fn unlisted_syscall_number() -> u8 {
         .expect("ABI v1 should leave at least one u8 syscall number unmapped")
 }
 
-fn metadata_with_gas_limit(limit: u64) -> Metadata {
-    let mut md = Metadata::default();
-    let key = iroha_data_model::name::Name::from_str("gas_limit").expect("gas_limit key");
-    md.insert(key, Json::new(limit));
-    md
+fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
 
 #[test]
@@ -151,10 +145,13 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -238,10 +235,13 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -316,10 +316,13 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -395,10 +398,13 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -470,10 +476,13 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
