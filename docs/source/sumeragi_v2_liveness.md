@@ -105,6 +105,17 @@ commitment into the replayed registry so a re-signed proposal can proceed
 directly to its Prepare vote even when the durable intent belongs to a nonzero
 view.
 
+Under the same post-GST, responsive-dual-quorum, terminating-local-work
+assumptions, certified lane-block and application-receipt progress sidecars
+always cross data, index, immediate-directory, and bottom-up ancestor
+durability barriers through the authenticated Kura root. These barriers apply
+even when ordinary Kura persistence uses batched `fsync`; a page-cache-readable
+record is not treated as durable progress. Authoritative reads re-attest the
+data, index, sidecar, and root binding and fail closed on drift. Pending
+alternate QCs and proofs of possession are fully authenticated and validated
+before the corresponding same-proposal owner can be retired, so invalid
+alternates cannot erase the remaining progress witness.
+
 The serialized runtime and adapter each reserve completion and progress
 capacity. Their cyclic `completion -> progress -> normal` service order keeps
 FIFO order within a class and records eligible service skips only for the
@@ -397,8 +408,9 @@ The following focused checks were recorded through 2026-07-17:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, and three-corridor ingress additions. The current
-source-bound inventory contains 168 exact tests across 14 modules, including
-the authoritative outer-ingress and historical block-sync modules. It must
+source-bound inventory contains 185 exact tests across 16 modules, including
+the authoritative outer-ingress, historical block-sync, and Kura
+progress-witness durability modules. It must
 still run as one clean committed, detached, source-sealed release leg before it
 becomes release evidence.
 
@@ -446,7 +458,9 @@ production worker/runtime refinement obligation both remain
 unissued future completion without replacing its owner and preserve the latest
 consumer while a missing body waits for durable recovery and retries.
 
-The 46-entry proof ledger now reports 24 `tlaps_proved`, 15
+The strict counts in the following paragraphs are retained historical submodule
+evidence, not current aggregate source-manifest-bound release evidence. The
+46-entry proof ledger now reports 24 `tlaps_proved`, 15
 `specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entry, with
 `machine_checked_completion: false`. The added successor-activation entry pins
 the finite queue-to-publication rank for responsive validators and remains
@@ -474,8 +488,8 @@ targets carry one of four exact outer frames, so TLC sees a value for every
 primed variable when it evaluates `ENABLED`. The exact quantified
 `AsyncFairActionAt` inventory is stated by the typed
 `AsyncFairActionsRefineAsyncNext` operator and proved by the dedicated
-`AsyncFairActionsRefineAsyncNextObligation`. The decomposed default-limit
-strict run proves all 1,143 obligations, including typed command execution,
+`AsyncFairActionsRefineAsyncNextObligation`. A recorded decomposed default-limit
+strict run proved all 1,143 obligations, including typed command execution,
 the 18 Core projections, and all runner/non-runner/recovery outer frames. The
 checker mutation-tests action deletion, quantifier drift, frame
 misclassification, claim or theorem weakening, unreviewed helper theorems, and
@@ -506,15 +520,19 @@ PR corridor is not claimed green here until its source-bound run finishes.
 ## Deterministic and production gates
 
 The PR corridor runs four fixed seeds for the four-validator genesis, restart,
-timeout-rotation, and divergent-PrepareQC scenarios, together with adversarial
-reducer simulations and model-trace replay:
+timeout-rotation, and same-subject locked-body re-proposal with ordered release
+of captured quorum evidence, together with adversarial reducer simulations and
+model-trace replay. The explicit releases are increasing captured subsequences,
+not FIFO prefixes; only the final drain is a FIFO fence. That fourth leg does
+not cover distinct-subject PrepareQCs; a separate adversarial scenario for that
+obligation remains outstanding:
 
 ```bash
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 168 exact production
-liveness tests and executes all 14 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 185 exact production
+liveness tests and executes all 16 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
@@ -535,13 +553,21 @@ completion-ownership seam described above. It then inventories and executes the 
 positive/negative cross-SDK wire-fixture tests and
 the maintained JavaScript and Python authoritative-status parser tests. The
 parser inventory pins normalization, `local_control_pending`,
-`unsafe_proposal`, and the full 12-reason ignore bound; a missing or ignored
+`unsafe_proposal`, the full 12-reason ignore bound, and the distinction between
+a remote partial timeout pool, a durable local timeout path, and same-/older-view
+locked Commit recovery; a missing or ignored
 Rust fixture test or a missing named SDK parser test fails the gate. The
 prior inventory and serial 11-module execution are green historical evidence.
-Current mutable-source discovery finds all 168 exact names among 6,750 library
-tests with none missing or ignored, and direct exact execution is green at
-168/168. The 168-test/14-module set still needs its clean source-sealed release
-rerun, and the full PR corridor is not claimed passed.
+The preceding mutable-source discovery found all 168 then-required names among
+6,750 library tests with none missing or ignored, and direct exact execution
+was green at 168/168. Two same-runtime-step Decision reconciliation tests raised
+the inventory to 170, and the exact timeout-path classifier regression raised
+it to 171. Eleven Kura progress-witness durability regressions, two lane-geometry
+durability regressions, and the lane-work alternate-certificate retirement
+regression now raise the current inventory to 185 tests across 16 modules. That
+set needs fresh discovery and execution plus
+its clean source-sealed release rerun; the full PR corridor is not claimed
+passed.
 
 The same pre-network gate inventories and executes four exact, non-ignored
 Taira release-profile validators plus the Rust summary-JSON schema contract.
@@ -710,31 +736,104 @@ canonical classification set exactly matches the blockers in its authoritative
 status snapshots. A checkout-manifest checkpoint immediately after the
 100,000-height chaos run rejects drift before starting the 24-hour soak. A final
 checkout-manifest and proof-evidence check rejects any later source change
-during the long corridor:
+during the long corridor.
+
+A production run cannot be started by invoking the candidate runner directly.
+The release operator first authenticates an out-of-tree copy of
+`bootstrap_sumeragi_v2_release.py`, the protected Python, Git, OpenSSH
+`ssh-keygen`, and Bash executables, the manifest and identity helpers, the SSH
+allowed-signers and revocation policies, and every expected SHA-256 digest and
+signer fingerprint. The protected interpreter must start in isolated, no-site
+mode; the evidence parent must already be owner-owned mode `0700`, and the
+requested evidence child must not exist. The complete invocation passes those
+protected paths and digests explicitly, for example:
 
 ```bash
-bash scripts/run_sumeragi_v2_release_gates.sh --release
+/protected/python3 -I -S /protected/bootstrap_sumeragi_v2_release.py \
+  --candidate-root /candidate/iroha \
+  --evidence-dir /private/preexisting-parent/new-release-evidence \
+  --expected-bootstrap-sha256 <sha256> \
+  --python-bin /protected/python3 --expected-python-sha256 <sha256> \
+  --git-bin /protected/git --expected-git-sha256 <sha256> \
+  --ssh-keygen-bin /protected/ssh-keygen \
+  --expected-ssh-keygen-sha256 <sha256> \
+  --manifest-helper /protected/compute_workspace_source_manifest.py \
+  --expected-manifest-helper-sha256 <sha256> \
+  --identity-verifier /protected/verify_sumeragi_v2_release_identity.py \
+  --expected-identity-verifier-sha256 <sha256> \
+  --receipt-validator /protected/write_sumeragi_v2_release_receipt.py \
+  --expected-receipt-validator-sha256 <sha256> \
+  --runner-tool-manifest /protected/runner-tools.json \
+  --expected-runner-tool-manifest-sha256 <sha256> \
+  --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
+  --expected-signer-fingerprint SHA256:<fingerprint> \
+  --ssh-allowed-signers /protected/allowed_signers \
+  --expected-ssh-allowed-signers-sha256 <sha256> \
+  --ssh-revocation-file /protected/revocation \
+  --expected-ssh-revocation-sha256 <sha256>
 ```
 
-On success, the command prints one atomically published aggregate receipt path.
-That receipt binds the 29 pre-network corridor legs and their exact
-168-test inventory, semantic test names/counts, commands, logs, and resolved
-tool identities; the formal completion, pinned harness lock, formal toolchain,
-proof ledger/evidence/log; all 128 matrix logs; the chaos completion/log; and
-the exact-identity Taira completion/canonical JSON/full run log. It
-independently revalidates matrix, chaos, and Taira libtest markers and runs the
-Taira evidence checker against the archived canonical JSON. Terminal JSON and
-its pointer are removed on an
-ordinary promotion failure; filesystem `fsync`/power-loss durability is not
-claimed.
+The first-release policy accepts exactly one active SSH allowed-signers line
+and rejects certificate-authority, SSH-certificate, `valid-after`, and
+`valid-before` policy forms. The bootstrap archives private stable copies of
+the trusted inputs, authenticates the candidate's exact signed commit and
+release identity, and publishes `BOOTSTRAP_COMPLETED.json` before it launches
+the signed runner under a closed environment. Its `PATH` contains only the
+archived protected tools and a private `runner-bin` directory. Every additional
+executable must be named in the protected canonical manifest with one absolute
+source path and SHA-256 digest; the bootstrap rejects writable or untrusted
+ancestors and creates an exact-target symlink in `runner-bin` so platform code
+signatures remain valid without reopening ambient path lookup. The runner
+independently
+validates that marker at entry, after sealing, and at every release-identity
+checkpoint before it executes another candidate helper. The bootstrap imposes
+no outer runtime or output-capture limit on the runner and never signals its
+process group; a runner which escapes its internal deadlines remains visibly
+incomplete and cannot publish either completion marker.
 
-This evidence is cooperative self-consistency, not authenticated runner
-provenance. The validator rejects malformed or incomplete transcripts,
-cross-source records, semantic name/count drift, and digest mismatches observed
-during receipt generation. It does not cryptographically attest the host or
-prevent the owning UID from fabricating a fully self-consistent transcript and
-recomputing every hash. Concurrent same-UID mutation outside the observed
-checks is likewise outside this trust model.
+Runner stdout and stderr are inherited regular files created directly under
+the private evidence directory, mode `0600` while active and `0400` after a
+normal exit. Bootstrap output consumers therefore cannot backpressure the
+runner. If the bootstrap process alone is interrupted, it does not signal the
+runner and preserves the active logs and evidence directory for diagnosis;
+without terminal validation it cannot publish external completion.
+
+On success, the runner publishes exactly
+`release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
+evidence directory. That receipt binds the 35 pre-network corridor legs and
+their exact 185-test inventory, semantic test names/counts, commands, logs, and
+resolved tool identities; the formal completion, pinned harness lock, formal
+toolchain, proof ledger/evidence/log; all 128 matrix logs; the chaos
+completion/log; and the exact-identity Taira completion/canonical JSON/full run
+log. It independently revalidates matrix, chaos, and Taira libtest markers and
+runs the Taira evidence checker against the archived canonical JSON.
+
+The receipt is a canonical owner-owned, single-link, mode-`0400` file. Its
+writer uses an exclusive staged inode, complete-write loops, no-clobber
+linking, and cleanup which removes only its own inode. Before publication it
+revalidates and synchronizes every bound evidence file, then the complete
+evidence-directory closure bottom-up; after publication it repeats that
+closure with the terminal receipt included. Any file, directory, or `fsync`
+failure is fail-closed. There is no mutable pointer file. The successful runner
+retains its sealed source root and sealed identity instead of deleting the code
+which produced the evidence. Once the runner returns success, the external
+bootstrap validates that retained root, re-synchronizes and re-attests its
+permission-aware manifest, then invokes the separately protected archived
+receipt validator in exact `--verify-existing` mode against that root. Only
+after the protected replay succeeds does it create the separate no-clobber
+`BOOTSTRAP_RELEASE_COMPLETED.json` marker. That external marker binds the
+terminal receipt, sealed source identity, protected validator, and sealed
+runner-log digests. Runner failure is returned unchanged and cannot publish
+external completion.
+
+This authenticates the signed candidate and runner relative to the operator's
+protected inputs; it is not remote host attestation. The release-host image,
+dynamic loader and libraries before Python starts, the owning UID, and trusted
+ancestor-directory owners remain external prerequisites. A malicious same-UID
+process or trusted ancestor can still attack the pathname namespace between
+checks. Durability also assumes the host filesystem and storage honor POSIX
+`fsync`. These limitations are recorded in the bootstrap marker rather than
+being hidden behind a cooperative-receipt claim.
 
 The release command is intentionally fail-closed while
 `docs/formal/sumeragi_v2/proof_coverage.json` contains any

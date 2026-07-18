@@ -923,6 +923,56 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
 });
 
 strict_replay_test!(
+    production_replay_consumes_preinstalled_lane_manifest_snapshot,
+    {
+        let fixture = StrictReplayFixture::new();
+        let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
+        replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
+        let before = StateFingerprint::capture(&replay_state);
+
+        let error = super::replay_blocks_from_kura_range(
+            &fixture.kura,
+            &mut replay_state,
+            &fixture.topology(),
+            1,
+            1,
+            wire::ConsensusMode::Permissioned,
+        )
+        .expect_err("replay must reject a durable block when its lane is absent");
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("first transaction error: tx#0"),
+            "replay rejection must identify the first failed transaction: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("lane 0 is absent from the installed manifest registry snapshot"),
+            "replay rejection must expose the missing registry binding: {diagnostic}"
+        );
+        before.assert_unchanged(&replay_state);
+
+        let nexus = replay_state.nexus_snapshot();
+        let frozen =
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
+        replay_state.install_lane_manifests(&frozen);
+        super::replay_blocks_from_kura_range(
+            &fixture.kura,
+            &mut replay_state,
+            &fixture.topology(),
+            1,
+            1,
+            wire::ConsensusMode::Permissioned,
+        )
+        .expect("the identical durable block replays after the lane snapshot is installed");
+
+        assert_eq!(replay_state.committed_height(), 1);
+        assert_eq!(
+            replay_state.latest_block_hash_fast(),
+            Some(fixture.block.hash())
+        );
+    }
+);
+
+strict_replay_test!(
     production_replay_rejects_missing_and_mismatched_sidecars_atomically,
     {
         let fixture = StrictReplayFixture::new();

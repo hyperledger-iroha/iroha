@@ -11186,6 +11186,9 @@ fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String>
     let quantity = value
         .parse::<Quantity>()
         .map_err(|error| format!("must be a canonical non-negative quantity: {error}"))?;
+    if quantity.to_string() != value {
+        return Err(format!("must use canonical quantity spelling `{quantity}`"));
+    }
     if quantity.is_zero() {
         return Err("quantity must be greater than zero".to_owned());
     }
@@ -19475,7 +19478,7 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
     return json {{
       authenticated: false,
       observed_height: observed_height,
-      wallet: null
+      wallet: Json::parse("null")
     }};
   }}
 
@@ -35098,7 +35101,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35317,7 +35320,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35441,7 +35444,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };

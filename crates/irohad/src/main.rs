@@ -71,7 +71,9 @@ use iroha_core::{
     block::ValidBlock,
     compliance::LaneComplianceEngine,
     gossiper::{TransactionGossiper, TransactionGossiperHandle},
-    governance::manifest::LaneManifestRegistry,
+    governance::manifest::{
+        GovernanceGuardError, LaneManifestRegistry, LaneManifestRegistryHandle,
+    },
     kiso::KisoHandle,
     kura::Kura,
     panic_hook,
@@ -1289,6 +1291,8 @@ struct NetworkRelay {
     pow_update_version: Arc<AtomicU64>,
     consensus_ingress: ConsensusIngressLimiter,
     low_priority_ingress: LowPriorityIngressLimiter,
+    #[cfg(feature = "test-network-message-control")]
+    test_message_control: Option<Arc<consensus_message_control::Controller>>,
 }
 
 struct NetworkRelayShared {
@@ -2110,17 +2114,6 @@ fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
 
 impl NetworkRelay {
     fn into_shared(self) -> NetworkRelayShared {
-        #[cfg(feature = "test-network-message-control")]
-        let test_message_control = match consensus_message_control::Controller::from_env() {
-            Ok(controller) => controller.map(Arc::new),
-            Err(error) => {
-                iroha_logger::error!(
-                    reason = error.code(),
-                    "test-network consensus message controller failed closed during startup"
-                );
-                std::process::exit(1);
-            }
-        };
         NetworkRelayShared {
             sumeragi: self.sumeragi,
             tx_gossiper: self.tx_gossiper,
@@ -2133,7 +2126,7 @@ impl NetworkRelay {
             consensus_ingress: Mutex::new(self.consensus_ingress),
             low_priority_ingress: Mutex::new(self.low_priority_ingress),
             #[cfg(feature = "test-network-message-control")]
-            test_message_control,
+            test_message_control: self.test_message_control,
         }
     }
 
@@ -2333,6 +2326,19 @@ impl NetworkRelay {
 }
 
 impl NetworkRelayShared {
+    async fn run_blocking_sumeragi_ingress<F>(enqueue: F) -> bool
+    where
+        F: FnOnce() -> bool + Send + 'static,
+    {
+        match tokio::task::spawn_blocking(enqueue).await {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                iroha_logger::warn!(?err, "blocking sumeragi ingress task aborted");
+                false
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn handle_message(&self, peer: Peer, msg: iroha_core::NetworkMessage, size_bytes: usize) {
         #[cfg(feature = "test-network-message-control")]
@@ -2469,13 +2475,10 @@ impl NetworkRelayShared {
                 let sumeragi = self.sumeragi.clone();
                 let msg = (*data).into_message();
                 if msg.requires_blocking_ingress() {
-                    let handle = tokio::task::spawn_blocking(move || {
-                        sumeragi.incoming_block_message_from(sender, msg);
-                    });
-                    if let Err(err) = handle.await {
-                        iroha_logger::warn!(?err, "blocking sumeragi ingress task aborted");
-                        return false;
-                    }
+                    return Self::run_blocking_sumeragi_ingress(move || {
+                        sumeragi.try_incoming_block_message_from(sender, msg)
+                    })
+                    .await;
                 } else {
                     return sumeragi.try_incoming_block_message_from(sender, msg);
                 }
@@ -3072,6 +3075,12 @@ mod network_relay_tests {
             rx.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
         ));
+    }
+
+    #[tokio::test]
+    async fn blocking_sumeragi_ingress_reports_the_real_enqueue_result() {
+        assert!(!NetworkRelayShared::run_blocking_sumeragi_ingress(|| false).await);
+        assert!(NetworkRelayShared::run_blocking_sumeragi_ingress(|| true).await);
     }
 
     #[test]
@@ -4356,6 +4365,33 @@ fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual
     state.nexus_snapshot()
 }
 
+/// Freeze the exact manifest source snapshot used while reconstructing State from Kura.
+///
+/// Replay executes ordinary transaction admission, so its registry must cover the same active
+/// catalog as the configured Nexus geometry. Loading this snapshot before replay also makes later
+/// catalog rebinding independent of filesystem changes during startup.
+fn freeze_lane_manifests_for_startup_replay(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
+    let registry = if nexus.enabled {
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry)
+    } else {
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
+    };
+    registry.validate_active_coverage()?;
+    Ok(Arc::new(registry))
+}
+
+/// Rebind the frozen startup sources to the effective catalog produced by replay.
+fn rebind_frozen_lane_manifests_after_startup_replay(
+    frozen: &LaneManifestRegistryHandle,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
+    let rebound = frozen.rebind(&nexus.lane_catalog, &nexus.governance);
+    rebound.validate_active_coverage()?;
+    Ok(Arc::new(rebound))
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -4726,6 +4762,100 @@ mod snapshot_read_error_tests {
                 .iter()
                 .any(|lane| lane.id == LaneId::new(1)),
             "runtime queue and manifest setup must see the replayed lane"
+        );
+    }
+
+    #[test]
+    fn startup_replay_installs_default_lane_manifest_snapshot_before_validation() {
+        use iroha_core::governance::manifest::GovernanceGuardReason;
+        use iroha_data_model::nexus::LaneId;
+
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let absent = state
+            .lane_manifests
+            .read()
+            .ensure_lane_ready(LaneId::SINGLE)
+            .expect_err("a fresh State starts without a bound manifest catalog");
+        assert_eq!(absent.reason(), GovernanceGuardReason::UnknownLane);
+
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
+            .expect("default lane is ready in the frozen startup registry");
+        state.install_lane_manifests(&frozen);
+
+        state
+            .lane_manifests
+            .read()
+            .ensure_lane_ready(LaneId::SINGLE)
+            .expect("atomic replay sees the configured default lane");
+    }
+
+    #[test]
+    fn startup_replay_manifest_freeze_fails_closed_for_missing_governance_source() {
+        use std::num::NonZeroU32;
+
+        use iroha_core::governance::manifest::GovernanceGuardReason;
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
+
+        let governed_lane = LaneConfig {
+            governance: Some("parliament".to_owned()),
+            ..LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane namespace"),
+            vec![governed_lane],
+        )
+        .expect("single governed lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        nexus.lane_catalog = catalog.clone();
+        nexus.configured_lane_catalog = catalog;
+
+        let error = freeze_lane_manifests_for_startup_replay(&nexus)
+            .expect_err("governed replay lane without a frozen manifest must reject startup");
+
+        assert_eq!(error.reason(), GovernanceGuardReason::MissingManifest);
+    }
+
+    #[test]
+    fn post_replay_manifest_rebind_does_not_rescan_changed_sources() {
+        let manifest_dir = tempfile::tempdir().expect("create manifest source directory");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        nexus.registry.manifest_directory = Some(manifest_dir.path().to_path_buf());
+        let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
+            .expect("ungoverned default lane is ready without a manifest");
+        assert!(!frozen.has_manifest_source_alias("default"));
+
+        std::fs::write(manifest_dir.path().join("default.manifest.json"), b"{}")
+            .expect("replace manifest source set after the startup freeze");
+        let rebound = rebind_frozen_lane_manifests_after_startup_replay(&frozen, &nexus)
+            .expect("frozen source set deterministically rebinds");
+
+        assert!(!rebound.has_manifest_source_alias("default"));
+        assert_eq!(
+            rebound.consensus_policy_digest(),
+            frozen.consensus_policy_digest(),
+            "post-replay rebinding must preserve the pre-replay source snapshot"
+        );
+        let rescanned = LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        );
+        assert!(rescanned.has_manifest_source_alias("default"));
+        assert_ne!(
+            rescanned.consensus_policy_digest(),
+            frozen.consensus_policy_digest(),
+            "the adversarial file change would affect a forbidden second scan"
         );
     }
 }
@@ -5208,6 +5338,16 @@ impl Iroha {
         if provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
         }
+        // Transaction validation during replay consults the lane registry. Freeze and install the
+        // configured source set before the first replay transition; installing it only after
+        // replay leaves even the default lane absent on snapshot-free restart.
+        let replay_nexus = nexus_for_runtime_surfaces(&state);
+        let frozen_startup_lane_manifests = freeze_lane_manifests_for_startup_replay(&replay_nexus)
+            .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("lane manifest registry is not ready before atomic Kura replay")
+            })?;
+        state.install_lane_manifests(&frozen_startup_lane_manifests);
         if generic_replay_height > state_height {
             iroha_logger::info!(
                 start_height = generic_replay_start,
@@ -5309,19 +5449,22 @@ impl Iroha {
         let mut lane_manifest_task = None;
         #[cfg(not(feature = "telemetry"))]
         let mut lane_manifest_task = None;
+        // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
+        // snapshot used by replay to the effective catalog, rather than rescanning mutable files
+        // at a second startup boundary.
+        let lane_manifests = rebind_frozen_lane_manifests_after_startup_replay(
+            &frozen_startup_lane_manifests,
+            &runtime_nexus,
+        )
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+        .map_err(|report| {
+            report.attach("lane manifest registry is not ready after atomic Kura replay")
+        })?;
+        queue.install_lane_manifests_with_state(&lane_manifests, &state);
+        state
+            .telemetry
+            .set_lane_manifest_registry(Arc::clone(&lane_manifests));
         if runtime_nexus.enabled {
-            let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
-                lane_catalog.as_ref(),
-                governance_catalog.as_ref(),
-                &registry_cfg,
-            ));
-            lane_manifests
-                .validate_active_coverage()
-                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-            queue.install_lane_manifests_with_state(&lane_manifests, &state);
-            state
-                .telemetry
-                .set_lane_manifest_registry(Arc::clone(&lane_manifests));
             for status in lane_manifests.missing_entries() {
                 iroha_logger::warn!(
                     lane = %status.alias,
@@ -5348,15 +5491,6 @@ impl Iroha {
                 let registry_cfg_task = registry_cfg.clone();
                 lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
             }
-        } else {
-            let empty_registry = Arc::new(
-                LaneManifestRegistry::empty()
-                    .rebind(lane_catalog.as_ref(), governance_catalog.as_ref()),
-            );
-            queue.install_lane_manifests_with_state(&empty_registry, &state);
-            state
-                .telemetry
-                .set_lane_manifest_registry(Arc::clone(&empty_registry));
         }
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
@@ -6167,6 +6301,20 @@ impl Iroha {
         #[cfg(not(feature = "telemetry"))]
         let torii_telemetry = iroha_torii::MaybeTelemetry::from_profile(None, telemetry_profile);
 
+        // The feature-isolated receiver controller must pin and acknowledge its
+        // revision-1 rules before Sumeragi can enter the first post-genesis round.
+        #[cfg(feature = "test-network-message-control")]
+        let test_message_control = match consensus_message_control::Controller::from_env() {
+            Ok(controller) => controller.map(Arc::new),
+            Err(error) => {
+                iroha_logger::error!(
+                    reason = error.code(),
+                    "test-network consensus message controller failed closed before Sumeragi startup"
+                );
+                std::process::exit(1);
+            }
+        };
+
         let genesis_for_consensus = if snapshot_bootstrap_active || stored_genesis_block.is_some() {
             None
         } else {
@@ -6381,6 +6529,8 @@ impl Iroha {
                     Duration::from_millis(signed_block_cadence_ms),
                 ),
                 low_priority_ingress: LowPriorityIngressLimiter::from_config(&config.network),
+                #[cfg(feature = "test-network-message-control")]
+                test_message_control,
             }
             .run(),
         ));

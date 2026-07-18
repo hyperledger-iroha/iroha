@@ -85,7 +85,7 @@ retrieve the exact regex, tier IDs, and auction parameters.
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "<base58-asset-definition-id>#<i105-account-id>", "amount": 500000000},
+          "base_price": {"asset_id": "<base58-asset-definition-id>#<i105-account-id>", "amount": "0.5"},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

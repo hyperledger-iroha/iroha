@@ -53215,18 +53215,32 @@ fn replay_blocks_from_kura_range_inner(
                     .signatures()
                     .map(|sig| u32::try_from(sig.index()).unwrap_or_default())
                     .collect();
+                let transaction_errors = failed_block
+                    .results()
+                    .enumerate()
+                    .filter_map(|(index, result)| {
+                        result
+                            .as_ref()
+                            .err()
+                            .map(|error| format!("tx#{index}: {error}; details: {error:?}"))
+                    })
+                    .collect::<Vec<_>>();
                 iroha_logger::error!(
                     height,
                     hash = %failed_block.hash(),
                     sig_indices = ?sig_indices,
                     leader_index = validation_topology.leader_index(),
+                    transaction_errors = ?transaction_errors,
                     ?err,
                     "failed to validate block during replay"
                 );
                 return Err(eyre!(err)).wrap_err_with(|| {
+                    let transaction_detail = transaction_errors
+                        .first()
+                        .map_or(String::new(), |error| format!("; first transaction error: {error}"));
                     format!(
-                        "failed to validate block #{height} during replay (hash={})",
-                        failed_block.hash()
+                        "failed to validate block #{height} during replay (hash={}){transaction_detail}",
+                        failed_block.hash(),
                     )
                 });
             }

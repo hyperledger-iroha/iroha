@@ -683,6 +683,8 @@ fn saturating_duration_add(left: Duration, right: Duration) -> Duration {
 }
 
 fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let owner = V2StatusOwner::from_status(&status);
     let watchdog_threshold = latest_v2_effect_status()
         .filter(|effect_status| {
@@ -714,6 +716,8 @@ pub fn set_v2_status(status: SumeragiV2Status) {
 
 /// Publish the latest local effect/runtime ownership snapshot.
 pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let owner = V2StatusOwner {
         height_context_id: status.height_context_id,
         height: status.height,
@@ -761,6 +765,8 @@ pub(crate) fn set_v2_effect_completion_observer<T>(
 ) where
     T: V2IoCompletionQueueObserver + 'static,
 {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let observer = Arc::clone(observer);
     let observer: Arc<dyn V2IoCompletionQueueObserver> = observer;
     *SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER
@@ -854,6 +860,8 @@ fn update_v2_successor_work_stage_at(
     stage: SumeragiV2LocalWorkStage,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let Some(mut status) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -958,6 +966,8 @@ fn activate_v2_successor_height_at(
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
 
     // Validate the predecessor and publish Complete before replacing it with
@@ -980,6 +990,8 @@ fn activate_recovered_v2_successor_height_at(
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
     if let Some(published) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -1040,6 +1052,8 @@ pub(crate) fn set_v2_network_ingress(
     height: u64,
     ingress: &Arc<FairV2Ingress>,
 ) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     *SUMERAGI_V2_NETWORK_INGRESS
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -1312,6 +1326,42 @@ fn classify_v2_liveness_blocker(
         return SumeragiV2LivenessBlocker::SchedulerStarvation;
     }
 
+    // A durable current-view timeout intent retires local proposal/Prepare
+    // ownership and prevents fresh lock acquisition in that view. The reducer
+    // may still report its pre-timeout Prepare phase while it collects the
+    // timeout quorum, so phase alone is no longer the active progress path.
+    // Commit is intentionally different: an exact durable locked Commit
+    // remains active and retransmittable across both same-view timeout intent
+    // and later-view TC installation, and therefore retains an independent
+    // decision path.
+    let timeout_pool_started = status
+        .liveness
+        .timeout_quorums
+        .iter()
+        .any(|quorum| quorum.round.view == status.view);
+    let local_timeout_started =
+        has_current_view_outbound_intent(status, SumeragiV2OutboundIntentKind::TimeoutVote)
+            || has_current_view_outbound_intent(
+                status,
+                SumeragiV2OutboundIntentKind::TimeoutCertificate,
+            );
+    if local_timeout_started && status.phase != SumeragiV2StatusPhase::Commit {
+        let formed = status
+            .liveness
+            .timeout_quorums
+            .iter()
+            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed)
+            || has_current_view_outbound_intent(
+                status,
+                SumeragiV2OutboundIntentKind::TimeoutCertificate,
+            );
+        return if formed {
+            SumeragiV2LivenessBlocker::SchedulerStarvation
+        } else {
+            SumeragiV2LivenessBlocker::TimeoutCertificateMissing
+        };
+    }
+
     if status.phase == SumeragiV2StatusPhase::Commit {
         let formed = status
             .liveness
@@ -1340,26 +1390,12 @@ fn classify_v2_liveness_blocker(
         };
     }
 
-    let timeout_started = status
-        .liveness
-        .timeout_quorums
-        .iter()
-        .any(|quorum| quorum.round.view == status.view)
-        || has_current_view_outbound_intent(status, SumeragiV2OutboundIntentKind::TimeoutVote)
-        || has_current_view_outbound_intent(
-            status,
-            SumeragiV2OutboundIntentKind::TimeoutCertificate,
-        );
-    if timeout_started {
+    if timeout_pool_started {
         let formed = status
             .liveness
             .timeout_quorums
             .iter()
-            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed)
-            || has_current_view_outbound_intent(
-                status,
-                SumeragiV2OutboundIntentKind::TimeoutCertificate,
-            );
+            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed);
         return if formed {
             SumeragiV2LivenessBlocker::SchedulerStarvation
         } else {
@@ -1462,6 +1498,8 @@ pub fn v2_status_with_restart_required(restart_required: bool) -> Option<Sumerag
 /// fail-closed. The snapshot is deliberately kept until an explicit restart
 /// clears and reconstructs the registry.
 pub(crate) fn mark_v2_restart_required() {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let Some(slot) = SUMERAGI_V2_STATUS.get() else {
         return;
     };
@@ -1476,6 +1514,8 @@ pub(crate) fn mark_v2_restart_required() {
 
 /// Clear protocol-v2 status during shutdown and isolated tests.
 pub fn clear_v2_status() {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let mut status = SUMERAGI_V2_STATUS.get().map(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1512,7 +1552,8 @@ pub fn clear_v2_status() {
 #[cfg(test)]
 mod v2_liveness_watchdog_tests {
     use std::{
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, mpsc},
+        thread,
         time::{Duration, Instant},
     };
 
@@ -1521,12 +1562,13 @@ mod v2_liveness_watchdog_tests {
         BlockHeader,
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage,
-            SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+            GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
+            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker,
+            SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
             SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
             SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
-            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2VoteQuorumStatus,
+            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
+            SumeragiV2VoteQuorumStatus,
         },
     };
 
@@ -1606,6 +1648,15 @@ mod v2_liveness_watchdog_tests {
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
         )
+    }
+
+    fn prepare_qc(status: &SumeragiV2Status, view: u64, seed: u8) -> QuorumCertificateRef {
+        QuorumCertificateRef {
+            round: round(status, view),
+            phase: GlobalPhase::Prepare,
+            subject: subject(seed),
+            execution_commitment: execution_commitment(seed),
+        }
     }
 
     fn commit_quorum(
@@ -1689,6 +1740,47 @@ mod v2_liveness_watchdog_tests {
             },
             watchdog_threshold: threshold,
         }
+    }
+
+    #[test]
+    fn cross_thread_v2_publication_waits_for_status_test_lease_and_resumes_after_release() {
+        let guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        let publication = status();
+        let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
+        let (completed_tx, completed_rx) = mpsc::sync_channel(0);
+
+        let publisher = thread::spawn(move || {
+            assert!(
+                super::try_reentrant_test_guard(&super::RBC_STATUS_TEST_LOCK).is_none(),
+                "a foreign thread must not enter the stable status window"
+            );
+            attempted_tx
+                .send(())
+                .expect("announce the blocked publication attempt");
+            set_v2_status_at(publication, started_at);
+            completed_tx
+                .send(())
+                .expect("announce publication after lease release");
+        });
+
+        attempted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("publisher reaches the guarded mutation boundary");
+        assert!(
+            v2_status_at(started_at).is_none(),
+            "the stable test window must exclude a foreign publisher"
+        );
+
+        drop(guard);
+        completed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("publisher resumes after the stable window closes");
+        publisher.join().expect("publisher thread completes");
+
+        let _cleanup_guard = super::rbc_status_test_guard();
+        clear_v2_status();
     }
 
     #[test]
@@ -2024,6 +2116,83 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&application, true),
             SumeragiV2LivenessBlocker::ApplicationPending,
             "application must take precedence over a stopped ingress scheduler"
+        );
+    }
+
+    #[test]
+    fn current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit() {
+        let mut prepare = status();
+        prepare.phase = SumeragiV2StatusPhase::Prepare;
+        prepare.body_state = SumeragiV2BodyState::Validated;
+        let current_round = round(&prepare, prepare.view);
+        prepare
+            .liveness
+            .timeout_quorums
+            .push(SumeragiV2TimeoutQuorumStatus {
+                round: current_round,
+                signer_count: 1,
+                signed_power: 1,
+                min_signers: 3,
+                total_power: 4,
+                certificate_formed: false,
+            });
+        prepare
+            .validate()
+            .expect("remote-timeout Prepare fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&prepare, false),
+            SumeragiV2LivenessBlocker::PrepareQuorumMissing,
+            "a remote partial timeout pool does not close the local Prepare path"
+        );
+
+        prepare
+            .liveness
+            .outbound_intents
+            .push(SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::TimeoutVote,
+                round: current_round,
+                subject: None,
+                execution_commitment: None,
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            });
+        prepare
+            .validate()
+            .expect("local-timeout Prepare fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&prepare, false),
+            SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
+            "a durable timeout closes the current Prepare path"
+        );
+
+        let mut current_commit = prepare.clone();
+        current_commit.phase = SumeragiV2StatusPhase::Commit;
+        let current_lock = prepare_qc(&current_commit, current_commit.view, 0xA2);
+        current_commit.locked_prepare_qc = Some(current_lock);
+        current_commit.highest_prepare_qc = Some(current_lock);
+        current_commit
+            .validate()
+            .expect("same-view locked Commit fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&current_commit, false),
+            SumeragiV2LivenessBlocker::CommitQuorumMissing,
+            "a same-view timeout must not hide the still-active locked Commit path"
+        );
+
+        let mut historical_commit = current_commit;
+        historical_commit.view = 1;
+        let historical_lock = prepare_qc(&historical_commit, 0, 0xA2);
+        historical_commit.locked_prepare_qc = Some(historical_lock);
+        historical_commit.highest_prepare_qc = Some(historical_lock);
+        let later_timeout_round = round(&historical_commit, 1);
+        historical_commit.liveness.outbound_intents[0].round = later_timeout_round;
+        historical_commit.liveness.timeout_quorums[0].round = later_timeout_round;
+        historical_commit
+            .validate()
+            .expect("historical locked Commit fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&historical_commit, false),
+            SumeragiV2LivenessBlocker::CommitQuorumMissing,
+            "a later-view timeout must not hide the still-admissible historical locked Commit path"
         );
     }
 
@@ -5949,6 +6118,13 @@ impl NexusFeeTestLock {
 }
 
 #[cfg(test)]
+/// Serialize every process-wide v2 status mutation with tests that need a
+/// stable clear/publish/observe window.
+///
+/// This is a synchronous, owner-reentrant test lease. Do not move it to another
+/// task or thread for nested use, hold it across `.await`, or wait for a child
+/// which can call a guarded status mutation; each of those patterns can prevent
+/// the original owner from releasing the lease.
 pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
     reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
 }

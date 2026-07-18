@@ -9,7 +9,65 @@ if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; th
   exit 2
 fi
 
-readonly repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
+# A production release is launched only by the externally authenticated
+# bootstrap.  Validate that capability before changing the bootstrap's closed
+# environment or executing any other candidate helper.  The sealed child is
+# validated through the same immutable bootstrap evidence propagated by this
+# outer process and through its own source-seal checkpoints below.
+if [[ "$profile" == "--release" ]]; then
+  for bootstrap_suffix in \
+    COMPLETION \
+    IDENTITY_ATTESTATION \
+    IDENTITY_TRANSCRIPT \
+    IDENTITY \
+    EVIDENCE_DIR; do
+    sumeragi_name="SUMERAGI_V2_RELEASE_BOOTSTRAP_${bootstrap_suffix}"
+    iroha_name="IROHA_RELEASE_BOOTSTRAP_${bootstrap_suffix}"
+    if [[ -z "${!sumeragi_name:-}" || "${!sumeragi_name}" != "${!iroha_name:-}" ]]; then
+      echo "production release requires matching bootstrap path aliases for ${bootstrap_suffix}" >&2
+      exit 1
+    fi
+  done
+  if [[ -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
+    || "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256}" \
+      != "${IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" ]]; then
+    echo "production release requires matching out-of-band bootstrap marker digests" >&2
+    exit 1
+  fi
+  if [[ ! "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
+    =~ ^[0-9a-f]{64}$ ]]; then
+    echo "bootstrap completion digest must be one lowercase SHA-256 value" >&2
+    exit 1
+  fi
+  bootstrap_python="${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python3"
+  if [[ ! -f "$bootstrap_python" || ! -x "$bootstrap_python" ]]; then
+    echo "production release requires the bootstrap-archived Python" >&2
+    exit 1
+  fi
+  if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
+    if [[ -z "${IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT:-}" \
+      || -z "${IROHA_RELEASE_BOOTSTRAP_RUNNER:-}" ]]; then
+      echo "sealed release requires the authenticated outer candidate binding" >&2
+      exit 1
+    fi
+    "$bootstrap_python" -I -S \
+      "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
+      --candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
+      --runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
+      --profile --release \
+      --checkpoint sealed
+  else
+    "$bootstrap_python" -I -S \
+      "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
+      --candidate-root "$repo_root" \
+      --runner "$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
+      --profile --release \
+      --checkpoint entry
+    export IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root"
+    export IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh"
+  fi
+fi
 readonly inherited_cargo_cache_home="${CARGO_HOME:-${HOME:-}/.cargo}"
 cd "$repo_root"
 # Every real-network leg in this parent shell must fail rather than translate a
@@ -30,6 +88,8 @@ unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE
 unset GIT_REPLACE_REF_BASE GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
 unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_NOSYSTEM
 unset GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_TEMPLATE_DIR
+unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_ASKPASS SSH_ASKPASS
+unset GIT_SSH GIT_SSH_COMMAND GIT_PROTOCOL_FROM_USER GIT_ATTR_SOURCE
 export GIT_NO_REPLACE_OBJECTS=1
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
@@ -49,6 +109,11 @@ while IFS='=' read -r inherited_name _; do
       ;;
   esac
 done < <(env)
+export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0=/dev/null
+export GIT_CONFIG_KEY_1=core.fsmonitor
+export GIT_CONFIG_VALUE_1=false
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -61,19 +126,34 @@ sha256_file() {
 canonical_executable() {
   local executable
   executable="$(command -v "$1")" || return 1
-  python3 -c \
+  python3 -I -S -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
     "$executable"
 }
 
+canonical_git_executable() {
+  local executable
+  executable="$(canonical_executable git)" || return 1
+  # `/usr/bin/git` on macOS is an xcode-select launcher. Archiving that shim
+  # would leave the selected developer-tool Git binary outside the protected
+  # digest and evidence directory. Resolve the implementation that the shim
+  # would execute; the caller-supplied SHA-256 policy below then authenticates
+  # those exact bytes before they are used.
+  if [[ "$(uname -s)" == Darwin && "$executable" == /usr/bin/git ]]; then
+    executable="$(/usr/bin/xcrun --find git)" || return 1
+    executable="$(canonical_path "$executable")" || return 1
+  fi
+  printf '%s\n' "$executable"
+}
+
 canonical_path() {
-  python3 -c \
+  python3 -I -S -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
     "$1"
 }
 
 release_identity_json() {
-  python3 scripts/compute_workspace_source_manifest.py \
+  python3 -I -S scripts/compute_workspace_source_manifest.py \
     --root "$repo_root" \
     --release-identity-json
 }
@@ -81,7 +161,7 @@ release_identity_json() {
 identity_field() {
   local identity_path="$1"
   local field="$2"
-  python3 -c \
+  python3 -I -S -c \
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
     "$identity_path" "$field"
 }
@@ -91,10 +171,34 @@ identity_field() {
 # the separately-bound ignored Cargo.lock, and remove source write permission.
 # The complete corridor then re-enters this script from that sealed source.
 if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]; then
-  release_git_bin="$(canonical_executable git)" || {
+  release_bootstrap_evidence_dir="$(
+    canonical_path "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR"
+  )" || {
+    echo "the authenticated bootstrap evidence directory is unavailable" >&2
+    exit 1
+  }
+  if [[ "$release_bootstrap_evidence_dir" \
+    != "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR" ]]; then
+    echo "the authenticated bootstrap evidence directory is not canonical" >&2
+    exit 1
+  fi
+  readonly release_bootstrap_evidence_dir
+  release_git_bin="$(canonical_git_executable)" || {
     echo "a resolved Git executable is required for the release corridor" >&2
     exit 1
   }
+  if [[ -z "${SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN:-}" ]]; then
+    echo "production release requires a relocatable tool path in SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN" >&2
+    exit 1
+  fi
+  release_ssh_keygen_bin="$(canonical_path "$SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN")" || {
+    echo "the configured release ssh-keygen executable could not be resolved" >&2
+    exit 1
+  }
+  if [[ ! -f "$release_ssh_keygen_bin" || ! -x "$release_ssh_keygen_bin" ]]; then
+    echo "the configured release ssh-keygen path is not an executable regular file" >&2
+    exit 1
+  fi
   release_python_bin="$(canonical_executable python3)" || {
     echo "a resolved Python executable is required for the release corridor" >&2
     exit 1
@@ -103,18 +207,92 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "a resolved Bash executable is required for the release corridor" >&2
     exit 1
   }
-  readonly release_git_bin release_python_bin release_bash_bin
-  export PATH="$(dirname "$release_git_bin"):$(dirname "$release_python_bin"):$(dirname "$release_bash_bin"):${PATH}"
-  candidate_identity_json="$(release_identity_json)"
+  readonly release_git_bin release_ssh_keygen_bin release_python_bin release_bash_bin
+  if [[ "$release_git_bin" != "$release_bootstrap_evidence_dir/git" \
+    || "$release_ssh_keygen_bin" != "$release_bootstrap_evidence_dir/ssh-keygen" \
+    || "$release_python_bin" != "$release_bootstrap_evidence_dir/python3" \
+    || "$release_bash_bin" != "$release_bootstrap_evidence_dir/bash" ]]; then
+    echo "release executables escaped the authenticated bootstrap archive" >&2
+    exit 1
+  fi
+  for release_policy_name in \
+    SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256 \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256 \
+    SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT \
+    SUMERAGI_V2_RELEASE_SSH_ALLOWED_SIGNERS \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256 \
+    SUMERAGI_V2_RELEASE_SSH_REVOCATION_FILE \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256; do
+    if [[ -z "${!release_policy_name:-}" ]]; then
+      echo "production release requires protected policy input ${release_policy_name}" >&2
+      exit 1
+    fi
+  done
+  for release_digest_name in \
+    SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256 \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256 \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256 \
+    SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256; do
+    if [[ ! "${!release_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "protected release digest ${release_digest_name} must be lowercase SHA-256" >&2
+      exit 1
+    fi
+  done
+  release_ssh_allowed_signers="$(
+    canonical_path "$SUMERAGI_V2_RELEASE_SSH_ALLOWED_SIGNERS"
+  )" || {
+    echo "the configured release allowed-signers policy could not be resolved" >&2
+    exit 1
+  }
+  release_ssh_revocation_file="$(
+    canonical_path "$SUMERAGI_V2_RELEASE_SSH_REVOCATION_FILE"
+  )" || {
+    echo "the configured release SSH revocation policy could not be resolved" >&2
+    exit 1
+  }
+  if [[ ! -f "$release_ssh_allowed_signers" || ! -f "$release_ssh_revocation_file" ]]; then
+    echo "release SSH policies must resolve to regular files" >&2
+    exit 1
+  fi
+  if [[ "$release_ssh_allowed_signers" \
+      != "$release_bootstrap_evidence_dir/bootstrap-allowed-signers" \
+    || "$release_ssh_revocation_file" \
+      != "$release_bootstrap_evidence_dir/bootstrap-revocation" ]]; then
+    echo "release SSH policies escaped the authenticated bootstrap archive" >&2
+    exit 1
+  fi
+  readonly release_ssh_allowed_signers release_ssh_revocation_file
+  export PATH="${release_bootstrap_evidence_dir}:${PATH}"
+  candidate_identity_path="$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY"
+  if [[ "$candidate_identity_path" != "$release_bootstrap_evidence_dir/candidate-identity.json" ]]; then
+    echo "bootstrap candidate identity path changed after authentication" >&2
+    exit 1
+  fi
+  candidate_identity_json="$(<"$candidate_identity_path")"
   candidate_manifest_sha256="$(
-    python3 -c 'import json, sys; print(json.loads(sys.argv[1])["workspace_source_manifest_sha256"])' \
+    python3 -I -S -c 'import json, sys; print(json.loads(sys.argv[1])["workspace_source_manifest_sha256"])' \
       "$candidate_identity_json"
   )"
   candidate_head="$(
-    python3 -c 'import json, sys; print(json.loads(sys.argv[1])["head_commit"])' \
+    python3 -I -S -c 'import json, sys; print(json.loads(sys.argv[1])["head_commit"])' \
       "$candidate_identity_json"
   )"
-  readonly candidate_identity_json candidate_manifest_sha256 candidate_head
+  candidate_lock_mode="$(
+    python3 -I -S -c \
+      'from pathlib import Path; import stat, sys; print(format(stat.S_IMODE(Path(sys.argv[1]).lstat().st_mode), "04o"))' \
+      "$repo_root/Cargo.lock"
+  )"
+  if [[ ! "$candidate_lock_mode" =~ ^0[0-7]{3}$ ]]; then
+    echo "candidate Cargo.lock mode is not canonical octal" >&2
+    exit 1
+  fi
+  if [[ ! "$candidate_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+    || ! "$candidate_head" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+    echo "bootstrap candidate identity contains a malformed source digest or commit OID" >&2
+    exit 1
+  fi
+  readonly candidate_identity_path candidate_identity_json candidate_manifest_sha256
+  readonly candidate_head candidate_lock_mode
 
   release_rustup_bin="$(canonical_executable rustup)" || {
     echo "rustup is required to resolve the repository-pinned release toolchain" >&2
@@ -193,37 +371,60 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   }
 
-  readonly release_host_base="/tmp/iroha-sumeragi-v2-release-host-${UID}/${candidate_manifest_sha256}"
-  mkdir -p -- "$release_host_base"
-  release_invocation_root="$(mktemp -d "${release_host_base}/invocation.XXXXXX")"
+  # The bootstrap evidence parent is already a private, owner-bound 0700
+  # directory.  Keep all mutable release state below it and refuse reuse; this
+  # removes the predictable shared-/tmp ancestor from the authentication
+  # boundary.
+  release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"
+  if [[ -e "$release_invocation_root" || -L "$release_invocation_root" ]]; then
+    echo "authenticated release invocation root already exists" >&2
+    exit 1
+  fi
+  mkdir -m 0700 -- "$release_invocation_root"
+  release_invocation_root="$(canonical_path "$release_invocation_root")" || {
+    echo "the authenticated release invocation root could not be resolved" >&2
+    exit 1
+  }
   readonly release_invocation_root
   readonly sealed_repo_root="${release_invocation_root}/source"
   readonly release_host_root="${release_invocation_root}/output"
-  readonly candidate_identity_path="${release_invocation_root}/candidate-identity.json"
   readonly sealed_identity_path="${release_invocation_root}/sealed-identity.json"
-  readonly aggregate_receipt_path_file="${release_host_root}/release-receipt-path"
-  mkdir -p -- \
+  readonly aggregate_receipt_path="${release_host_root}/release/RELEASE_COMPLETED.json"
+  readonly release_signature_evidence_dir="$release_bootstrap_evidence_dir"
+  readonly release_signature_attestation="${release_signature_evidence_dir}/identity-attestation.json"
+  readonly release_signature_transcript="${release_signature_evidence_dir}/identity-transcript.json"
+  readonly release_signature_raw_commit="${release_signature_evidence_dir}/identity-raw-commit"
+  readonly release_signature_cargo_lock="${release_signature_evidence_dir}/identity-Cargo.lock"
+  readonly release_signature_allowed_signers="${release_signature_evidence_dir}/identity-allowed-signers"
+  readonly release_signature_revocation="${release_signature_evidence_dir}/identity-revocation"
+  readonly release_verified_git_bin="${release_signature_evidence_dir}/identity-git"
+  readonly release_verified_ssh_keygen_bin="${release_signature_evidence_dir}/identity-ssh-keygen"
+  mkdir -m 0700 -- "$release_host_root"
+  mkdir -m 0700 -- \
     "$release_host_root/workspace-target" \
     "$release_host_root/tmp" \
     "$release_host_root/cache" \
-    "$release_host_root/cargo-home"
+    "$release_host_root/cargo-home" \
+    "$release_host_root/release"
   for cargo_cache in registry git; do
     if [[ -d "${inherited_cargo_cache_home}/${cargo_cache}" ]]; then
       ln -s "$(canonical_path "${inherited_cargo_cache_home}/${cargo_cache}")" \
         "$release_host_root/cargo-home/${cargo_cache}"
     fi
   done
-  printf '%s\n' "$candidate_identity_json" >"$candidate_identity_path"
+  export PATH="${release_signature_evidence_dir}:${PATH}"
 
   sealed_worktree_added=0
+  sealed_worktree_retained=0
   cleanup_sealed_worktree() {
     local status=$?
-    if ((sealed_worktree_added)); then
+    if ((sealed_worktree_added && ! sealed_worktree_retained)); then
       if [[ -d "$sealed_repo_root" ]]; then
-        python3 "$repo_root/scripts/seal_workspace_source.py" \
+        python3 -I -S "$repo_root/scripts/seal_workspace_source.py" \
           --unseal --root "$sealed_repo_root" >/dev/null 2>&1 || status=1
       fi
-      "$release_git_bin" -C "$repo_root" worktree remove --force "$sealed_repo_root" \
+      "$release_verified_git_bin" -c core.hooksPath=/dev/null \
+        -C "$repo_root" worktree remove --force "$sealed_repo_root" \
         >/dev/null 2>&1 || status=1
     fi
     trap - EXIT
@@ -231,11 +432,13 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   }
   trap cleanup_sealed_worktree EXIT
 
-  "$release_git_bin" worktree add --detach "$sealed_repo_root" "$candidate_head"
+  "$release_verified_git_bin" -c core.hooksPath=/dev/null \
+    worktree add --detach "$sealed_repo_root" "$candidate_head"
   sealed_worktree_added=1
-  cp -- "$repo_root/Cargo.lock" "$sealed_repo_root/Cargo.lock"
+  cp -- "$release_signature_cargo_lock" "$sealed_repo_root/Cargo.lock"
+  chmod "$candidate_lock_mode" "$sealed_repo_root/Cargo.lock"
   reproduced_identity_json="$(
-    python3 "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+    python3 -I -S "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
       --root "$sealed_repo_root" \
       --release-identity-json
   )"
@@ -259,21 +462,21 @@ for parent in root.parents:
 PY
 
   ln -s "$release_host_root/workspace-target" "$sealed_repo_root/target"
-  python3 "$sealed_repo_root/scripts/seal_workspace_source.py" \
+  python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
     --seal --root "$sealed_repo_root" --writable target
-  python3 "$sealed_repo_root/scripts/seal_workspace_source.py" \
+  python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
     --verify --root "$sealed_repo_root" --writable target
   # Keep both digests. The candidate manifest records the original checkout;
   # the sealed manifest may change because the manifest intentionally binds all
   # permission bits. Every child build/evidence item uses the sealed digest,
   # while the final receipt also binds candidate HEAD/tree/Cargo.lock.
   sealed_identity_json="$(
-    python3 "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+    python3 -I -S "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
       --root "$sealed_repo_root" \
       --release-identity-json
   )"
   printf '%s\n' "$sealed_identity_json" >"$sealed_identity_path"
-  chmod 0444 "$candidate_identity_path" "$sealed_identity_path"
+  chmod 0400 "$sealed_identity_path"
 
   set +e
   IROHA_RELEASE_SEALED_WORKTREE=1 \
@@ -283,13 +486,27 @@ PY
     IROHA_RELEASE_INVOCATION_ROOT="$release_invocation_root" \
     IROHA_RELEASE_CANDIDATE_IDENTITY_PATH="$candidate_identity_path" \
     IROHA_RELEASE_EXPECTED_IDENTITY_PATH="$sealed_identity_path" \
-    IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE="$aggregate_receipt_path_file" \
+    IROHA_RELEASE_AGGREGATE_RECEIPT_PATH="$aggregate_receipt_path" \
+    IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root" \
+    IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
     IROHA_RELEASE_TLAPM_BIN="$release_tlapm_bin" \
     IROHA_RELEASE_TLAPM_STDLIB="$release_tlapm_stdlib" \
     IROHA_RELEASE_TLA2TOOLS_JAR="$release_tla2tools_jar" \
     IROHA_RELEASE_VERUS_DIR="$release_verus_dir" \
     IROHA_RELEASE_JAVA_BIN="$release_java_bin" \
-    IROHA_RELEASE_GIT_BIN="$release_git_bin" \
+    IROHA_RELEASE_GIT_BIN="$release_verified_git_bin" \
+    IROHA_RELEASE_SSH_KEYGEN_BIN="$release_verified_ssh_keygen_bin" \
+    IROHA_RELEASE_SIGNATURE_ATTESTATION="$release_signature_attestation" \
+    IROHA_RELEASE_SIGNATURE_TRANSCRIPT="$release_signature_transcript" \
+    IROHA_RELEASE_SIGNATURE_RAW_COMMIT="$release_signature_raw_commit" \
+    IROHA_RELEASE_SIGNATURE_CARGO_LOCK="$release_signature_cargo_lock" \
+    IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS="$release_signature_allowed_signers" \
+    IROHA_RELEASE_SIGNATURE_REVOCATION="$release_signature_revocation" \
+    IROHA_RELEASE_EXPECTED_GIT_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256" \
+    IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256" \
+    IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT="$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
+    IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256" \
+    IROHA_RELEASE_EXPECTED_REVOCATION_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256" \
     IROHA_RELEASE_CARGO_BIN="$release_cargo_bin" \
     IROHA_RELEASE_RUSTC_BIN="$release_rustc_bin" \
     IROHA_RELEASE_PYTHON_BIN="$release_python_bin" \
@@ -302,11 +519,15 @@ PY
   sealed_status=$?
   set -e
   if ((sealed_status == 0)); then
-    if [[ ! -s "$aggregate_receipt_path_file" ]]; then
+    if [[ ! -s "$aggregate_receipt_path" || -L "$aggregate_receipt_path" ]]; then
       echo "sealed release corridor passed without an aggregate receipt" >&2
       sealed_status=1
     else
-      echo "aggregate release receipt: $(<"$aggregate_receipt_path_file")" >&2
+      # The authenticated bootstrap must revalidate this exact sealed tree
+      # after the child exits. Retain the read-only worktree and its identity
+      # as durable release evidence; failed runs are still cleaned up.
+      sealed_worktree_retained=1
+      echo "aggregate release receipt: ${aggregate_receipt_path}" >&2
     fi
   fi
   exit "$sealed_status"
@@ -321,10 +542,53 @@ verify_release_identity() {
     || -z "${IROHA_RELEASE_WORKSPACE_TARGET:-}" \
     || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_CANDIDATE_IDENTITY_PATH:-}" \
-    || -z "${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE:-}" \
+    || -z "${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH:-}" \
+    || -z "${IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT:-}" \
+    || -z "${IROHA_RELEASE_BOOTSTRAP_RUNNER:-}" \
+    || -z "${IROHA_RELEASE_PYTHON_BIN:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
+    || "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH" \
+      != "$IROHA_RELEASE_HOST_ROOT/release/RELEASE_COMPLETED.json" \
+    || -z "${IROHA_RELEASE_SIGNATURE_ATTESTATION:-}" \
+    || -z "${IROHA_RELEASE_SIGNATURE_TRANSCRIPT:-}" \
+    || -z "${IROHA_RELEASE_SIGNATURE_RAW_COMMIT:-}" \
+    || -z "${IROHA_RELEASE_SIGNATURE_CARGO_LOCK:-}" \
+    || -z "${IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS:-}" \
+    || -z "${IROHA_RELEASE_SIGNATURE_REVOCATION:-}" \
+    || -z "${IROHA_RELEASE_EXPECTED_GIT_SHA256:-}" \
+    || -z "${IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256:-}" \
+    || -z "${IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT:-}" \
+    || -z "${IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256:-}" \
+    || -z "${IROHA_RELEASE_EXPECTED_REVOCATION_SHA256:-}" \
     || ! -f "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
-    || ! -f "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" ]]; then
-    echo "production release corridor must run from its sealed detached worktree" >&2
+    || ! -f "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_ATTESTATION" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_TRANSCRIPT" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_RAW_COMMIT" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_CARGO_LOCK" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS" \
+    || ! -f "$IROHA_RELEASE_SIGNATURE_REVOCATION" ]]; then
+    echo "production release corridor must run from its signed, sealed detached worktree" >&2
+    return 1
+  fi
+  local signature_digest_name
+  for signature_digest_name in \
+    IROHA_RELEASE_EXPECTED_GIT_SHA256 \
+    IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256 \
+    IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256 \
+    IROHA_RELEASE_EXPECTED_REVOCATION_SHA256; do
+    if [[ ! "${!signature_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "signed release trust anchor ${signature_digest_name} changed at ${checkpoint}" >&2
+      return 1
+    fi
+  done
+  if [[ ! "$IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then
+    echo "signed release fingerprint trust anchor changed at ${checkpoint}" >&2
     return 1
   fi
   local observed_target expected_target
@@ -333,11 +597,11 @@ verify_release_identity() {
     return 1
   fi
   observed_target="$(
-    python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
       "$repo_root/target"
   )"
   expected_target="$(
-    python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
       "$IROHA_RELEASE_WORKSPACE_TARGET"
   )"
   if [[ "$observed_target" != "$expected_target" ]]; then
@@ -354,9 +618,18 @@ verify_release_identity() {
     echo "release source identity changed at ${checkpoint}" >&2
     return 1
   fi
-  if ! python3 scripts/seal_workspace_source.py \
+  if ! python3 -I -S scripts/seal_workspace_source.py \
     --verify --root "$repo_root" --writable target; then
     echo "release source seal changed at ${checkpoint}" >&2
+    return 1
+  fi
+  if ! "$IROHA_RELEASE_PYTHON_BIN" -I -S \
+    "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
+    --candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
+    --runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
+    --profile --release \
+    --checkpoint sealed; then
+    echo "authenticated bootstrap evidence changed at ${checkpoint}" >&2
     return 1
   fi
 }
@@ -366,7 +639,7 @@ verify_release_identity "release corridor entry"
 # Both profiles are release evidence. Bind the complete corridor, including the
 # PR matrix, to one checkout manifest and one content-addressed build root.
 release_source_manifest_sha256="$(
-  python3 scripts/compute_workspace_source_manifest.py --root "$repo_root"
+  python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
 if [[ ! "$release_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "workspace source manifest helper returned an invalid digest" >&2
@@ -415,6 +688,7 @@ if [[ "$profile" == "--release" ]]; then
     IROHA_RELEASE_VERUS_DIR \
     IROHA_RELEASE_JAVA_BIN \
     IROHA_RELEASE_GIT_BIN \
+    IROHA_RELEASE_SSH_KEYGEN_BIN \
     IROHA_RELEASE_CARGO_BIN \
     IROHA_RELEASE_RUSTC_BIN \
     IROHA_RELEASE_PYTHON_BIN \
@@ -436,10 +710,11 @@ if [[ "$profile" == "--release" ]]; then
   export CARGO_HOME="$IROHA_RELEASE_CARGO_HOME"
   export CARGO="$IROHA_RELEASE_CARGO_BIN"
   export RUSTC="$IROHA_RELEASE_RUSTC_BIN"
-  export PATH="${IROHA_RELEASE_VERUS_DIR}:$(dirname "$IROHA_RELEASE_GIT_BIN"):$(dirname "$IROHA_RELEASE_CARGO_BIN"):$(dirname "$IROHA_RELEASE_RUSTC_BIN"):$(dirname "$IROHA_RELEASE_PYTHON_BIN"):$(dirname "$IROHA_RELEASE_NODE_BIN"):$(dirname "$IROHA_RELEASE_BASH_BIN"):${PATH}"
-  for pinned_tool in git cargo rustc python3 node bash; do
+  export PATH="${IROHA_RELEASE_VERUS_DIR}:$(dirname "$IROHA_RELEASE_GIT_BIN"):$(dirname "$IROHA_RELEASE_SSH_KEYGEN_BIN"):$(dirname "$IROHA_RELEASE_CARGO_BIN"):$(dirname "$IROHA_RELEASE_RUSTC_BIN"):$(dirname "$IROHA_RELEASE_PYTHON_BIN"):$(dirname "$IROHA_RELEASE_NODE_BIN"):$(dirname "$IROHA_RELEASE_BASH_BIN"):${PATH}"
+  for pinned_tool in git ssh-keygen cargo rustc python3 node bash; do
     pinned_variable="IROHA_RELEASE_${pinned_tool^^}_BIN"
     [[ "$pinned_tool" == python3 ]] && pinned_variable=IROHA_RELEASE_PYTHON_BIN
+    [[ "$pinned_tool" == ssh-keygen ]] && pinned_variable=IROHA_RELEASE_SSH_KEYGEN_BIN
     if [[ "$(canonical_executable "$pinned_tool")" != "${!pinned_variable}" ]]; then
       echo "sealed release PATH does not resolve pinned ${pinned_tool}" >&2
       exit 1
@@ -481,7 +756,7 @@ record_corridor_log() {
     return 1
   fi
   local observed_test_count
-  observed_test_count="$(python3 - "$kind" "$log_path" <<'PY'
+  observed_test_count="$(python3 -I -S - "$kind" "$log_path" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -505,7 +780,11 @@ if kind.startswith("cargo-"):
     print(results[0].group(1))
 elif kind == "pytest":
     matches = [
-        re.fullmatch(r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s", line)
+        re.fullmatch(
+            r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s"
+            r"(?: \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?",
+            line,
+        )
         for line in lines
     ]
     matches = [match for match in matches if match]
@@ -581,6 +860,19 @@ corridor_contract_log_path() {
 # exercise worker cancellation, queued completion rebinding, or watchdog
 # classification, so these exact tests are source-bound release inputs.
 required_production_liveness_tests=(
+  kura::tests::progress_witness_durability::absent_progress_namespace_requires_every_directory_barrier
+  kura::tests::progress_witness_durability::bound_progress_recovery_handles_crash_phases_without_path_escape
+  kura::tests::progress_witness_durability::certified_lane_block_strict_retry_reissues_every_barrier
+  kura::tests::progress_witness_durability::direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries
+  kura::tests::progress_witness_durability::initial_preindex_data_sync_failure_rolls_back_payload_before_retry
+  kura::tests::progress_witness_durability::lane_block_application_receipt_strict_retry_reissues_every_barrier
+  kura::tests::progress_witness_durability::predecessor_application_receipt_fails_closed_while_durability_barrier_fails
+  kura::tests::progress_witness_durability::progress_sidecar_mutation_rejects_symlinks_without_external_writes
+  kura::tests::progress_witness_durability::progress_prepend_directory_failure_retries_without_corruption
+  kura::tests::progress_witness_durability::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload
+  kura::tests::progress_witness_durability::unindexed_crash_suffix_is_repaired_before_retry_or_append
+  kura::lane_geometry::tests::first_release_retirement_requires_bound_progress_sidecar_durability
+  kura::lane_geometry::tests::geometry_gc_requires_bound_merge_receipt_durability_before_deletion
   sumeragi::v2_core::tests::prior_view_commit_votes_rebuild_the_exact_locked_round_quorum
   sumeragi::v2_core::tests::higher_tc_lock_prunes_superseded_commit_retransmission
   sumeragi::v2_core::tests::same_lock_tc_resigns_local_commit_and_rebuilds_quorum_without_self_delivery
@@ -655,6 +947,8 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::lock_cleanup_rejects_inconsistent_certified_request_before_mutation
   sumeragi::v2_effects::tests::lock_cleanup_status_failure_preserves_committed_replacement
   sumeragi::v2_effects::tests::higher_round_same_subject_preserves_current_proposal_pipeline_with_same_tag
+  sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_retires_stale_terminal_effects
+  sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work
   sumeragi::v2_effects::tests::decision_installation_frees_losing_capacity_before_fetch
   sumeragi::v2_effects::tests::failed_decision_cleanup_keeps_losing_owner_and_requires_restart
   sumeragi::v2_effects::tests::decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer
@@ -678,6 +972,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_rejects_usize_overflow
   sumeragi::v2_lane_work::tests::native_amx_adapter_opens_with_bounded_production_like_limits
   sumeragi::v2_lane_work::tests::persisted_lane_session_uses_only_selected_qc_signer_pops
+  sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
   sumeragi::v2_lane_work::tests::planner_view_one_binds_rotated_global_leader_to_fresh_lane_view
   sumeragi::v2_lane_work::tests::enabled_nexus_binds_independent_lane_author_distinct_from_global_leader
   sumeragi::v2_lane_work::tests::lane_work_stays_quiescent_until_the_exact_global_prepare_lock
@@ -736,6 +1031,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::successful_auxiliary_drain_republishes_cleared_completion_ownership
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::status::v2_liveness_watchdog_tests::blocker_classifier_has_stable_specific_precedence
+  sumeragi::status::v2_liveness_watchdog_tests::current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit
   sumeragi::status::v2_liveness_watchdog_tests::locked_candidate_load_overlay_precedes_commit_quorum_diagnosis
   sumeragi::status::v2_liveness_watchdog_tests::aged_queue_without_service_debt_does_not_claim_scheduler_starvation
   sumeragi::status::v2_liveness_watchdog_tests::network_ingress_service_clock_distinguishes_stopped_and_active_scans
@@ -750,7 +1046,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
 )
-readonly expected_production_liveness_test_count=168
+readonly expected_production_liveness_test_count=185
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -770,6 +1066,8 @@ for required_test in "${required_production_liveness_tests[@]}"; do
   fi
 done
 production_liveness_modules=(
+  kura::tests::progress_witness_durability
+  kura::lane_geometry::tests
   sumeragi::authoritative_runtime_gate_tests
   sumeragi::v2_core::tests
   sumeragi::v2_core::refinement::tests
@@ -786,6 +1084,8 @@ production_liveness_modules=(
   sumeragi::status::v2_liveness_watchdog_tests
 )
 production_liveness_leg_ids=(
+  production-kura-progress-durability
+  production-kura-lane-geometry
   production-authoritative-ingress
   production-v2-core
   production-v2-core-refinement
@@ -1051,6 +1351,90 @@ record_corridor_log \
   "${chaos_launcher_pipeline_status[0]}" "${chaos_launcher_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$chaos_launcher_contract_log"
 
+if [[ "$profile" == "--release" ]]; then
+  # The production authentication stack is executable release evidence. Run
+  # each complete adversarial corpus under the same relocatable SSH verifier
+  # and exact source tree that the sealed release will use.
+  release_identity_contract_files=(
+    pytests/scripts/sumeragi_v2_release_identity_signature_test.py
+  )
+  release_identity_contract_log="$(corridor_contract_log_path preflight-release-identity)"
+  set +e
+  SUMERAGI_V2_TEST_RELOCATABLE_SSH_KEYGEN_BIN="$IROHA_RELEASE_SSH_KEYGEN_BIN" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+    python3 -m pytest -q -p no:cacheprovider \
+    "${release_identity_contract_files[@]}" 2>&1 | tee "$release_identity_contract_log"
+  release_identity_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_identity_pass_summary="$(
+    grep -Ec '^68 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+      "$release_identity_contract_log" || true
+  )"
+  if ((release_identity_pipeline_status[0] != 0 || release_identity_pipeline_status[1] != 0)) \
+    || [[ "$release_identity_pass_summary" != 1 ]]; then
+    echo "Sumeragi v2 release-identity preflight did not run exactly 68 passing tests (pytest=${release_identity_pipeline_status[0]}, tee=${release_identity_pipeline_status[1]})" >&2
+    exit 1
+  fi
+  record_corridor_log \
+    preflight-release-identity pytest 68 \
+    'SUMERAGI_V2_TEST_RELOCATABLE_SSH_KEYGEN_BIN=$IROHA_RELEASE_SSH_KEYGEN_BIN PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_identity_signature_test.py' \
+    "$release_identity_contract_log" \
+    "${release_identity_pipeline_status[0]}" "${release_identity_pipeline_status[1]}"
+
+  release_bootstrap_contract_files=(
+    pytests/scripts/sumeragi_v2_release_bootstrap_test.py
+  )
+  release_bootstrap_contract_log="$(corridor_contract_log_path preflight-release-bootstrap)"
+  set +e
+  PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
+    "${release_bootstrap_contract_files[@]}" 2>&1 | tee "$release_bootstrap_contract_log"
+  release_bootstrap_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_bootstrap_pass_summary="$(
+    grep -Ec '^71 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+      "$release_bootstrap_contract_log" || true
+  )"
+  if ((release_bootstrap_pipeline_status[0] != 0 || release_bootstrap_pipeline_status[1] != 0)) \
+    || [[ "$release_bootstrap_pass_summary" != 1 ]]; then
+    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 71 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
+    exit 1
+  fi
+  record_corridor_log \
+    preflight-release-bootstrap pytest 71 \
+    "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_contract_files[*]}" \
+    "$release_bootstrap_contract_log" \
+    "${release_bootstrap_pipeline_status[0]}" "${release_bootstrap_pipeline_status[1]}"
+
+  release_bootstrap_validator_contract_files=(
+    pytests/scripts/sumeragi_v2_release_bootstrap_validator_test.py
+  )
+  release_bootstrap_validator_contract_log="$(
+    corridor_contract_log_path preflight-release-bootstrap-validator
+  )"
+  set +e
+  PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
+    "${release_bootstrap_validator_contract_files[@]}" 2>&1 \
+    | tee "$release_bootstrap_validator_contract_log"
+  release_bootstrap_validator_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_bootstrap_validator_pass_summary="$(
+    grep -Ec '^37 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+      "$release_bootstrap_validator_contract_log" || true
+  )"
+  if ((release_bootstrap_validator_pipeline_status[0] != 0 \
+    || release_bootstrap_validator_pipeline_status[1] != 0)) \
+    || [[ "$release_bootstrap_validator_pass_summary" != 1 ]]; then
+    echo "Sumeragi v2 bootstrap-validator preflight did not run exactly 37 passing tests (pytest=${release_bootstrap_validator_pipeline_status[0]}, tee=${release_bootstrap_validator_pipeline_status[1]})" >&2
+    exit 1
+  fi
+  record_corridor_log \
+    preflight-release-bootstrap-validator pytest 37 \
+    "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_validator_contract_files[*]}" \
+    "$release_bootstrap_validator_contract_log" \
+    "${release_bootstrap_validator_pipeline_status[0]}" \
+    "${release_bootstrap_validator_pipeline_status[1]}"
+fi
+
 # Aggregate receipt validation must reject cross-source and post-completion
 # evidence changes before the corridor relies on the final release receipt.
 release_receipt_contract_files=(
@@ -1063,19 +1447,49 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^37 passed in [0-9]+([.][0-9]+)?s$' "$release_receipt_contract_log" || true
+  grep -Ec '^173 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 37 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 173 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 37 \
+  preflight-release-receipt pytest 173 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$release_receipt_contract_log"
+
+# Run the complete fail-closed proof-ledger, Verus-evidence, and TLC-trace
+# normalizer contract corpus before trusting any expensive formal result. The
+# exact pass count rejects deleted, added, skipped, or xfailed fidelity cases.
+proof_fidelity_contract_files=(
+  pytests/scripts/sumeragi_v2_proof_ledger_test.py
+  pytests/scripts/sumeragi_v2_verus_evidence_test.py
+  pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py
+)
+proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
+set +e
+PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
+  "${proof_fidelity_contract_files[@]}" 2>&1 | tee "$proof_fidelity_contract_log"
+proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+proof_fidelity_pass_summary="$(
+  grep -Ec '^440 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+)"
+if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
+  || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 440 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  exit 1
+fi
+record_corridor_log \
+  preflight-proof-fidelity pytest 440 \
+  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
+  "$proof_fidelity_contract_log" \
+  "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
+((corridor_enabled)) || rm -f -- "$proof_fidelity_contract_log"
 
 formal_launcher_contract_files=(
   pytests/scripts/sumeragi_v2_formal_release_test.py
@@ -1129,14 +1543,14 @@ record_corridor_log \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=29
+  readonly expected_corridor_leg_count=35
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
   fi
   corridor_summary_sha256="$(sha256_file "$corridor_summary")"
   corridor_required_tests_sha256="$(sha256_file "$corridor_required_tests")"
-  corridor_java_path="$(python3 -c \
+  corridor_java_path="$(python3 -I -S -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
     "$JAVA_BIN")"
   corridor_java_sha256="$(sha256_file "$corridor_java_path")"
@@ -1211,12 +1625,12 @@ fi
 verify_release_identity "after deterministic seed matrix"
 
 if [[ "$profile" == "--pr" ]]; then
-  python3 scripts/formal/check_sumeragi_v2_proof_ledger.py
+  python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py
   bash scripts/formal/run_sumeragi_v2_harness.sh --unit
   bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
   bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   final_pr_source_manifest_sha256="$(
-    python3 scripts/compute_workspace_source_manifest.py --root "$repo_root"
+    python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
   )"
   if [[ ! "$final_pr_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
     echo "workspace source manifest helper returned an invalid digest after the PR corridor" >&2
@@ -1240,7 +1654,7 @@ if [[ ! -s "$chaos_completion_path_file" ]]; then
 fi
 verify_release_identity "after 100,000-height chaos"
 pre_soak_source_manifest_sha256="$(
-  python3 scripts/compute_workspace_source_manifest.py --root "$repo_root"
+  python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
 if [[ ! "$pre_soak_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "workspace source manifest helper returned an invalid digest before the Taira production soak" >&2
@@ -1261,7 +1675,7 @@ fi
 verify_release_identity "after Taira production soak"
 
 final_release_source_manifest_sha256="$(
-  python3 scripts/compute_workspace_source_manifest.py --root "$repo_root"
+  python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
 if [[ ! "$final_release_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "workspace source manifest helper returned an invalid digest after the production release corridor" >&2
@@ -1273,7 +1687,7 @@ if [[ "$final_release_source_manifest_sha256" != "$release_source_manifest_sha25
 fi
 # Revalidate the deductive evidence after every long-running gate so a TLA+
 # edit during chaos or soak execution cannot inherit stale TLAPS success.
-python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
   --release \
   --evidence target/formal/sumeragi_v2/proof_evidence.json
 verify_release_identity "after final proof-evidence validation"
@@ -1282,44 +1696,39 @@ seed_completion_path="$(<"$seed_completion_path_file")"
 formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
 taira_completion_path="$(<"$taira_completion_path_file")"
-release_receipt_root="${release_source_bound_root}/evidence/release"
-mkdir -p -- "$release_receipt_root"
-release_receipt_dir="$(mktemp -d "${release_receipt_root}/invocation.XXXXXX")"
-release_receipt_path="${release_receipt_dir}/RELEASE_COMPLETED.json"
-release_receipt_partial="${release_receipt_dir}/.RELEASE_COMPLETED.partial.json"
-receipt_pointer_tmp="${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE}.$$"
-terminal_receipt_published=0
-cleanup_unpublished_terminal_receipt() {
-  local status=$?
-  if ((terminal_receipt_published == 0)); then
-    rm -f -- \
-      "$release_receipt_partial" \
-      "$release_receipt_path" \
-      "$receipt_pointer_tmp" \
-      "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE"
-  fi
-  trap - EXIT
-  exit "$status"
-}
-trap cleanup_unpublished_terminal_receipt EXIT
-python3 scripts/write_sumeragi_v2_release_receipt.py \
+verify_release_identity "before aggregate release receipt publication"
+"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/write_sumeragi_v2_release_receipt.py \
   --candidate-identity "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" \
   --sealed-identity "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
+  --release-root "$repo_root" \
+  --bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
+  --bootstrap-evidence-dir "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR" \
+  --bootstrap-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
+  --bootstrap-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
+  --bootstrap-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
+  --expected-bootstrap-completion-sha256 \
+    "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
+  --bootstrap-candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
+  --bootstrap-runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
+  --signature-attestation "$IROHA_RELEASE_SIGNATURE_ATTESTATION" \
+  --signature-transcript "$IROHA_RELEASE_SIGNATURE_TRANSCRIPT" \
+  --signature-raw-commit "$IROHA_RELEASE_SIGNATURE_RAW_COMMIT" \
+  --signature-cargo-lock "$IROHA_RELEASE_SIGNATURE_CARGO_LOCK" \
+  --signature-allowed-signers "$IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS" \
+  --signature-revocation "$IROHA_RELEASE_SIGNATURE_REVOCATION" \
+  --signature-git "$IROHA_RELEASE_GIT_BIN" \
+  --signature-ssh-keygen "$IROHA_RELEASE_SSH_KEYGEN_BIN" \
+  --expected-git-sha256 "$IROHA_RELEASE_EXPECTED_GIT_SHA256" \
+  --expected-ssh-keygen-sha256 "$IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256" \
+  --expected-allowed-signers-sha256 "$IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256" \
+  --expected-revocation-sha256 "$IROHA_RELEASE_EXPECTED_REVOCATION_SHA256" \
+  --expected-signer-fingerprint "$IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
   --corridor-completion "$corridor_completion_path" \
   --formal-completion "$formal_completion_path" \
   --seed-completion "$seed_completion_path" \
   --chaos-completion "$chaos_completion_path" \
   --taira-completion "$taira_completion_path" \
-  --output "$release_receipt_partial"
-verify_release_identity "before aggregate release receipt promotion"
-mv -- "$release_receipt_partial" "$release_receipt_path"
-canonical_release_receipt="$(
-  python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-    "$release_receipt_path"
-)"
-printf '%s\n' "$canonical_release_receipt" >"$receipt_pointer_tmp"
-mv -- "$receipt_pointer_tmp" "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE"
-terminal_receipt_published=1
-trap - EXIT
+  --repository-root "$repo_root" \
+  --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-echo "Sumeragi v2 production release gates passed, including 100,000 heights and the 24-hour Taira soak; receipt=${canonical_release_receipt}" >&2
+echo "Sumeragi v2 production release gates passed, including 100,000 heights and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

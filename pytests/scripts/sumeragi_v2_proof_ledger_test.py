@@ -228,6 +228,16 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     module = load_checker()
     ledger = module.load_ledger()
 
+    application = next(
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] == "application-liveness"
+    )
+    assert application["module"] == "SumeragiV2AsyncLivenessProofs"
+    assert application["symbol"] == "ApplicationCompletionProgressObligation"
+    assert application["status"] == "specified_unproved"
+    assert ledger["machine_checked_completion"] is False
+
     assert tuple(
         obligation["id"]
         for obligation in ledger["obligations"]
@@ -1125,6 +1135,22 @@ def test_effective_lock_acquisition_config_weakening_fails_closed(
     ("old", "new", "expected_error"),
     (
         (
+            "successor_stale_token_bug.cfg 12",
+            "successor_stale_token_bug.cfg 0",
+            "successor-stale-token-bug exactly once with status 12",
+        ),
+        (
+            '"Invariant SuccessorActivationProtocolInvariantProjection is '
+            'violated." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue."',
+            '"Invariant SuccessorActivationProtocolInvariantProjection is '
+            'violated." \\\n'
+            '  "3 states generated, 3 distinct states found, 0 states left '
+            'on queue."',
+            "successor-stale-token-bug must require exact markers",
+        ),
+        (
             "effective_lock_rebind_bug.cfg 12",
             "effective_lock_rebind_bug.cfg 0",
             "effective-lock-rebind-bug exactly once with status 12",
@@ -1160,6 +1186,82 @@ def test_effective_lock_mutation_runner_weakening_fails_closed(
 
     errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
     assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("label", "block"),
+    (
+        (
+            "successor-stale-token-bug",
+            "run_case successor-stale-token-bug \\\n"
+            "  SumeragiV2SuccessorStaleTokenMutation.tla \\\n"
+            "  successor_stale_token_bug.cfg 12 \\\n"
+            '  "Invariant SuccessorActivationProtocolInvariantProjection '
+            'is violated." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue." \\\n'
+            '  "BuggyBeginSuccessorActivation"\n',
+        ),
+        (
+            "successor-stale-token-fixed",
+            "run_case successor-stale-token-fixed \\\n"
+            "  SumeragiV2SuccessorStaleTokenMutation.tla \\\n"
+            "  successor_stale_token_fixed.cfg 0 \\\n"
+            '  "Model checking completed. No error has been found." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue." \\\n'
+            '  "depth of the complete state graph search is 2"\n',
+        ),
+    ),
+)
+def test_successor_stale_token_runner_requires_both_tlc_cases(
+    tmp_path: Path,
+    label: str,
+    block: str,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    assert source.count(block) == 1
+    runner.write_text(source.replace(block, "", 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+
+    assert any(
+        f"must invoke {label} exactly once" in error for error in errors
+    ), errors
+
+
+def test_successor_stale_token_runner_rejects_swapped_red_green_order(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    bug_start = source.index("run_case successor-stale-token-bug")
+    fixed_start = source.index("run_case successor-stale-token-fixed")
+    next_start = source.index("run_case effective-lock-rebind-fixed")
+    bug_block = source[bug_start:fixed_start]
+    fixed_block = source[fixed_start:next_start]
+    runner.write_text(
+        source[:bug_start] + fixed_block + bug_block + source[next_start:],
+        encoding="utf-8",
+    )
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+
+    assert any(
+        "successor stale-token cases must keep bug-before-fixed order" in error
+        for error in errors
+    ), errors
 
 
 def test_successor_activation_and_exact_recovery_refinement_remains_explicit_debt() -> None:
@@ -1209,7 +1311,10 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
         source, "SuccessorActivationStarvationFreedomObligation"
     )
     assert theorem is not None
-    statement = " ".join(theorem[0].split())
+    theorem_parts = re.split(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", theorem[0], maxsplit=1
+    )
+    statement = " ".join(theorem_parts[0].split())
     assert statement == (
         "IndexedChainSpec "
         "=> /\\ SuccessorActivationPendingStructureProperty "
@@ -1219,6 +1324,17 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
         "/\\ SuccessorActivationRankProgressProperty "
         "/\\ SuccessorActivationStarvationFreedomProperty"
     )
+    assert len(theorem_parts) == 2
+    proof = " ".join(theorem_parts[1].split())
+    for dependency in (
+        "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
+        "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
+        "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
+        "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
+        "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
+        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+    ):
+        assert proof.count(dependency) == 1
     assert (
         module._successor_activation_rank_source_fidelity_errors(module.FORMAL_DIR)
         == []
@@ -1749,6 +1865,11 @@ RotatingLeaderProgressProperty(specification) ==
        /\ (gst /\ ResponsiveHonestLeaderViewReached
                  /\ ~ResponsiveNodesDecide)
              ~> ResponsiveNodesDecide
+ApplicationCompletionProgressProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters:
+         (gst /\ NodeHasDecision(node))
+           ~> NodeHasApplication(node)
 ApplicationLivenessProperty(specification) ==
   specification
     => /\ \A node \in AsyncCurrentResponsiveVoters:
@@ -1777,6 +1898,24 @@ PostGstProgressActionEnabled ==
     )
     errors = module._async_proof_architecture_errors(formal_dir)
     assert any("ApplicationLivenessProperty must equal only" in error for error in errors)
+
+    vocabulary.write_text(
+        valid.replace(
+            "ApplicationCompletionProgressProperty(specification) ==\n"
+            "  specification\n"
+            "    => \\A node \\in AsyncCurrentResponsiveVoters:\n",
+            "ApplicationCompletionProgressProperty(specification) ==\n"
+            "  specification\n"
+            "    => \\A node \\in ValidatorIds:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "ApplicationCompletionProgressProperty must equal only" in error
+        for error in errors
+    )
 
     vocabulary.write_text(
         valid.replace(
@@ -1817,6 +1956,47 @@ PostGstProgressActionEnabled ==
     assert any("asynchronous liveness symbol NodeHasDecision" in error for error in errors)
     assert any(
         "asynchronous liveness symbol HeightLivenessProperty" in error
+        for error in errors
+    )
+
+    fidelity_dir = tmp_path / "application-fidelity"
+    fidelity_dir.mkdir()
+    for filename in (
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2LivenessProofs.tla",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / filename, fidelity_dir / filename)
+    assert module._application_completion_source_fidelity_errors(fidelity_dir) == []
+
+    proof_path = fidelity_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    proof_source = proof_path.read_text(encoding="utf-8")
+    proof_path.write_text(
+        proof_source.replace(
+            "         ApplicationCompletionReachesEveryResponsivePrefix\n",
+            "         ApplicationCompletionProgressAppliesFixedResponsiveNode\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
+    assert any(
+        "proof must compose the reviewed application dependencies in order"
+        in error
+        for error in errors
+    )
+
+    proof_path.write_text(
+        mutate_tla_theorem(
+            proof_source,
+            "ApplicationLivenessObligation",
+            "PROOF\n",
+            "OBVIOUS\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
+    assert any(
+        "must have the reviewed deductive application-completion proof" in error
         for error in errors
     )
 
@@ -5260,6 +5440,176 @@ def test_chain_successor_mutations_fail_closed(
 
 
 @pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            '                 "Applied", parentContext, node, successorContext)',
+            '                 "Recovered", parentContext, node, successorContext)',
+        ),
+        (
+            "     /\\ successorActivationPrerequisites[parentContext][node] = {}\n",
+            "",
+        ),
+        (
+            "     /\\ token \\notin successorActivationTokens\n",
+            "",
+        ),
+    ),
+)
+def test_chain_begin_successor_requires_clean_exact_applied_start(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        _mutate_chain_operator(
+            source,
+            "BeginSuccessorActivation",
+            old,
+            new,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any("BeginSuccessorActivation" in error for error in errors), errors
+
+
+def test_successor_stale_token_mutation_artifacts_are_pinned() -> None:
+    module = load_checker()
+
+    assert (
+        module._successor_stale_token_mutation_source_fidelity_errors(
+            module.FORMAL_DIR
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    (
+        "SumeragiV2SuccessorStaleTokenMutation.tla",
+        "successor_stale_token_bug.cfg",
+        "successor_stale_token_fixed.cfg",
+    ),
+)
+def test_successor_stale_token_mutation_artifacts_are_required(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    (formal_dir / artifact).unlink()
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(
+        artifact in error and "missing required" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "SuccessorActivationPipelineDistance",
+            "  [] OTHER -> 0",
+            "  [] OTHER -> 1",
+        ),
+        (
+            "FixedBeginSuccessorActivation",
+            "  /\\ activationPrerequisites = {}\n",
+            "",
+        ),
+        (
+            "FixedBeginSuccessorActivation",
+            "  /\\ AppliedSuccessorActivationToken \\notin activationTokens\n",
+            "",
+        ),
+        (
+            "BuggyBeginSuccessorActivation",
+            "  /\\ ExactDurableParentApplicationWitness\n",
+            "  /\\ ExactDurableParentApplicationWitness\n"
+            "  /\\ activationPrerequisites = {}\n",
+        ),
+        (
+            "MutationFailClosedSuccessorStartup",
+            "  /\\ activationTokens' = {}\n",
+            "  /\\ UNCHANGED activationTokens\n",
+        ),
+        (
+            "FailClosedStrictlyDecreasesRankWitness",
+            "    => SuccessorActivationRank < previousRank",
+            "    => SuccessorActivationRank <= previousRank",
+        ),
+    ),
+)
+def test_successor_stale_token_mutation_model_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorStaleTokenMutation.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("artifact", "line"),
+    (
+        (
+            "successor_stale_token_bug.cfg",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection\n",
+        ),
+        (
+            "successor_stale_token_fixed.cfg",
+            "INVARIANT FailClosedStrictlyDecreasesRankWitness\n",
+        ),
+    ),
+)
+def test_successor_stale_token_mutation_config_mutations_fail_closed(
+    tmp_path: Path,
+    artifact: str,
+    line: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / artifact
+    source = path.read_text(encoding="utf-8")
+    assert line in source
+    path.write_text(source.replace(line, "", 1), encoding="utf-8")
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(artifact in error and "configuration" in error for error in errors)
+
+
+@pytest.mark.parametrize(
     ("symbol", "old", "new", "expected_error"),
     (
         (
@@ -5991,6 +6341,58 @@ def test_successor_activation_starvation_obligation_pins_every_conjunct(
     ), errors
 
 
+def test_successor_activation_starvation_obligation_pins_composition_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "    BY IndexedChainSpecEstablishesSuccessorActivationNonOrphaning\n",
+            "    BY IndexedChainSpecEstablishesSuccessorActivationPendingStructure\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "proof must compose exactly the six reviewed successor-activation "
+        "theorems" in error
+        for error in errors
+    ), errors
+
+
+def test_successor_activation_starvation_obligation_rejects_asserted_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "SuccessorActivationStarvationFreedomObligation",
+            "PROOF\n",
+            "OBVIOUS\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must have the reviewed deductive composition proof" in error
+        for error in errors
+    ), errors
+
+
 def test_successor_activation_starvation_chain_progress_equivalence_is_pinned(
     tmp_path: Path,
 ) -> None:
@@ -6405,6 +6807,16 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "discovery_debt_fixed.cfg 0" in progress_runner
     assert "io_candidate_index_all_jobs_bug.cfg 12" in progress_runner
     assert "io_candidate_index_consensus_only.cfg 0" in progress_runner
+    assert "successor_stale_token_bug.cfg 12" in progress_runner
+    assert "successor_stale_token_fixed.cfg 0" in progress_runner
+    assert (
+        "Invariant SuccessorActivationProtocolInvariantProjection is violated."
+        in progress_runner
+    )
+    assert (
+        "2 states generated, 2 distinct states found, 0 states left on queue."
+        in progress_runner
+    )
     assert "effective_lock_rebind_fixed.cfg 0" in progress_runner
     assert "effective_lock_rebind_bug.cfg 12" in progress_runner
     assert "effective_lock_no_retry_bug.cfg 13" in progress_runner
@@ -6704,6 +7116,31 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         ROOT_DIR / "integration_tests" / "tests" / "taira_public_localnet.rs"
     ).read_text(encoding="utf-8")
 
+    runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    bash = Path(shutil.which("bash") or "").resolve(strict=True)
+    for sealed_value in ("0", "1"):
+        direct_environment = {
+            "HOME": os.environ.get("HOME", str(ROOT_DIR)),
+            "IROHA_RELEASE_SEALED_WORKTREE": sealed_value,
+            "PATH": os.defpath,
+        }
+        direct = subprocess.run(
+            [str(bash), str(runner_path), "--release"],
+            cwd=ROOT_DIR,
+            env=direct_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert direct.returncode != 0
+        assert (
+            "production release requires matching bootstrap path aliases"
+            in direct.stderr
+        )
+
     assert "export IROHA_TEST_REQUIRE_NETWORK=1" in seed_source
     assert "export IROHA_TEST_NETWORK_START_ATTEMPTS=1" in seed_source
     assert "-- --list --ignored" in seed_source
@@ -6712,6 +7149,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert ".seed-matrix.lock" in seed_source
     assert "COMPLETED.tsv" in seed_source
 
+    bootstrap_validation = release_source.index(
+        "validate_sumeragi_v2_release_bootstrap.py"
+    )
     required_network = release_source.index("export IROHA_TEST_REQUIRE_NETWORK=1")
     production_units = release_source.index("required_production_liveness_tests")
     taira_rust_contracts = release_source.index(
@@ -6727,6 +7167,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     receipt_contract_preflight = release_source.index(
         "release_receipt_contract_files=("
     )
+    proof_fidelity_preflight = release_source.index(
+        "proof_fidelity_contract_files=("
+    )
     formal_launcher_preflight = release_source.index(
         "formal_launcher_contract_files=("
     )
@@ -6741,18 +7184,22 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     pre_soak_manifest = release_source.index("pre_soak_source_manifest_sha256")
     taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
-    final_proof_check = release_source.rindex("--release")
+    final_proof_check = release_source.index(
+        "check_sumeragi_v2_proof_ledger.py \\\n  --release \\\n  --evidence"
+    )
     aggregate_receipt = release_source.index(
         "write_sumeragi_v2_release_receipt.py"
     )
     assert (
-        required_network
+        bootstrap_validation
+        < required_network
         < production_units
         < taira_rust_contracts
         < source_contract_preflight
         < seed_launcher_preflight
         < chaos_launcher_preflight
         < receipt_contract_preflight
+        < proof_fidelity_preflight
         < formal_launcher_preflight
         < taira_soak_preflight
         < formal_gate
@@ -6765,16 +7212,45 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         < aggregate_receipt
     )
     assert seed_matrix < pr_branch < pr_fast_formal
+    assert "/tmp/iroha-sumeragi-v2-release-host-" not in release_source
+    assert "IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE" not in release_source
+    assert 'release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"' in release_source
+    assert '--bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION"' in release_source
+    assert '--expected-bootstrap-completion-sha256' in release_source
+    assert '--bootstrap-candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT"' in release_source
+    assert '--bootstrap-runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER"' in release_source
+    assert 'mv -- "$release_receipt_partial"' not in release_source
     production_inventory_end = release_source.index("\n)", production_units)
     production_inventory = tuple(
         line.strip()
         for line in release_source[
             production_units:production_inventory_end
         ].splitlines()
-        if line.strip().startswith("sumeragi::")
+        if line.strip().startswith(("sumeragi::", "kura::"))
     )
-    assert len(production_inventory) == 168
-    assert len(set(production_inventory)) == 168
+    assert len(production_inventory) == 185
+    assert len(set(production_inventory)) == 185
+    for required_test in (
+        "kura::tests::progress_witness_durability::"
+        "absent_progress_namespace_requires_every_directory_barrier",
+        "kura::tests::progress_witness_durability::"
+        "bound_progress_recovery_handles_crash_phases_without_path_escape",
+        "kura::tests::progress_witness_durability::"
+        "direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries",
+        "kura::tests::progress_witness_durability::"
+        "initial_preindex_data_sync_failure_rolls_back_payload_before_retry",
+        "kura::tests::progress_witness_durability::"
+        "progress_sidecar_mutation_rejects_symlinks_without_external_writes",
+        "kura::tests::progress_witness_durability::"
+        "progress_prepend_directory_failure_retries_without_corruption",
+        "kura::tests::progress_witness_durability::"
+        "unindexed_crash_suffix_is_repaired_before_retry_or_append",
+        "kura::lane_geometry::tests::"
+        "first_release_retirement_requires_bound_progress_sidecar_durability",
+        "kura::lane_geometry::tests::"
+        "geometry_gc_requires_bound_merge_receipt_durability_before_deletion",
+    ):
+        assert required_test in production_inventory
     assert (
         "sumeragi::v2_effects::tests::"
         "runtime_step_dispatches_entire_effect_batch_before_returning"
@@ -6795,6 +7271,16 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         "unavailable_locked_candidate_rebinds_latest_consumer_before_retry"
         in production_inventory
     )
+    assert (
+        "sumeragi::v2_effects::tests::"
+        "decision_installed_by_same_runtime_step_retires_stale_terminal_effects"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_effects::tests::"
+        "decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work"
+        in production_inventory
+    )
     production_modules_start = release_source.index("production_liveness_modules=(")
     production_modules_end = release_source.index("\n)", production_modules_start)
     production_modules = tuple(
@@ -6802,10 +7288,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         for line in release_source[
             production_modules_start:production_modules_end
         ].splitlines()
-        if line.strip().startswith("sumeragi::")
+        if line.strip().startswith(("sumeragi::", "kura::"))
     )
-    assert len(production_modules) == 14
-    assert len(set(production_modules)) == 14
+    assert len(production_modules) == 16
+    assert len(set(production_modules)) == 16
+    assert "kura::tests::progress_witness_durability" in production_modules
+    assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
     assert "sumeragi::v2_block_sync::tests" in production_modules
     assert "sumeragi::v2_apply::tests" in production_modules
@@ -6825,6 +7313,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "replay_does_not_resign_commit_superseded_by_higher_tc_lock" in release_source
     assert "fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner" in release_source
     assert "blocker_classifier_has_stable_specific_precedence" in release_source
+    assert (
+        "current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit"
+        in release_source
+    )
     assert "missing required production Sumeragi v2 liveness test" in release_source
     assert "production_ignored_unit_list=" in release_source
     assert "required production Sumeragi v2 liveness test is ignored" in release_source
@@ -6839,14 +7331,57 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "did not run exactly ten passing tests" in release_source
     assert "did not run exactly five passing tests" in release_source
     assert "preflight-chaos-launcher pytest 5" in release_source
+    assert "did not run exactly 68 passing tests" in release_source
+    assert "preflight-release-identity pytest 68" in release_source
+    assert "did not run exactly 71 passing tests" in release_source
+    assert "preflight-release-bootstrap pytest 71" in release_source
     assert "did not run exactly 37 passing tests" in release_source
-    assert "preflight-release-receipt pytest 37" in release_source
+    assert "preflight-release-bootstrap-validator pytest 37" in release_source
+    assert "did not run exactly 173 passing tests" in release_source
+    assert "preflight-release-receipt pytest 173" in release_source
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                37,'
+        '"preflight-release-identity",\n                "pytest",\n                68,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-bootstrap",\n                "pytest",\n                71,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-bootstrap-validator",\n                "pytest",\n                37,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-receipt",\n                "pytest",\n                173,'
+        in receipt_source
+    )
+    assert "did not run exactly 440 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 440" in release_source
+    assert (
+        "^440 passed in [0-9]+([.][0-9]+)?s( "
+        r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
+        in release_source
+    )
+    assert (
+        r'r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s"' in release_source
+    )
+    assert (
+        r'r"(?: \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?"'
+        in release_source
+    )
+    for contract_file in (
+        "pytests/scripts/sumeragi_v2_proof_ledger_test.py",
+        "pytests/scripts/sumeragi_v2_verus_evidence_test.py",
+        "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py",
+    ):
+        assert contract_file in release_source
+        assert contract_file in receipt_source
+    assert (
+        '"preflight-proof-fidelity",\n                "pytest",\n                440,'
         in receipt_source
     )
     assert "did not run exactly twelve passing tests" in release_source
@@ -6862,6 +7397,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
+    assert "expected_corridor_leg_count=35" in release_source
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source

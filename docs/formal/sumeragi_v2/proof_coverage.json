@@ -251,7 +251,7 @@
       "id": "application-liveness",
       "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, it eventually recovers, validates, and applies the certified body without waiting for all other validators to decide",
       "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "ApplicationLivenessObligation",
+      "symbol": "ApplicationCompletionProgressObligation",
       "status": "specified_unproved"
     },
     {

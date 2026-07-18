@@ -391,7 +391,7 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const SAMPLE_ACCOUNT_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 
     fn checked_alias_key_fixture() -> KeyPair {
         KeyPair::try_random().expect("generate checked alias fixture key")

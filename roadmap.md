@@ -25243,6 +25243,13 @@ also joins the safety-WAL intent with the independently fsynced body-store
 validation commitment before startup signing, and a production-path regression
 continues from that restart through broadcast and the exact Prepare vote.
 
+Certified lane-block and application-receipt progress sidecars always enforce
+data, index, immediate-directory, and bottom-up ancestor barriers through the
+authenticated Kura root, independent of ordinary batched `fsync`. Authoritative
+reads re-attest the full binding and fail closed because page-cache readability
+does not prove durability. Pending alternate QCs and proofs of possession are
+fully authenticated and validated before same-proposal retirement.
+
 Body-pipeline completions now have one evidence-preserving ownership domain
 across runtime ingress and the adapter's Busy-deferred queues. Exact retries
 compare the complete manifest and durable/validated receipts, including
@@ -25267,10 +25274,12 @@ acknowledgement; second-callback failure, mixed decided-local work, corrupt
 indexes, and post-commit status failure are pinned by adversarial tests.
 Certified-body request conflicts remain nonfatal, and conflicting
 Commit-certificate responses preserve outstanding discovery for retry. The
-gate pins 168 required tests across 14 modules, including exact composite
+gate pins 185 required tests across 16 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
-catch-up. Before the three-corridor expansion, all
+catch-up. The added watchdog regression distinguishes a remote partial timeout
+pool, a durable local current-view timeout path, and exact same-/older-view
+locked Commit recovery. Before the three-corridor expansion, all
 twelve then-owning modules were green on the then-current unsealed source:
 56/56 reducer/core, 10/10 refinement, 9/9 reducer source-link, 57/57 adapter,
 26/26 apply, 115/115 effects, 60/60 lane work, 40/40 runtime, 29/29 recovery,
@@ -25281,12 +25290,27 @@ entry. The latest expanded unsealed discovery found all 162 then-required names
 among 6,744 tests with none missing or ignored, and the authoritative-ingress
 module is green at 30/30. Two newly pinned replay-FIFO names plus their two
 source-linked refinement witnesses raised the inventory to 166, and the two
-effective-lock acquisition regressions now raise it to 168. The new
+effective-lock acquisition regressions raised it to 168. Two same-runtime-step
+Decision reconciliation regressions now raise it to 170. The new
 refinement witnesses are green at 2/2, the complete source-link module at
-11/11, and the isolated reducer library at 96/96. Current mutable-source
-discovery finds all 168 exact names among 6,750 library tests with none missing
-or ignored, and direct exact execution is green at 168/168. The committed,
-detached, source-sealed serial rerun is still pending. The
+11/11, and the isolated reducer library at 96/96. The preceding mutable-source
+discovery found all 168 then-required names among 6,750 library tests with none
+missing or ignored, and direct exact execution was green at 168/168. Fresh
+mutable-tree discovery found all 170 then-required names exactly once among
+6,756 library tests, with no overlap with the four ignored tests. The new 171st
+classifier is green exactly 1/1, in the watchdog module at 21/21, and in the
+complete status module at 29/29. Eleven Kura progress-witness durability
+regressions, two lane-geometry durability regressions, and one lane-work
+alternate-certificate retirement regression raise the current inventory to
+185 names across 16 modules. Fresh full discovery and serial
+execution are pending for that inventory; the preceding 170-name
+corridor was green with one passing row per name. The committed, detached,
+source-sealed serial rerun remains pending. A fresh exact isolated-network run after the status-registry
+isolation change also passed the authoritative four-validator genesis test 1/1
+in 266.01 seconds with networking required, one startup attempt, and the exact
+deterministic scenario seed; all voters applied genesis and exposed the common
+awaiting-proposal successor height. It remains mutable-tree diagnostic evidence
+and does not replace the four-seed PR or 32-seed sealed release matrices. The
 one-shot token binds successor identity to the exact
 verified successor `HeightContextId`, and the adversarial rejection table
 retains the applied predecessor on a same-height foreign-context snapshot. A
@@ -25313,6 +25337,19 @@ diagnostic is not a clean signed, checkout-manifest-bound source-attested
 release receipt and therefore does not reduce the outstanding four-seed PR,
 32-seed release, strict-proof, clean chaos-attestation, or 24-hour soak gates.
 
+The exact current-tree restart and timeout-rotation scenarios are separately
+green: `authoritative_v2_finalizes_through_validator_restart` passed 1/1 in
+165.05 seconds after replaying heights 1 through 4, and
+`taira_npos_leader_timeout_commits_within_rotation_bound` passed 1/1 in 90.00
+seconds. The historical distinct-subject PrepareQC attempt remains red. It
+split the four
+validators 2/2 across QC views 1 and 0, but both QCs named the same block
+subject, so the harness did not construct its required distinct-subject state
+within 25 seconds. The retained network is
+`/tmp/iroha-divergent-prepareqc-retained-20260718/irohad_test_network_M4CsaG`;
+the first message-control/harness divergence is under causal audit and must be
+fixed before this scenario can reduce any matrix debt.
+
 Ten arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
 uniqueness, lock monotonicity, external validity, certified-body availability,
 certificate uniqueness, agreement, conflicting-CommitQC exclusion, and crash
@@ -25332,7 +25369,7 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 168 production-liveness tests across 14
+completion. The PR gate inventories 185 production-liveness tests across 16
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -25353,41 +25390,72 @@ queues local work, rotates restart across five persistence/application
 boundaries every 64th height, rejects stale-generation completions, and binds
 exact duplicate, reordered, and count-only/power-only negative counters. Its
 post-hardening 320-height smoke and exact 100,000-height harness run are green;
-the latter completed in 57.52 seconds with every schema-v2 counter matched.
+the prior run completed in 57.52 seconds with every schema-v2 counter matched,
+and a fresh mutable-source rerun completed all 100,000 heights in 171.97
+seconds under concurrent build/proof load with every exact counter matched.
 The checkout-manifest-bound rerun remains outstanding until these changes are
 available as a signed clean commit.
 
-Production release execution is now structurally isolated from mutable source:
-active Git operations are rejected, the candidate must be one clean committed
-HEAD/index/worktree plus a regular ignored `Cargo.lock`, and the complete
-corridor re-enters from a unique detached read-only worktree with external
-outputs. The chmod seal is a cooperative guard against ordinary writes, not a
-same-UID security boundary; detached committed source and identity checkpoints
-remain authoritative. The manifest binds modes of enumerated file/symlink
-entries, while the seal walk checks directories and rejects escaping or
-writable-output symlinks plus hard-linked source files. The original checkout
-manifest and sealed manifest are both retained; every child completion uses the
-latter, while one aggregate receipt also binds original HEAD/tree/`Cargo.lock`,
-all pre-network legs and their exact 168-test inventory, the formal harness
-lock/toolchain, matrix, chaos, and soak evidence. The formal leg archives a
-tee-captured all-legs log plus `proof_coverage.json` and
-`proof_evidence.json`; receipt publication reruns the official proof checker.
-Every matrix summary row hashes its exact Cargo log, and receipt publication
-revalidates all 128 scenario and exact-seed libtest markers. The 100,000-height
-launcher now requires an explicit 50,000-per-mode completion marker and
-publishes its source-bound log receipt, and the soak promotes an
-invocation-local `.partial` JSON only after validation and final identity
-checks, with exact HEAD/tree/`Cargo.lock` plus the canonical JSON and full
-Cargo/libtest log hashes in its completion. Cargo/rustc are
-resolved to the repository's pinned 1.93.1 toolchain after Git/Rust semantic
-environment cleanup and run with an isolated configuration-free `CARGO_HOME`;
-exact tool paths, versions, and hashes are receipt-bound. The receipt contract
-is cooperative self-consistency rather than authenticated host/runner
-provenance: malformed, incomplete, cross-source, semantically mismatched, and
-digest-mismatched evidence observed during generation is rejected, but a
-same-UID actor can synthesize a fully self-consistent transcript and recompute
-its hashes. The remaining work is to discharge the proof debts below and then
-execute the hardened gates, not to accept evidence from the mutable caller.
+Production release execution is now structurally isolated from mutable source
+and authenticated before candidate code runs. Active Git operations are
+rejected, the candidate must be one clean committed HEAD/index/worktree plus a
+regular ignored `Cargo.lock`, and an operator-authenticated out-of-tree
+bootstrap must run under a protected `python3 -I -S`. The bootstrap digest-binds
+and archives its protected Python, Git, OpenSSH `ssh-keygen`, Bash, manifest and
+identity helpers, one-entry unbounded SSH allowed-signers policy, and revocation
+policy; it authenticates the exact signed candidate and bound runner before
+launch. Direct production-runner entry fails before another candidate helper.
+The bootstrap neither times out nor output-captures the runner and never
+signals its process group; an escaped internal deadline stays visibly
+incomplete.
+Its exact `PATH` consists of the archived protected tools plus a private
+`runner-bin` populated only by exact-target symlinks from a digest-pinned
+canonical manifest. Tool sources and all ancestors must be trusted-owner and
+non-writable. Runner stdout/stderr inherit owner-private regular files, so a
+blocked bootstrap stream cannot stall the runner; normal exit seals them
+read-only, while bootstrap-only interruption preserves active logs without an
+external completion marker. The successful runner retains its sealed source
+and identity for independent replay.
+The complete corridor then re-enters from a unique detached read-only worktree
+with external outputs. The chmod seal is a cooperative guard against ordinary
+writes, while detached committed source, the external bootstrap marker, and
+repeated identity checkpoints remain authoritative. The manifest binds modes
+of enumerated file/symlink entries, while the seal walk checks directories and
+rejects escaping or writable-output symlinks plus hard-linked source files.
+
+The original checkout manifest and sealed manifest are both retained; every
+child completion uses the latter. One canonical aggregate receipt binds
+original HEAD/tree/`Cargo.lock`, all 35 pre-network legs and their exact
+185-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+evidence. The formal leg archives a tee-captured all-legs log plus
+`proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
+official proof checker. Every matrix summary row hashes its exact Cargo log,
+and receipt publication revalidates all 128 scenario and exact-seed libtest
+markers. The 100,000-height launcher requires an explicit 50,000-per-mode
+completion marker and publishes its source-bound log receipt, and the soak
+promotes an invocation-local `.partial` JSON only after validation and final
+identity checks, with exact HEAD/tree/`Cargo.lock` plus the canonical JSON and
+full Cargo/libtest log hashes in its completion. Cargo/rustc resolve to the
+repository's pinned 1.93.1 toolchain after Git/Rust semantic-environment cleanup
+and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
+versions, and hashes are receipt-bound.
+
+The receipt is published only at the exact bootstrap-owned path with mode
+`0400`, one link, exclusive staging, complete writes, no-clobber linking, and
+identity-checked cleanup. Publication revalidates and synchronizes every bound
+artifact, then every evidence directory bottom-up, and repeats the transitive
+closure with the receipt included; any file, directory, or `fsync` failure is
+fail-closed. The bootstrap validates the retained source and invokes its
+separately protected archived receipt validator in exact `--verify-existing`
+mode before publishing a no-clobber external marker bound to the receipt,
+source identity, validator, and sealed runner logs. There is no mutable pointer.
+Malformed, incomplete, cross-source, semantically mismatched, and
+digest-mismatched evidence is rejected. This authenticates the
+signed candidate and runner relative to operator-protected inputs, but does not
+attest the host image, pre-Python dynamic loader, same-UID processes, trusted
+ancestor owners, or storage which violates `fsync`. The remaining work is to
+discharge the proof debts below and then execute the hardened gates, not to
+accept evidence from the mutable caller.
 
 The 46-entry ledger contains 24 `tlaps_proved`, 15 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
@@ -25411,9 +25479,14 @@ remains false. Outstanding release work:
   freedom, timeout-view progress, responsive-leader rotation, and application
   liveness. Rotation must reach a view in which the responsive honest scheduled
   leader itself is active (or decide first), and application must be proved per
-  responsive validator without waiting for every peer to decide. Generation-
-  scoped delivery and the typed 18-action fairness refinement are already
-  `tlaps_proved`; the latter is strict-green at 1,143/1,143 obligations. Async
+  responsive validator without waiting for every peer to decide. The aggregate
+  application theorem is now source-derived from the proofless per-validator
+  completion obligation by durable monotonicity and finite responsive-voter
+  induction; the remaining debt is the actual per-validator
+  recovery/validation/application pipeline, not a global apply barrier.
+  Generation-scoped delivery and the typed 18-action fairness refinement are
+  already `tlaps_proved`; the latter is strict-green at 1,143/1,143
+  obligations. Async
   type closure may be promoted only after runner preservation, deadlock freedom
   only after async type closure, and starvation only after service-rank
   progress.
@@ -25455,9 +25528,14 @@ remains false. Outstanding release work:
   production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
   corridor against the final source tree. The last complete discovery found all
-  166 then-required tests with none missing or ignored; the inventory now
-  requires 168 after adding future-completion and rebound-retry coverage, so a
-  fresh exact discovery remains pending. The 14-module pre-network
+  168 then-required tests with none missing or ignored. Fresh mutable-tree
+  discovery and serial execution covered all 170 then-required tests after
+  adding the same-step Decision reconciliation cases. The new timeout-path
+  classifier is green in focused and full status-module execution; eleven Kura
+  progress-witness durability names, two lane-geometry durability names, and
+  one lane-work alternate-certificate retirement name raise the current
+  inventory to 185. Fresh full discovery/serial execution and the clean
+  source-sealed rerun remain pending for all 185 names. The 16-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
@@ -25468,8 +25546,13 @@ remains false. Outstanding release work:
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
 - execute and archive a clean 32-seed release matrix for four-validator
-  genesis, restart, timeout rotation, and divergent PrepareQC convergence,
-  including the 50-second Taira bound;
+  genesis, restart, timeout rotation, and same-subject locked-body re-proposal
+  convergence after ordered release of captured quorum evidence, including the
+  50-second Taira bound; the explicit quorum releases are increasing captured
+  subsequences rather than FIFO prefixes, while only the final drain has a FIFO
+  fence;
+  add a separate adversarial distinct-subject PrepareQC scenario, because the
+  same-subject matrix leg intentionally does not discharge that obligation;
 - reproduce and archive the green 100,000-height permissioned/NPoS
   chain-prefix chaos gate inside the source-manifest-bound release corridor;
   the current queued-work/restart schema is green in the standalone 320-height

@@ -122,16 +122,18 @@ ledger.
   productive step that grows height evidence, consumes concrete deadline debt,
   or decreases/exits a protected candidate or Serve-occurrence rank. The weaker
   scheduler-enabled lemma cannot discharge it, so the productive obligation
-  remains explicit proof debt. `StarvationFreedomObligation` likewise
-  has a source proof body but cannot be promoted ahead of its still-unproved
+  remains explicit proof debt. `StarvationFreedomObligation` likewise remains
+  proofless: its conditional precursor lemmas have source proof bodies, but the
+  release-facing theorem cannot be closed ahead of its still-unproved
   service-rank prerequisite. The durable progress
   witness and the remaining stable-suffix liveness declarations are likewise
   explicit debt, so this is not a machine-checked completion claim.
   The Core vote-delivery relation and normalized trace replay encode the exact
-  durable-lock Commit gate and post-WAL pool pruning. The repaired full strict
-  induction discharged all 7,826 obligations, and the downstream Core safety
-  wrapper discharged all 565 obligations. That closes only the historical
-  TC-lock and timeout-protection ledger entries; the asynchronous liveness
+  durable-lock Commit gate and post-WAL pool pruning. A recorded strict run
+  made before the current edits discharged all 7,826 induction obligations and
+  all 565 downstream Core safety obligations. Those historical submodule
+  results close only the historical TC-lock and timeout-protection ledger
+  entries; the asynchronous liveness
   proof-premise repairs remain outstanding.
   Logical views are unbounded in the deductive liveness abstraction; finite
   TLC configurations remain counterexample searches only.
@@ -325,8 +327,9 @@ quantified actions as `AsyncFairnessAt`. `AsyncFairActionsRefineAsyncNext` is
 the typed source claim; the dedicated
 `SumeragiV2AsyncFairnessRefinementProofs!AsyncFairActionsRefineAsyncNextObligation`
 theorem proves that every member is one canonical `AsyncNext` transition at a
-Core-plus-scheduler typed state. Its fully decomposed strict run is green at
-1,143/1,143 obligations. The Core transition relation is deliberately not
+Core-plus-scheduler typed state. A recorded strict submodule run was green at
+1,143/1,143 obligations; it is not current aggregate release evidence. The
+Core transition relation is deliberately not
 conjoined inside each `WF` target: doing so makes TLC re-search unrelated Core
 branches while evaluating `ENABLED`. The structural checker pins the four
 frames, all 18 action classifications, both quantifier inventories, the typed
@@ -362,9 +365,15 @@ rotating-leader, and application liveness declarations remain
 `specified_unproved` as well. The rotating-leader declaration is a two-stage
 claim: reach a view where the responsive honest scheduled leader itself is
 active (or decide first), then decide from that leader state. The application
-declaration contains an independent post-GST decision-to-application leadsto
-for each responsive validator, plus the aggregate clause used by height
-composition. The concrete genesis chain product separately
+ledger entry now names the proofless per-validator
+`ApplicationCompletionProgressObligation`: after GST, each responsive
+validator's own durable decision must lead to its own durable application.
+`ApplicationLivenessObligation` derives the aggregate clause used by height
+composition from that premise using durable application monotonicity, the
+frozen responsive-voter set, and finite induction over validator prefixes. It
+does not add a global apply barrier, discharge the per-validator pipeline, or
+promote the ledger entry before a fresh pinned strict proof. The concrete
+genesis chain product separately
 records its first-successor handoff, when a successor height exists, as
 `GenesisHeightSuccessorHandoffObligation`. That theorem also has a source proof
 body but remains `specified_unproved` until the strict proof succeeds after
@@ -380,15 +389,22 @@ recovery resumes the one-shot suffix. Its rank, enabledness, fairness, and
 starvation clauses range over responsive validators only. An honest validator
 outside `Responsive` may retain work queued before GST without violating the
 conditional production target; the model does not manufacture local-worker
-fairness for that validator.
+fairness for that validator. The release-facing activation theorem now has a
+source proof body that composes its six exact structure, rank, non-orphaning,
+stability, progress, and starvation theorems. It remains ledgered
+`specified_unproved` until the complete module passes the pinned strict TLAPS
+runner; source composition and SANY parsing are not a machine-checked
+discharge.
 The chain refinement now models an indexed family of authoritative
 `AsyncSpecAt` instances and exposes the exact
-`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. Its source proof body
-now composes responsive-validator instance activation and exact-action fairness
-on the all-joined
-suffix, authenticated exact recovery for responsive validators absent from
-an old roster, and finite-height temporal induction. The whole theorem remains
-explicit `specified_unproved` debt until a fresh pinned strict proof succeeds
+`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. The conditional
+indexed composition immediately above it has a source proof body covering
+responsive-validator instance activation and exact-action fairness on the
+all-joined suffix, authenticated exact recovery for responsive validators
+absent from an old roster, and finite-height temporal induction. The
+release-facing theorem itself remains proofless, explicit
+`specified_unproved` debt until its prerequisites are discharged and a fresh
+pinned strict proof succeeds
 after rotating-leader, application liveness, successor-activation starvation,
 and that production-refinement seam are proved. Its exact completion
 predicate requires application
@@ -458,7 +474,7 @@ rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 168 named tests
+Before network startup, the executable wrapper inventories 171 named tests
 across 14 Rust modules. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -472,25 +488,36 @@ promotion, and the aggregate release receipt. These execution contracts are
 not deductive proof. Strict proof completion, the complete PR corridor, the
 source-bound chaos run, and the 24-hour Taira-profile soak remain pending.
 
-Production release execution accepts only a clean committed HEAD, reproduces
-it in a detached read-only worktree, and records both the original checkout
-manifest and the permission-aware sealed manifest. Manifest modes cover
-enumerated file/symlink entries; a separate seal walk checks directories and
-rejects source symlink escapes, writable-output targets, and hard-linked regular
-files. Child builds and evidence bind the sealed manifest actually compiled;
-the aggregate receipt additionally binds original HEAD/tree/`Cargo.lock`, all
-29 pre-network legs and the exact 168-test inventory, the pinned harness lock
-and resolved toolchain, the formal ledger/evidence/log, all matrix logs, chaos
-log, and exact-identity soak evidence. The chmod
-seal is a cooperative ordinary-write guard rather than a same-UID security
-boundary. The complete operator contract is documented in
+Production release execution accepts only a clean committed HEAD and must be
+entered through the operator-authenticated out-of-tree bootstrap under a
+protected `python3 -I -S`; direct candidate-runner entry fails before another
+candidate helper. The bootstrap authenticates and privately archives its exact
+tool/helper/policy inputs and the candidate's SSH-signed identity before it
+launches the bound runner under a closed environment. It imposes no outer
+runner timeout or output-capture bound and never signals the runner process
+group.
+
+The runner reproduces the candidate in a detached read-only worktree and
+records both the original checkout manifest and the permission-aware sealed
+manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
+walk checks directories and rejects source symlink escapes, writable-output
+targets, and hard-linked regular files. Child builds and evidence bind the
+sealed manifest actually compiled. The canonical aggregate receipt additionally
+binds original HEAD/tree/`Cargo.lock`, all 33 pre-network legs and the exact
+171-test inventory, the pinned harness lock and resolved toolchain, the formal
+ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
+evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
+pointer; after success the external bootstrap independently validates it and
+publishes a separate no-clobber completion marker. The complete operator
+contract is documented in
 [`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
 
-The release transcript contract provides cooperative self-consistency only.
-It rejects malformed, incomplete, cross-source, semantically mismatched, or
-digest-mismatched evidence observed during receipt generation; it is not a
-cryptographic attestation of the host or runner. A same-UID actor can synthesize
-a fully self-consistent transcript and recompute its hashes. Cargo/rustc are
+This authenticates the signed candidate and runner relative to the operator's
+protected inputs, but is not remote host attestation. The host image,
+pre-Python dynamic loader, same UID, trusted ancestor owners, and correct
+storage `fsync` semantics remain external prerequisites. Malformed, incomplete,
+cross-source, semantically mismatched, or digest-mismatched evidence is
+rejected. Cargo/rustc are
 resolved to the repository-pinned 1.93.1 toolchain, run with sanitized semantic
 environment overrides and an isolated configuration-free `CARGO_HOME`, and
 their exact paths, versions, and hashes are retained in the corridor receipt.
@@ -522,8 +549,9 @@ subscripts it with the receipt variables, and `ChainEpochTlcNext` freezes Core
 while a directly constructed receipt relation advances. The deductive
 `ChainEpochNext` and `ChainEpochSpec` are unchanged, and
 `ChainEpochTlcReceiptNextRefinesChainEpochNext` checks that every optimized
-harness receipt is an ordinary deductive step. Its focused strict slice is
-green at 5/5 obligations. Simulation
+harness receipt is an ordinary deductive step. A recorded focused strict slice
+was green at 5/5 obligations; it is not current aggregate release evidence.
+Simulation
 transcripts must contain one seeded header, one initial-state marker, at least
 one progress marker, one exact single- or multi-unit duration footer, status
 zero, and no TLC error. Before those searches, the gate runs the original eight

@@ -3057,18 +3057,18 @@ mod tests {
             .map(|validator| validator.validator.clone())
             .collect::<Vec<_>>();
 
-        let count_error = FairV2Ingress::new(4, 3 * 1024, 1024, 0)
+        let count_error = FairV2Ingress::new(6, 3 * 1024, 1024, 0)
             .configure_roster(validators.clone())
-            .expect_err("two validators require five protected message slots");
+            .expect_err("two validators require seven protected message slots");
         assert!(matches!(
             ingress_capacity_error(count_error),
             V2RunnerError::IngressCapacity {
-                configured: 4,
-                required: 5,
+                configured: 6,
+                required: 7,
             }
         ));
 
-        let byte_error = FairV2Ingress::new(5, 2 * 1024, 1024, 0)
+        let byte_error = FairV2Ingress::new(7, 2 * 1024, 1024, 0)
             .configure_roster(validators)
             .expect_err("two validators and untrusted traffic require three byte partitions");
         assert!(matches!(

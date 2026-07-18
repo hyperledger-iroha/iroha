@@ -30,7 +30,7 @@
           "label_regex": "^[a-z0-9]{3,}$",
           "base_price": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 500000000
+            "amount": "0.5"
           },
           "auction_kind": "vickrey_commit_reveal",
           "dutch_floor": null,
@@ -78,7 +78,7 @@
           "label_regex": "^[a-z0-9]{4,}$",
           "base_price": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 480
+            "amount": "480"
           },
           "auction_kind": "vickrey_commit_reveal",
           "dutch_floor": null,
@@ -90,12 +90,12 @@
           "label_regex": "^[a-z]{2}$",
           "base_price": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 4000
+            "amount": "4000"
           },
           "auction_kind": "dutch_reopen",
           "dutch_floor": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 500
+            "amount": "500"
           },
           "min_duration_years": 1,
           "max_duration_years": 2
@@ -135,7 +135,7 @@
           "label_regex": "^[a-z0-9]{3,}$",
           "base_price": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 60
+            "amount": "60"
           },
           "auction_kind": "vickrey_commit_reveal",
           "dutch_floor": null,

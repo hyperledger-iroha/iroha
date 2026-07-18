@@ -189,7 +189,7 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     ),
     "application-liveness": (
         "SumeragiV2AsyncLivenessProofs",
-        "ApplicationLivenessObligation",
+        "ApplicationCompletionProgressObligation",
     ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
@@ -347,7 +347,7 @@ ASYNC_LIVENESS_OBLIGATIONS = {
     "post-gst-starvation-freedom": "StarvationFreedomObligation",
     "timeout-view-liveness": "TimeoutViewProgressObligation",
     "rotating-leader-liveness": "RotatingLeaderProgressObligation",
-    "application-liveness": "ApplicationLivenessObligation",
+    "application-liveness": "ApplicationCompletionProgressObligation",
 }
 ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
@@ -357,7 +357,7 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "post-gst-starvation-freedom": "StarvationFreedomProperty",
     "timeout-view-liveness": "TimeoutViewProgressProperty",
     "rotating-leader-liveness": "RotatingLeaderProgressProperty",
-    "application-liveness": "ApplicationLivenessProperty",
+    "application-liveness": "ApplicationCompletionProgressProperty",
 }
 
 # These obligations are release-architecture seams, not declarations that may
@@ -1690,6 +1690,15 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "PreGstCrash",
                 "UNCHANGED AsyncAllVars",
             ),
+            "ApplicationCompletionProgressImpliesAggregateApplication": (
+                "ApplicationCompletionReachesEveryResponsivePrefix",
+                "AsyncSpecAlwaysKeepsFrozenContext",
+                "FrozenContextFullApplicationPrefixImpliesResponsiveApply",
+            ),
+            "ApplicationLivenessObligation": (
+                "ApplicationCompletionProgressObligation",
+                "ApplicationCompletionProgressImpliesAggregateApplication",
+            ),
             "OneHeightCompletionObligation": (
                 "RotatingLeaderProgressObligation",
                 "ApplicationLivenessObligation",
@@ -1743,6 +1752,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"ResponsiveNodesDecide) /\ (gst /\ "
                 r"ResponsiveHonestLeaderViewReached /\ "
                 r"~ResponsiveNodesDecide) ~> ResponsiveNodesDecide"
+            ),
+            "ApplicationCompletionProgressProperty": (
+                r"specification => \A node \in "
+                r"AsyncCurrentResponsiveVoters: (gst /\ "
+                r"NodeHasDecision(node)) ~> NodeHasApplication(node)"
             ),
             "ApplicationLivenessProperty": (
                 r"specification => /\ \A node \in "
@@ -2108,6 +2122,144 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                         f"{safety_path}: asynchronous liveness symbol {symbol} "
                         "may not be redeclared in the safety proof module"
                     )
+    return errors
+
+
+def _application_completion_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the per-validator application debt and its finite composition."""
+
+    proof_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    vocabulary_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if not proof_path.is_file() or not vocabulary_path.is_file():
+        return []
+
+    proof_source = proof_path.read_text(encoding="utf-8")
+    vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+
+    operator_contracts = {
+        "ApplicationCompletionProgressProperty": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters: "
+            "(gst /\\ NodeHasDecision(node)) ~> NodeHasApplication(node)"
+        ),
+        "ResponsiveApplicationPrefixAt": (
+            "\\A node \\in AsyncVotersAt(initialContext) \\cap (0..limit): "
+            "NodeHasApplication(node)"
+        ),
+    }
+    for symbol, exact_body in operator_contracts.items():
+        is_vocabulary = symbol == "ApplicationCompletionProgressProperty"
+        source = vocabulary_source if is_vocabulary else proof_source
+        path = vocabulary_path if is_vocabulary else proof_path
+        extracted = _top_level_operator_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing application-completion operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    proofless_symbol = "ApplicationCompletionProgressObligation"
+    proofless = _top_level_theorem_body(proof_source, proofless_symbol)
+    exact_proofless_statement = (
+        "\\A initialContext: ApplicationCompletionProgressProperty("
+        "AsyncSpecAt(initialContext))"
+    )
+    if proofless is None:
+        errors.append(f"{proof_path}: missing {proofless_symbol}")
+    else:
+        body, line = proofless
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        normalized = " ".join(parts[0].split())
+        if normalized != exact_proofless_statement:
+            errors.append(
+                f"{proof_path}:{line}: {proofless_symbol} must state only "
+                f"{exact_proofless_statement!r}; found {normalized!r}"
+            )
+        if len(parts) != 1:
+            errors.append(
+                f"{proof_path}:{line}: {proofless_symbol} must remain the "
+                "explicit proofless per-validator application debt"
+            )
+
+    reviewed_proofs = {
+        "ApplicationCompletionProgressImpliesAggregateApplication": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ApplicationCompletionProgressProperty( "
+            "AsyncSpecAt(initialContext)) => (gst /\\ ResponsiveNodesDecide) "
+            "~> ResponsiveNodesApply",
+            (
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "ModelConfigurationMakesLastValidatorNatural",
+                "ApplicationCompletionReachesEveryResponsivePrefix",
+                "AsyncSpecAlwaysKeepsFrozenContext",
+                "FrozenContextFullApplicationPrefixImpliesResponsiveApply",
+            ),
+        ),
+        "ApplicationLivenessObligation": (
+            "\\A initialContext: ApplicationLivenessProperty("
+            "AsyncSpecAt(initialContext))",
+            (
+                "ApplicationCompletionProgressObligation",
+                "ApplicationCompletionProgressImpliesAggregateApplication",
+            ),
+        ),
+    }
+    forbidden_assertions = re.compile(
+        r"(?i)\b(?:AXIOM|OBVIOUS|OMITTED)\b"
+    )
+    for symbol, (exact_statement, dependencies) in reviewed_proofs.items():
+        extracted = _top_level_theorem_body(proof_source, symbol)
+        if extracted is None:
+            errors.append(f"{proof_path}: missing {symbol}")
+            continue
+        body, line = extracted
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        normalized = " ".join(parts[0].split())
+        if normalized != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized!r}"
+            )
+        if len(parts) != 2 or re.search(r"(?m)^[ \t]*PROOF\b", body) is None:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must have the reviewed "
+                "deductive application-completion proof"
+            )
+            continue
+        proof = parts[1]
+        if forbidden_assertions.search(proof):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} may not replace the reviewed "
+                "application-completion proof with an asserted result"
+            )
+        positions = [proof.find(dependency) for dependency in dependencies]
+        if any(position < 0 for position in positions) or positions != sorted(
+            positions
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof must compose the reviewed "
+                f"application dependencies in order {dependencies!r}"
+            )
+        repeated = [
+            dependency for dependency in dependencies if proof.count(dependency) != 1
+        ]
+        if repeated:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof must consume each reviewed "
+                f"application dependency exactly once; found {repeated!r}"
+            )
+
     return errors
 
 
@@ -2638,7 +2790,7 @@ def _effective_lock_acquisition_source_fidelity_errors(
 
 
 def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[str]:
-    """Require the production mutation runner to expect each exact outcome."""
+    """Pin exact successor and effective-lock production mutation outcomes."""
 
     path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
     if not path.is_file():
@@ -2647,7 +2799,33 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
     normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
     cases = (
         (
+            "successor-stale-token-bug",
+            "SumeragiV2SuccessorStaleTokenMutation.tla",
+            "successor_stale_token_bug.cfg",
+            "12",
+            (
+                "Invariant SuccessorActivationProtocolInvariantProjection "
+                "is violated.",
+                "2 states generated, 2 distinct states found, 0 states left "
+                "on queue.",
+                "BuggyBeginSuccessorActivation",
+            ),
+        ),
+        (
+            "successor-stale-token-fixed",
+            "SumeragiV2SuccessorStaleTokenMutation.tla",
+            "successor_stale_token_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "2 states generated, 2 distinct states found, 0 states left "
+                "on queue.",
+                "depth of the complete state graph search is 2",
+            ),
+        ),
+        (
             "effective-lock-rebind-fixed",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
             "effective_lock_rebind_fixed.cfg",
             "0",
             (
@@ -2658,6 +2836,7 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
         ),
         (
             "effective-lock-rebind-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
             "effective_lock_rebind_bug.cfg",
             "12",
             (
@@ -2667,6 +2846,7 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
         ),
         (
             "effective-lock-no-retry-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
             "effective_lock_no_retry_bug.cfg",
             "13",
             (
@@ -2677,6 +2857,7 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
         ),
         (
             "effective-lock-future-completion-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
             "effective_lock_future_completion_bug.cfg",
             "12",
             (
@@ -2687,10 +2868,10 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
     )
     errors: list[str] = []
     offsets: list[int] = []
-    for label, config, expected_status, markers in cases:
+    for label, model, config, expected_status, markers in cases:
         pattern = re.compile(
             rf"run_case\s+{re.escape(label)}\s+"
-            r"SumeragiV2EffectiveLockAcquisitionMutation\.tla\s+"
+            rf"{re.escape(model)}\s+"
             rf"{re.escape(config)}\s+{re.escape(expected_status)}\s+"
             + r"(?P<markers>(?:\"[^\"\n]*\"\s*)+)"
         )
@@ -2712,8 +2893,8 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
             )
     if len(offsets) == len(cases) and offsets != sorted(offsets):
         errors.append(
-            f"{path}: effective-lock mutation cases must keep fixed-before-bug "
-            "and rebind-before-recovery order"
+            f"{path}: successor stale-token cases must keep bug-before-fixed "
+            "order, followed by fixed-before-bug effective-lock order"
         )
     return errors
 
@@ -5866,6 +6047,242 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     return errors
 
 
+def _successor_stale_token_mutation_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the depth-one stale-token successor-start mutation witness."""
+
+    model_path = formal_dir / "SumeragiV2SuccessorStaleTokenMutation.tla"
+    bug_cfg_path = formal_dir / "successor_stale_token_bug.cfg"
+    fixed_cfg_path = formal_dir / "successor_stale_token_fixed.cfg"
+    errors: list[str] = []
+
+    for path in (model_path, bug_cfg_path, fixed_cfg_path):
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: missing required successor stale-token mutation artifact"
+            )
+    if not model_path.is_file() or model_path.is_symlink():
+        return errors
+
+    source = model_path.read_text(encoding="utf-8")
+
+    def require_operator(
+        symbol: str,
+        *,
+        required: tuple[str, ...] = (),
+        forbidden: tuple[str, ...] = (),
+        exact: str | None = None,
+    ) -> None:
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{model_path}: missing mutation operator {symbol}")
+            return
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if exact is not None and normalized != exact:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} must equal "
+                f"only {exact!r}; found {normalized!r}"
+            )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} omits "
+                f"required stale-token behavior {missing}"
+            )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} contains "
+                f"prohibited repaired behavior {present}"
+            )
+
+    require_operator(
+        "AppliedSuccessorActivationToken",
+        exact=(
+            '[kind |-> "Applied", parentContext |-> "Parent", '
+            'node |-> "Node", successorContext |-> "Successor"]'
+        ),
+    )
+    require_operator(
+        "ExactDurableParentApplicationWitness",
+        exact="TRUE",
+    )
+    require_operator(
+        "SuccessorActivationPipelineDistance",
+        required=(
+            'CASE activationStatus = "Queued" -> IF '
+            "activationFailureHistoryPresent THEN 9 ELSE 10",
+            '/\\ activationStatus = "Running" /\\ '
+            "~SuccessorActivationCredentialReady -> 9",
+            "/\\ SuccessorActivationCredentialReady /\\ "
+            "activationPrerequisites = {} -> 8",
+            "[] OTHER -> 0",
+        ),
+    )
+    require_operator(
+        "SuccessorActivationRank",
+        exact=(
+            "IF ~activationFailureHistoryPresent THEN 9 + "
+            "SuccessorActivationPipelineDistance ELSE "
+            "SuccessorActivationPipelineDistance"
+        ),
+    )
+    require_operator(
+        "MutationTypeInvariant",
+        required=(
+            "activationPrerequisites \\subseteq "
+            "SuccessorActivationRequiredPrerequisites",
+            "activationTokens \\subseteq {AppliedSuccessorActivationToken}",
+            "previousRank \\in 0..19",
+        ),
+    )
+    require_operator(
+        "SuccessorActivationProtocolInvariantProjection",
+        exact=(
+            "/\\ MutationTypeInvariant "
+            "/\\ ExactDurableParentApplicationWitness "
+            "/\\ (activationFailureHistoryPresent => "
+            'predecessorOwnership = "Absent") '
+            "/\\ SuccessorActivationPipelineDistance \\in 1..10"
+        ),
+    )
+    require_operator(
+        "StaleAppliedTokenState",
+        exact=(
+            '/\\ activationStatus = "Queued" '
+            '/\\ predecessorOwnership = "Published" '
+            '/\\ activationPrerequisites = {"IngressOpen"} '
+            "/\\ activationTokens = {AppliedSuccessorActivationToken} "
+            "/\\ ~activationFailurePresent "
+            "/\\ ~activationFailureHistoryPresent"
+        ),
+    )
+    require_operator(
+        "StaleAppliedTokenInit",
+        exact=(
+            '/\\ StaleAppliedTokenState /\\ lastTransition = "Initial" '
+            "/\\ previousRank = 19"
+        ),
+    )
+    require_operator(
+        "BuggyBeginSuccessorActivation",
+        required=(
+            'activationStatus = "Queued"',
+            'predecessorOwnership = "Published"',
+            "ExactDurableParentApplicationWitness",
+            'activationStatus\' = "Running"',
+            'lastTransition\' = "BuggyBegin"',
+            "previousRank' = SuccessorActivationRank",
+        ),
+        forbidden=(
+            "activationPrerequisites = {}",
+            "AppliedSuccessorActivationToken \\notin activationTokens",
+        ),
+    )
+    require_operator(
+        "FixedBeginSuccessorActivation",
+        required=(
+            'activationStatus = "Queued"',
+            'predecessorOwnership = "Published"',
+            "ExactDurableParentApplicationWitness",
+            "activationPrerequisites = {}",
+            "AppliedSuccessorActivationToken \\notin activationTokens",
+            'activationStatus\' = "Running"',
+        ),
+    )
+    require_operator(
+        "MutationFailClosedSuccessorStartup",
+        required=(
+            'activationStatus \\in {"Queued", "Running"}',
+            'predecessorOwnership = "Published"',
+            "~activationFailureHistoryPresent",
+            'activationStatus\' = "Queued"',
+            'predecessorOwnership\' = "Absent"',
+            "activationPrerequisites' = {}",
+            "activationTokens' = {}",
+            "activationFailurePresent'",
+            "activationFailureHistoryPresent'",
+            'lastTransition\' = "FailClosed"',
+            "previousRank' = SuccessorActivationRank",
+        ),
+    )
+    exact_operators = {
+        "StaleBuggyBeginIsEnabled": (
+            "StaleAppliedTokenState => ENABLED "
+            "BuggyBeginSuccessorActivation"
+        ),
+        "StaleFixedBeginIsDisabled": (
+            "StaleAppliedTokenState => ~ENABLED "
+            "FixedBeginSuccessorActivation"
+        ),
+        "StaleFailClosedIsEnabled": (
+            "StaleAppliedTokenState => ENABLED "
+            "MutationFailClosedSuccessorStartup"
+        ),
+        "BuggyBeginViolationWitness": (
+            'lastTransition = "BuggyBegin" => '
+            "~SuccessorActivationProtocolInvariantProjection"
+        ),
+        "FailClosedStrictlyDecreasesRankWitness": (
+            'lastTransition = "FailClosed" => '
+            "SuccessorActivationRank < previousRank"
+        ),
+        "BugMutationNext": "BuggyBeginSuccessorActivation",
+        "BugMutationSpec": (
+            "StaleAppliedTokenInit /\\ "
+            "[][BugMutationNext]_MutationVars"
+        ),
+        "FixedMutationNext": (
+            "\\/ FixedBeginSuccessorActivation "
+            "\\/ MutationFailClosedSuccessorStartup"
+        ),
+        "FixedMutationSpec": (
+            "StaleAppliedTokenInit /\\ "
+            "[][FixedMutationNext]_MutationVars"
+        ),
+    }
+    for symbol, exact in exact_operators.items():
+        require_operator(symbol, exact=exact)
+
+    cfg_contracts = {
+        bug_cfg_path: (
+            "SPECIFICATION BugMutationSpec",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT StaleBuggyBeginIsEnabled",
+            "INVARIANT StaleFixedBeginIsDisabled",
+            "INVARIANT StaleFailClosedIsEnabled",
+            "INVARIANT BuggyBeginViolationWitness",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection",
+        ),
+        fixed_cfg_path: (
+            "SPECIFICATION FixedMutationSpec",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT StaleFixedBeginIsDisabled",
+            "INVARIANT StaleFailClosedIsEnabled",
+            "INVARIANT FailClosedStrictlyDecreasesRankWitness",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection",
+        ),
+    }
+    for cfg_path, expected_lines in cfg_contracts.items():
+        if not cfg_path.is_file() or cfg_path.is_symlink():
+            continue
+        actual_lines = tuple(
+            line.strip()
+            for line in cfg_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("\\*")
+        )
+        if actual_lines != expected_lines:
+            errors.append(
+                f"{cfg_path}: successor stale-token mutation configuration "
+                f"must equal {expected_lines!r}; found {actual_lines!r}"
+            )
+    return errors
+
+
 def _successor_activation_rank_source_fidelity_errors(
     formal_dir: Path,
 ) -> list[str]:
@@ -6076,15 +6493,52 @@ def _successor_activation_rank_source_fidelity_errors(
         errors.append(f"{proof_path}: missing {theorem_symbol}")
     else:
         body, line = theorem
-        statement = re.split(
+        theorem_parts = re.split(
             r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )[0]
+        )
+        statement = theorem_parts[0]
         normalized = " ".join(statement.split())
         if normalized != exact_statement:
             errors.append(
                 f"{proof_path}:{line}: {theorem_symbol} must state only "
                 f"{exact_statement!r}; found {normalized!r}"
             )
+        exact_proof = (
+            "<1>1. IndexedChainSpec "
+            "=> SuccessorActivationPendingStructureProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationPendingStructure "
+            "<1>2. IndexedChainSpec "
+            "=> SuccessorActivationStepDecreasesRankProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationStepDecrease "
+            "<1>3. IndexedChainSpec "
+            "=> SuccessorActivationPendingIsNotOrphanedProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationNonOrphaning "
+            "<1>4. IndexedChainSpec "
+            "=> SuccessorActivationOutcomeIsStableProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationOutcomeStability "
+            "<1>5. IndexedChainSpec "
+            "=> SuccessorActivationRankProgressProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationRankProgress "
+            "<1>6. IndexedChainSpec "
+            "=> SuccessorActivationStarvationFreedomProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom "
+            "<1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6"
+        )
+        if len(theorem_parts) != 2 or not re.search(
+            r"(?m)^[ \t]*PROOF\b", body
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {theorem_symbol} must have the "
+                "reviewed deductive composition proof"
+            )
+        else:
+            normalized_proof = " ".join(theorem_parts[1].split())
+            if normalized_proof != exact_proof:
+                errors.append(
+                    f"{proof_path}:{line}: {theorem_symbol} proof must "
+                    "compose exactly the six reviewed successor-activation "
+                    "theorems"
+                )
 
     equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
     equivalence = _top_level_theorem_body(
@@ -6968,8 +7422,11 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         require_chain_operator(
             "BeginSuccessorActivation",
             required=(
+                'LET token == SuccessorActivationToken( "Applied", parentContext, node, successorContext)',
                 'successorActivationStatus[parentContext][node] = "Queued"',
                 'successorPredecessorStatusOwnership[parentContext][node] = "Published"',
+                "successorActivationPrerequisites[parentContext][node] = {}",
+                "token \\notin successorActivationTokens",
                 '![parentContext][node] = "Running"',
                 "ExactDurableParentApplication(parentContext, node, application)",
             ),
@@ -7712,12 +8169,16 @@ def validate_ledger(
     errors.extend(_historical_timeout_derivation_errors(formal_dir))
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
+    errors.extend(_application_completion_source_fidelity_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
     errors.extend(_effective_lock_acquisition_source_fidelity_errors(formal_dir))
     errors.extend(_effective_lock_acquisition_mutation_runner_errors(ROOT_DIR))
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))
+    errors.extend(
+        _successor_stale_token_mutation_source_fidelity_errors(formal_dir)
+    )
     errors.extend(_nightly_chaos_cold_cache_errors(ROOT_DIR))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name

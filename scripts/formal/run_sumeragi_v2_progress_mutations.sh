@@ -168,6 +168,19 @@ run_case io-candidate-consensus-only \
   "Model checking completed. No error has been found." \
   "1 distinct states" "depth of the complete state graph search is 1"
 
+run_case successor-stale-token-bug \
+  SumeragiV2SuccessorStaleTokenMutation.tla \
+  successor_stale_token_bug.cfg 12 \
+  "Invariant SuccessorActivationProtocolInvariantProjection is violated." \
+  "2 states generated, 2 distinct states found, 0 states left on queue." \
+  "BuggyBeginSuccessorActivation"
+run_case successor-stale-token-fixed \
+  SumeragiV2SuccessorStaleTokenMutation.tla \
+  successor_stale_token_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "2 states generated, 2 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 2"
+
 run_case effective-lock-rebind-fixed \
   SumeragiV2EffectiveLockAcquisitionMutation.tla \
   effective_lock_rebind_fixed.cfg 0 \
@@ -194,4 +207,4 @@ run_case ownership-invariant-n1 \
   "42817 states generated, 6208 distinct states found" \
   "depth of the complete state graph search is 45"
 
-echo "[tlc] protected-rank, effective-lock, and ownership mutation matrix passed"
+echo "[tlc] protected-rank, successor, effective-lock, and ownership mutation matrix passed"

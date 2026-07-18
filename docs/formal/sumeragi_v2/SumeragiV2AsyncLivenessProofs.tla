@@ -13676,12 +13676,17 @@ PROOF
          PROVE /\ AsyncCandidateTyped(DeliveryCandidate(item))
                /\ DeliveryCandidate(item).node = node
                /\ DeliveryCandidate(item).class # "Completion"
-    <2>1. AsyncCandidateTyped(DeliveryCandidate(item))
-      BY <1>1, TypedItemMakesTypedDeliveryCandidate
-    <2>2. /\ DeliveryCandidate(item).node = node
-           /\ DeliveryCandidate(item).class \in {"Normal", "Progress"}
-      BY <1>1, DeliveryCandidateShape, SMT DEF DeliveryClass
-    <2> QED BY <2>1, <2>2
+    <2>1. TypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant
+    <2>2. AsyncCandidateTyped(DeliveryCandidate(item))
+      BY <1>1, <2>1, TypedItemMakesTypedDeliveryCandidate
+    <2>3. DeliveryCandidate(item).node = node
+      BY <1>1, DeliveryCandidateShape
+    <2>4. DeliveryCandidate(item).class = DeliveryClass(item)
+      BY DeliveryCandidateShape
+    <2>5. DeliveryClass(item) \in {"Normal", "Progress"}
+      BY SMT DEF DeliveryClass
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
   <1> QED BY <1>1
 
 THEOREM TypedCertifiedResponseCandidateFacts ==
@@ -13704,36 +13709,67 @@ PROOF
          PROVE /\ AsyncCandidateTyped(CertifiedResponseCandidate(item))
                /\ CertifiedResponseCandidate(item).node = node
                /\ CertifiedResponseCandidate(item).class = "Completion"
-    <2>1. AsyncBodyEnvelopeTyped(item.envelope)
+    <2>1. TypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant
+    <2>2. AsyncBodyEnvelopeTyped(item.envelope)
       BY <1>1, Isa DEF AsyncItemTyped
-    <2>2. /\ "Completion" \in AsyncCommandClasses
+    <2>3. /\ "Completion" \in AsyncCommandClasses
            /\ "FetchCertifiedBody" \in AsyncWorkKinds
       BY Isa DEF AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
-    <2>3. /\ DOMAIN CertifiedResponseCandidate(item) =
-                    AsyncCandidateDomain
-           /\ CertifiedResponseCandidate(item).class = "Completion"
+    <2>4. DOMAIN CertifiedResponseCandidate(item) = AsyncCandidateDomain
+      BY DEF CertifiedResponseCandidate, AsyncCandidate,
+             AsyncCandidateWithIdentity, AsyncCandidateDomain
+    <2>4a. /\ CertifiedResponseCandidate(item).class = "Completion"
            /\ CertifiedResponseCandidate(item).kind =
                 "FetchCertifiedBody"
-           /\ CertifiedResponseCandidate(item).node = node
+           /\ CertifiedResponseCandidate(item).node =
+                item.envelope.recipient
            /\ CertifiedResponseCandidate(item).height =
                 item.envelope.height
            /\ CertifiedResponseCandidate(item).view = item.envelope.view
            /\ CertifiedResponseCandidate(item).subject =
                 item.envelope.subject
            /\ CertifiedResponseCandidate(item).item = item
-      BY <1>1 DEF CertifiedResponseCandidate, AsyncCandidate
-    <2>4. CertifiedResponseCandidate(item).height \in Heights
-      BY <2>1, <2>3 DEF AsyncBodyEnvelopeTyped
-    <2>5. CertifiedResponseCandidate(item).view \in Views
-      BY <2>1, <2>3 DEF AsyncBodyEnvelopeTyped
-    <2>6. ValidSubjects \subseteq Subjects
-      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant,
-                   ModelConfiguration
-    <2>7. CertifiedResponseCandidate(item).subject \in SubjectOrNone
-      BY <2>1, <2>3, <2>6
+      BY DEF CertifiedResponseCandidate, AsyncCandidate,
+             AsyncCandidateWithIdentity
+    <2>4b. /\ CertifiedResponseCandidate(item).consumerContext = context
+           /\ CertifiedResponseCandidate(item).consumerView =
+                nodeView[item.envelope.recipient]
+           /\ CertifiedResponseCandidate(item).consumerGeneration =
+                generation[item.envelope.recipient]
+           /\ CertifiedResponseCandidate(item).evidence = item
+      BY DEF CertifiedResponseCandidate, AsyncCandidate,
+             AsyncCandidateWithIdentity
+    <2>4c. /\ CertifiedResponseCandidate(item).bodyIdentity =
+                item.envelope.subject
+           /\ CertifiedResponseCandidate(item).manifestIdentity =
+                item.envelope.subject
+           /\ CertifiedResponseCandidate(item).commitmentIdentity =
+                item.envelope.subject
+      BY DEF CertifiedResponseCandidate, AsyncCandidate,
+             AsyncCandidateWithIdentity
+    <2>5. CertifiedResponseCandidate(item).node = node
+      BY <1>1, <2>4a
+    <2>6. CertifiedResponseCandidate(item).height \in Heights
+      BY <2>2, <2>4a DEF AsyncBodyEnvelopeTyped
+    <2>7. CertifiedResponseCandidate(item).view \in Views
+      BY <2>2, <2>4a DEF AsyncBodyEnvelopeTyped
+    <2>8. ValidSubjects \subseteq Subjects
+      BY <2>1 DEF TypeInvariant, ModelConfiguration
+    <2>9. CertifiedResponseCandidate(item).subject \in SubjectOrNone
+      BY <2>2, <2>4a, <2>8
          DEF AsyncBodyEnvelopeTyped, SubjectOrNone
-    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>7
+    <2>10. /\ context \in ContextRecords
+            /\ nodeView[item.envelope.recipient] \in Views
+            /\ generation[item.envelope.recipient] \in Generations
+      BY <1>1, <2>1, SMT DEF TypeInvariant
+    <2>11. AsyncEvidenceTyped(item)
+      BY <1>1 DEF AsyncEvidenceTyped
+    <2>12. AsyncCandidateTyped(CertifiedResponseCandidate(item))
+      BY <1>1, <2>3, <2>4, <2>4a, <2>4b, <2>4c,
+         <2>5, <2>6, <2>7, <2>9, <2>10, <2>11, SMTT(30)
          DEF AsyncCandidateTyped
+    <2> QED BY <2>4a, <2>5, <2>12
   <1> QED BY <1>1
 
 THEOREM TypedCommitCertificateResponseCandidateFacts ==
@@ -13761,21 +13797,58 @@ PROOF
                /\ CommitCertificateResponseCandidate(item).node = node
                /\ CommitCertificateResponseCandidate(item).class #
                     "Completion"
-    <2>1. /\ item.source \in ValidatorIds
-           /\ item.envelope \in QcEnvelopeSet
-      BY <1>1, SMT DEF AsyncItemTyped
-    <2>2. AsyncItemTyped(DiscoveredCommitQcItem(item))
-      BY <1>1, <2>1, SMT
-         DEF DiscoveredCommitQcItem, AsyncNetworkItem,
-             AsyncItemTyped, AsyncNetworkKinds, AsyncIngressSources
-    <2>3. /\ DiscoveredCommitQcItem(item).envelope.recipient = node
+    <2>1. item.source \in ValidatorIds
+      BY <1>1 DEF AsyncItemTyped
+    <2>2. item.envelope \in QcEnvelopeSet
+      BY <1>1, SMTT(30) DEF AsyncItemTyped
+    <2>3. /\ DOMAIN DiscoveredCommitQcItem(item) =
+                  {"kind", "source", "envelope"}
+           /\ DiscoveredCommitQcItem(item).kind = "CommitQC"
+           /\ DiscoveredCommitQcItem(item).source = item.source
+           /\ DiscoveredCommitQcItem(item).envelope = item.envelope
+      BY Isa DEF DiscoveredCommitQcItem, AsyncNetworkItem
+    <2>4. /\ DiscoveredCommitQcItem(item).kind \in AsyncNetworkKinds
+           /\ DiscoveredCommitQcItem(item).source \in AsyncIngressSources
+           /\ (DiscoveredCommitQcItem(item).kind # "Noise"
+                 => DiscoveredCommitQcItem(item).source \in ValidatorIds)
+      BY <2>1, <2>3, SMT
+         DEF AsyncNetworkKinds, AsyncIngressSources
+    <2>5. /\ DiscoveredCommitQcItem(item).envelope.recipient
+                  \in ValidatorIds
+           /\ DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
+      BY <2>2, <2>3, SMT DEF QcEnvelopeSet
+    <2>6. (CASE DiscoveredCommitQcItem(item).kind = "Proposal" ->
+                 DiscoveredCommitQcItem(item).envelope \in ProposalEnvelopeSet
+           [] DiscoveredCommitQcItem(item).kind
+                \in {"PrepareVote", "CommitVote"} ->
+                 DiscoveredCommitQcItem(item).envelope \in VoteEnvelopeSet
+           [] DiscoveredCommitQcItem(item).kind
+                \in {"PrepareQC", "CommitQC"} ->
+                 DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
+           [] DiscoveredCommitQcItem(item).kind = "TimeoutVote" ->
+                 DiscoveredCommitQcItem(item).envelope \in TimeoutEnvelopeSet
+           [] DiscoveredCommitQcItem(item).kind = "TimeoutCertificate" ->
+                 AsyncTcEnvelopeTyped(
+                   DiscoveredCommitQcItem(item).envelope)
+           [] DiscoveredCommitQcItem(item).kind =
+                "CommitCertificateResponse" ->
+                 DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
+           [] OTHER ->
+                 AsyncBodyEnvelopeTyped(
+                   DiscoveredCommitQcItem(item).envelope))
+      BY <2>3, <2>5, SMT
+    <2>7. AsyncItemTyped(DiscoveredCommitQcItem(item))
+      BY <2>3, <2>4, <2>5, <2>6 DEF AsyncItemTyped
+    <2>8. /\ DiscoveredCommitQcItem(item).envelope.recipient = node
            /\ CommitCertificateResponseCandidate(item) =
                 DeliveryCandidate(DiscoveredCommitQcItem(item))
-      BY <1>1 DEF DiscoveredCommitQcItem,
-                    CommitCertificateResponseCandidate,
-                    AsyncNetworkItem
-    <2> QED BY <1>1, <2>2, <2>3,
-         TypedIngressDeliveryCandidateFacts
+      BY <1>1, <2>3 DEF CommitCertificateResponseCandidate
+    <2>9. /\ AsyncCandidateTyped(
+                  CommitCertificateResponseCandidate(item))
+           /\ CommitCertificateResponseCandidate(item).node = node
+           /\ CommitCertificateResponseCandidate(item).class # "Completion"
+      BY <1>1, <2>7, <2>8, TypedIngressDeliveryCandidateFacts
+    <2> QED BY <2>7, <2>9
   <1> QED BY <1>1
 
 THEOREM RemoveRequestsAndAddSentPreservesTransportContentType ==
@@ -14798,10 +14871,12 @@ PROOF
         <4>2. DrainItem.kind = "CommitCertificateResponse"
           BY <3>3
              DEF CommitAccepted, CommitCertificateResponseAuthorized
+        <4>2a. /\ DrainItem \in asyncSentItems
+                /\ CommitCertificateResponseAuthorized(DrainItem)
+          BY <3>3 DEF CommitAccepted
         <4>3. CanEnqueueClass(node, "Progress")
-          BY <2>4, <3>3, <4>1, SMTT(60)
-             DEF IngressItemCanDrain, DrainItem, CommitAccepted,
-                 CommitCandidate, CommitCertificateResponseAuthorized
+          BY <2>4, <4>2, <4>2a, SMTT(30)
+             DEF IngressItemCanDrain
         <4>4. /\ asyncCommandQueues' =
                     [asyncCommandQueues EXCEPT
                        ![node] = Append(@, CommitCandidate)]
@@ -29998,7 +30073,7 @@ PROOF
                  /\ asyncIngressReady[node] # <<>>
                  /\ DrainableIngressIndices(node) # {}
       <3> DEFINE Index == FirstDrainableIngressIndex(node)
-      <3> DEFINE Item == IngressItemAt(node, Index)
+      <3> DEFINE Item == SelectedIngressItemAt(node, Index)
       <3> DEFINE Candidate == DeliveryCandidate(Item)
       <3> DEFINE CommitCandidate ==
              CommitCertificateResponseCandidate(Item)
@@ -30007,10 +30082,17 @@ PROOF
              /\ Index \in 1..Len(asyncIngressReady[node])
         BY <1>1, <2>4, FirstDrainableIngressIndexIsDrainable
            DEF IngressDrainStep, Index, DrainableIngressIndices
+      <3>1a. SelectedIngressLaneIndex(node, Index)
+                   \in 1..Len(IngressLane(
+                        node, asyncIngressReady[node][Index]))
+        BY <3>1, FirstDrainableIngressLaneIndexIsDrainable
+           DEF Index, DrainableIngressIndices, IngressSourceCanDrain,
+               DrainableIngressLaneIndices, SelectedIngressLaneIndex
       <3>2. /\ AsyncItemTyped(Item)
              /\ Item.envelope.recipient = node
-        BY <2>1, <3>1, SelectedIngressItemIsTyped,
-           SelectedIngressItemHasLaneOwnership DEF Item, Index
+        BY <2>1, <3>1, <3>1a, SelectedIngressItemIsTyped,
+           SelectedIngressItemHasLaneOwnership
+           DEF Item, SelectedIngressItemAt
       <3>3. /\ AsyncCandidateTyped(Candidate)
              /\ ProgressCommitSource(Candidate)
         BY <1>1, <3>2, TypedIngressDeliveryCandidateFacts,
@@ -30023,10 +30105,10 @@ PROOF
            DEF DrainFairIngressSelected, EnqueueCandidate,
                Candidate, CommitCandidate, Item, Index
       <3>5. CASE UNCHANGED asyncCommandQueues
-        BY <1>1, <2>1, <3>5,
+        BY <1>1, <2>1, <2>2, <3>5,
            UnchangedCommandQueuesPreserveProgressCommitHistory
       <3>6. CASE EnqueueCandidate(Candidate)
-        BY <1>1, <2>1, <3>3, <3>6,
+        BY <1>1, <2>1, <2>2, <3>3, <3>6,
            EnqueueCandidatePreservesQueuedProgressCommitHistory
       <3>7. CASE /\ Item.kind = "CommitCertificateResponse"
                    /\ EnqueueCandidate(CommitCandidate)
@@ -30036,7 +30118,7 @@ PROOF
              TypedCommitCertificateResponseCandidateFacts,
              CommitCertificateResponseCandidateHasProgressCommitSource
              DEF CommitCandidate
-        <4> QED BY <1>1, <2>1, <3>7, <4>1,
+        <4> QED BY <1>1, <2>1, <2>2, <3>7, <4>1,
              EnqueueCandidatePreservesQueuedProgressCommitHistory
       <3>8. QueuedProgressCommitHistoryInvariant'
         BY <3>4, <3>5, <3>6, <3>7
@@ -34860,6 +34942,240 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
+Application-completion temporal closure.
+
+The substantive recovery/validation/application pipeline remains the explicit
+`ApplicationCompletionProgressObligation` below.  This section proves only the
+finite temporal composition which that per-validator obligation entails.  An
+application receipt is durable under every Core step, the one-height async
+refinement preserves that durability, and induction over the finite validator
+identifier prefix therefore closes the aggregate responsive-application
+clause.  No global apply barrier or additional fairness premise is introduced.
+***************************************************************************)
+
+ResponsiveApplicationPrefixAt(initialContext, limit) ==
+  \A node \in AsyncVotersAt(initialContext) \cap (0..limit):
+    NodeHasApplication(node)
+
+THEOREM CoreBracketStepPreservesNodeApplication ==
+  \A node:
+    NodeHasApplication(node)
+      /\ [Next]_vars
+      => NodeHasApplication(node)'
+PROOF
+  <1>1. ASSUME NEW node,
+                NodeHasApplication(node),
+                [Next]_vars
+         PROVE NodeHasApplication(node)'
+    <2>1. CASE UNCHANGED vars
+      BY <1>1, <2>1, Isa DEF NodeHasApplication, vars
+    <2>2. CASE Next
+      <3>1. UNCHANGED context
+        BY <2>2, CoreNextLeavesContext
+      <3>2. \/ UNCHANGED <<decisions, applied>>
+             \/ (\E request \in pendingDecision:
+                   PersistDecision(request))
+             \/ (\E owner \in ValidatorIds,
+                        qc \in DecisionQcValues:
+                   ApplyDecision(owner, qc))
+        BY <2>2, NextDurableReceiptActionClassification
+      <3>3. CASE UNCHANGED <<decisions, applied>>
+        BY <1>1, <3>1, <3>3, Isa DEF NodeHasApplication
+      <3>4. CASE \E request \in pendingDecision:
+                    PersistDecision(request)
+        <4>1. PICK request \in pendingDecision:
+                 PersistDecision(request)
+          BY <3>4
+        <4> QED BY <1>1, <3>1, <4>1, Isa
+             DEF PersistDecision, NodeHasApplication
+      <3>5. CASE \E owner \in ValidatorIds,
+                        qc \in DecisionQcValues:
+                    ApplyDecision(owner, qc)
+        <4>1. PICK owner \in ValidatorIds,
+                     qc \in DecisionQcValues:
+                 ApplyDecision(owner, qc)
+          BY <3>5
+        <4> QED BY <1>1, <3>1, <4>1, Isa
+             DEF ApplyDecision, NodeHasApplication
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AsyncBracketStepPreservesNodeApplication ==
+  \A node:
+    NodeHasApplication(node)
+      /\ [AsyncNext]_AsyncAllVars
+      => NodeHasApplication(node)'
+PROOF
+  <1>1. ASSUME NEW node,
+                NodeHasApplication(node),
+                [AsyncNext]_AsyncAllVars
+         PROVE NodeHasApplication(node)'
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Isa
+         DEF NodeHasApplication, AsyncAllVars, AsyncSchedulerVars, vars
+    <2>2. CASE AsyncNext
+      <3>1. [Next]_vars
+        BY <2>2, AsyncStepRefinementObligation
+      <3> QED BY <1>1, <3>1,
+           CoreBracketStepPreservesNodeApplication
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ResponsiveApplicationPrefixAtIsStable ==
+  \A initialContext, limit \in Nat:
+    ResponsiveApplicationPrefixAt(initialContext, limit)
+      /\ [AsyncNext]_AsyncAllVars
+      => ResponsiveApplicationPrefixAt(initialContext, limit)'
+BY Isa, AsyncBracketStepPreservesNodeApplication
+   DEF ResponsiveApplicationPrefixAt
+
+THEOREM FrozenContextFullApplicationPrefixImpliesResponsiveApply ==
+  \A initialContext:
+    /\ ModelConfiguration
+    /\ AsyncFrozenContextAt(initialContext)
+    /\ ResponsiveApplicationPrefixAt(initialContext, N - 1)
+    => ResponsiveNodesApply
+BY FrozenContextFixesResponsiveVoters, Isa
+   DEF ResponsiveApplicationPrefixAt, ResponsiveNodesApply,
+       AsyncVotersAt, ValidatorIds, ModelConfiguration,
+       QuorumConfiguration
+
+THEOREM ApplicationCompletionProgressAppliesFixedResponsiveNode ==
+  \A initialContext:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ AsyncSpecAt(initialContext)
+      /\ ApplicationCompletionProgressProperty(
+           AsyncSpecAt(initialContext))
+      => (gst /\ ResponsiveNodesDecide)
+           ~> NodeHasApplication(node)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW node \in AsyncVotersAt(initialContext),
+                AsyncSpecAt(initialContext),
+                ApplicationCompletionProgressProperty(
+                  AsyncSpecAt(initialContext))
+         PROVE (gst /\ ResponsiveNodesDecide)
+                 ~> NodeHasApplication(node)
+    <2>1. [](AsyncCurrentResponsiveVoters
+               = AsyncVotersAt(initialContext))
+      BY <1>1, AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>2. \A currentNode \in AsyncCurrentResponsiveVoters:
+             (gst /\ NodeHasDecision(currentNode))
+               ~> NodeHasApplication(currentNode)
+      BY <1>1, PTL DEF ApplicationCompletionProgressProperty
+    <2>3. (gst /\ NodeHasDecision(node))
+             ~> NodeHasApplication(node)
+      BY <1>1, <2>1, <2>2, PTL
+    <2>4. []((gst /\ ResponsiveNodesDecide)
+                => (gst /\ NodeHasDecision(node)))
+      BY <1>1, <2>1, PTL DEF ResponsiveNodesDecide
+    <2> QED BY <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM ApplicationCompletionReachesEveryResponsivePrefix ==
+  \A initialContext:
+    /\ AsyncSpecAt(initialContext)
+    /\ ApplicationCompletionProgressProperty(
+         AsyncSpecAt(initialContext))
+    => \A limit \in Nat:
+         (gst /\ ResponsiveNodesDecide)
+           ~> ResponsiveApplicationPrefixAt(initialContext, limit)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext),
+                ApplicationCompletionProgressProperty(
+                  AsyncSpecAt(initialContext))
+         PROVE \A limit \in Nat:
+                 (gst /\ ResponsiveNodesDecide)
+                   ~> ResponsiveApplicationPrefixAt(
+                        initialContext, limit)
+    <2> DEFINE P(limit) ==
+           (gst /\ ResponsiveNodesDecide)
+             ~> ResponsiveApplicationPrefixAt(initialContext, limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in AsyncVotersAt(initialContext)
+        <4>1. (gst /\ ResponsiveNodesDecide)
+                 ~> NodeHasApplication(0)
+          BY <1>1, <3>1,
+             ApplicationCompletionProgressAppliesFixedResponsiveNode
+        <4> QED BY <4>1, PTL
+             DEF P, ResponsiveApplicationPrefixAt
+      <3>2. CASE 0 \notin AsyncVotersAt(initialContext)
+        BY <3>2, PTL DEF P, ResponsiveApplicationPrefixAt
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat,
+                  P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in AsyncVotersAt(initialContext)
+        <4>1. (gst /\ ResponsiveNodesDecide)
+                 ~> NodeHasApplication(limit + 1)
+          BY <1>1, <3>1,
+             ApplicationCompletionProgressAppliesFixedResponsiveNode
+        <4>2. ResponsiveApplicationPrefixAt(initialContext, limit)
+                 /\ [AsyncNext]_AsyncAllVars
+                 => ResponsiveApplicationPrefixAt(
+                      initialContext, limit)'
+          BY <2>2, ResponsiveApplicationPrefixAtIsStable
+        <4>3. NodeHasApplication(limit + 1)
+                 /\ [AsyncNext]_AsyncAllVars
+                 => NodeHasApplication(limit + 1)'
+          BY AsyncBracketStepPreservesNodeApplication
+        <4>4. ResponsiveApplicationPrefixAt(
+                 initialContext, limit + 1)
+                 <=> /\ ResponsiveApplicationPrefixAt(
+                           initialContext, limit)
+                     /\ NodeHasApplication(limit + 1)
+          BY <2>2, <3>1, Isa DEF ResponsiveApplicationPrefixAt
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL DEF P
+      <3>2. CASE limit + 1 \notin AsyncVotersAt(initialContext)
+        <4>1. ResponsiveApplicationPrefixAt(initialContext, limit)
+                 => ResponsiveApplicationPrefixAt(
+                      initialContext, limit + 1)
+          BY <2>2, <3>2, Isa DEF ResponsiveApplicationPrefixAt
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM ModelConfigurationMakesLastValidatorNatural ==
+  ModelConfiguration => N - 1 \in Nat
+BY SMT DEF ModelConfiguration, QuorumConfiguration
+
+THEOREM ApplicationCompletionProgressImpliesAggregateApplication ==
+  \A initialContext:
+    /\ AsyncSpecAt(initialContext)
+    /\ ApplicationCompletionProgressProperty(
+         AsyncSpecAt(initialContext))
+    => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext),
+                ApplicationCompletionProgressProperty(
+                  AsyncSpecAt(initialContext))
+         PROVE (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+    <2>1. ModelConfiguration
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant, PTL
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+             Safety, TypeInvariant
+    <2>2. N - 1 \in Nat
+      BY <2>1, ModelConfigurationMakesLastValidatorNatural
+    <2>3. (gst /\ ResponsiveNodesDecide)
+             ~> ResponsiveApplicationPrefixAt(initialContext, N - 1)
+      BY <1>1, <2>2,
+         ApplicationCompletionReachesEveryResponsivePrefix
+    <2>4. []AsyncFrozenContextAt(initialContext)
+      BY <1>1, AsyncSpecAlwaysKeepsFrozenContext
+    <2>5. [](ResponsiveApplicationPrefixAt(initialContext, N - 1)
+               => ResponsiveNodesApply)
+      BY <2>1, <2>4,
+         FrozenContextFullApplicationPrefixImpliesResponsiveApply, PTL
+    <2> QED BY <2>3, <2>5, PTL
+  <1> QED BY <1>1
+
+(***************************************************************************
 Stage 5: exact Consensus-I/O FIFO service.
 
 The rank ignores Serve/Control candidate identities but counts their physical
@@ -38802,9 +39118,26 @@ THEOREM RotatingLeaderProgressObligation ==
   \A initialContext:
     RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
 
+THEOREM ApplicationCompletionProgressObligation ==
+  \A initialContext:
+    ApplicationCompletionProgressProperty(AsyncSpecAt(initialContext))
+
 THEOREM ApplicationLivenessObligation ==
   \A initialContext:
     ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+    <2>1. ApplicationCompletionProgressProperty(
+             AsyncSpecAt(initialContext))
+      BY ApplicationCompletionProgressObligation
+    <2>2. AsyncSpecAt(initialContext)
+            => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+      BY <2>1, ApplicationCompletionProgressImpliesAggregateApplication, PTL
+    <2> QED BY <2>1, <2>2, PTL
+         DEF ApplicationCompletionProgressProperty,
+             ApplicationLivenessProperty
+  <1> QED BY <1>1
 
 THEOREM OneHeightCompletionObligation ==
   \A initialContext:

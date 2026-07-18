@@ -2579,8 +2579,12 @@ pub struct DebugViewArgs {
     #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", requires = "source_map_file")]
     pub source_file: Option<PathBuf>,
+    /// Hash-bound Kotodama source-map sidecar used to resolve trapped debug locations.
+    /// Relative source paths in the sidecar are read from the current working directory.
+    #[arg(long, value_name = "PATH")]
+    pub source_map_file: Option<PathBuf>,
     /// Optional JSON array of canonical account ids available to iterator helpers.
     #[arg(long, value_name = "JSON", conflicts_with = "accounts_file")]
     pub accounts_json: Option<String>,
@@ -2624,8 +2628,12 @@ pub struct DebugCallArgs {
     #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", requires = "source_map_file")]
     pub source_file: Option<PathBuf>,
+    /// Hash-bound Kotodama source-map sidecar used to resolve trapped debug locations.
+    /// Relative source paths in the sidecar are read from the current working directory.
+    #[arg(long, value_name = "PATH")]
+    pub source_map_file: Option<PathBuf>,
     /// Optional JSON array of canonical account ids available to iterator helpers.
     #[arg(long, value_name = "JSON", conflicts_with = "accounts_file")]
     pub accounts_json: Option<String>,
@@ -3074,6 +3082,23 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let code = load_code_bytes(args.code_file.clone(), args.code_b64.clone())?;
     let verified = verify_contract_from_bytes(&code)?;
     let summary = program_summary_from_bytes(&code)?;
+    let program_prefix_len = verified
+        .code_offset
+        .checked_sub(verified.header_len)
+        .ok_or_else(|| eyre!("contract program offset precedes its metadata header"))?;
+    let program_prefix_len = u64::try_from(program_prefix_len)
+        .map_err(|_| eyre!("contract program prefix length exceeds u64"))?;
+    let executable_len = code
+        .len()
+        .checked_sub(verified.code_offset)
+        .ok_or_else(|| eyre!("contract executable offset exceeds artifact length"))?;
+    let executable_len = u64::try_from(executable_len)
+        .map_err(|_| eyre!("contract executable length exceeds u64"))?;
+    let source_map = load_local_contract_source_map(
+        args.source_map_file.as_deref(),
+        &verified.code_hash,
+        executable_len,
+    )?;
     let selector = args.entrypoint;
     let descriptor = resolve_local_view_entrypoint(&verified, &selector)?;
     let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
@@ -3103,6 +3128,7 @@ fn execute_local_contract_debug_view<C: RunContext>(
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
+    host.set_local_contract_debug_view_execution();
     host.set_chain_id(&context.config().chain);
     host.set_durable_state_snapshot(durable_state);
 
@@ -3125,7 +3151,10 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let queued = host.drain_instructions();
     let durable_state_overlay = host.drain_durable_state_overlay();
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
-    let vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    let mut vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    if let (Some(diagnostic), Some(source_map)) = (vm_diagnostic.as_mut(), source_map.as_deref()) {
+        apply_local_contract_source_map(diagnostic, source_map, program_prefix_len);
+    }
     let source_snippet =
         maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
     let entrypoint = build_local_debug_entrypoint(descriptor, entrypoint_pc);
@@ -3213,6 +3242,23 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let code = load_code_bytes(args.code_file.clone(), args.code_b64.clone())?;
     let verified = verify_contract_from_bytes(&code)?;
     let summary = program_summary_from_bytes(&code)?;
+    let program_prefix_len = verified
+        .code_offset
+        .checked_sub(verified.header_len)
+        .ok_or_else(|| eyre!("contract program offset precedes its metadata header"))?;
+    let program_prefix_len = u64::try_from(program_prefix_len)
+        .map_err(|_| eyre!("contract program prefix length exceeds u64"))?;
+    let executable_len = code
+        .len()
+        .checked_sub(verified.code_offset)
+        .ok_or_else(|| eyre!("contract executable offset exceeds artifact length"))?;
+    let executable_len = u64::try_from(executable_len)
+        .map_err(|_| eyre!("contract executable length exceeds u64"))?;
+    let source_map = load_local_contract_source_map(
+        args.source_map_file.as_deref(),
+        &verified.code_hash,
+        executable_len,
+    )?;
     let selector = args.entrypoint;
     let descriptor = resolve_local_public_entrypoint(&verified, &selector)?;
     let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
@@ -3242,6 +3288,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
+    host.set_local_contract_debug_execution();
     host.set_chain_id(&context.config().chain);
     host.set_durable_state_snapshot(durable_state);
 
@@ -3268,7 +3315,10 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let queued_instructions = render_queued_instructions(&queued)?;
     let durable_state_overlay_json = render_durable_state_overlay(&durable_state_overlay)?;
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
-    let vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    let mut vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
+    if let (Some(diagnostic), Some(source_map)) = (vm_diagnostic.as_mut(), source_map.as_deref()) {
+        apply_local_contract_source_map(diagnostic, source_map, program_prefix_len);
+    }
     let source_snippet =
         maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
     let entrypoint = build_local_debug_entrypoint(descriptor, entrypoint_pc);
@@ -3418,6 +3468,142 @@ fn map_local_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> LocalContractDe
     }
 }
 
+fn load_local_contract_source_map(
+    path: Option<&Path>,
+    artifact_hash: &iroha_crypto::Hash,
+    executable_len: u64,
+) -> Result<Option<Vec<ivm::EmbeddedSourceMapEntryV1>>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let contents = fs::read_to_string(path)
+        .wrap_err_with(|| format!("failed to read source-map sidecar {}", path.display()))?;
+    let value: norito::json::Value = norito::json::from_str(&contents)
+        .wrap_err_with(|| format!("failed to parse source-map sidecar {}", path.display()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| eyre!("source-map sidecar must be a JSON object"))?;
+    if object
+        .get("sidecar_version")
+        .and_then(norito::json::Value::as_u64)
+        != Some(1)
+        || object.get("kind").and_then(norito::json::Value::as_str) != Some("source-map")
+    {
+        return Err(eyre!(
+            "source-map sidecar must declare sidecar_version 1 and kind `source-map`"
+        ));
+    }
+    let expected_hash = artifact_hash.to_string();
+    let actual_hash = object
+        .get("artifact_hash")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("source-map sidecar is missing string `artifact_hash`"))?;
+    if actual_hash != expected_hash {
+        return Err(eyre!(
+            "source-map sidecar artifact_hash does not match the debug contract artifact"
+        ));
+    }
+    let entries = object
+        .get("entries")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("source-map sidecar is missing array `entries`"))?;
+    let mut decoded = Vec::with_capacity(entries.len());
+    let mut previous_end = 0_u64;
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| eyre!("source-map entry {index} must be a JSON object"))?;
+        let string = |name: &str| -> Result<String> {
+            entry
+                .get(name)
+                .and_then(norito::json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| eyre!("source-map entry {index} is missing string `{name}`"))
+        };
+        let unsigned = |name: &str| -> Result<u64> {
+            entry
+                .get(name)
+                .and_then(norito::json::Value::as_u64)
+                .ok_or_else(|| eyre!("source-map entry {index} is missing integer `{name}`"))
+        };
+        let narrow = |name: &str| -> Result<u32> {
+            u32::try_from(unsigned(name)?)
+                .map_err(|_| eyre!("source-map entry {index} `{name}` exceeds u32"))
+        };
+        let source_path = match entry.get("source_path") {
+            Some(norito::json::Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| {
+                        eyre!("source-map entry {index} `source_path` must be a string or null")
+                    })?
+                    .to_owned(),
+            ),
+            None => {
+                return Err(eyre!("source-map entry {index} is missing `source_path`"));
+            }
+        };
+        let pc_start = unsigned("pc_start")?;
+        let pc_end = unsigned("pc_end")?;
+        if pc_start >= pc_end || pc_end > executable_len || pc_start < previous_end {
+            return Err(eyre!(
+                "source-map entry {index} has an invalid or overlapping PC range"
+            ));
+        }
+        let byte_start = narrow("byte_start")?;
+        let byte_end = narrow("byte_end")?;
+        if byte_start > byte_end {
+            return Err(eyre!(
+                "source-map entry {index} has an invalid source byte range"
+            ));
+        }
+        let line = narrow("line")?;
+        let column = narrow("column")?;
+        if line == 0 || column == 0 {
+            return Err(eyre!(
+                "source-map entry {index} line and column must be one-based"
+            ));
+        }
+        decoded.push(ivm::EmbeddedSourceMapEntryV1 {
+            function_name: string("function_name")?,
+            pc_start,
+            pc_end,
+            source: ivm::EmbeddedSourceLocation {
+                source_path,
+                source_id: narrow("source_id")?,
+                byte_start,
+                byte_end,
+                line,
+                column,
+            },
+        });
+        previous_end = pc_end;
+    }
+    Ok(Some(decoded))
+}
+
+fn apply_local_contract_source_map(
+    diagnostic: &mut LocalContractDebugVmDiagnostic,
+    source_map: &[ivm::EmbeddedSourceMapEntryV1],
+    program_prefix_len: u64,
+) {
+    let Some(relative_pc) = diagnostic.pc.checked_sub(program_prefix_len) else {
+        return;
+    };
+    let Some(entry) = source_map
+        .iter()
+        .find(|entry| relative_pc >= entry.pc_start && relative_pc < entry.pc_end)
+    else {
+        return;
+    };
+    diagnostic.function = Some(entry.function_name.clone());
+    diagnostic.current_function = Some(entry.function_name.clone());
+    diagnostic.source_path = entry.source.source_path.clone();
+    diagnostic.line = Some(entry.source.line);
+    diagnostic.column = Some(entry.source.column);
+}
+
 fn maybe_render_source_snippet(
     source_file: Option<&std::path::Path>,
     diagnostic: Option<&LocalContractDebugVmDiagnostic>,
@@ -3432,9 +3618,12 @@ fn maybe_render_source_snippet(
     };
     let contents = std::fs::read_to_string(&resolved_path).ok()?;
     let lines = contents.lines().collect::<Vec<_>>();
-    let idx = usize::try_from(line.saturating_sub(1)).ok()?;
+    let idx = usize::try_from(line.checked_sub(1)?).ok()?;
+    if idx >= lines.len() {
+        return None;
+    }
     let start = idx.saturating_sub(1);
-    let end = std::cmp::min(idx + 2, lines.len());
+    let end = idx.saturating_add(2).min(lines.len());
     let mut excerpt = String::new();
     for (offset, text) in lines[start..end].iter().enumerate() {
         let current = start + offset + 1;
@@ -3608,6 +3797,50 @@ fn normalize_local_contract_payload(
             "contract payload is required for parameterized entrypoints"
         )),
         (Some(schema), Some(payload)) => {
+            let object = payload.as_object().ok_or_else(|| {
+                eyre!("contract payload must be a JSON object keyed by parameter name")
+            })?;
+            for field in &schema.fields {
+                if !object.contains_key(&field.name) {
+                    return Err(eyre!(
+                        "missing contract payload field `{}` for entrypoint `{}`",
+                        field.name,
+                        descriptor.name
+                    ));
+                }
+            }
+            for name in object.keys() {
+                if !schema.fields.iter().any(|field| field.name == *name) {
+                    return Err(eyre!(
+                        "unexpected contract payload field `{name}` for entrypoint `{}`",
+                        descriptor.name
+                    ));
+                }
+            }
+            for field in &schema.fields {
+                let mut field_schema = schema.clone();
+                field_schema.fields = vec![field.clone()];
+                let mut field_object = norito::json::Map::new();
+                let field_value = object.get(&field.name).ok_or_else(|| {
+                    eyre!(
+                        "missing contract payload field `{}` for entrypoint `{}`",
+                        field.name,
+                        descriptor.name
+                    )
+                })?;
+                field_object.insert(field.name.clone(), field_value.clone());
+                let field_payload =
+                    iroha_primitives::json::Json::from(norito::json::Value::Object(field_object));
+                ivm::encode_argument_record_from_json(&field_schema, &field_payload).map_err(
+                    |error| {
+                        eyre!(
+                            "contract payload field `{}` does not match the declared schema: {error}",
+                            field.name,
+                        )
+                    },
+                )?;
+            }
+
             let payload = iroha_primitives::json::Json::from(payload.clone());
             ivm::encode_argument_record_from_json(schema, &payload).map_err(|error| {
                 eyre!(
@@ -3714,14 +3947,21 @@ mod tests {
             .unwrap_or_else(|| panic!("missing embedded entrypoint `{name}`"))
     }
 
-    fn compile_contract_program_with_source_path(source: &str, source_path: &str) -> Vec<u8> {
+    fn compile_contract_program_with_source_map(
+        source: &str,
+        source_path: &str,
+    ) -> (Vec<u8>, String) {
         let output = CompilerSession::default()
             .build(CompileRequest {
                 source,
                 source_name: Some(source_path),
             })
             .expect("compile contract with source path");
-        output.artifact
+        let source_map = output
+            .report
+            .render_source_map_json()
+            .expect("render source-map sidecar");
+        (output.artifact, source_map)
     }
 
     #[test]
@@ -5173,6 +5413,7 @@ mod tests {
             entrypoint: "inspect".to_owned(),
             gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
             source_file: None,
+            source_map_file: None,
             accounts_json: None,
             accounts_file: None,
             durable_state_json: None,
@@ -5186,7 +5427,8 @@ mod tests {
         let output = ctx.take_output().expect("output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
+            Some(true),
+            "unexpected debug-view response: {output:?}"
         );
         assert_eq!(
             output.get("result").and_then(norito::json::Value::as_str),
@@ -5203,7 +5445,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_view_uses_embedded_source_path_for_snippets() {
+    fn debug_view_uses_hash_bound_source_map_for_snippets() {
         let authority = fixture_account(0x22);
         let mut ctx = TestContext::new(authority);
         let dir = tempfile::tempdir().expect("tempdir");
@@ -5216,16 +5458,20 @@ mod tests {
             }
         "#;
         std::fs::write(&source_path, source).expect("write source");
-        let program =
-            compile_contract_program_with_source_path(source, &source_path.display().to_string());
+        let (program, source_map) =
+            compile_contract_program_with_source_map(source, &source_path.display().to_string());
+        let source_map_path = dir.path().join("debug_view.source-map.json");
+        std::fs::write(&source_map_path, source_map).expect("write source-map sidecar");
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let args = DebugViewArgs {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
             entrypoint: "inspect".to_owned(),
-            gas_limit: 0,
+            // The entrypoint wrapper costs two gas; exhaust at the first mapped body opcode.
+            gas_limit: 2,
             source_file: None,
+            source_map_file: Some(source_map_path),
             accounts_json: None,
             accounts_file: None,
             durable_state_json: None,
@@ -5240,6 +5486,22 @@ mod tests {
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
             Some(false)
+        );
+        let diagnostic = output
+            .get("vm_diagnostic")
+            .and_then(norito::json::Value::as_object)
+            .expect("VM diagnostic");
+        assert_eq!(
+            diagnostic
+                .get("function")
+                .and_then(norito::json::Value::as_str),
+            Some("inspect")
+        );
+        assert_eq!(
+            diagnostic
+                .get("current_function")
+                .and_then(norito::json::Value::as_str),
+            Some("inspect")
         );
         let snippet = output
             .get("source_snippet")
@@ -5260,7 +5522,85 @@ mod tests {
     }
 
     #[test]
-    fn debug_view_source_file_override_beats_embedded_path() {
+    fn debug_source_map_rejects_mismatched_artifact_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("debug_view_mismatch.ko");
+        let source = r#"
+            seiyaku Demo {
+                view fn inspect() -> int {
+                    return 7;
+                }
+            }
+        "#;
+        let (program, source_map) =
+            compile_contract_program_with_source_map(source, &source_path.display().to_string());
+        let mut source_map: norito::json::Value =
+            norito::json::from_str(&source_map).expect("parse source-map sidecar");
+        source_map
+            .as_object_mut()
+            .expect("source-map object")
+            .insert(
+                "artifact_hash".to_owned(),
+                norito::json::Value::from("00".repeat(iroha_crypto::Hash::LENGTH)),
+            );
+        let source_map_path = dir.path().join("mismatch.source-map.json");
+        std::fs::write(
+            &source_map_path,
+            norito::json::to_json_pretty(&source_map).expect("render tampered sidecar"),
+        )
+        .expect("write tampered sidecar");
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+        let executable_len = u64::try_from(program.len() - parsed.code_offset)
+            .expect("fixture executable length fits u64");
+
+        let err = load_local_contract_source_map(
+            Some(&source_map_path),
+            &ivm::contract_code_hash(&program),
+            executable_len,
+        )
+        .expect_err("mismatched source-map sidecar must fail");
+        assert!(
+            err.to_string().contains("artifact_hash does not match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_snippet_ignores_out_of_range_source_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("short.ko");
+        std::fs::write(&source_path, "one line\n").expect("write source");
+        let diagnostic = LocalContractDebugVmDiagnostic {
+            trap_kind: "OutOfGas".to_owned(),
+            message: "fixture".to_owned(),
+            pc: 0,
+            function: Some("inspect".to_owned()),
+            source_path: Some(source_path.display().to_string()),
+            line: Some(2),
+            column: Some(1),
+            gas_limit: 0,
+            gas_remaining: 0,
+            gas_used: 0,
+            cycles: 0,
+            max_cycles: 0,
+            stack_limit_bytes: 0,
+            stack_bytes_used: 0,
+            entrypoint_pc: None,
+            current_function: Some("inspect".to_owned()),
+            opcode: None,
+            syscall: None,
+            predecoded_loaded: false,
+            predecoded_hit: None,
+        };
+
+        assert!(
+            maybe_render_source_snippet(None, Some(&diagnostic)).is_none(),
+            "an invalid sidecar line must not panic or produce an empty snippet"
+        );
+    }
+
+    #[test]
+    fn debug_view_source_file_override_beats_sidecar_path() {
         let authority = fixture_account(0x23);
         let mut ctx = TestContext::new(authority);
         let dir = tempfile::tempdir().expect("tempdir");
@@ -5285,16 +5625,20 @@ mod tests {
             "#,
         )
         .expect("write override source");
-        let program =
-            compile_contract_program_with_source_path(source, &embedded_path.display().to_string());
+        let (program, source_map) =
+            compile_contract_program_with_source_map(source, &embedded_path.display().to_string());
+        let source_map_path = dir.path().join("debug_view.source-map.json");
+        std::fs::write(&source_map_path, source_map).expect("write source-map sidecar");
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let args = DebugViewArgs {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
             entrypoint: "inspect".to_owned(),
-            gas_limit: 0,
+            // The entrypoint wrapper costs two gas; exhaust at the first mapped body opcode.
+            gas_limit: 2,
             source_file: Some(override_path.clone()),
+            source_map_file: Some(source_map_path),
             accounts_json: None,
             accounts_file: None,
             durable_state_json: None,
@@ -5351,8 +5695,9 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             entrypoint: "bump".to_owned(),
-            gas_limit: 50_000,
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
             source_file: None,
+            source_map_file: None,
             accounts_json: None,
             accounts_file: None,
             durable_state_json: Some(durable_state_json),
@@ -5366,7 +5711,8 @@ mod tests {
         let output = ctx.take_output().expect("output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
+            Some(true),
+            "unexpected debug-call response: {output:?}"
         );
         assert_eq!(
             output.get("result").and_then(norito::json::Value::as_str),
@@ -5414,6 +5760,7 @@ mod tests {
             entrypoint: "inspect".to_owned(),
             gas_limit: 50_000,
             source_file: None,
+            source_map_file: None,
             accounts_json: None,
             accounts_file: None,
             durable_state_json: None,
@@ -5434,17 +5781,28 @@ mod tests {
 
     #[test]
     fn debug_call_matches_overlay_for_public_by_call_execution() {
-        let authority = fixture_account(0x33);
+        use iroha::data_model::{
+            permission::{Permission, Permissions},
+            transaction::executable::{ContractArgumentRecord, ContractInvocation},
+        };
+        use iroha_core::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            smartcontracts::code,
+            state::{State, World},
+        };
+
+        let authority_key_pair = fixture_key_pair(0x33);
+        let authority = AccountId::new(authority_key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
         let source = r#"
             seiyaku Demo {
-                state int counter;
-                hajimari() { counter = 0; }
+                state StateMap<int, int> Counters;
 
                 kotoage fn bump(int amount) -> int authorize("Admin") {
                     ledger::domain::register(DomainId::parse("debugparity.universal"));
-                    counter = amount;
-                    return counter;
+                    Counters[0] = amount;
+                    return Counters.get(0).unwrap_or(0);
                 }
             }
         "#;
@@ -5456,8 +5814,9 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             entrypoint: "bump".to_owned(),
-            gas_limit: 50_000,
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
             source_file: None,
+            source_map_file: None,
             accounts_json: None,
             accounts_file: None,
             durable_state_json: None,
@@ -5471,31 +5830,110 @@ mod tests {
         let output = ctx.take_output().expect("debug call output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
+            Some(true),
+            "unexpected debug-call response: {output:?}"
         );
+
+        let verified = ivm::verify_contract_artifact(&program).expect("verify contract artifact");
+        let code_hash = verified.code_hash;
+        let argument_schema = verified
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "bump")
+            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+            .expect("bump argument schema")
+            .clone();
+        let manifest = verified.manifest.signed(&authority_key_pair);
+        let argument_bytes = ivm::encode_argument_record_from_json(
+            &argument_schema,
+            &iroha_primitives::json::Json::from(
+                norito::json::from_str::<norito::json::Value>(&payload_json)
+                    .expect("payload json"),
+            ),
+        )
+        .expect("encode contract arguments");
+        let arguments = ContractArgumentRecord::try_new(argument_bytes)
+            .expect("bounded contract argument record");
+        let contract_address = ContractAddress::derive(
+            iroha::account_address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+
+        let fixture_domain = Domain::new(
+            DomainId::try_new("fixture", "universal").expect("valid fixture domain"),
+        )
+        .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([fixture_domain], [account], []);
+        let mut permissions = Permissions::new();
+        assert!(permissions.insert(Permission::new(
+            "CanRegisterSmartContractCode".to_owned(),
+            iroha_primitives::json::Json::new(()),
+        )));
+        assert!(permissions.insert(Permission::new(
+            "Admin".to_owned(),
+            iroha_primitives::json::Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
+        let state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ctx.config().chain.clone(),
+        );
+        {
+            let header = BlockHeader::new(
+                std::num::NonZeroU64::new(1).expect("non-zero block height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let registered_hash =
+                code::register_code_bytes(&authority, program.clone(), &mut transaction)
+                    .expect("register contract bytecode");
+            assert_eq!(registered_hash, code_hash);
+            code::register_manifest(&authority, manifest, &mut transaction)
+                .expect("register contract manifest");
+            code::activate_instance(
+                &authority,
+                contract_address.clone(),
+                code_hash,
+                &mut transaction,
+            )
+            .expect("activate contract instance");
+            transaction.apply();
+            block.commit().expect("commit contract deployment");
+        }
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit").expect("static gas_limit key"),
             iroha_primitives::json::Json::from(DEFAULT_CONTRACT_GAS_LIMIT),
         );
-        metadata.insert(
-            Name::from_str("contract_entrypoint").expect("static contract_entrypoint key"),
-            iroha_primitives::json::Json::from("bump"),
-        );
-        metadata.insert(
-            Name::from_str("contract_payload").expect("static contract_payload key"),
-            iroha_primitives::json::Json::from(
-                norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json"),
-            ),
-        );
         let tx = TransactionBuilder::new(ctx.config().chain.clone(), authority.clone())
             .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
-            .sign(ctx.config().key_pair.private_key());
-        let overlay =
-            build_overlay_for_transaction_with_accounts(&tx, std::slice::from_ref(&authority))
-                .expect("overlay");
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                expected_code_hash: code_hash,
+                entrypoint: "bump".to_owned(),
+                arguments: Some(arguments),
+            }))
+            .sign(authority_key_pair.private_key());
+        let overlay = iroha_core::pipeline::overlay::build_overlay_for_transaction(
+            &tx,
+            &state.view(),
+        )
+        .expect("overlay");
 
         assert_eq!(
             output
@@ -5517,9 +5955,26 @@ mod tests {
         );
         let expected_durable_json = render_durable_state_overlay(overlay.durable_state_overlay())
             .expect("serialize durable overlay");
+        let expected_durable = expected_durable_json
+            .as_object()
+            .expect("live durable overlay object");
+        let contract_state_digest = hex::encode(
+            iroha_crypto::Hash::new(contract_address.to_string().as_bytes()).as_ref(),
+        );
+        let debug_durable = output
+            .get("durable_state_overlay")
+            .and_then(norito::json::Value::as_object)
+            .expect("debug durable overlay object");
+        let (logical_key, debug_value) = debug_durable
+            .iter()
+            .next()
+            .expect("one local durable-state mutation");
+        assert_eq!(debug_durable.len(), 1);
+        let scoped_key = format!("sc/{contract_state_digest}/{logical_key}");
         assert_eq!(
-            output.get("durable_state_overlay"),
-            Some(&expected_durable_json)
+            Some(debug_value),
+            expected_durable.get(&scoped_key),
+            "local logical state must match the live contract-scoped overlay"
         );
         assert_eq!(
             output.get("result").and_then(norito::json::Value::as_str),

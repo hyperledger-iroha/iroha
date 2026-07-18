@@ -194,6 +194,68 @@ struct StableSidecarRead {
     metadata: StableSidecarMetadata,
 }
 
+#[derive(Debug)]
+struct BoundProgressDirectory {
+    expected_path: PathBuf,
+    canonical_path: PathBuf,
+    /// Entry name relative to the next bound ancestor; `None` only for Kura root.
+    entry_name: Option<std::ffi::OsString>,
+    file: std::fs::File,
+    metadata: std::fs::Metadata,
+}
+
+#[derive(Debug)]
+struct BoundProgressNamespace {
+    data_path: PathBuf,
+    index_path: PathBuf,
+    /// Bound directories in durability order: immediate parent through Kura root.
+    directories: Vec<BoundProgressDirectory>,
+}
+
+#[derive(Debug)]
+struct BoundProgressSidecar {
+    namespace: BoundProgressNamespace,
+    data: std::fs::File,
+    index: std::fs::File,
+    data_metadata: StableSidecarMetadata,
+    index_metadata: StableSidecarMetadata,
+}
+
+#[derive(Debug)]
+enum BoundProgressPair {
+    Absent(BoundProgressNamespace),
+    Present(BoundProgressSidecar),
+}
+
+#[derive(Debug)]
+struct BoundProgressPromotionError {
+    published: bool,
+    source: std::io::Error,
+}
+
+#[derive(Debug)]
+struct BoundSidecarIndexSnapshot {
+    layout: SidecarIndexLayout,
+    entries: Vec<SidecarIndexEntry>,
+    indexed_end: u64,
+}
+
+impl BoundProgressPair {
+    fn sidecar(&self) -> Option<&BoundProgressSidecar> {
+        match self {
+            Self::Absent(_) => None,
+            Self::Present(sidecar) => Some(sidecar),
+        }
+    }
+
+    fn sidecar_mut(&mut self) -> Option<&mut BoundProgressSidecar> {
+        match self {
+            Self::Absent(_) => None,
+            Self::Present(sidecar) => Some(sidecar),
+        }
+    }
+}
+
 /// One canonical outbound SCCP payload retained in commitment-index order.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -5281,13 +5343,22 @@ impl Kura {
             // The primary binding was already resolved from the durable geometry journal and
             // opened above. Recreating its configured alias here would resurrect the stale side
             // of an interrupted relabel and make the next recovery ambiguous.
-            if entry.lane_id == primary_lane {
-                continue;
-            }
-            let blocks_dir = entry.blocks_dir(store_dir);
-            if blocks_dir.as_path() != active_blocks_dir {
+            let is_primary = entry.lane_id == primary_lane;
+            let blocks_dir = if is_primary {
+                active_blocks_dir.to_path_buf()
+            } else {
+                entry.blocks_dir(store_dir)
+            };
+            if !is_primary && blocks_dir.as_path() != active_blocks_dir {
                 std::fs::create_dir_all(&blocks_dir)
                     .map_err(|err| Error::MkDir(err, blocks_dir.clone()))?;
+            }
+            let lane_artifacts_dir = Self::lane_artifact_dir(&blocks_dir);
+            std::fs::create_dir_all(&lane_artifacts_dir)
+                .map_err(|err| Error::MkDir(err, lane_artifacts_dir))?;
+
+            if is_primary {
+                continue;
             }
 
             let merge_path = entry.merge_log_path(store_dir);
@@ -5880,6 +5951,7 @@ impl Kura {
             let mut block_store = BlockStore::new(&blocks_dir);
             block_store.create_files_if_they_do_not_exist()?;
         }
+        create_dir_all_with_context(&Self::lane_artifact_dir(&blocks_dir))?;
 
         let merge_path = entry.merge_log_path(&self.store_root);
         if let Some(parent) = merge_path.parent() {
@@ -5905,6 +5977,7 @@ impl Kura {
     fn preflight_prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
         Self::preflight_dir_path(&blocks_dir)?;
+        Self::preflight_dir_path(&Self::lane_artifact_dir(&blocks_dir))?;
         for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
             Self::preflight_file_path(&blocks_dir.join(name))?;
         }
@@ -6151,8 +6224,8 @@ impl Kura {
     }
 
     #[cfg(all(not(unix), not(windows)))]
-    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-        left.file_type() == right.file_type() && left.created().ok() == right.created().ok()
+    fn sidecar_metadata_same_object(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
+        false
     }
 
     #[cfg(unix)]
@@ -6170,6 +6243,40 @@ impl Kura {
             && left.mtime_nsec() == right.mtime_nsec()
             && left.ctime() == right.ctime()
             && left.ctime_nsec() == right.ctime_nsec()
+    }
+
+    #[cfg(unix)]
+    fn sidecar_directory_metadata_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self::sidecar_metadata_same_object(left, right)
+            && left.mtime() == right.mtime()
+            && left.mtime_nsec() == right.mtime_nsec()
+            && left.ctime() == right.ctime()
+            && left.ctime_nsec() == right.ctime_nsec()
+    }
+
+    #[cfg(windows)]
+    fn sidecar_directory_metadata_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        Self::sidecar_metadata_same_object(left, right)
+            && left.last_write_time() == right.last_write_time()
+            && left.creation_time() == right.creation_time()
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn sidecar_directory_metadata_unchanged(
+        _left: &std::fs::Metadata,
+        _right: &std::fs::Metadata,
+    ) -> bool {
+        false
     }
 
     #[cfg(windows)]
@@ -6203,7 +6310,7 @@ impl Kura {
     ) -> bool {
         left.canonical_path == right.canonical_path
             && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
-            && Self::sidecar_metadata_same_object(&left.directory, &right.directory)
+            && Self::sidecar_directory_metadata_unchanged(&left.directory, &right.directory)
     }
 
     #[cfg(unix)]
@@ -6222,7 +6329,7 @@ impl Kura {
 
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_is_single_link(_metadata: &std::fs::Metadata) -> bool {
-        true
+        false
     }
 
     fn canonical_sidecar_directory_for(
@@ -6269,7 +6376,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
         if after.file_type().is_symlink()
             || !after.is_dir()
-            || !Self::sidecar_metadata_same_object(&before, &after)
+            || !Self::sidecar_directory_metadata_unchanged(&before, &after)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -6354,6 +6461,1181 @@ impl Kura {
         expected_directory: &Path,
     ) -> Result<Option<StableSidecarMetadata>> {
         Self::regular_sidecar_metadata_for(&self.store_root, path, expected_directory)
+    }
+
+    fn open_bound_progress_file(
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        expected: &StableSidecarMetadata,
+    ) -> Result<std::fs::File> {
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bound progress namespace has no immediate directory",
+                ),
+                path.to_path_buf(),
+            )
+        })?;
+        if path.parent() != Some(immediate.expected_path.as_path()) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar file is outside its bound immediate directory",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let file_name = path.file_name().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar file has no entry name",
+                ),
+                path.to_path_buf(),
+            )
+        })?;
+
+        #[cfg(unix)]
+        let file = std::fs::File::from(
+            rustix::fs::openat(
+                &immediate.file,
+                file_name,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?,
+        );
+
+        #[cfg(not(unix))]
+        let file = {
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            options
+                .open(path)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        };
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if !opened.is_file() || !Self::sidecar_file_metadata_unchanged(&expected.file, &opened) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar file changed while opening",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(file)
+    }
+
+    fn open_optional_bound_progress_file(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+    ) -> Result<Option<std::fs::File>> {
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bound progress namespace has no immediate directory",
+                ),
+                path.to_path_buf(),
+            )
+        })?;
+        if path.parent() != Some(immediate.expected_path.as_path()) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar file is outside its bound immediate directory",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let Some(expected) =
+            Self::regular_sidecar_metadata_for(&self.store_root, path, &immediate.expected_path)?
+        else {
+            return Ok(None);
+        };
+        if !Self::sidecar_metadata_same_object(&immediate.metadata, &expected.directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar directory changed while binding an optional file",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let file = Self::open_bound_progress_file(namespace, path, &expected)?;
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar namespace changed while binding an optional file",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(file))
+    }
+
+    fn open_direct_sidecar_file_in_namespace(
+        path: &Path,
+        create: bool,
+        append: bool,
+        namespace: Option<&BoundProgressNamespace>,
+    ) -> std::io::Result<std::fs::File> {
+        let before = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == ErrorKind::NotFound && create => None,
+            Err(error) => return Err(error),
+        };
+        if before.as_ref().is_some_and(|metadata| {
+            metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || !Self::sidecar_is_single_link(metadata)
+        }) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "sidecar path is not a direct single-link regular file",
+            ));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+            let parent_path = path.parent().ok_or_else(|| {
+                std::io::Error::new(ErrorKind::InvalidInput, "sidecar path has no parent")
+            })?;
+            let file_name = path.file_name().ok_or_else(|| {
+                std::io::Error::new(ErrorKind::InvalidInput, "sidecar path has no file name")
+            })?;
+            let owned_parent;
+            let parent = if let Some(namespace) = namespace {
+                let immediate = namespace.directories.first().ok_or_else(|| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "bound sidecar namespace has no immediate directory",
+                    )
+                })?;
+                if parent_path != immediate.expected_path {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "sidecar path is outside its bound namespace",
+                    ));
+                }
+                let opened = immediate.file.metadata()?;
+                let current = std::fs::symlink_metadata(parent_path)?;
+                if !opened.is_dir()
+                    || current.file_type().is_symlink()
+                    || !current.is_dir()
+                    || !Self::sidecar_metadata_same_object(&immediate.metadata, &opened)
+                    || !Self::sidecar_metadata_same_object(&immediate.metadata, &current)
+                {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "bound sidecar namespace changed before mutation",
+                    ));
+                }
+                &immediate.file
+            } else {
+                let parent_before = std::fs::symlink_metadata(parent_path)?;
+                if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "sidecar parent is not a direct directory",
+                    ));
+                }
+                let mut options = std::fs::OpenOptions::new();
+                options.read(true).custom_flags(
+                    (rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC)
+                        .bits() as i32,
+                );
+                owned_parent = options.open(parent_path)?;
+                let parent_opened = owned_parent.metadata()?;
+                let parent_after = std::fs::symlink_metadata(parent_path)?;
+                if !parent_opened.is_dir()
+                    || parent_after.file_type().is_symlink()
+                    || !parent_after.is_dir()
+                    || !Self::sidecar_metadata_same_object(&parent_before, &parent_opened)
+                    || !Self::sidecar_metadata_same_object(&parent_before, &parent_after)
+                {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "sidecar parent changed while binding it",
+                    ));
+                }
+                &owned_parent
+            };
+
+            let mut flags = rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC;
+            if create {
+                flags |= rustix::fs::OFlags::CREATE;
+            }
+            if append {
+                flags |= rustix::fs::OFlags::APPEND;
+            }
+            let file = std::fs::File::from(
+                rustix::fs::openat(
+                    parent,
+                    file_name,
+                    flags,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(std::io::Error::from)?,
+            );
+            let opened = file.metadata()?;
+            let after =
+                rustix::fs::statat(parent, file_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)?;
+            if !opened.is_file()
+                || !Self::sidecar_is_single_link(&opened)
+                || after.st_dev as u64 != opened.dev()
+                || after.st_ino as u64 != opened.ino()
+                || after.st_nlink as u64 != 1
+                || before
+                    .as_ref()
+                    .is_some_and(|metadata| !Self::sidecar_metadata_same_object(metadata, &opened))
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path identity changed while opening",
+                ));
+            }
+            return Ok(file);
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create(create).append(append);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            let file = options.open(path)?;
+            let opened = file.metadata()?;
+            let after = std::fs::symlink_metadata(path)?;
+            if !opened.is_file()
+                || after.file_type().is_symlink()
+                || !after.is_file()
+                || !Self::sidecar_is_single_link(&opened)
+                || !Self::sidecar_is_single_link(&after)
+                || !Self::sidecar_metadata_same_object(&opened, &after)
+                || before
+                    .as_ref()
+                    .is_some_and(|metadata| !Self::sidecar_metadata_same_object(metadata, &opened))
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path identity changed while opening",
+                ));
+            }
+            Ok(file)
+        }
+    }
+
+    fn remove_bound_progress_temp_if_present(
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+    ) -> std::io::Result<()> {
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bound progress namespace has no immediate directory",
+            )
+        })?;
+        if path.parent() != Some(immediate.expected_path.as_path()) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "progress temp is outside its bound namespace",
+            ));
+        }
+        let name = path.file_name().ok_or_else(|| {
+            std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
+        })?;
+
+        #[cfg(unix)]
+        {
+            let entry = match rustix::fs::statat(
+                &immediate.file,
+                name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(entry) => entry,
+                Err(rustix::io::Errno::NOENT) => return Ok(()),
+                Err(error) => return Err(std::io::Error::from(error)),
+            };
+            if rustix::fs::FileType::from_raw_mode(entry.st_mode)
+                != rustix::fs::FileType::RegularFile
+                || entry.st_nlink as u64 != 1
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress temp is not a direct single-link regular file",
+                ));
+            }
+            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+                .map_err(std::io::Error::from)?;
+            return Ok(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata)
+                    if metadata.is_file()
+                        && !metadata.file_type().is_symlink()
+                        && Self::sidecar_is_single_link(&metadata) =>
+                {
+                    std::fs::remove_file(path)
+                }
+                Ok(_) => Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress temp is not a direct single-link regular file",
+                )),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+    }
+
+    fn create_new_bound_progress_temp(
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+    ) -> std::io::Result<std::fs::File> {
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bound progress namespace has no immediate directory",
+            )
+        })?;
+        if path.parent() != Some(immediate.expected_path.as_path()) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "progress temp is outside its bound namespace",
+            ));
+        }
+        let name = path.file_name().ok_or_else(|| {
+            std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
+        })?;
+
+        #[cfg(unix)]
+        {
+            let file = std::fs::File::from(
+                rustix::fs::openat(
+                    &immediate.file,
+                    name,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(std::io::Error::from)?,
+            );
+            let metadata = file.metadata()?;
+            let entry =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)?;
+            use std::os::unix::fs::MetadataExt as _;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || entry.st_dev as u64 != metadata.dev()
+                || entry.st_ino as u64 != metadata.ino()
+                || entry.st_nlink as u64 != 1
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress temp identity changed during exclusive creation",
+                ));
+            }
+            return Ok(file);
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            let file = options.open(path)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || !Self::sidecar_is_single_link(&metadata) {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress temp is not a direct single-link regular file",
+                ));
+            }
+            Ok(file)
+        }
+    }
+
+    fn promote_bound_progress_temp(
+        namespace: &BoundProgressNamespace,
+        temp_path: &Path,
+        main_path: &Path,
+        temp: &std::fs::File,
+    ) -> std::result::Result<(), BoundProgressPromotionError> {
+        let unpublished = |source| BoundProgressPromotionError {
+            published: false,
+            source,
+        };
+        let published = |source| BoundProgressPromotionError {
+            published: true,
+            source,
+        };
+        let immediate = namespace
+            .directories
+            .first()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bound progress namespace has no immediate directory",
+                )
+            })
+            .map_err(unpublished)?;
+        if temp_path.parent() != Some(immediate.expected_path.as_path())
+            || main_path.parent() != Some(immediate.expected_path.as_path())
+        {
+            return Err(unpublished(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "progress promotion escapes its bound namespace",
+            )));
+        }
+        let temp_name = temp_path
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
+            })
+            .map_err(unpublished)?;
+        let main_name = main_path
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(ErrorKind::InvalidInput, "progress index has no entry name")
+            })
+            .map_err(unpublished)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = temp.metadata().map_err(unpublished)?;
+            let before = rustix::fs::statat(
+                &immediate.file,
+                temp_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(unpublished)?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || before.st_dev as u64 != metadata.dev()
+                || before.st_ino as u64 != metadata.ino()
+                || before.st_nlink as u64 != 1
+            {
+                return Err(unpublished(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress temp changed before promotion",
+                )));
+            }
+            rustix::fs::renameat(&immediate.file, temp_name, &immediate.file, main_name)
+                .map_err(std::io::Error::from)
+                .map_err(unpublished)?;
+            let after = rustix::fs::statat(
+                &immediate.file,
+                main_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(published)?;
+            if after.st_dev as u64 != metadata.dev()
+                || after.st_ino as u64 != metadata.ino()
+                || after.st_nlink as u64 != 1
+            {
+                return Err(published(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "promoted progress index has the wrong identity",
+                )));
+            }
+            return Ok(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (namespace, temp_path, main_path, temp);
+            Err(BoundProgressPromotionError {
+                published: false,
+                source: std::io::Error::new(
+                    ErrorKind::Unsupported,
+                    "descriptor-relative progress prepend promotion is unsupported on this platform",
+                ),
+            })
+        }
+    }
+
+    fn open_bound_progress_directory(
+        store_root: &Path,
+        expected_path: &Path,
+    ) -> Result<BoundProgressDirectory> {
+        let (canonical_path, metadata) =
+            Self::canonical_sidecar_directory_for(store_root, expected_path)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "progress sidecar directory disappeared while binding it",
+                    ),
+                    expected_path.to_path_buf(),
+                )
+            })?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            options.custom_flags(
+                (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        let file = options
+            .open(expected_path)
+            .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+        let after = Self::canonical_sidecar_directory_for(store_root, expected_path)?;
+        if !opened.is_dir()
+            || !Self::sidecar_directory_metadata_unchanged(&metadata, &opened)
+            || !after.as_ref().is_some_and(|(after_path, after_metadata)| {
+                *after_path == canonical_path
+                    && Self::sidecar_directory_metadata_unchanged(&metadata, after_metadata)
+            })
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar directory changed while opening",
+                ),
+                expected_path.to_path_buf(),
+            ));
+        }
+        Ok(BoundProgressDirectory {
+            expected_path: expected_path.to_path_buf(),
+            canonical_path,
+            entry_name: None,
+            file,
+            metadata,
+        })
+    }
+
+    fn open_bound_progress_child_directory(
+        store_root: &Path,
+        parent: &BoundProgressDirectory,
+        expected_path: &Path,
+    ) -> Result<BoundProgressDirectory> {
+        #[cfg(unix)]
+        let _ = store_root;
+        if expected_path.parent() != Some(parent.expected_path.as_path()) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar directory is not a direct child of its bound parent",
+                ),
+                expected_path.to_path_buf(),
+            ));
+        }
+        let name = expected_path.file_name().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar child directory has no entry name",
+                ),
+                expected_path.to_path_buf(),
+            )
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let before =
+                rustix::fs::statat(&parent.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            if rustix::fs::FileType::from_raw_mode(before.st_mode)
+                != rustix::fs::FileType::Directory
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar path component is not a direct directory",
+                    ),
+                    expected_path.to_path_buf(),
+                ));
+            }
+            let file = std::fs::File::from(
+                rustix::fs::openat(
+                    &parent.file,
+                    name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?,
+            );
+            let metadata = file
+                .metadata()
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            let after =
+                rustix::fs::statat(&parent.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            let canonical_path = parent.canonical_path.join(name);
+            let canonical_after = std::fs::canonicalize(expected_path)
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            if !metadata.is_dir()
+                || before.st_dev as u64 != metadata.dev()
+                || before.st_ino as u64 != metadata.ino()
+                || after.st_dev as u64 != metadata.dev()
+                || after.st_ino as u64 != metadata.ino()
+                || canonical_after != canonical_path
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar directory changed during descriptor-relative binding",
+                    ),
+                    expected_path.to_path_buf(),
+                ));
+            }
+            return Ok(BoundProgressDirectory {
+                expected_path: expected_path.to_path_buf(),
+                canonical_path,
+                entry_name: Some(name.to_os_string()),
+                file,
+                metadata,
+            });
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut child = Self::open_bound_progress_directory(store_root, expected_path)?;
+            child.entry_name = Some(name.to_os_string());
+            Ok(child)
+        }
+    }
+
+    fn open_bound_progress_namespace(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<BoundProgressNamespace> {
+        let sidecar_dir = data_path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar data path has no parent",
+                ),
+                data_path.to_path_buf(),
+            )
+        })?;
+        if index_path.parent() != Some(sidecar_dir) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar files do not share one parent directory",
+                ),
+                index_path.to_path_buf(),
+            ));
+        }
+        let mut directory_paths = vec![sidecar_dir.to_path_buf()];
+        let mut ancestor = sidecar_dir;
+        loop {
+            if ancestor == self.store_root {
+                break;
+            }
+            ancestor = ancestor.parent().ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar durability chain did not reach the Kura root",
+                    ),
+                    ancestor.to_path_buf(),
+                )
+            })?;
+            directory_paths.push(ancestor.to_path_buf());
+        }
+        directory_paths.reverse();
+        let Some(root_path) = directory_paths.first() else {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar durability chain is empty",
+                ),
+                sidecar_dir.to_path_buf(),
+            ));
+        };
+        let root = Self::open_bound_progress_directory(&self.store_root, root_path)?;
+        let mut directories = Vec::with_capacity(directory_paths.len());
+        directories.push(root);
+        for path in directory_paths.iter().skip(1) {
+            let parent = directories
+                .last()
+                .expect("bound progress directory chain starts at Kura root");
+            let child = Self::open_bound_progress_child_directory(&self.store_root, parent, path)?;
+            directories.push(child);
+        }
+        directories.reverse();
+
+        let namespace = BoundProgressNamespace {
+            data_path: data_path.to_path_buf(),
+            index_path: index_path.to_path_buf(),
+            directories,
+        };
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar namespace changed while binding durability handles",
+                ),
+                sidecar_dir.to_path_buf(),
+            ));
+        }
+        Ok(namespace)
+    }
+
+    fn open_bound_progress_pair(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<BoundProgressPair> {
+        let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+        let sidecar_dir = namespace
+            .data_path
+            .parent()
+            .expect("bound progress namespace always has an immediate parent");
+
+        let data_metadata =
+            Self::regular_sidecar_metadata_for(&self.store_root, data_path, sidecar_dir)?;
+        let index_metadata =
+            Self::regular_sidecar_metadata_for(&self.store_root, index_path, sidecar_dir)?;
+        let (data_metadata, index_metadata) = match (data_metadata, index_metadata) {
+            (None, None) => {
+                if !self.bound_progress_namespace_unchanged(&namespace) {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "progress sidecar namespace changed while attesting absence",
+                        ),
+                        sidecar_dir.to_path_buf(),
+                    ));
+                }
+                return Ok(BoundProgressPair::Absent(namespace));
+            }
+            (Some(data), Some(index)) => (data, index),
+            _ => {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar data and index are only partially present",
+                    ),
+                    sidecar_dir.to_path_buf(),
+                ));
+            }
+        };
+        let data = Self::open_bound_progress_file(&namespace, data_path, &data_metadata)?;
+        let index = Self::open_bound_progress_file(&namespace, index_path, &index_metadata)?;
+
+        let bound = BoundProgressSidecar {
+            namespace,
+            data,
+            index,
+            data_metadata,
+            index_metadata,
+        };
+        if !self.bound_progress_sidecar_unchanged(&bound) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar identity changed while binding its durability handles",
+                ),
+                data_path.to_path_buf(),
+            ));
+        }
+        Ok(BoundProgressPair::Present(bound))
+    }
+
+    fn open_bound_progress_sidecar(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<BoundProgressSidecar> {
+        match self.open_bound_progress_pair(data_path, index_path)? {
+            BoundProgressPair::Present(bound) => Ok(bound),
+            BoundProgressPair::Absent(namespace) => Err(Error::IO(
+                std::io::Error::new(ErrorKind::NotFound, "progress sidecar pair is absent"),
+                namespace.data_path,
+            )),
+        }
+    }
+
+    fn bound_progress_namespace_unchanged(&self, namespace: &BoundProgressNamespace) -> bool {
+        namespace
+            .directories
+            .iter()
+            .enumerate()
+            .all(|(index, directory)| {
+                let Ok(opened) = directory.file.metadata() else {
+                    return false;
+                };
+                #[cfg(unix)]
+                if let Some(name) = directory.entry_name.as_deref() {
+                    use std::os::unix::fs::MetadataExt as _;
+
+                    let Some(parent) = namespace.directories.get(index.saturating_add(1)) else {
+                        return false;
+                    };
+                    let Ok(entry) = rustix::fs::statat(
+                        &parent.file,
+                        name,
+                        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                    ) else {
+                        return false;
+                    };
+                    if rustix::fs::FileType::from_raw_mode(entry.st_mode)
+                        != rustix::fs::FileType::Directory
+                        || entry.st_dev as u64 != opened.dev()
+                        || entry.st_ino as u64 != opened.ino()
+                    {
+                        return false;
+                    }
+                }
+                let opened_matches = if index == 0 {
+                    Self::sidecar_directory_metadata_unchanged(&directory.metadata, &opened)
+                } else {
+                    Self::sidecar_metadata_same_object(&directory.metadata, &opened)
+                };
+                if !opened.is_dir() || !opened_matches {
+                    return false;
+                }
+                Self::canonical_sidecar_directory_for(&self.store_root, &directory.expected_path)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(canonical_path, metadata)| {
+                        let path_matches = if index == 0 {
+                            Self::sidecar_directory_metadata_unchanged(
+                                &directory.metadata,
+                                &metadata,
+                            )
+                        } else {
+                            Self::sidecar_metadata_same_object(&directory.metadata, &metadata)
+                        };
+                        canonical_path == directory.canonical_path && path_matches
+                    })
+            })
+    }
+
+    fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
+        let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
+            return false;
+        };
+        if bound.namespace.index_path.parent() != Some(sidecar_dir) {
+            return false;
+        }
+        let Ok(data_opened) = bound.data.metadata() else {
+            return false;
+        };
+        let Ok(index_opened) = bound.index.metadata() else {
+            return false;
+        };
+        if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
+            || !Self::sidecar_file_metadata_unchanged(&bound.index_metadata.file, &index_opened)
+        {
+            return false;
+        }
+        let Ok(data_after) = Self::regular_sidecar_metadata_for(
+            &self.store_root,
+            &bound.namespace.data_path,
+            sidecar_dir,
+        ) else {
+            return false;
+        };
+        let Ok(index_after) = Self::regular_sidecar_metadata_for(
+            &self.store_root,
+            &bound.namespace.index_path,
+            sidecar_dir,
+        ) else {
+            return false;
+        };
+        if !data_after.as_ref().is_some_and(|after| {
+            Self::stable_sidecar_metadata_unchanged(&bound.data_metadata, after)
+        }) || !index_after.as_ref().is_some_and(|after| {
+            Self::stable_sidecar_metadata_unchanged(&bound.index_metadata, after)
+        }) {
+            return false;
+        }
+        self.bound_progress_namespace_unchanged(&bound.namespace)
+    }
+
+    fn sync_bound_progress_namespace(
+        &self,
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> bool {
+        for (index, directory) in namespace.directories.iter().enumerate() {
+            let result = if index == 0 {
+                sync_indexed_sidecar_dir_handle(&directory.file)
+            } else {
+                sync_progress_sidecar_ancestor_dir_handle(&directory.file)
+            };
+            if let Err(err) = result {
+                iroha_logger::warn!(
+                    ?err,
+                    path = ?directory.expected_path,
+                    kind,
+                    "failed to sync bound progress sidecar namespace"
+                );
+                return false;
+            }
+        }
+        self.bound_progress_namespace_unchanged(namespace)
+    }
+
+    fn sync_bound_progress_absence(&self, namespace: &BoundProgressNamespace, kind: &str) -> bool {
+        if !self.sync_bound_progress_namespace(namespace, kind) {
+            return false;
+        }
+        let Some(sidecar_dir) = namespace.data_path.parent() else {
+            return false;
+        };
+        if namespace.index_path.parent() != Some(sidecar_dir) {
+            return false;
+        }
+        matches!(
+            Self::regular_sidecar_metadata_for(&self.store_root, &namespace.data_path, sidecar_dir,),
+            Ok(None)
+        ) && matches!(
+            Self::regular_sidecar_metadata_for(
+                &self.store_root,
+                &namespace.index_path,
+                sidecar_dir,
+            ),
+            Ok(None)
+        ) && self.bound_progress_namespace_unchanged(namespace)
+    }
+
+    fn sync_bound_progress_sidecar(&self, bound: &BoundProgressSidecar, kind: &str) -> bool {
+        if let Err(err) = sync_indexed_sidecar_data(&bound.data) {
+            iroha_logger::warn!(?err, path = ?bound.namespace.data_path, kind, "failed to sync progress sidecar payload");
+            return false;
+        }
+        if let Err(err) = sync_indexed_sidecar_index(&bound.index) {
+            iroha_logger::warn!(?err, path = ?bound.namespace.index_path, kind, "failed to sync progress sidecar index");
+            return false;
+        }
+        self.sync_bound_progress_namespace(&bound.namespace, kind)
+            && self.bound_progress_sidecar_unchanged(bound)
+    }
+
+    fn bound_indexed_sidecar_payload_heights(
+        &self,
+        bound: &mut BoundProgressSidecar,
+        kind: &str,
+        limit: usize,
+    ) -> Result<BTreeSet<u64>> {
+        if !self.bound_progress_sidecar_unchanged(bound) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar identity changed before index enumeration",
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        let index_len = bound
+            .index
+            .metadata()
+            .map_err(|error| Error::IO(error, bound.namespace.index_path.clone()))?
+            .len();
+        let layout =
+            SidecarIndexLayout::read_from(&mut bound.index, index_len).map_err(|reason| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{kind} index is malformed: {reason}"),
+                    ),
+                    bound.namespace.index_path.clone(),
+                )
+            })?;
+        if layout.aligned_len != index_len
+            || usize::try_from(layout.entry_count).unwrap_or(usize::MAX) > limit
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{kind} index is misaligned or exceeds its bounded entry count"),
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        let data_len = bound
+            .data
+            .metadata()
+            .map_err(|error| Error::IO(error, bound.namespace.data_path.clone()))?
+            .len();
+        bound
+            .index
+            .seek(SeekFrom::Start(layout.entries_offset))
+            .map_err(|error| Error::IO(error, bound.namespace.index_path.clone()))?;
+        let mut heights = BTreeSet::new();
+        let mut indexed_end = 0_u64;
+        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+        for offset in 0..layout.entry_count {
+            bound
+                .index
+                .read_exact(&mut encoded)
+                .map_err(|error| Error::IO(error, bound.namespace.index_path.clone()))?;
+            let entry = SidecarIndexEntry::from_bytes(encoded);
+            if entry.len == 0 {
+                continue;
+            }
+            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES
+                || entry
+                    .offset
+                    .checked_add(entry.len)
+                    .is_none_or(|end| end > data_len)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{kind} index contains an invalid payload range"),
+                    ),
+                    bound.namespace.index_path.clone(),
+                ));
+            }
+            indexed_end = indexed_end.max(
+                entry
+                    .offset
+                    .checked_add(entry.len)
+                    .expect("validated sidecar range cannot overflow"),
+            );
+            let height = layout.base_height.checked_add(offset).ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{kind} index height overflows"),
+                    ),
+                    bound.namespace.index_path.clone(),
+                )
+            })?;
+            heights.insert(height);
+        }
+        if data_len != indexed_end {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{kind} data has an unindexed suffix and requires writer recovery"),
+                ),
+                bound.namespace.data_path.clone(),
+            ));
+        }
+        if !self.bound_progress_sidecar_unchanged(bound) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar identity changed during index enumeration",
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        Ok(heights)
+    }
+
+    fn bound_indexed_sidecar_height_range(
+        &self,
+        bound: &mut BoundProgressSidecar,
+        kind: &str,
+    ) -> Result<Option<core::ops::RangeInclusive<u64>>> {
+        if !self.bound_progress_sidecar_unchanged(bound) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar identity changed before range enumeration",
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        let index_len = bound
+            .index
+            .metadata()
+            .map_err(|error| Error::IO(error, bound.namespace.index_path.clone()))?
+            .len();
+        let layout =
+            SidecarIndexLayout::read_from(&mut bound.index, index_len).map_err(|reason| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{kind} index is malformed: {reason}"),
+                    ),
+                    bound.namespace.index_path.clone(),
+                )
+            })?;
+        if layout.aligned_len != index_len {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{kind} index has trailing or partial bytes"),
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        if !self.bound_progress_sidecar_unchanged(bound) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar identity changed during range enumeration",
+                ),
+                bound.namespace.index_path.clone(),
+            ));
+        }
+        Ok(layout.height_range())
     }
 
     fn read_regular_sidecar_bytes_for(
@@ -17311,6 +18593,15 @@ impl Kura {
             .store(true, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
+    pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
+        &self,
+        ancestor_index: usize,
+        failures: usize,
+    ) {
+        fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
+    }
+
     pub(crate) fn fail_next_autonomous_lane_view_state_write_for_tests(&self) {
         self.fail_next_autonomous_lane_view_state_write
             .store(true, Ordering::Relaxed);
@@ -18720,7 +20011,7 @@ impl RosterSidecar {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SidecarIndexEntry {
     offset: u64,
     len: u64,
@@ -19613,7 +20904,6 @@ impl Kura {
         )
     }
 
-    #[cfg(test)]
     fn autonomous_lane_block_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -20840,8 +22130,13 @@ impl Kura {
     ///
     /// # Errors
     ///
+    /// The certificate is a progress-critical reconstruction source, so this
+    /// operation completes the data, index, and directory durability barriers
+    /// even when ordinary Kura sidecars use batched fsync.
+    ///
     /// Returns an error when the session is internally inconsistent, the lane
-    /// has no configured storage segment, or the sidecar write fails.
+    /// has no configured storage segment, or any strict persistence barrier
+    /// fails.
     pub(crate) fn persist_committed_lane_block_session(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
@@ -20885,14 +22180,38 @@ impl Kura {
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
         let _guard = self.sidecar_lock.lock();
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
-            lane_block_height,
+        if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
             "certified lane block",
         ) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "failed to recover certified lane block data/index pair",
+            ));
+        }
+        let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        if let Ok(mut existing_bound) = self.open_bound_progress_sidecar(&data_path, &index_path)
+            && let Some(existing) = self.read_certified_lane_block_artifact_from_bound_locked(
+                lane_id,
+                lane_block_height,
+                &mut existing_bound,
+            )
+        {
             if existing == *artifact {
+                // A previous strict attempt may have left an exact payload
+                // readable from the page cache while its data, index, or
+                // directory barrier failed. Reissue the complete durability
+                // sequence before acknowledging the duplicate and allowing
+                // consensus to retire its volatile reconstruction source.
+                if !self.sync_bound_progress_sidecar(&existing_bound, "certified lane block") {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make existing certified lane block durable",
+                        ),
+                        data_path,
+                    ));
+                }
                 return Ok(());
             }
             if self
@@ -20929,19 +22248,37 @@ impl Kura {
         };
         let payload = artifact.encode_framed()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let wrote = Self::append_indexed_sidecar(
+        let wrote = Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,
             lane_block_height,
             &payload,
             "certified lane block",
-            self.sidecar_fsync_mode(),
             None,
             SidecarIndexOrigin::FirstWrite,
+            &mutation_namespace,
         );
         if !wrote {
             return Err(Error::IO(
                 std::io::Error::other("failed to persist certified lane block"),
+                data_path,
+            ));
+        }
+        if self
+            .read_certified_lane_block_artifact_from_paths_durability_attested_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            )
+            .as_ref()
+            != Some(artifact)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to make certified lane block directory chain durable",
+                ),
                 data_path,
             ));
         }
@@ -20969,7 +22306,8 @@ impl Kura {
     /// Read a certified standalone lane block by lane and lane-local block height.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a different
-    /// lane/height or active geometry incarnation, or fails proposal/QC consistency checks.
+    /// lane/height or active geometry incarnation, fails proposal/QC consistency checks,
+    /// or cannot pass the complete progress-sidecar durability barrier sequence.
     #[must_use]
     pub fn read_certified_lane_block_artifact(
         &self,
@@ -20987,7 +22325,7 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-        self.read_active_certified_lane_block_artifact_from_paths_locked(
+        self.read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
             &entry,
             lane_block_height,
             &data_path,
@@ -21032,27 +22370,56 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            if !Self::recover_indexed_sidecar_artifacts(
+            if !self.recover_bound_progress_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
             ) {
                 return None;
             }
-            let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
-            heights
-                .rev()
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                .filter_map(|lane_block_height| {
-                    self.read_active_certified_lane_block_artifact_from_paths_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )
-                })
-                .collect::<Vec<_>>()
+            let mut pair = self
+                .open_bound_progress_pair(&data_path, &index_path)
+                .ok()?;
+            match &mut pair {
+                BoundProgressPair::Absent(namespace) => {
+                    if !self.sync_bound_progress_absence(namespace, "certified lane block") {
+                        return None;
+                    }
+                    Vec::new()
+                }
+                BoundProgressPair::Present(bound) => {
+                    let heights = match self
+                        .bound_indexed_sidecar_height_range(bound, "certified lane block")
+                    {
+                        Ok(heights) => heights,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                lane = %entry.lane_id.as_u32(),
+                                "failed to enumerate bound certified lane blocks"
+                            );
+                            return None;
+                        }
+                    };
+                    let candidates = heights
+                        .into_iter()
+                        .flatten()
+                        .rev()
+                        .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
+                        .filter_map(|lane_block_height| {
+                            self.read_active_certified_lane_block_artifact_from_bound_locked(
+                                &entry,
+                                lane_block_height,
+                                bound,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
+                        return None;
+                    }
+                    candidates
+                }
+            }
         };
         candidates.into_iter().find(|artifact| accept(artifact))
     }
@@ -21084,31 +22451,60 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            if !Self::recover_indexed_sidecar_artifacts(
+            if !self.recover_bound_progress_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
             ) {
                 return None;
             }
-            let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
-            let start = minimum_height.max(*heights.start());
-            let end = *heights.end();
-            if start > end {
-                return None;
+            let mut pair = self
+                .open_bound_progress_pair(&data_path, &index_path)
+                .ok()?;
+            match &mut pair {
+                BoundProgressPair::Absent(namespace) => {
+                    if !self.sync_bound_progress_absence(namespace, "certified lane block") {
+                        return None;
+                    }
+                    Vec::new()
+                }
+                BoundProgressPair::Present(bound) => {
+                    let heights = match self
+                        .bound_indexed_sidecar_height_range(bound, "certified lane block")
+                    {
+                        Ok(heights) => heights,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                lane = %entry.lane_id.as_u32(),
+                                "failed to enumerate bound certified lane blocks"
+                            );
+                            return None;
+                        }
+                    };
+                    let candidates = heights
+                        .into_iter()
+                        .flat_map(|heights| {
+                            let start = minimum_height.max(*heights.start());
+                            let end = *heights.end();
+                            (start <= end).then_some(start..=end)
+                        })
+                        .flatten()
+                        .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
+                        .filter_map(|lane_block_height| {
+                            self.read_active_certified_lane_block_artifact_from_bound_locked(
+                                &entry,
+                                lane_block_height,
+                                bound,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
+                        return None;
+                    }
+                    candidates
+                }
             }
-            (start..=end)
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                .filter_map(|lane_block_height| {
-                    self.read_active_certified_lane_block_artifact_from_paths_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )
-                })
-                .collect::<Vec<_>>()
         };
         candidates.into_iter().find(|artifact| accept(artifact))
     }
@@ -21142,30 +22538,58 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Vec::new();
         }
-        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
-        {
+        if !self.recover_bound_progress_sidecar_artifacts(
+            &data_path,
+            &index_path,
+            "certified lane block",
+        ) {
             return Vec::new();
         }
-        let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
-        else {
-            return Vec::new();
-        };
         let scan_budget = limit
             .saturating_mul(8)
             .max(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET);
-        let candidates = heights
-            .rev()
-            .take(scan_budget)
-            .filter_map(|lane_block_height| {
-                self.read_active_certified_lane_block_artifact_from_paths_locked(
-                    &entry,
-                    lane_block_height,
-                    &data_path,
-                    &index_path,
-                    false,
-                )
-            })
-            .collect::<Vec<_>>();
+        let Ok(mut pair) = self.open_bound_progress_pair(&data_path, &index_path) else {
+            return Vec::new();
+        };
+        let candidates = match &mut pair {
+            BoundProgressPair::Absent(namespace) => {
+                if !self.sync_bound_progress_absence(namespace, "certified lane block") {
+                    return Vec::new();
+                }
+                Vec::new()
+            }
+            BoundProgressPair::Present(bound) => {
+                let heights =
+                    match self.bound_indexed_sidecar_height_range(bound, "certified lane block") {
+                        Ok(heights) => heights,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                lane = %entry.lane_id.as_u32(),
+                                "failed to enumerate bound certified lane blocks"
+                            );
+                            return Vec::new();
+                        }
+                    };
+                let candidates = heights
+                    .into_iter()
+                    .flatten()
+                    .rev()
+                    .take(scan_budget)
+                    .filter_map(|lane_block_height| {
+                        self.read_active_certified_lane_block_artifact_from_bound_locked(
+                            &entry,
+                            lane_block_height,
+                            bound,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
+                    return Vec::new();
+                }
+                candidates
+            }
+        };
         drop(_guard);
         let mut artifacts = candidates
             .into_iter()
@@ -21219,25 +22643,53 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Vec::new();
         }
-        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
-        {
+        if !self.recover_bound_progress_sidecar_artifacts(
+            &data_path,
+            &index_path,
+            "certified lane block",
+        ) {
             return Vec::new();
         }
-        let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
-        else {
+        let Ok(mut pair) = self.open_bound_progress_pair(&data_path, &index_path) else {
             return Vec::new();
         };
-        let artifacts = heights
-            .filter_map(|lane_block_height| {
-                self.read_active_certified_lane_block_artifact_from_paths_locked(
-                    &entry,
-                    lane_block_height,
-                    &data_path,
-                    &index_path,
-                    false,
-                )
-            })
-            .collect::<Vec<_>>();
+        let artifacts = match &mut pair {
+            BoundProgressPair::Absent(namespace) => {
+                if !self.sync_bound_progress_absence(namespace, "certified lane block") {
+                    return Vec::new();
+                }
+                Vec::new()
+            }
+            BoundProgressPair::Present(bound) => {
+                let heights =
+                    match self.bound_indexed_sidecar_height_range(bound, "certified lane block") {
+                        Ok(heights) => heights,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                lane = %entry.lane_id.as_u32(),
+                                "failed to enumerate bound certified lane blocks"
+                            );
+                            return Vec::new();
+                        }
+                    };
+                let artifacts = heights
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|lane_block_height| {
+                        self.read_active_certified_lane_block_artifact_from_bound_locked(
+                            &entry,
+                            lane_block_height,
+                            bound,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
+                    return Vec::new();
+                }
+                artifacts
+            }
+        };
         drop(_guard);
         artifacts
             .into_iter()
@@ -21245,7 +22697,7 @@ impl Kura {
             .collect()
     }
 
-    fn read_certified_lane_block_artifact_from_paths_locked(
+    fn read_certified_lane_block_artifact_from_paths_durability_attested_locked(
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
@@ -21253,57 +22705,84 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<CertifiedLaneBlockArtifact> {
-        let artifact = Self::decode_certified_lane_block_artifact_from_paths_locked(
-            lane_id,
+        if recover
+            && !self.recover_bound_progress_sidecar_artifacts(
+                data_path,
+                index_path,
+                "certified lane block",
+            )
+        {
+            return None;
+        }
+        let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
+            Ok(pair) => pair,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to bind certified lane block durability handles"
+                );
+                return None;
+            }
+        };
+        match &mut pair {
+            BoundProgressPair::Absent(namespace) => {
+                self.sync_bound_progress_absence(namespace, "certified lane block");
+                None
+            }
+            BoundProgressPair::Present(bound) => {
+                let artifact = self.read_certified_lane_block_artifact_from_bound_locked(
+                    lane_id,
+                    lane_block_height,
+                    bound,
+                );
+                self.sync_bound_progress_sidecar(bound, "certified lane block")
+                    .then_some(artifact)
+                    .flatten()
+            }
+        }
+    }
+
+    fn read_certified_lane_block_artifact_from_bound_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        let artifact = Self::read_indexed_sidecar_from_open_files(
             lane_block_height,
-            data_path,
-            index_path,
-            recover,
+            &mut bound.data,
+            &mut bound.index,
+            &bound.namespace.data_path,
+            &bound.namespace.index_path,
+            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
+            "certified lane block",
         )?;
+        let descriptor = &artifact.proposal.descriptor;
+        if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                actual_lane = %descriptor.lane_id.as_u32(),
+                actual_height = descriptor.lane_block_height,
+                "durability-attested certified lane block identity mismatch"
+            );
+            return None;
+        }
         if let Err(message) = Self::validate_certified_lane_block_artifact(&artifact) {
             iroha_logger::warn!(
                 lane = %lane_id.as_u32(),
                 lane_block_height,
                 message,
-                "certified lane block validation failed"
+                "durability-attested certified lane block validation failed"
             );
             return None;
         }
         Some(artifact)
     }
 
-    fn decode_certified_lane_block_artifact_from_paths_locked(
-        lane_id: LaneId,
-        lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        recover: bool,
-    ) -> Option<CertifiedLaneBlockArtifact> {
-        Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            data_path,
-            index_path,
-            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
-            "certified lane block",
-            recover,
-        )
-        .and_then(|artifact| {
-            let descriptor = &artifact.proposal.descriptor;
-            if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
-                iroha_logger::warn!(
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    actual_lane = %descriptor.lane_id.as_u32(),
-                    actual_height = descriptor.lane_block_height,
-                    "certified lane block identity mismatch"
-                );
-                return None;
-            }
-            Some(artifact)
-        })
-    }
-
-    fn read_active_certified_lane_block_artifact_from_paths_locked(
+    fn read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
         &self,
         entry: &LaneConfigEntry,
         lane_block_height: u64,
@@ -21311,29 +22790,45 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<CertifiedLaneBlockArtifact> {
-        let artifact = Self::decode_certified_lane_block_artifact_from_paths_locked(
-            entry.lane_id,
-            lane_block_height,
-            data_path,
-            index_path,
-            recover,
-        )?;
-        if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)
+        let artifact = self
+            .read_certified_lane_block_artifact_from_paths_durability_attested_locked(
+                entry.lane_id,
+                lane_block_height,
+                data_path,
+                index_path,
+                recover,
+            )?;
+        if let Err(error) = self.require_active_lane_artifact(entry, &artifact.proposal.descriptor)
         {
             iroha_logger::warn!(
                 ?error,
                 lane = %entry.lane_id.as_u32(),
                 lane_block_height,
-                "certified lane block targets stale lane geometry"
+                "durability-attested certified lane block targets stale lane geometry"
             );
             return None;
         }
-        if let Err(message) = Self::validate_certified_lane_block_artifact(&artifact) {
+        Some(artifact)
+    }
+
+    fn read_active_certified_lane_block_artifact_from_bound_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        let artifact = self.read_certified_lane_block_artifact_from_bound_locked(
+            entry.lane_id,
+            lane_block_height,
+            bound,
+        )?;
+        if let Err(error) = self.require_active_lane_artifact(entry, &artifact.proposal.descriptor)
+        {
             iroha_logger::warn!(
+                ?error,
                 lane = %entry.lane_id.as_u32(),
                 lane_block_height,
-                message,
-                "certified lane block validation failed"
+                "bound certified lane block targets stale lane geometry"
             );
             return None;
         }
@@ -24200,6 +25695,11 @@ impl Kura {
         Ok(())
     }
 
+    /// Persist a recoverable application receipt through a strict power-loss boundary.
+    ///
+    /// Returns `Ok(false)` while canonical execution evidence is incomplete.
+    /// Exact existing bytes still reissue all durability barriers before this
+    /// method reports success.
     pub(crate) fn persist_lane_block_application_receipt_if_ready(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -24312,11 +25812,11 @@ impl Kura {
         // raw sidecar whose global block or merge carrier was pruned remains
         // replaceable, but its bytes are rechecked under the geometry lock so a
         // concurrently published valid receipt cannot be overwritten.
-        let observed_existing = self.read_active_lane_block_application_receipt_structural(
-            lane_id,
-            lane_block_height,
-            true,
-        );
+        let observed_existing = self
+            .read_active_lane_block_application_receipt_for_write_observation(
+                lane_id,
+                lane_block_height,
+            );
         let observed_existing_matches_evidence =
             observed_existing.as_ref().is_some_and(|existing| {
                 self.lane_block_application_receipt_matches_available_evidence(existing)
@@ -24347,14 +25847,39 @@ impl Kura {
         }
 
         let _guard = self.sidecar_lock.lock();
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
-            lane_block_height,
+        if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
             "lane block application receipt",
         ) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "failed to recover lane application receipt data/index pair",
+            ));
+        }
+        let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        if let Ok(mut existing_bound) = self.open_bound_progress_sidecar(&data_path, &index_path)
+            && let Some(existing) = self.read_lane_block_application_receipt_from_bound_locked(
+                lane_id,
+                lane_block_height,
+                &mut existing_bound,
+            )
+        {
             if existing == *artifact {
+                // Receipt visibility is not enough: an earlier attempt may
+                // have failed after making exact bytes page-cache readable.
+                // Reissue every strict barrier before application completion
+                // is allowed to retire its volatile recovery witness.
+                if !self
+                    .sync_bound_progress_sidecar(&existing_bound, "lane block application receipt")
+                {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make existing lane application receipt durable",
+                        ),
+                        data_path,
+                    ));
+                }
                 return Ok(());
             }
             if self
@@ -24399,19 +25924,37 @@ impl Kura {
         };
         let payload = artifact.encode_framed()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let wrote = Self::append_indexed_sidecar(
+        let wrote = Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,
             lane_block_height,
             &payload,
             "lane block application receipt",
-            self.sidecar_fsync_mode(),
             None,
             SidecarIndexOrigin::FirstWrite,
+            &mutation_namespace,
         );
         if !wrote {
             return Err(Error::IO(
                 std::io::Error::other("failed to persist lane block application receipt"),
+                data_path,
+            ));
+        }
+        if self
+            .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            )
+            .as_ref()
+            != Some(artifact)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to make lane application receipt directory chain durable",
+                ),
                 data_path,
             ));
         }
@@ -24440,7 +25983,8 @@ impl Kura {
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a
     /// different lane/height or active geometry incarnation, or fails structural
-    /// validation.
+    /// validation, canonical-evidence confirmation, or the complete progress-sidecar
+    /// durability barrier sequence.
     #[must_use]
     pub fn read_lane_block_application_receipt(
         &self,
@@ -24463,10 +26007,9 @@ impl Kura {
             );
             return None;
         }
-        let confirmed = self.read_active_lane_block_application_receipt_structural(
+        let confirmed = self.read_active_lane_block_application_receipt_durability_attested(
             lane_id,
             lane_block_height,
-            false,
         )?;
         if confirmed != artifact {
             iroha_logger::warn!(
@@ -24493,29 +26036,59 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-        self.read_active_lane_block_application_receipt_from_paths_locked(
-            &entry,
-            lane_block_height,
-            &data_path,
-            &index_path,
-            recover,
-        )
+        let artifact = self
+            .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+                entry.lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                recover,
+            )?;
+        if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)
+        {
+            iroha_logger::warn!(
+                ?error,
+                lane = %entry.lane_id.as_u32(),
+                lane_block_height,
+                "durability-attested lane application receipt targets stale lane geometry"
+            );
+            return None;
+        }
+        Some(artifact)
     }
 
-    fn read_active_lane_block_application_receipt_from_paths_locked(
+    /// Capture existing receipt bytes for the writer's optimistic concurrency check.
+    ///
+    /// This read is deliberately not a durability witness: the same writer reopens the
+    /// pair under the geometry and sidecar locks and reissues every strict barrier before
+    /// it can report success. Keeping the observation non-attesting ensures a failed
+    /// barrier cannot be consumed by a preliminary read and then hidden by the retry.
+    fn read_active_lane_block_application_receipt_for_write_observation(
         &self,
-        entry: &LaneConfigEntry,
+        lane_id: LaneId,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        recover: bool,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
-        let artifact = self.read_lane_block_application_receipt_from_paths_locked(
-            entry.lane_id,
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required()
+            || !self.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "lane block application receipt",
+            )
+        {
+            return None;
+        }
+        let mut bound = self
+            .open_bound_progress_sidecar(&data_path, &index_path)
+            .ok()?;
+        let artifact = self.read_lane_block_application_receipt_from_bound_locked(
+            lane_id,
             lane_block_height,
-            data_path,
-            index_path,
-            recover,
+            &mut bound,
         )?;
         if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)
         {
@@ -24523,7 +26096,41 @@ impl Kura {
                 ?error,
                 lane = %entry.lane_id.as_u32(),
                 lane_block_height,
-                "lane application receipt targets stale lane geometry"
+                "observed lane application receipt targets stale lane geometry"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    fn read_active_lane_block_application_receipt_durability_attested(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let artifact = self
+            .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+                entry.lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            )?;
+        if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)
+        {
+            iroha_logger::warn!(
+                ?error,
+                lane = %entry.lane_id.as_u32(),
+                lane_block_height,
+                "durability-attested lane application receipt targets stale lane geometry"
             );
             return None;
         }
@@ -24538,17 +26145,29 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Vec::new();
         }
-        let candidates = self.active_direct_lane_block_application_receipts_structural_snapshot();
-        let mut receipts = candidates
-            .into_iter()
+        let Some(candidates) = self.active_lane_block_application_receipts_structural_snapshot()
+        else {
+            return Vec::new();
+        };
+        let direct_candidates = candidates
+            .iter()
+            .filter(|receipt| {
+                receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut receipts = direct_candidates
+            .iter()
+            .cloned()
             .filter(|receipt| {
                 self.lane_block_application_receipt_matches_available_evidence(receipt)
             })
             .collect::<Vec<_>>();
-        if !self.active_direct_lane_block_application_receipts_match_structural_snapshot(&receipts)
+        if receipts.len() != direct_candidates.len()
+            || self.active_lane_block_application_receipts_structural_snapshot() != Some(candidates)
         {
             iroha_logger::warn!(
-                "direct lane application receipt snapshot changed while evidence was validated"
+                "direct lane application receipt snapshot changed or lost evidence while it was validated"
             );
             return Vec::new();
         }
@@ -24566,9 +26185,9 @@ impl Kura {
         }
     }
 
-    fn active_direct_lane_block_application_receipts_structural_snapshot(
+    fn active_lane_block_application_receipts_structural_snapshot(
         &self,
-    ) -> Vec<LaneBlockApplicationReceiptArtifact> {
+    ) -> Option<Vec<LaneBlockApplicationReceiptArtifact>> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -24583,67 +26202,102 @@ impl Kura {
             let lane_receipts = {
                 let _guard = self.sidecar_lock.lock();
                 if self.prune_recovery_is_required() {
-                    return Vec::new();
+                    return None;
                 }
-                if !Self::recover_indexed_sidecar_artifacts(
+                if !self.recover_bound_progress_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     "lane block application receipt",
                 ) {
-                    continue;
+                    return None;
                 }
-                let Some(heights) = Self::indexed_sidecar_height_range(
-                    &index_path,
-                    "lane block application receipt",
-                ) else {
-                    continue;
+                let mut pair = match self.open_bound_progress_pair(&data_path, &index_path) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        iroha_logger::warn!(
+                            ?error,
+                            lane = %entry.lane_id.as_u32(),
+                            "failed to bind lane application receipt snapshot"
+                        );
+                        return None;
+                    }
                 };
-                heights
-                    .filter_map(|lane_block_height| {
-                        self.read_active_lane_block_application_receipt_from_paths_locked(
-                            &entry,
-                            lane_block_height,
-                            &data_path,
-                            &index_path,
-                            false,
-                        )
-                    })
-                    .filter(|receipt| {
-                        receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-                    })
-                    .collect::<Vec<_>>()
+                match &mut pair {
+                    BoundProgressPair::Absent(namespace) => {
+                        if !self.sync_bound_progress_absence(
+                            namespace,
+                            "lane block application receipt",
+                        ) {
+                            return None;
+                        }
+                        Vec::new()
+                    }
+                    BoundProgressPair::Present(bound) => {
+                        let heights = match self.bound_indexed_sidecar_payload_heights(
+                            bound,
+                            "lane block application receipt",
+                            usize::MAX,
+                        ) {
+                            Ok(heights) => heights,
+                            Err(error) => {
+                                iroha_logger::warn!(
+                                    ?error,
+                                    lane = %entry.lane_id.as_u32(),
+                                    "failed to enumerate bound lane application receipts"
+                                );
+                                return None;
+                            }
+                        };
+                        let lane_receipts = heights
+                            .into_iter()
+                            .map(|lane_block_height| {
+                                self.read_lane_block_application_receipt_from_bound_locked(
+                                    entry.lane_id,
+                                    lane_block_height,
+                                    bound,
+                                )
+                                .and_then(|receipt| {
+                                    self.require_active_lane_artifact(
+                                        &entry,
+                                        &receipt.proposal.descriptor,
+                                    )
+                                    .is_ok()
+                                    .then_some(receipt)
+                                })
+                            })
+                            .collect::<Option<Vec<_>>>()?;
+                        if !self
+                            .sync_bound_progress_sidecar(bound, "lane block application receipt")
+                        {
+                            return None;
+                        }
+                        lane_receipts
+                    }
+                }
             };
             receipts.extend(lane_receipts);
         }
-        receipts
+        Some(receipts)
     }
+
+    #[cfg(test)]
+    fn active_direct_lane_block_application_receipts_structural_snapshot(
+        &self,
+    ) -> Vec<LaneBlockApplicationReceiptArtifact> {
+        self.active_lane_block_application_receipts_structural_snapshot()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|receipt| {
+                receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+            })
+            .collect()
+    }
+    #[cfg(test)]
     fn active_direct_lane_block_application_receipts_match_structural_snapshot(
         &self,
         receipts: &[LaneBlockApplicationReceiptArtifact],
     ) -> bool {
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entries = self.lane_storage_entries.lock().clone();
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return false;
-        }
-        receipts.iter().all(|receipt| {
-            let descriptor = &receipt.proposal.descriptor;
-            let Some(entry) = entries.get(&descriptor.lane_id) else {
-                return false;
-            };
-            let (data_path, index_path) =
-                Self::lane_block_application_receipt_paths_for_entry(entry, &self.store_root);
-            self.read_active_lane_block_application_receipt_from_paths_locked(
-                entry,
-                descriptor.lane_block_height,
-                &data_path,
-                &index_path,
-                false,
-            )
-            .as_ref()
-                == Some(receipt)
-        })
+        self.active_direct_lane_block_application_receipts_structural_snapshot() == receipts
     }
 
     pub(crate) fn lane_block_application_receipt_available(
@@ -24807,6 +26461,7 @@ impl Kura {
             && !preflight.has_rejections()
     }
 
+    #[cfg(test)]
     fn read_lane_block_application_receipt_from_paths_locked(
         &self,
         lane_id: LaneId,
@@ -24847,6 +26502,91 @@ impl Kura {
             }
             Some(artifact)
         })
+    }
+
+    fn read_lane_block_application_receipt_from_paths_durability_attested_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        if recover
+            && !self.recover_bound_progress_sidecar_artifacts(
+                data_path,
+                index_path,
+                "lane block application receipt",
+            )
+        {
+            return None;
+        }
+        let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
+            Ok(pair) => pair,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to bind lane application receipt durability handles"
+                );
+                return None;
+            }
+        };
+        match &mut pair {
+            BoundProgressPair::Absent(namespace) => {
+                self.sync_bound_progress_absence(namespace, "lane block application receipt");
+                None
+            }
+            BoundProgressPair::Present(bound) => {
+                let artifact = self.read_lane_block_application_receipt_from_bound_locked(
+                    lane_id,
+                    lane_block_height,
+                    bound,
+                );
+                self.sync_bound_progress_sidecar(bound, "lane block application receipt")
+                    .then_some(artifact)
+                    .flatten()
+            }
+        }
+    }
+
+    fn read_lane_block_application_receipt_from_bound_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let artifact = Self::read_indexed_sidecar_from_open_files(
+            lane_block_height,
+            &mut bound.data,
+            &mut bound.index,
+            &bound.namespace.data_path,
+            &bound.namespace.index_path,
+            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+            "lane block application receipt",
+        )?;
+        let descriptor = &artifact.proposal.descriptor;
+        if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                actual_lane = %descriptor.lane_id.as_u32(),
+                actual_height = descriptor.lane_block_height,
+                "durability-attested lane application receipt identity mismatch"
+            );
+            return None;
+        }
+        if let Err(message) = Self::validate_lane_block_application_receipt_artifact(&artifact) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                message,
+                "durability-attested lane application receipt validation failed"
+            );
+            return None;
+        }
+        Some(artifact)
     }
 
     /// Read a lane-local block artifact by lane and lane-local block height.
@@ -26230,6 +27970,7 @@ impl Kura {
                 Some(self.roster_sidecar_retention),
                 Some(1),
                 SidecarIndexOrigin::HeightOne,
+                None,
             ),
             Err(err) => {
                 iroha_logger::warn!(
@@ -26480,6 +28221,662 @@ impl Kura {
         } else {
             Some(sidecar)
         }
+    }
+
+    fn bound_sidecar_index_snapshot(
+        index: &mut std::fs::File,
+        index_path: &Path,
+        data_len: u64,
+        kind: &str,
+        label: &str,
+    ) -> Option<BoundSidecarIndexSnapshot> {
+        let index_len = index.metadata().ok()?.len();
+        let layout = match SidecarIndexLayout::read_from(index, index_len) {
+            Ok(layout) => layout,
+            Err(reason) => {
+                warn!(
+                    reason,
+                    len = index_len,
+                    ?index_path,
+                    kind,
+                    label,
+                    "bound sidecar index layout is malformed"
+                );
+                return None;
+            }
+        };
+        if layout.aligned_len != index_len {
+            warn!(
+                len = index_len,
+                aligned_len = layout.aligned_len,
+                ?index_path,
+                kind,
+                label,
+                "bound sidecar index length is misaligned"
+            );
+            return None;
+        }
+        let capacity = usize::try_from(layout.entry_count).ok()?;
+        index.seek(SeekFrom::Start(layout.entries_offset)).ok()?;
+        let mut entries = Vec::new();
+        if entries.try_reserve_exact(capacity).is_err() {
+            warn!(
+                entry_count = layout.entry_count,
+                ?index_path,
+                kind,
+                label,
+                "bound sidecar recovery index exceeds available memory"
+            );
+            return None;
+        }
+        let mut ranges = Vec::new();
+        if ranges.try_reserve_exact(capacity.min(4_096)).is_err() {
+            return None;
+        }
+        let mut indexed_end = 0_u64;
+        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+        for _ in 0..layout.entry_count {
+            index.read_exact(&mut encoded).ok()?;
+            let entry = SidecarIndexEntry::from_bytes(encoded);
+            if entry.len == 0 {
+                if entry.offset != 0 {
+                    warn!(
+                        offset = entry.offset,
+                        ?index_path,
+                        kind,
+                        label,
+                        "zero-length bound sidecar index entry has a non-zero offset"
+                    );
+                    return None;
+                }
+            } else {
+                let Some(end) = entry.offset.checked_add(entry.len) else {
+                    warn!(
+                        offset = entry.offset,
+                        len = entry.len,
+                        ?index_path,
+                        kind,
+                        label,
+                        "bound sidecar index entry overflows"
+                    );
+                    return None;
+                };
+                if entry.len > STRICT_INIT_MAX_BLOCK_BYTES || end > data_len {
+                    warn!(
+                        offset = entry.offset,
+                        len = entry.len,
+                        data_len,
+                        ?index_path,
+                        kind,
+                        label,
+                        "bound sidecar index entry has an invalid payload range"
+                    );
+                    return None;
+                }
+                indexed_end = indexed_end.max(end);
+                if ranges.try_reserve(1).is_err() {
+                    return None;
+                }
+                ranges.push((entry.offset, end));
+            }
+            entries.push(entry);
+        }
+        ranges.sort_unstable_by_key(|&(start, end)| (start, end));
+        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            warn!(
+                ?index_path,
+                kind, label, "bound sidecar recovery index contains overlapping payload ranges"
+            );
+            return None;
+        }
+        Some(BoundSidecarIndexSnapshot {
+            layout,
+            entries,
+            indexed_end,
+        })
+    }
+
+    #[must_use]
+    fn recover_bound_progress_sidecar_artifacts(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+    ) -> bool {
+        let namespace = match self.open_bound_progress_namespace(data_path, index_path) {
+            Ok(namespace) => namespace,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    ?index_path,
+                    kind,
+                    "failed to bind progress sidecar recovery namespace"
+                );
+                return false;
+            }
+        };
+        self.recover_bound_progress_sidecar_artifacts_in_namespace(
+            &namespace, data_path, index_path, kind,
+        )
+    }
+
+    fn recover_bound_progress_sidecar_artifacts_in_namespace(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+    ) -> bool {
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let prepend_index_path = index_path.with_extension("index.prepend.tmp");
+        let open_optional =
+            |path: &Path| match self.open_optional_bound_progress_file(namespace, path) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        ?path,
+                        kind,
+                        "failed to bind progress sidecar recovery file"
+                    );
+                    None
+                }
+            };
+        let Some(temp_data) = open_optional(&temp_data_path) else {
+            return false;
+        };
+        let Some(temp_index) = open_optional(&temp_index_path) else {
+            return false;
+        };
+        let Some(prepend_index) = open_optional(&prepend_index_path) else {
+            return false;
+        };
+
+        if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
+            warn!(
+                ?data_path,
+                ?index_path,
+                kind,
+                "progress sidecar has conflicting rewrite and prepend recovery artifacts"
+            );
+            return false;
+        }
+        if let Some(prepend_index) = prepend_index {
+            return self.recover_bound_progress_prepend_temp(
+                namespace,
+                data_path,
+                index_path,
+                &prepend_index_path,
+                prepend_index,
+                kind,
+            );
+        }
+        let Some(mut temp_index) = temp_index else {
+            if let Some(temp_data) = temp_data {
+                // The temp index is the rewrite commit marker. A lone data temp
+                // therefore precedes publication and is safe to discard.
+                drop(temp_data);
+                return Self::discard_bound_progress_temps(
+                    namespace,
+                    &[temp_data_path.as_path()],
+                    kind,
+                );
+            }
+            return self.repair_bound_progress_main_tail(namespace, data_path, index_path, kind);
+        };
+
+        let temp_data_was_present = temp_data.is_some();
+        let recovery_data = if let Some(temp_data) = temp_data {
+            temp_data
+        } else {
+            match self.open_optional_bound_progress_file(namespace, data_path) {
+                Ok(Some(data)) => data,
+                Ok(None) => {
+                    warn!(
+                        ?data_path,
+                        ?temp_index_path,
+                        kind,
+                        "progress temp index has no recovery payload"
+                    );
+                    return false;
+                }
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        ?data_path,
+                        kind,
+                        "failed to bind progress recovery payload"
+                    );
+                    return false;
+                }
+            }
+        };
+        let data_len = match recovery_data.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    kind,
+                    "failed to stat progress recovery payload"
+                );
+                return false;
+            }
+        };
+        let temp_snapshot = Self::bound_sidecar_index_snapshot(
+            &mut temp_index,
+            &temp_index_path,
+            data_len,
+            kind,
+            "rewrite temp",
+        );
+        let temp_is_complete = temp_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
+        });
+        if !temp_is_complete {
+            if temp_data_was_present {
+                // Neither main file has been published while both temp names
+                // still exist. Discard the incomplete rewrite and retain the
+                // authoritative main pair.
+                drop(temp_index);
+                drop(recovery_data);
+                if !Self::discard_bound_progress_temps(
+                    namespace,
+                    &[temp_index_path.as_path()],
+                    kind,
+                ) {
+                    return false;
+                }
+                return Self::discard_bound_progress_temps(
+                    namespace,
+                    &[temp_data_path.as_path()],
+                    kind,
+                );
+            }
+            let indexed_end = temp_snapshot
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.indexed_end);
+            warn!(
+                indexed_end,
+                data_len,
+                ?temp_index_path,
+                kind,
+                "index-only progress rewrite temp does not cover its exact published payload"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_data(&recovery_data) {
+            warn!(
+                ?error,
+                ?data_path,
+                kind,
+                "failed to sync progress recovery payload"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_index(&temp_index) {
+            warn!(
+                ?error,
+                ?temp_index_path,
+                kind,
+                "failed to sync progress recovery index"
+            );
+            return false;
+        }
+        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
+            return false;
+        }
+        if temp_data_was_present {
+            if let Err(error) = Self::promote_bound_progress_temp(
+                namespace,
+                &temp_data_path,
+                data_path,
+                &recovery_data,
+            ) {
+                warn!(
+                    source = ?error.source,
+                    published = error.published,
+                    ?temp_data_path,
+                    ?data_path,
+                    kind,
+                    "failed to promote bound progress temp data"
+                );
+                return false;
+            }
+            if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
+                return false;
+            }
+        }
+        if let Err(error) =
+            Self::promote_bound_progress_temp(namespace, &temp_index_path, index_path, &temp_index)
+        {
+            warn!(
+                source = ?error.source,
+                published = error.published,
+                ?temp_index_path,
+                ?index_path,
+                kind,
+                "failed to promote bound progress temp index"
+            );
+            return false;
+        }
+        Self::sync_indexed_sidecar_bound_mutation(&recovery_data, &temp_index, namespace, kind)
+    }
+
+    fn repair_bound_progress_main_tail(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+    ) -> bool {
+        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
+            Ok(data) => data,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    kind,
+                    "failed to bind progress main payload"
+                );
+                return false;
+            }
+        };
+        let index = match self.open_optional_bound_progress_file(namespace, index_path) {
+            Ok(index) => index,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?index_path,
+                    kind,
+                    "failed to bind progress main index"
+                );
+                return false;
+            }
+        };
+        let (data, mut index) = match (data, index) {
+            (Some(data), Some(index)) => (data, index),
+            (None, None) => return true,
+            _ => {
+                warn!(
+                    ?data_path,
+                    ?index_path,
+                    kind,
+                    "progress main data and index are only partially present"
+                );
+                return false;
+            }
+        };
+        let data_len = match data.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    kind,
+                    "failed to stat progress main payload"
+                );
+                return false;
+            }
+        };
+        let Some(snapshot) = Self::bound_sidecar_index_snapshot(
+            &mut index,
+            index_path,
+            data_len,
+            kind,
+            "main tail repair",
+        ) else {
+            return false;
+        };
+        if snapshot.indexed_end == data_len {
+            return true;
+        }
+        if let Err(error) = data.set_len(snapshot.indexed_end) {
+            warn!(
+                ?error,
+                ?data_path,
+                indexed_end = snapshot.indexed_end,
+                kind,
+                "failed to truncate unindexed progress main suffix"
+            );
+            return false;
+        }
+        Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
+    }
+
+    fn discard_bound_progress_temps(
+        namespace: &BoundProgressNamespace,
+        paths: &[&Path],
+        kind: &str,
+    ) -> bool {
+        for path in paths {
+            if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, path) {
+                warn!(
+                    ?error,
+                    ?path,
+                    kind,
+                    "failed to discard an unpublished bound progress temp"
+                );
+                return false;
+            }
+        }
+        Self::sync_bound_progress_mutation_directories(namespace, kind)
+    }
+
+    fn rollback_bound_progress_prepend(
+        namespace: &BoundProgressNamespace,
+        data: &std::fs::File,
+        index: &std::fs::File,
+        prepend_index_path: &Path,
+        indexed_end: u64,
+        kind: &str,
+    ) -> bool {
+        if let Err(error) = data.set_len(indexed_end) {
+            warn!(
+                ?error,
+                ?prepend_index_path,
+                indexed_end,
+                kind,
+                "failed to truncate an unpublished progress prepend payload"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_data(data) {
+            warn!(
+                ?error,
+                indexed_end, kind, "failed to sync rolled-back progress payload"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_index(index) {
+            warn!(
+                ?error,
+                kind, "failed to sync authoritative progress index after rollback"
+            );
+            return false;
+        }
+        Self::discard_bound_progress_temps(namespace, &[prepend_index_path], kind)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recover_bound_progress_prepend_temp(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        prepend_index_path: &Path,
+        mut prepend_index: std::fs::File,
+        kind: &str,
+    ) -> bool {
+        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                warn!(
+                    ?data_path,
+                    kind, "progress prepend temp has no main payload"
+                );
+                return false;
+            }
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    kind,
+                    "failed to bind progress prepend payload"
+                );
+                return false;
+            }
+        };
+        let mut index = match self.open_optional_bound_progress_file(namespace, index_path) {
+            Ok(Some(index)) => index,
+            Ok(None) => {
+                warn!(?index_path, kind, "progress prepend temp has no main index");
+                return false;
+            }
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?index_path,
+                    kind,
+                    "failed to bind progress prepend index"
+                );
+                return false;
+            }
+        };
+        let data_len = match data.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?data_path,
+                    kind,
+                    "failed to stat progress prepend payload"
+                );
+                return false;
+            }
+        };
+        let Some(main_snapshot) = Self::bound_sidecar_index_snapshot(
+            &mut index,
+            index_path,
+            data_len,
+            kind,
+            "prepend main",
+        ) else {
+            return false;
+        };
+        if main_snapshot.indexed_end == data_len {
+            drop(prepend_index);
+            return Self::rollback_bound_progress_prepend(
+                namespace,
+                &data,
+                &index,
+                prepend_index_path,
+                main_snapshot.indexed_end,
+                kind,
+            );
+        }
+
+        let prepend_snapshot = Self::bound_sidecar_index_snapshot(
+            &mut prepend_index,
+            prepend_index_path,
+            data_len,
+            kind,
+            "prepend temp",
+        );
+        let Some(prepend_snapshot) = prepend_snapshot else {
+            drop(prepend_index);
+            return Self::rollback_bound_progress_prepend(
+                namespace,
+                &data,
+                &index,
+                prepend_index_path,
+                main_snapshot.indexed_end,
+                kind,
+            );
+        };
+        let prepend_count = main_snapshot
+            .layout
+            .base_height
+            .checked_sub(prepend_snapshot.layout.base_height)
+            .and_then(|count| usize::try_from(count).ok())
+            .filter(|count| *count > 0);
+        let first = prepend_snapshot.entries.first().copied();
+        let structurally_valid = prepend_count.is_some_and(|prepend_count| {
+            prepend_count
+                .checked_add(main_snapshot.entries.len())
+                .is_some_and(|expected_len| {
+                    prepend_snapshot.entries.len() == expected_len
+                        && prepend_snapshot.entries[prepend_count..] == main_snapshot.entries
+                        && prepend_snapshot.entries[1..prepend_count]
+                            .iter()
+                            .all(|entry| entry.offset == 0 && entry.len == 0)
+                        && first.is_some_and(|entry| {
+                            entry.len > 0
+                                && entry.offset == main_snapshot.indexed_end
+                                && entry.offset.checked_add(entry.len) == Some(data_len)
+                        })
+                        && prepend_snapshot.indexed_end == data_len
+                })
+        });
+        if !structurally_valid {
+            warn!(
+                ?prepend_index_path,
+                ?index_path,
+                indexed_end = main_snapshot.indexed_end,
+                data_len,
+                kind,
+                "refusing a progress prepend temp that is not an exact extension of the main index"
+            );
+            drop(prepend_index);
+            return Self::rollback_bound_progress_prepend(
+                namespace,
+                &data,
+                &index,
+                prepend_index_path,
+                main_snapshot.indexed_end,
+                kind,
+            );
+        }
+        if let Err(error) = sync_indexed_sidecar_data(&data) {
+            warn!(
+                ?error,
+                ?data_path,
+                kind,
+                "failed to sync recovered prepend payload"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_index(&prepend_index) {
+            warn!(
+                ?error,
+                ?prepend_index_path,
+                kind,
+                "failed to sync recovered prepend index"
+            );
+            return false;
+        }
+        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
+            return false;
+        }
+        if let Err(error) = Self::promote_bound_progress_temp(
+            namespace,
+            prepend_index_path,
+            index_path,
+            &prepend_index,
+        ) {
+            warn!(
+                source = ?error.source,
+                published = error.published,
+                ?prepend_index_path,
+                ?index_path,
+                kind,
+                "failed to promote recovered bound progress prepend index"
+            );
+            return false;
+        }
+        Self::sync_indexed_sidecar_bound_mutation(&data, &prepend_index, namespace, kind)
     }
 
     #[must_use]
@@ -26774,6 +29171,128 @@ impl Kura {
         layout.height_range()
     }
 
+    fn repair_unindexed_sidecar_tail(
+        data: &std::fs::File,
+        index: &mut std::fs::File,
+        layout: SidecarIndexLayout,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+    ) -> bool {
+        let data_len = match data.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                iroha_logger::warn!(?error, ?data_path, kind, "failed to stat sidecar payload");
+                return false;
+            }
+        };
+        if index.seek(SeekFrom::Start(layout.entries_offset)).is_err() {
+            iroha_logger::warn!(
+                ?index_path,
+                kind,
+                "failed to seek sidecar index for tail repair"
+            );
+            return false;
+        }
+        let Ok(entry_capacity) = usize::try_from(layout.entry_count) else {
+            iroha_logger::warn!(?index_path, kind, "sidecar index entry count exceeds usize");
+            return false;
+        };
+        let mut ranges = Vec::with_capacity(entry_capacity.min(4096));
+        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+        for _ in 0..layout.entry_count {
+            if let Err(error) = index.read_exact(&mut encoded) {
+                iroha_logger::warn!(
+                    ?error,
+                    ?index_path,
+                    kind,
+                    "failed to read sidecar index during tail repair"
+                );
+                return false;
+            }
+            let entry = SidecarIndexEntry::from_bytes(encoded);
+            if entry.len == 0 {
+                if entry.offset != 0 {
+                    iroha_logger::warn!(
+                        offset = entry.offset,
+                        ?index_path,
+                        kind,
+                        "zero-length sidecar index entry has a non-zero offset"
+                    );
+                    return false;
+                }
+                continue;
+            }
+            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+                iroha_logger::warn!(
+                    len = entry.len,
+                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                    ?index_path,
+                    kind,
+                    "sidecar index entry exceeds the payload limit during tail repair"
+                );
+                return false;
+            }
+            let Some(end) = entry.offset.checked_add(entry.len) else {
+                iroha_logger::warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    ?index_path,
+                    kind,
+                    "sidecar index entry overflows during tail repair"
+                );
+                return false;
+            };
+            if end > data_len {
+                iroha_logger::warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    data_len,
+                    ?index_path,
+                    kind,
+                    "sidecar index points past the payload during tail repair"
+                );
+                return false;
+            }
+            ranges.push((entry.offset, end));
+        }
+        ranges.sort_unstable_by_key(|&(start, end)| (start, end));
+        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            iroha_logger::warn!(
+                ?index_path,
+                kind,
+                "sidecar index contains overlapping active payload ranges"
+            );
+            return false;
+        }
+        let indexed_end = ranges.iter().map(|&(_, end)| end).max().unwrap_or(0);
+        if data_len == indexed_end {
+            return true;
+        }
+        if let Err(error) = data.set_len(indexed_end) {
+            iroha_logger::warn!(
+                ?error,
+                ?data_path,
+                data_len,
+                indexed_end,
+                kind,
+                "failed to truncate unindexed sidecar crash residue"
+            );
+            return false;
+        }
+        if let Err(error) = data.sync_data() {
+            iroha_logger::warn!(
+                ?error,
+                ?data_path,
+                indexed_end,
+                kind,
+                "failed to durably repair unindexed sidecar crash residue"
+            );
+            return false;
+        }
+        true
+    }
+
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn append_preceding_indexed_sidecar(
         data_path: &Path,
@@ -26784,6 +29303,7 @@ impl Kura {
         should_sync: bool,
         retention: Option<NonZeroUsize>,
         layout: SidecarIndexLayout,
+        namespace: Option<&BoundProgressNamespace>,
     ) -> bool {
         debug_assert!(layout.is_based());
         debug_assert!(height < layout.base_height);
@@ -26826,19 +29346,34 @@ impl Kura {
         };
 
         let data_existed = data_path.exists();
-        let mut data = match std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(data_path)
-        {
+        let mut data =
+            match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
+                Ok(file) => file,
+                Err(err) => {
+                    iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
+                    return false;
+                }
+            };
+        let mut repair_index = match Self::open_direct_sidecar_file_in_namespace(
+            index_path, false, false, namespace,
+        ) {
             Ok(file) => file,
             Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
+                iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
                 return false;
             }
         };
+        if !Self::repair_unindexed_sidecar_tail(
+            &data,
+            &mut repair_index,
+            layout,
+            data_path,
+            index_path,
+            kind,
+        ) {
+            return false;
+        }
+        drop(repair_index);
         let data_len = match data.metadata() {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -26863,9 +29398,17 @@ impl Kura {
         };
 
         let temp_index_path = index_path.with_extension("index.prepend.tmp");
-        if let Err(err) = std::fs::remove_file(&temp_index_path)
-            && err.kind() != ErrorKind::NotFound
-        {
+        let remove_temp = || match namespace {
+            Some(namespace) => {
+                Self::remove_bound_progress_temp_if_present(namespace, &temp_index_path)
+            }
+            None => match std::fs::remove_file(&temp_index_path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            },
+        };
+        if let Err(err) = remove_temp() {
             iroha_logger::warn!(
                 ?err,
                 ?temp_index_path,
@@ -26874,19 +29417,23 @@ impl Kura {
             );
             return false;
         }
-        let mut source_index = match std::fs::File::open(index_path) {
+        let mut source_index = match Self::open_direct_sidecar_file_in_namespace(
+            index_path, false, false, namespace,
+        ) {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(?err, ?index_path, kind, "failed to reopen sidecar index");
                 return false;
             }
         };
-        let mut temp_index = match std::fs::OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&temp_index_path)
-        {
+        let mut temp_index = match match namespace {
+            Some(namespace) => Self::create_new_bound_progress_temp(namespace, &temp_index_path),
+            None => std::fs::OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .open(&temp_index_path),
+        } {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(
@@ -26939,7 +29486,7 @@ impl Kura {
                 "failed to build sidecar prepend temp index"
             );
             drop(temp_index);
-            let _ = std::fs::remove_file(&temp_index_path);
+            let _ = remove_temp();
             return false;
         }
         let temp_index_len = temp_index.metadata().map(|meta| meta.len());
@@ -26951,10 +29498,9 @@ impl Kura {
                 "sidecar prepend temp index has unexpected length"
             );
             drop(temp_index);
-            let _ = std::fs::remove_file(&temp_index_path);
+            let _ = remove_temp();
             return false;
         }
-        drop(temp_index);
         drop(source_index);
 
         if let Err(err) = data
@@ -26963,50 +29509,102 @@ impl Kura {
             .and_then(|_| data.flush())
         {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
-            let _ = data.set_len(data_len);
+            let _ = rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind);
             drop(data);
-            if !data_existed {
+            if !data_existed && namespace.is_none() {
                 let _ = std::fs::remove_file(data_path);
             }
-            let _ = std::fs::remove_file(&temp_index_path);
+            drop(temp_index);
+            let _ = remove_temp();
             return false;
         }
-        if should_sync && let Err(err) = data.sync_data() {
+        if should_sync && let Err(err) = sync_indexed_sidecar_initial_data(&data) {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-            let _ = data.set_len(data_len);
+            let _ = rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind);
             drop(data);
-            if !data_existed {
+            if !data_existed && namespace.is_none() {
                 let _ = std::fs::remove_file(data_path);
             }
-            let _ = std::fs::remove_file(&temp_index_path);
+            drop(temp_index);
+            let _ = remove_temp();
             return false;
         }
+        let mut index_was_published = false;
+        let promoted = if let Some(namespace) = namespace {
+            let temp_layout = temp_index.metadata().ok().and_then(|metadata| {
+                SidecarIndexLayout::read_from(&mut temp_index, metadata.len()).ok()
+            });
+            if temp_layout.is_some_and(|temp_layout| {
+                temp_layout.entry_count > 0
+                    && temp_layout.aligned_len == projected_index_len
+                    && Self::repair_unindexed_sidecar_tail(
+                        &data,
+                        &mut temp_index,
+                        temp_layout,
+                        data_path,
+                        &temp_index_path,
+                        kind,
+                    )
+            }) {
+                match Self::promote_bound_progress_temp(
+                    namespace,
+                    &temp_index_path,
+                    index_path,
+                    &temp_index,
+                ) {
+                    Ok(()) => {
+                        index_was_published = true;
+                        Self::sync_indexed_sidecar_bound_mutation(
+                            &data,
+                            &temp_index,
+                            namespace,
+                            kind,
+                        )
+                    }
+                    Err(error) => {
+                        index_was_published = error.published;
+                        iroha_logger::warn!(
+                            source = ?error.source,
+                            published = error.published,
+                            ?temp_index_path,
+                            ?index_path,
+                            kind,
+                            "failed to promote bound progress prepend index"
+                        );
+                        false
+                    }
+                }
+            } else {
+                false
+            }
+        } else {
+            Self::sidecar_index_sane_with_label(
+                &temp_index_path,
+                projected_data_len,
+                kind,
+                "prepend temp",
+            ) && Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "prepend index")
+        };
+        if !promoted {
+            // Once rename publishes the new index, its new entry owns the
+            // appended payload even if a later directory barrier fails. Keep
+            // that consistent pair intact so an exact retry can reissue the
+            // complete barrier sequence; truncating now would leave the main
+            // index pointing past EOF.
+            if !index_was_published
+                && rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind)
+                && !data_existed
+                && namespace.is_none()
+            {
+                drop(data);
+                let _ = std::fs::remove_file(data_path);
+            }
+            drop(temp_index);
+            let _ = remove_temp();
+            return false;
+        }
+        drop(temp_index);
         drop(data);
-
-        if !Self::sidecar_index_sane_with_label(
-            &temp_index_path,
-            projected_data_len,
-            kind,
-            "prepend temp",
-        ) || !Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "prepend index")
-        {
-            let rollback = std::fs::OpenOptions::new()
-                .write(true)
-                .open(data_path)
-                .and_then(|file| file.set_len(data_len));
-            if let Err(err) = rollback {
-                iroha_logger::warn!(
-                    ?err,
-                    ?data_path,
-                    kind,
-                    "failed to roll back sidecar payload after prepend failure"
-                );
-            } else if !data_existed {
-                let _ = std::fs::remove_file(data_path);
-            }
-            let _ = std::fs::remove_file(&temp_index_path);
-            return false;
-        }
 
         if let Some(retention) = retention
             && !Self::prune_indexed_sidecars(data_path, index_path, retention, kind)
@@ -27028,8 +29626,53 @@ impl Kura {
         origin: SidecarIndexOrigin,
     ) -> bool {
         Self::append_indexed_sidecar_with_pinned_height(
-            data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin,
+            data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin, None,
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_indexed_progress_sidecar(
+        data_path: &Path,
+        index_path: &Path,
+        height: u64,
+        payload: &[u8],
+        kind: &str,
+        retention: Option<NonZeroUsize>,
+        origin: SidecarIndexOrigin,
+        namespace: &BoundProgressNamespace,
+    ) -> bool {
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return false;
+        }
+        let wrote = Self::append_indexed_sidecar_with_pinned_height(
+            data_path,
+            index_path,
+            height,
+            payload,
+            kind,
+            FsyncMode::Always,
+            retention,
+            None,
+            origin,
+            Some(namespace),
+        );
+        wrote && Self::progress_mutation_namespace_unchanged(namespace)
+    }
+
+    fn progress_mutation_namespace_unchanged(namespace: &BoundProgressNamespace) -> bool {
+        namespace.directories.iter().all(|directory| {
+            let Ok(opened) = directory.file.metadata() else {
+                return false;
+            };
+            let Ok(current) = std::fs::symlink_metadata(&directory.expected_path) else {
+                return false;
+            };
+            opened.is_dir()
+                && current.is_dir()
+                && !current.file_type().is_symlink()
+                && Self::sidecar_metadata_same_object(&directory.metadata, &opened)
+                && Self::sidecar_metadata_same_object(&directory.metadata, &current)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -27043,6 +29686,7 @@ impl Kura {
         retention: Option<NonZeroUsize>,
         pinned_height: Option<u64>,
         origin: SidecarIndexOrigin,
+        namespace: Option<&BoundProgressNamespace>,
     ) -> bool {
         // Sidecars are best-effort; only fsync when strict durability is requested.
         let should_sync = matches!(fsync_mode, FsyncMode::Always);
@@ -27055,23 +29699,20 @@ impl Kura {
             return false;
         }
 
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+        if namespace.is_none()
+            && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind)
+        {
             return false;
         }
 
-        let mut index = match std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(index_path)
-        {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
-                return false;
-            }
-        };
+        let mut index =
+            match Self::open_direct_sidecar_file_in_namespace(index_path, true, false, namespace) {
+                Ok(file) => file,
+                Err(err) => {
+                    iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
+                    return false;
+                }
+            };
         let index_len = match index.metadata() {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -27155,7 +29796,22 @@ impl Kura {
                 should_sync,
                 retention,
                 layout,
+                namespace,
             );
+        }
+
+        let mut data =
+            match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
+                Ok(file) => file,
+                Err(err) => {
+                    iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
+                    return false;
+                }
+            };
+        if !Self::repair_unindexed_sidecar_tail(
+            &data, &mut index, layout, data_path, index_path, kind,
+        ) {
+            return false;
         }
 
         let expected_height = match layout.next_height() {
@@ -27187,20 +29843,6 @@ impl Kura {
                 return false;
             }
             let entry = SidecarIndexEntry::from_bytes(entry_buf);
-
-            let mut data = match std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(data_path)
-            {
-                Ok(file) => file,
-                Err(err) => {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
-                    return false;
-                }
-            };
 
             let mut matches_existing = false;
             if entry.len > 0 {
@@ -27272,6 +29914,12 @@ impl Kura {
                     kind,
                     "sidecar already recorded; revalidating strict durability"
                 );
+                if should_sync
+                    && let Some(namespace) = namespace
+                    && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
+                {
+                    return false;
+                }
                 drop(index);
                 drop(data);
                 if let Some(retention) = retention {
@@ -27285,7 +29933,9 @@ impl Kura {
                         return false;
                     }
                 }
-                if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
+                if should_sync
+                    && namespace.is_none()
+                    && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
                 {
                     return false;
                 }
@@ -27315,11 +29965,13 @@ impl Kura {
                 .and_then(|_| data.write_all(payload))
             {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
+                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
                 return false;
             }
             if should_sync {
-                if let Err(err) = data.sync_data() {
+                if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
                     iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+                    let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
                     return false;
                 }
             }
@@ -27333,18 +29985,13 @@ impl Kura {
                 .and_then(|_| index.write_all(&new_entry.to_bytes()))
             {
                 iroha_logger::warn!(?err, ?index_path, kind, "failed to update sidecar index");
-                if let Err(truncate_err) = data.set_len(offset) {
-                    iroha_logger::debug!(
-                        ?truncate_err,
-                        ?data_path,
-                        offset,
-                        kind,
-                        "failed to roll back sidecar payload"
-                    );
-                }
-                if should_sync {
-                    let _ = data.sync_data();
-                }
+                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
+                return false;
+            }
+            if should_sync
+                && let Some(namespace) = namespace
+                && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
+            {
                 return false;
             }
             drop(index);
@@ -27360,7 +30007,10 @@ impl Kura {
                     return false;
                 }
             }
-            if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
+            if should_sync
+                && namespace.is_none()
+                && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
+            {
                 return false;
             }
             return true;
@@ -27445,18 +30095,6 @@ impl Kura {
             }
         }
 
-        let mut data = match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(data_path)
-        {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
-                return false;
-            }
-        };
-
         let offset = match data.metadata() {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -27475,13 +30113,18 @@ impl Kura {
             return false;
         };
 
-        if let Err(err) = data.write_all(payload) {
+        if let Err(err) = data
+            .seek(SeekFrom::Start(offset))
+            .and_then(|_| data.write_all(payload))
+        {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
+            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
             return false;
         }
         if should_sync {
-            if let Err(err) = data.sync_data() {
+            if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
                 return false;
             }
         }
@@ -27497,7 +30140,7 @@ impl Kura {
                 kind,
                 "sidecar index entry position underflows"
             );
-            let _ = data.set_len(offset);
+            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
             return false;
         };
         if let Err(err) = index
@@ -27505,15 +30148,13 @@ impl Kura {
             .and_then(|_| index.write_all(&entry.to_bytes()))
         {
             iroha_logger::warn!(?err, ?index_path, kind, "failed to append sidecar index");
-            if let Err(truncate_err) = data.set_len(offset) {
-                iroha_logger::debug!(
-                    ?truncate_err,
-                    ?data_path,
-                    offset,
-                    kind,
-                    "failed to roll back sidecar payload"
-                );
-            }
+            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
+            return false;
+        }
+        if should_sync
+            && let Some(namespace) = namespace
+            && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
+        {
             return false;
         }
         drop(index);
@@ -27529,11 +30170,58 @@ impl Kura {
                 return false;
             }
         }
-        if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
+        if should_sync
+            && namespace.is_none()
+            && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
+        {
             return false;
         }
 
         true
+    }
+
+    fn sync_indexed_sidecar_bound_mutation(
+        data: &std::fs::File,
+        index: &std::fs::File,
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> bool {
+        if let Err(error) = sync_indexed_sidecar_data(data) {
+            iroha_logger::warn!(
+                ?error,
+                kind,
+                "failed to sync bound sidecar payload mutation"
+            );
+            return false;
+        }
+        if let Err(error) = sync_indexed_sidecar_index(index) {
+            iroha_logger::warn!(?error, kind, "failed to sync bound sidecar index mutation");
+            return false;
+        }
+        Self::sync_bound_progress_mutation_directories(namespace, kind)
+    }
+
+    fn sync_bound_progress_mutation_directories(
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> bool {
+        for (position, directory) in namespace.directories.iter().enumerate() {
+            let result = if position == 0 {
+                sync_indexed_sidecar_dir_handle(&directory.file)
+            } else {
+                sync_progress_sidecar_ancestor_dir_handle(&directory.file)
+            };
+            if let Err(error) = result {
+                iroha_logger::warn!(
+                    ?error,
+                    path = ?directory.expected_path,
+                    kind,
+                    "failed to sync bound sidecar mutation directory"
+                );
+                return false;
+            }
+        }
+        Self::progress_mutation_namespace_unchanged(namespace)
     }
 
     /// Reissue the complete strict sidecar durability sequence in dependency order.
@@ -27557,7 +30245,7 @@ impl Kura {
                 return false;
             }
         };
-        if let Err(err) = data.sync_data() {
+        if let Err(err) = sync_indexed_sidecar_data(&data) {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
             return false;
         }
@@ -27666,9 +30354,28 @@ impl Kura {
         }
 
         let mut index = std::fs::File::open(index_path).ok()?;
+        let mut data = std::fs::File::open(data_path).ok()?;
+        Self::read_indexed_sidecar_from_open_files(
+            height, &mut data, &mut index, data_path, index_path, decoder, kind,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_open_files<T, F>(
+        height: u64,
+        data: &mut std::fs::File,
+        index: &mut std::fs::File,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
         let index_meta = index.metadata().ok()?;
         let index_len = index_meta.len();
-        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
+        let layout = match SidecarIndexLayout::read_from(index, index_len) {
             Ok(layout) => layout,
             Err(reason) => {
                 iroha_logger::warn!(
@@ -27734,7 +30441,6 @@ impl Kura {
             return None;
         };
 
-        let mut data = std::fs::File::open(data_path).ok()?;
         let data_len = data.metadata().ok()?.len();
         let entry_end = match entry.offset.checked_add(entry.len) {
             Some(end) => end,
@@ -32408,11 +35114,22 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy)]
+struct ProgressAncestorSyncFault {
+    target_index: usize,
+    remaining_to_target: usize,
+    failures_remaining: usize,
+}
+
+#[cfg(test)]
 std::thread_local! {
     static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
 }
 
@@ -32436,6 +35153,55 @@ fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
     Ok(())
 }
 
+fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected indexed sidecar data sync failure",
+        ));
+    }
+    file.sync_data()
+}
+
+fn sync_indexed_sidecar_initial_data(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected initial indexed sidecar data sync failure",
+        ));
+    }
+    file.sync_data()
+}
+
+fn rollback_unindexed_sidecar_payload(
+    file: &std::fs::File,
+    offset: u64,
+    data_path: &Path,
+    kind: &str,
+) -> bool {
+    if let Err(err) = file.set_len(offset) {
+        iroha_logger::warn!(
+            ?err,
+            ?data_path,
+            offset,
+            kind,
+            "failed to truncate unpublished sidecar payload"
+        );
+        return false;
+    }
+    if let Err(err) = file.sync_data() {
+        iroha_logger::warn!(
+            ?err,
+            ?data_path,
+            offset,
+            kind,
+            "failed to synchronize unpublished sidecar payload rollback"
+        );
+        return false;
+    }
+    true
+}
+
 fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.replace(false)) {
@@ -32447,13 +35213,45 @@ fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
 }
 
 fn sync_indexed_sidecar_dir(path: &Path) -> std::io::Result<()> {
+    let file = std::fs::File::open(path)?;
+    sync_indexed_sidecar_dir_handle(&file)
+}
+
+fn sync_indexed_sidecar_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.replace(false)) {
         return Err(std::io::Error::other(
             "injected indexed sidecar directory sync failure",
         ));
     }
-    sync_dir(path)
+    file.sync_all()
+}
+
+fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| {
+        let Some(mut fault) = slot.get() else {
+            return false;
+        };
+        if fault.remaining_to_target > 0 {
+            fault.remaining_to_target -= 1;
+            slot.set(Some(fault));
+            return false;
+        }
+        fault.failures_remaining -= 1;
+        if fault.failures_remaining == 0 {
+            slot.set(None);
+        } else {
+            fault.remaining_to_target = fault.target_index;
+            slot.set(Some(fault));
+        }
+        true
+    }) {
+        return Err(std::io::Error::other(
+            "injected progress sidecar ancestor directory sync failure",
+        ));
+    }
+    file.sync_all()
 }
 
 fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
@@ -32487,6 +35285,16 @@ fn fail_next_sidecar_temp_marker_dir_sync_for_tests() {
 }
 
 #[cfg(test)]
+fn fail_next_indexed_sidecar_data_sync_for_tests() {
+    FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_next_indexed_sidecar_initial_data_sync_for_tests() {
+    FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
 fn fail_next_indexed_sidecar_index_sync_for_tests() {
     FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.set(true));
 }
@@ -32494,6 +35302,26 @@ fn fail_next_indexed_sidecar_index_sync_for_tests() {
 #[cfg(test)]
 fn fail_next_indexed_sidecar_dir_sync_for_tests() {
     FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_progress_sidecar_ancestor_sync_at_for_tests(ancestor_index: usize) {
+    fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, 1);
+}
+
+#[cfg(test)]
+fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures_remaining: usize) {
+    assert!(
+        failures_remaining > 0,
+        "fault injection count must be non-zero"
+    );
+    FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|fault| {
+        fault.set(Some(ProgressAncestorSyncFault {
+            target_index: ancestor_index,
+            remaining_to_target: ancestor_index,
+            failures_remaining,
+        }));
+    });
 }
 
 #[cfg(test)]
@@ -48779,6 +51607,114 @@ mod tests {
         assert!(reloaded.lane_block_application_receipt_available(&proposal));
     }
 
+    fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
+        for (label, failure) in strict_progress_sidecar_failure_modes() {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            assert_eq!(
+                config.fsync_mode,
+                FsyncMode::Batched,
+                "fixture must prove the receipt overrides ordinary batched durability"
+            );
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+            let lane_block_height = 1;
+            let mut block = dummy_block_with_lane_payload_ownership(
+                lane_id,
+                lane_entry.dataspace_id,
+                lane_block_height,
+            )
+            .as_ref()
+            .clone();
+            attach_ok_results_to_block(&mut block);
+            let ownership = block
+                .execution_context()
+                .expect("execution context")
+                .lane_payload_ownerships
+                .first()
+                .expect("lane ownership")
+                .clone();
+            let proposal = lane_block_proposal_from_ownership(&ownership);
+
+            let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+            kura.store_block(Arc::new(block))
+                .expect("store canonical receipt evidence");
+            let expected = kura
+                .recover_lane_block_application_receipt_artifact(&proposal)
+                .expect("recover expected receipt before fault injection");
+            let (data_path, index_path) =
+                Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+
+            failure.inject();
+            assert!(
+                kura.persist_lane_block_application_receipt_if_ready(&proposal)
+                    .is_err(),
+                "injected {label} barrier failure must reject receipt persistence"
+            );
+            let readable =
+                Kura::read_indexed_sidecar_from_paths::<LaneBlockApplicationReceiptArtifact, _>(
+                    lane_block_height,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+                    "lane block application receipt",
+                )
+                .expect("failed barrier leaves exact page-cache receipt bytes readable");
+            assert_eq!(readable, expected);
+            let first_data_len = fs::metadata(&data_path)
+                .expect("receipt data metadata")
+                .len();
+
+            drop(kura);
+            let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
+            failure.inject();
+            assert_eq!(
+                kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+                None,
+                "a reopened public reader must not expose a receipt while its {label} barrier fails"
+            );
+
+            failure.inject();
+            assert!(
+                !kura.lane_block_application_receipt_available(&proposal),
+                "receipt availability must fail closed while its {label} barrier fails"
+            );
+
+            failure.inject();
+            assert!(
+                kura.persist_lane_block_application_receipt_if_ready(&proposal)
+                    .is_err(),
+                "exact-existing receipt retry must reissue the {label} barrier"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("receipt data metadata")
+                    .len(),
+                first_data_len,
+                "failed exact receipt retry must not append duplicate bytes"
+            );
+
+            assert!(
+                kura.persist_lane_block_application_receipt_if_ready(&proposal)
+                    .expect("receipt retry after barrier recovery"),
+                "complete canonical evidence must persist a receipt"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("receipt data metadata")
+                    .len(),
+                first_data_len,
+                "successful exact receipt retry must not append duplicate bytes"
+            );
+            assert_eq!(
+                kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+                Some(expected),
+                "receipt must become observable after every strict barrier succeeds"
+            );
+        }
+    }
+
     #[test]
     fn current_application_receipt_fails_closed_after_lane_recreation() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -50042,6 +52978,70 @@ mod tests {
         );
     }
 
+    fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let dataspace_id = lane_entry.dataspace_id;
+
+        let mut generator = DummyBlocks::new();
+        let mut predecessor_block = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            dataspace_id,
+            1,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut predecessor_block);
+        let predecessor_ownership = predecessor_block
+            .execution_context()
+            .expect("predecessor execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("predecessor lane ownership")
+            .clone();
+        let predecessor_proposal = lane_block_proposal_from_ownership(&predecessor_ownership);
+
+        let mut successor_block = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            dataspace_id,
+            2,
+        )
+        .as_ref()
+        .clone();
+        let successor_ownership = rebind_kura_lane_payload_predecessor(
+            &mut successor_block,
+            predecessor_proposal.descriptor.descriptor_hash,
+        );
+        let successor_proposal = lane_block_proposal_from_ownership(&successor_ownership);
+
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.store_block(Arc::new(predecessor_block))
+            .expect("store predecessor block with canonical results");
+        kura.persist_lane_block_application_receipt(&predecessor_proposal)
+            .expect("persist predecessor application receipt");
+        assert!(
+            kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
+            "durable predecessor receipt must authorize its exact successor"
+        );
+
+        for (label, failure) in strict_progress_sidecar_failure_modes() {
+            failure.inject();
+            assert!(
+                !kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
+                "successor progress must fail closed while the predecessor receipt's {label} barrier fails"
+            );
+            assert!(
+                kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
+                "successor progress must recover after the predecessor receipt's {label} barrier succeeds"
+            );
+        }
+    }
+
     #[test]
     fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -50348,6 +53348,95 @@ mod tests {
             reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
             Some(artifact)
         );
+    }
+
+    fn certified_lane_block_strict_retry_reissues_every_barrier() {
+        for (label, failure) in strict_progress_sidecar_failure_modes() {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            assert_eq!(
+                config.fsync_mode,
+                FsyncMode::Batched,
+                "fixture must prove the certificate overrides ordinary batched durability"
+            );
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+            let lane_block_height = 1;
+            let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                lane_block_height,
+            );
+            let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+
+            let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
+            kura.install_lane_incarnation_marker_for_test(
+                lane_entry,
+                session.proposal.descriptor.lane_incarnation,
+                0,
+            )
+            .expect("install explicit certified-session marker");
+            let (data_path, index_path) =
+                Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+
+            failure.inject();
+            assert!(
+                kura.persist_committed_lane_block_session(&session, &signer_pops)
+                    .is_err(),
+                "injected {label} barrier failure must reject certificate persistence"
+            );
+            let readable = Kura::read_indexed_sidecar_from_paths::<CertifiedLaneBlockArtifact, _>(
+                lane_block_height,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
+                "certified lane block",
+            )
+            .expect("failed barrier leaves exact page-cache certificate bytes readable");
+            assert_eq!(readable, expected);
+            let first_data_len = fs::metadata(&data_path)
+                .expect("certified lane data metadata")
+                .len();
+
+            drop(kura);
+            let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
+            failure.inject();
+            assert_eq!(
+                kura.read_certified_lane_block_artifact(lane_id, lane_block_height),
+                None,
+                "a reopened public reader must not expose a certificate while its {label} barrier fails"
+            );
+
+            failure.inject();
+            assert!(
+                kura.persist_committed_lane_block_session(&session, &signer_pops)
+                    .is_err(),
+                "exact-existing certificate retry must reissue the {label} barrier"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("certified lane data metadata")
+                    .len(),
+                first_data_len,
+                "failed exact certificate retry must not append duplicate bytes"
+            );
+
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("certificate retry after barrier recovery");
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("certified lane data metadata")
+                    .len(),
+                first_data_len,
+                "successful exact certificate retry must not append duplicate bytes"
+            );
+            assert_eq!(
+                kura.read_certified_lane_block_artifact(lane_id, lane_block_height),
+                Some(expected),
+                "certificate must become observable after every strict barrier succeeds"
+            );
+        }
     }
 
     #[test]
@@ -53509,14 +56598,61 @@ mod tests {
         height: u64,
     }
 
-    #[test]
-    fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
-        let failure_modes: [(&str, fn()); 2] = [
+    #[derive(Clone, Copy, Debug)]
+    enum ProgressSidecarBarrierFailure {
+        Data,
+        Index,
+        ImmediateDirectory,
+        AncestorDirectory(usize),
+    }
+
+    impl ProgressSidecarBarrierFailure {
+        fn inject(self) {
+            match self {
+                Self::Data => fail_next_indexed_sidecar_data_sync_for_tests(),
+                Self::Index => fail_next_indexed_sidecar_index_sync_for_tests(),
+                Self::ImmediateDirectory => fail_next_indexed_sidecar_dir_sync_for_tests(),
+                Self::AncestorDirectory(index) => {
+                    fail_progress_sidecar_ancestor_sync_at_for_tests(index);
+                }
+            }
+        }
+    }
+
+    fn strict_progress_sidecar_failure_modes() -> [(&'static str, ProgressSidecarBarrierFailure); 6]
+    {
+        [
+            ("data", ProgressSidecarBarrierFailure::Data),
+            ("index", ProgressSidecarBarrierFailure::Index),
+            (
+                "immediate-directory",
+                ProgressSidecarBarrierFailure::ImmediateDirectory,
+            ),
+            (
+                "lane-segment-directory",
+                ProgressSidecarBarrierFailure::AncestorDirectory(0),
+            ),
+            (
+                "blocks-directory",
+                ProgressSidecarBarrierFailure::AncestorDirectory(1),
+            ),
+            (
+                "store-root-directory",
+                ProgressSidecarBarrierFailure::AncestorDirectory(2),
+            ),
+        ]
+    }
+
+    fn strict_indexed_sidecar_failure_modes() -> [(&'static str, fn()); 3] {
+        [
+            ("data", fail_next_indexed_sidecar_data_sync_for_tests),
             ("index", fail_next_indexed_sidecar_index_sync_for_tests),
             ("directory", fail_next_indexed_sidecar_dir_sync_for_tests),
-        ];
+        ]
+    }
 
-        for (label, inject_failure) in failure_modes {
+    fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
+        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
             let temp_dir = TempDir::new().unwrap();
             let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
             let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
@@ -53580,6 +56716,1008 @@ mod tests {
                 first_data_len,
                 "exact retries must not append duplicate payload bytes"
             );
+        }
+    }
+
+    fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
+        for overwrite_placeholder in [false, true] {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
+            let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+            let payload = norito::to_bytes(&DummySidecar { height: 1 })
+                .expect("encode height-one dummy sidecar");
+
+            let baseline_len = if overwrite_placeholder {
+                let height_two = norito::to_bytes(&DummySidecar { height: 2 })
+                    .expect("encode height-two dummy sidecar");
+                assert!(
+                    Kura::append_indexed_sidecar(
+                        &data_path,
+                        &index_path,
+                        2,
+                        &height_two,
+                        "initial-sync rollback sidecar",
+                        FsyncMode::Always,
+                        None,
+                        SidecarIndexOrigin::HeightOne,
+                    ),
+                    "prepare a height-one index placeholder"
+                );
+                fs::metadata(&data_path)
+                    .expect("baseline data metadata")
+                    .len()
+            } else {
+                0
+            };
+
+            fail_next_indexed_sidecar_initial_data_sync_for_tests();
+            assert!(
+                !Kura::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "initial-sync rollback sidecar",
+                    FsyncMode::Always,
+                    None,
+                    SidecarIndexOrigin::HeightOne,
+                ),
+                "an initial pre-index data barrier failure must reject the write"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("rolled-back data metadata")
+                    .len(),
+                baseline_len,
+                "the unpublished payload must be truncated and synchronized before retry"
+            );
+            assert!(
+                Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                    1,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "initial-sync rollback sidecar",
+                )
+                .is_none(),
+                "the failed pre-index write must not publish a readable height-one entry"
+            );
+
+            assert!(
+                Kura::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "initial-sync rollback sidecar",
+                    FsyncMode::Always,
+                    None,
+                    SidecarIndexOrigin::HeightOne,
+                ),
+                "retry must publish the payload exactly once"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("retried data metadata")
+                    .len(),
+                baseline_len + u64::try_from(payload.len()).expect("payload length fits u64"),
+                "retry must not retain or duplicate unpublished payload bytes"
+            );
+            assert_eq!(
+                Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                    1,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "initial-sync rollback sidecar",
+                ),
+                Some(DummySidecar { height: 1 })
+            );
+        }
+    }
+
+    fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
+        let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+        let first = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode first payload");
+        let replacement =
+            norito::to_bytes(&DummySidecar { height: 11 }).expect("encode replacement payload");
+        let second = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode second payload");
+
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            1,
+            &first,
+            "crash-tail repair sidecar",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::HeightOne,
+        ));
+        let append_residue = |bytes: &[u8]| {
+            let mut data = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&data_path)
+                .expect("open data for crash residue");
+            data.write_all(bytes).expect("append crash residue");
+            data.sync_data().expect("persist crash residue fixture");
+        };
+
+        append_residue(b"unpublished-exact-retry");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            1,
+            &first,
+            "crash-tail repair sidecar",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::HeightOne,
+        ));
+        assert_eq!(
+            fs::metadata(&data_path).expect("repaired data").len(),
+            u64::try_from(first.len()).expect("first length fits u64"),
+            "an exact-existing retry must trim a crash suffix before returning"
+        );
+
+        append_residue(b"unpublished-replacement");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            1,
+            &replacement,
+            "crash-tail repair sidecar",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::HeightOne,
+        ));
+        let after_replacement =
+            u64::try_from(first.len() + replacement.len()).expect("replacement length fits u64");
+        assert_eq!(
+            fs::metadata(&data_path).expect("replacement data").len(),
+            after_replacement,
+            "replacement retry must retain one old payload and one replacement only"
+        );
+
+        append_residue(b"unpublished-new-height");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            2,
+            &second,
+            "crash-tail repair sidecar",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::HeightOne,
+        ));
+        assert_eq!(
+            fs::metadata(&data_path).expect("height-two data").len(),
+            after_replacement + u64::try_from(second.len()).expect("second length fits u64"),
+            "new-height retry must append exactly once after trimming crash residue"
+        );
+        assert_eq!(
+            Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                1,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "crash-tail repair sidecar",
+            ),
+            Some(DummySidecar { height: 11 })
+        );
+        assert_eq!(
+            Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                2,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "crash-tail repair sidecar",
+            ),
+            Some(DummySidecar { height: 2 })
+        );
+    }
+
+    #[cfg(unix)]
+    fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
+        use std::os::unix::fs::symlink;
+
+        for substitution in ["data", "index", "directory"] {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+            let root = kura.store_root();
+            let sidecar_dir = root.join(format!("progress-{substitution}"));
+            fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
+            let data_path = sidecar_dir.join("progress.data");
+            let index_path = sidecar_dir.join("progress.index");
+            let namespace = kura
+                .open_bound_progress_namespace(&data_path, &index_path)
+                .expect("bind progress namespace before substitution");
+            let external_dir = root.join(format!("external-{substitution}"));
+            fs::create_dir_all(&external_dir).expect("create external target directory");
+            let external_data = external_dir.join("progress.data");
+            let external_index = external_dir.join("progress.index");
+            let data_sentinel = b"external-data-sentinel";
+            let index_sentinel = b"external-index-sentinel";
+            fs::write(&external_data, data_sentinel).expect("write external data sentinel");
+            fs::write(&external_index, index_sentinel).expect("write external index sentinel");
+
+            match substitution {
+                "data" => symlink(&external_data, &data_path).expect("substitute data symlink"),
+                "index" => symlink(&external_index, &index_path).expect("substitute index symlink"),
+                "directory" => {
+                    let displaced = root.join("displaced-progress");
+                    fs::rename(&sidecar_dir, &displaced).expect("displace bound directory");
+                    symlink(&external_dir, &sidecar_dir).expect("substitute namespace symlink");
+                }
+                _ => unreachable!("fixed substitution matrix"),
+            }
+
+            let payload = norito::to_bytes(&DummySidecar { height: 1 })
+                .expect("encode progress mutation payload");
+            assert!(
+                !Kura::append_indexed_progress_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "symlink progress sidecar",
+                    None,
+                    SidecarIndexOrigin::FirstWrite,
+                    &namespace,
+                ),
+                "{substitution} substitution must reject the progress write"
+            );
+            assert_eq!(
+                fs::read(&external_data).expect("read external data sentinel"),
+                data_sentinel,
+                "{substitution} substitution must not mutate external data"
+            );
+            assert_eq!(
+                fs::read(&external_index).expect("read external index sentinel"),
+                index_sentinel,
+                "{substitution} substitution must not mutate external index"
+            );
+        }
+    }
+
+    fn absent_progress_namespace_requires_every_directory_barrier() {
+        for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+            let sidecar_dir = kura
+                .store_root()
+                .join("blocks")
+                .join("lane")
+                .join(LANE_ARTIFACTS_DIR_NAME);
+            fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
+            let data_path = sidecar_dir.join("absent.data");
+            let index_path = sidecar_dir.join("absent.index");
+            let pair = kura
+                .open_bound_progress_pair(&data_path, &index_path)
+                .expect("bind absent progress pair");
+            let BoundProgressPair::Absent(namespace) = pair else {
+                panic!("fresh progress pair must be absent");
+            };
+            failure.inject();
+            assert!(
+                !kura.sync_bound_progress_absence(&namespace, "absent progress test"),
+                "absent namespace must fail closed at the {label} barrier"
+            );
+        }
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+        let sidecar_dir = kura
+            .store_root()
+            .join("blocks")
+            .join("lane")
+            .join(LANE_ARTIFACTS_DIR_NAME);
+        fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
+        let data_path = sidecar_dir.join("absent.data");
+        let index_path = sidecar_dir.join("absent.index");
+        let pair = kura
+            .open_bound_progress_pair(&data_path, &index_path)
+            .expect("bind absent progress pair");
+        let BoundProgressPair::Absent(namespace) = pair else {
+            panic!("fresh progress pair must be absent");
+        };
+        fs::write(&data_path, b"appeared after absence scan").expect("publish conflicting data");
+        assert!(
+            !kura.sync_bound_progress_absence(&namespace, "appeared progress test"),
+            "a sidecar appearing after the absence scan must invalidate the witness"
+        );
+    }
+
+    #[cfg(unix)]
+    fn progress_prepend_directory_failure_retries_without_corruption() {
+        for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
+            let sidecar_dir = kura
+                .store_root()
+                .join("blocks")
+                .join("lane")
+                .join(LANE_ARTIFACTS_DIR_NAME);
+            fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
+            let data_path = sidecar_dir.join("prepend.data");
+            let index_path = sidecar_dir.join("prepend.index");
+            let height_two =
+                norito::to_bytes(&DummySidecar { height: 2 }).expect("encode height two");
+            let height_one =
+                norito::to_bytes(&DummySidecar { height: 1 }).expect("encode height one");
+
+            let namespace = kura
+                .open_bound_progress_namespace(&data_path, &index_path)
+                .expect("bind initial progress namespace");
+            assert!(
+                Kura::append_indexed_progress_sidecar(
+                    &data_path,
+                    &index_path,
+                    2,
+                    &height_two,
+                    "progress prepend test",
+                    None,
+                    SidecarIndexOrigin::FirstWrite,
+                    &namespace,
+                ),
+                "prepare height two for the {label} failure"
+            );
+
+            let namespace = kura
+                .open_bound_progress_namespace(&data_path, &index_path)
+                .expect("rebind progress namespace before prepend");
+            failure.inject();
+            assert!(
+                !Kura::append_indexed_progress_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &height_one,
+                    "progress prepend test",
+                    None,
+                    SidecarIndexOrigin::FirstWrite,
+                    &namespace,
+                ),
+                "the {label} barrier failure must reject the prepend acknowledgement"
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("failed prepend data metadata")
+                    .len(),
+                u64::try_from(height_two.len() + height_one.len())
+                    .expect("fixture length fits u64"),
+                "a post-publication {label} failure must not truncate indexed payload bytes"
+            );
+
+            drop(kura);
+            let (reopened, _) =
+                Kura::new(&config, &lane_config).expect("reopen Kura after failed prepend");
+            let namespace = reopened
+                .open_bound_progress_namespace(&data_path, &index_path)
+                .expect("bind reopened progress namespace");
+            assert!(
+                Kura::append_indexed_progress_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &height_one,
+                    "progress prepend test",
+                    None,
+                    SidecarIndexOrigin::FirstWrite,
+                    &namespace,
+                ),
+                "an exact retry after the {label} failure must reissue every barrier"
+            );
+            assert_eq!(
+                Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                    1,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "progress prepend test",
+                ),
+                Some(DummySidecar { height: 1 })
+            );
+            assert_eq!(
+                Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                    2,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "progress prepend test",
+                ),
+                Some(DummySidecar { height: 2 })
+            );
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("retried prepend data metadata")
+                    .len(),
+                u64::try_from(height_two.len() + height_one.len())
+                    .expect("fixture length fits u64"),
+                "retry must preserve exactly one payload for each indexed height"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
+        use std::fs::{File, OpenOptions};
+        use std::os::unix::fs::{MetadataExt as _, symlink};
+
+        let fixture = || {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+                .expect("init bound recovery Kura");
+            let sidecar_dir = kura
+                .store_root()
+                .join("blocks")
+                .join("lane")
+                .join(LANE_ARTIFACTS_DIR_NAME);
+            fs::create_dir_all(&sidecar_dir).expect("create bound recovery namespace");
+            let data_path = sidecar_dir.join("bound-recovery.norito");
+            let index_path = sidecar_dir.join("bound-recovery.index");
+            (temp_dir, kura, data_path, index_path)
+        };
+        let persist =
+            |kura: &Kura, data_path: &Path, index_path: &Path, height: u64, payload: &[u8]| {
+                let namespace = kura
+                    .open_bound_progress_namespace(data_path, index_path)
+                    .expect("bind progress fixture namespace");
+                assert!(Kura::append_indexed_progress_sidecar(
+                    data_path,
+                    index_path,
+                    height,
+                    payload,
+                    "bound recovery test",
+                    None,
+                    SidecarIndexOrigin::FirstWrite,
+                    &namespace,
+                ));
+            };
+        let read = |data_path: &Path, index_path: &Path, height: u64| {
+            Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                height,
+                data_path,
+                index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "bound recovery test",
+            )
+        };
+
+        // A lone data temp precedes the index commit marker and is discarded.
+        {
+            let (_temp_dir, kura, data_path, index_path) = fixture();
+            let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
+            persist(&kura, &data_path, &index_path, 1, &main);
+            let temp_data_path = data_path.with_extension("norito.tmp");
+            fs::write(&temp_data_path, b"uncommitted rewrite data").expect("stage data temp");
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_data_path.exists());
+            assert_eq!(
+                read(&data_path, &index_path, 1),
+                Some(DummySidecar { height: 1 })
+            );
+        }
+
+        // When both pre-publication temps are incomplete, cleanup removes the
+        // index commit marker first and preserves the authoritative main pair.
+        {
+            let (_temp_dir, kura, data_path, index_path) = fixture();
+            let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
+            persist(&kura, &data_path, &index_path, 1, &main);
+            let temp_data_path = data_path.with_extension("norito.tmp");
+            let temp_index_path = index_path.with_extension("index.tmp");
+            fs::write(&temp_data_path, b"incomplete rewrite data").expect("stage data temp");
+            fs::write(&temp_index_path, [0_u8; 3]).expect("stage incomplete index temp");
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_data_path.exists());
+            assert!(!temp_index_path.exists());
+            assert_eq!(
+                read(&data_path, &index_path, 1),
+                Some(DummySidecar { height: 1 })
+            );
+        }
+
+        // A complete rewrite pair is published data-first and remains exact.
+        {
+            let (_temp_dir, kura, data_path, index_path) = fixture();
+            let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
+            persist(&kura, &data_path, &index_path, 1, &main);
+            let replacement =
+                norito::to_bytes(&DummySidecar { height: 7 }).expect("encode replacement");
+            let temp_data_path = data_path.with_extension("norito.tmp");
+            let temp_index_path = index_path.with_extension("index.tmp");
+            fs::write(&temp_data_path, &replacement).expect("stage complete data temp");
+            fs::write(
+                &temp_index_path,
+                SidecarIndexEntry {
+                    offset: 0,
+                    len: u64::try_from(replacement.len()).expect("replacement length"),
+                }
+                .to_bytes(),
+            )
+            .expect("stage complete index temp");
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_data_path.exists());
+            assert!(!temp_index_path.exists());
+            assert_eq!(
+                read(&data_path, &index_path, 1),
+                Some(DummySidecar { height: 7 })
+            );
+        }
+
+        // An index-only recovery marker represents data that already reached
+        // its main name. It is validated against that exact payload and promoted.
+        {
+            let (_temp_dir, kura, data_path, index_path) = fixture();
+            let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
+            persist(&kura, &data_path, &index_path, 1, &main);
+            let replacement =
+                norito::to_bytes(&DummySidecar { height: 8 }).expect("encode replacement");
+            assert_eq!(main.len(), replacement.len());
+            fs::write(&data_path, &replacement).expect("model promoted rewrite data");
+            let temp_index_path = index_path.with_extension("index.tmp");
+            fs::write(
+                &temp_index_path,
+                SidecarIndexEntry {
+                    offset: 0,
+                    len: u64::try_from(replacement.len()).expect("replacement length"),
+                }
+                .to_bytes(),
+            )
+            .expect("stage index-only recovery marker");
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_index_path.exists());
+            assert_eq!(
+                read(&data_path, &index_path, 1),
+                Some(DummySidecar { height: 8 })
+            );
+        }
+
+        let stage_prepend = |complete_payload: bool| {
+            let (temp_dir, kura, data_path, index_path) = fixture();
+            let height_two =
+                norito::to_bytes(&DummySidecar { height: 2 }).expect("encode height two");
+            let height_one =
+                norito::to_bytes(&DummySidecar { height: 1 }).expect("encode height one");
+            persist(&kura, &data_path, &index_path, 2, &height_two);
+            let original_len = fs::metadata(&data_path).expect("main data metadata").len();
+            let mut source_index = File::open(&index_path).expect("open main index");
+            let source_len = source_index.metadata().expect("main index metadata").len();
+            let layout = SidecarIndexLayout::read_from(&mut source_index, source_len)
+                .expect("decode main based index");
+            source_index
+                .seek(SeekFrom::Start(layout.entries_offset))
+                .expect("seek main entries");
+            let temp_index_path = index_path.with_extension("index.prepend.tmp");
+            let mut temp_index = File::create(&temp_index_path).expect("create prepend temp");
+            temp_index
+                .write_all(
+                    &SidecarIndexEntry {
+                        offset: original_len,
+                        len: u64::try_from(height_one.len()).expect("height one length"),
+                    }
+                    .to_bytes(),
+                )
+                .expect("write prepended entry");
+            std::io::copy(
+                &mut source_index.take(
+                    layout
+                        .entry_count
+                        .saturating_mul(PIPELINE_INDEX_ENTRY_SIZE_U64),
+                ),
+                &mut temp_index,
+            )
+            .expect("copy main index entries");
+            let suffix_len = if complete_payload {
+                height_one.len()
+            } else {
+                height_one.len().saturating_sub(1)
+            };
+            OpenOptions::new()
+                .append(true)
+                .open(&data_path)
+                .expect("open main data for prepend suffix")
+                .write_all(&height_one[..suffix_len])
+                .expect("stage prepend payload suffix");
+            (
+                temp_dir,
+                kura,
+                data_path,
+                index_path,
+                temp_index_path,
+                original_len,
+            )
+        };
+
+        // A complete prepend suffix is recovered by publishing its exact index.
+        {
+            let (_temp_dir, kura, data_path, index_path, temp_index_path, _) = stage_prepend(true);
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_index_path.exists());
+            assert_eq!(
+                read(&data_path, &index_path, 1),
+                Some(DummySidecar { height: 1 })
+            );
+            assert_eq!(
+                read(&data_path, &index_path, 2),
+                Some(DummySidecar { height: 2 })
+            );
+        }
+
+        // A partial prepend suffix was never published. Recovery keeps the
+        // main index authoritative and truncates the incomplete payload.
+        {
+            let (_temp_dir, kura, data_path, index_path, temp_index_path, original_len) =
+                stage_prepend(false);
+            assert!(kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery test",
+            ));
+            assert!(!temp_index_path.exists());
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("rolled-back data metadata")
+                    .len(),
+                original_len
+            );
+            assert_eq!(read(&data_path, &index_path, 1), None);
+            assert_eq!(
+                read(&data_path, &index_path, 2),
+                Some(DummySidecar { height: 2 })
+            );
+        }
+
+        // Every predictable recovery name rejects a symlink without changing
+        // either the main pair or the external target.
+        for extension in ["norito.tmp", "index.tmp", "index.prepend.tmp"] {
+            let (temp_dir, kura, data_path, index_path) = fixture();
+            let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
+            persist(&kura, &data_path, &index_path, 1, &main);
+            let data_before = fs::read(&data_path).expect("main data bytes");
+            let index_before = fs::read(&index_path).expect("main index bytes");
+            let data_identity = fs::metadata(&data_path).expect("main data identity");
+            let index_identity = fs::metadata(&index_path).expect("main index identity");
+            let sentinel = temp_dir.path().join(format!("outside-{extension}"));
+            fs::write(&sentinel, b"external sentinel").expect("write external sentinel");
+            let recovery_path = if extension == "norito.tmp" {
+                data_path.with_extension(extension)
+            } else {
+                index_path.with_extension(extension)
+            };
+            symlink(&sentinel, &recovery_path).expect("install recovery symlink");
+            assert!(!kura.recover_bound_progress_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "bound recovery symlink test",
+            ));
+            assert_eq!(
+                fs::read(&sentinel).expect("external sentinel retained"),
+                b"external sentinel"
+            );
+            assert!(
+                fs::symlink_metadata(&recovery_path)
+                    .expect("recovery symlink retained")
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                fs::read(&data_path).expect("main data retained"),
+                data_before
+            );
+            assert_eq!(
+                fs::read(&index_path).expect("main index retained"),
+                index_before
+            );
+            let data_after = fs::metadata(&data_path).expect("main data after recovery rejection");
+            let index_after =
+                fs::metadata(&index_path).expect("main index after recovery rejection");
+            assert_eq!(
+                (data_after.dev(), data_after.ino()),
+                (data_identity.dev(), data_identity.ino())
+            );
+            assert_eq!(
+                (index_after.dev(), index_after.ino()),
+                (index_identity.dev(), index_identity.ino())
+            );
+        }
+    }
+
+    fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
+        for include_current_receipt in [false, true] {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+            let mut generator = DummyBlocks::new();
+            let first = dummy_block_with_lane_payload_ownership_from_generator(
+                &mut generator,
+                lane_id,
+                lane_entry.dataspace_id,
+                1,
+            );
+            let mut second = dummy_block_with_lane_payload_ownership_from_generator(
+                &mut generator,
+                lane_id,
+                lane_entry.dataspace_id,
+                2,
+            )
+            .as_ref()
+            .clone();
+            if include_current_receipt {
+                attach_ok_results_to_block(&mut second);
+            }
+            let second = Arc::new(second);
+            let third = dummy_block_with_lane_payload_ownership_from_generator(
+                &mut generator,
+                lane_id,
+                lane_entry.dataspace_id,
+                3,
+            );
+            let proposal = |block: &SignedBlock| {
+                lane_block_proposal_from_ownership(
+                    block
+                        .execution_context()
+                        .expect("lane execution context")
+                        .lane_payload_ownerships
+                        .first()
+                        .expect("lane ownership"),
+                )
+            };
+            let first_proposal = proposal(&first);
+            let second_proposal = proposal(&second);
+            let third_proposal = proposal(&third);
+
+            let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+            kura.store_block(Arc::clone(&first))
+                .expect("store first lane block");
+            kura.store_block(Arc::clone(&second))
+                .expect("store second lane block");
+            kura.store_block(Arc::clone(&third))
+                .expect("store third lane block");
+
+            let persist_direct =
+                |proposal: &LaneBlockProposalV1,
+                 preflight_state_height: u64,
+                 state_hash_marker: &'static [u8]| {
+                    let recovered = kura
+                        .recover_lane_block_payload(proposal)
+                        .expect("recover direct lane payload");
+                    kura.persist_lane_block_execution_input(&recovered)
+                        .expect("persist direct execution input");
+                    let input = kura
+                        .read_lane_block_execution_input(
+                            proposal.descriptor.lane_id,
+                            proposal.descriptor.lane_block_height,
+                        )
+                        .expect("read direct execution input");
+                    let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
+                        Hash::new(state_hash_marker),
+                    ));
+                    let result =
+                        TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+                    kura.persist_lane_block_execution_preflight(
+                        &input,
+                        preflight_state_height,
+                        state_hash,
+                        vec![result],
+                    )
+                    .expect("persist direct execution preflight");
+                    let preflight = kura
+                        .read_lane_block_execution_preflight(
+                            proposal.descriptor.lane_id,
+                            proposal.descriptor.lane_block_height,
+                        )
+                        .expect("read direct execution preflight");
+                    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+                        .expect("persist direct application receipt");
+                };
+            persist_direct(&first_proposal, 11, b"direct-snapshot-first-state");
+            if include_current_receipt {
+                kura.persist_lane_block_application_receipt(&second_proposal)
+                    .expect("persist intervening current-format receipt");
+            }
+            persist_direct(&third_proposal, 13, b"direct-snapshot-third-state");
+
+            for entry in kura
+                .lane_storage_entries
+                .lock()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+            {
+                let (data_path, index_path) =
+                    Kura::lane_block_application_receipt_paths_for_entry(&entry, &kura.store_root);
+                let mut pair = kura
+                    .open_bound_progress_pair(&data_path, &index_path)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "lane {} receipt pair must bind: {error:?}",
+                            entry.lane_id.as_u32()
+                        )
+                    });
+                match &mut pair {
+                    BoundProgressPair::Absent(namespace) => assert!(
+                        kura.sync_bound_progress_absence(
+                            namespace,
+                            "direct snapshot fixture absence"
+                        ),
+                        "lane {} absent receipt namespace must attest",
+                        entry.lane_id.as_u32()
+                    ),
+                    BoundProgressPair::Present(bound) => {
+                        let heights = kura
+                            .bound_indexed_sidecar_payload_heights(
+                                bound,
+                                "direct snapshot fixture",
+                                usize::MAX,
+                            )
+                            .unwrap_or_else(|error| {
+                                panic!(
+                                    "lane {} receipt heights must enumerate: {error:?}",
+                                    entry.lane_id.as_u32()
+                                )
+                            });
+                        for height in heights {
+                            assert!(
+                                kura.read_lane_block_application_receipt_from_bound_locked(
+                                    entry.lane_id,
+                                    height,
+                                    bound,
+                                )
+                                .is_some(),
+                                "lane {} height {height} receipt must decode",
+                                entry.lane_id.as_u32()
+                            );
+                        }
+                        assert!(
+                            kura.sync_bound_progress_sidecar(
+                                bound,
+                                "direct snapshot fixture receipt"
+                            ),
+                            "lane {} receipt pair must attest",
+                            entry.lane_id.as_u32()
+                        );
+                    }
+                }
+            }
+
+            let structural = kura
+                .active_lane_block_application_receipts_structural_snapshot()
+                .expect("mixed/sparse structural snapshot must be readable");
+            assert_eq!(
+                structural
+                    .iter()
+                    .map(|receipt| receipt.proposal.descriptor.lane_block_height)
+                    .collect::<Vec<_>>(),
+                if include_current_receipt {
+                    vec![1, 2, 3]
+                } else {
+                    vec![1, 3]
+                },
+                "occupied-entry enumeration must ignore sparse holes without dropping receipts"
+            );
+            assert!(
+                structural
+                    .iter()
+                    .filter(|receipt| {
+                        receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+                    })
+                    .all(|receipt| kura
+                        .lane_block_application_receipt_matches_available_evidence(receipt)),
+                "every structurally captured direct receipt must retain its preflight evidence"
+            );
+            assert_eq!(
+                kura.active_lane_block_application_receipts_structural_snapshot(),
+                Some(structural),
+                "a second full occupied-entry scan must match exactly"
+            );
+            let snapshot = kura.direct_lane_block_application_receipts_snapshot();
+            assert_eq!(
+                snapshot
+                    .iter()
+                    .map(|receipt| receipt.proposal.descriptor.lane_block_height)
+                    .collect::<Vec<_>>(),
+                vec![1, 3],
+                "{} must not hide either direct receipt",
+                if include_current_receipt {
+                    "an intervening Current receipt"
+                } else {
+                    "a sparse zero index entry"
+                }
+            );
+            assert!(snapshot.iter().all(|receipt| {
+                receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+            }));
+        }
+    }
+
+    mod progress_witness_durability {
+        #[test]
+        fn absent_progress_namespace_requires_every_directory_barrier() {
+            super::absent_progress_namespace_requires_every_directory_barrier();
+        }
+
+        #[test]
+        fn certified_lane_block_strict_retry_reissues_every_barrier() {
+            super::certified_lane_block_strict_retry_reissues_every_barrier();
+        }
+
+        #[test]
+        fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
+            super::direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries();
+        }
+
+        #[test]
+        fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
+            super::lane_block_application_receipt_strict_retry_reissues_every_barrier();
+        }
+
+        #[test]
+        fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
+            super::initial_preindex_data_sync_failure_rolls_back_payload_before_retry();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
+            super::bound_progress_recovery_handles_crash_phases_without_path_escape();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
+            super::progress_sidecar_mutation_rejects_symlinks_without_external_writes();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn progress_prepend_directory_failure_retries_without_corruption() {
+            super::progress_prepend_directory_failure_retries_without_corruption();
+        }
+
+        #[test]
+        fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
+            super::predecessor_application_receipt_fails_closed_while_durability_barrier_fails();
+        }
+
+        #[test]
+        fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
+            super::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload();
+        }
+
+        #[test]
+        fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
+            super::unindexed_crash_suffix_is_repaired_before_retry_or_append();
         }
     }
 

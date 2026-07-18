@@ -422,29 +422,40 @@ current-height protocol evidence, strictly consumes a concrete deadline debt,
 or decreases/exits a protected candidate or Serve-occurrence rank. Repeated
 clock or view-change steps alone do not satisfy that productive obligation.
 Stage-2/3/6, packet-admission, and zero-deadline cases therefore remain explicit
-proof debt. Runner preservation and starvation now have source
-proof bodies, but remain `specified_unproved`; the runner still needs a fresh
-pinned strict proof and starvation depends on the still-unproved service-rank
-theorem. Durable witness,
+proof debt. Runner preservation has a source proof body but still needs a fresh
+pinned strict proof. Starvation has conditional precursor proof bodies, while
+the release-facing theorem remains proofless and depends on the still-unproved
+service-rank theorem. Both remain `specified_unproved`. Durable witness,
 rank decrease, and the remaining stable-suffix liveness theorems are exact
 universally quantified declarations recorded as `specified_unproved`. The
 argument above does not upgrade any of those statuses. The concrete genesis
 chain product's first-successor handoff also has a source proof body but remains
-ledgered `specified_unproved`. The chain
+ledgered `specified_unproved`. The application debt is now isolated at
+`ApplicationCompletionProgressObligation`, the proofless per-responsive-node
+decision-to-application pipeline. The aggregate `ApplicationLivenessObligation`
+is derived from that premise by application monotonicity, a frozen responsive
+voter set, and finite validator-prefix induction; this composition introduces
+no global application barrier and does not promote the ledger entry. The chain
 refinement now contains the authoritative indexed successor-instance product
-and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. Its
-source proof body composes instance activation, exact-action fairness,
-exact historical recovery for responsive validators absent from an old roster,
-and finite-height temporal induction, but the ledger remains
-`specified_unproved` until the whole theorem passes a fresh pinned strict proof
+and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. The
+conditional indexed composition immediately above that theorem has a source
+proof body covering instance activation, exact-action fairness, exact
+historical recovery for responsive validators absent from an old roster, and
+finite-height temporal induction. The release-facing theorem itself remains
+proofless and ledgered `specified_unproved` until its prerequisites are
+discharged and the whole theorem passes a fresh pinned strict proof
 after rotating-leader, application liveness, and the separately ledgered
 `SuccessorActivationStarvationFreedomObligation` and
 `SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`.
 The former pins the minimal `0..19` queue-to-publication rank for each
 responsive validator, including the one-time pre-failure `+9` offset. It makes
 no progress claim for an honest validator outside `Responsive`, which may stop
-with pre-GST local work still queued. The latter maps production startup and
-block-sync traces to the model. Historical recovery is an exact Async reducer path rather than a
+with pre-GST local work still queued. Its release-facing theorem now has a
+source proof body that deductively composes the six exact structure,
+rank-decrease, non-orphaning, outcome-stability, well-founded progress, and
+starvation results, but remains `specified_unproved` pending a fresh pinned
+strict TLAPS run of the complete module. The latter maps production startup
+and block-sync traces to the model. Historical recovery is an exact Async reducer path rather than a
 second consensus or receipt relation: an authenticated current voter serves an
 already canonical exact CommitQC, the Core imports that envelope into ordinary
 certificate delivery, and the reducer performs decision persistence, body
@@ -480,8 +491,10 @@ category-specific outer frame. `AsyncFairActionAt` repeats the exact quantified
 inventory. `AsyncFairActionsRefineAsyncNext` is the typed source claim, while
 `SumeragiV2AsyncFairnessRefinementProofs!AsyncFairActionsRefineAsyncNextObligation`
 is its deductive theorem. The decomposed proof projects typed command execution,
-all 18 fair actions, and their runner, non-runner, and recovery outer frames;
-the exact release invocation proves 1,143/1,143 obligations. The proof checker
+all 18 fair actions, and their runner, non-runner, and recovery outer frames. A
+recorded exact release invocation proved 1,143/1,143 obligations; that
+historical submodule result is not current aggregate source-manifest evidence.
+The proof checker
 rejects a missing action, changed quantifier domain, misclassified frame,
 weakened claim or theorem, unreviewed helper theorem, duplicate TLC-only
 variable tuple, or alternate TLC fairness relation. The complete Core `Next`
@@ -506,21 +519,23 @@ replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
 index mutations. An exhaustive one-validator configuration checks the logical
 ownership invariant through 42,817 generated states, 6,208 distinct states,
 and depth 45. The larger graph covers separate non-timeout-progress and
-TimeoutVote ingress reservations. These are bounded regression witnesses, not deductive proof and not a reason to
-promote a ledger entry. Two additional seam models make the remaining temporal
+TimeoutVote ingress reservations. These are bounded regression witnesses, not
+deductive proof and not a reason to promote a ledger entry. Two additional
+seam models make the remaining temporal
 gap executable: an unprotected Normal proposal/Prepare candidate starves, and
 a dynamic delivery-class mutation loses a stored CommitVote after a TC, while
 the frozen constructor inventory closes both cases; separately, a
 scheduler-only deadlock claim accepts a bare tick, whereas the productive claim
 rejects it until a concrete deadline, evidence, or rank repair exists. The
-productive release obligation remains `specified_unproved`. The production trace replayer and adversarial
-simulations exercise the exact reducer sources, while the pinned Verus harness
+productive release obligation remains `specified_unproved`. The production
+trace replayer and adversarial simulations exercise the exact reducer sources,
+while the pinned Verus harness
 proves the source-linked reducer/WAL and scheduler kernels. The
 remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The current pre-network release inventory names 168 tests across fourteen Rust
+The current pre-network release inventory names 170 tests across fourteen Rust
 modules. It includes exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
@@ -529,18 +544,21 @@ authenticated exact historical recovery, and watchdog classification. Cargo
 discovery found all
 162 then-required names among 6,744 tests with no missing or ignored release
 test before the four replay-FIFO/refinement regressions raised the inventory to
-166 and the two effective-lock acquisition regressions raised it to 168; the
-authoritative ingress module was green at 30/30. Current mutable-source
-discovery finds all 168 exact names among 6,750 library tests with none missing
-or ignored, and direct exact execution is green at 168/168. The clean
-committed, detached, source-sealed serial release leg remains pending. An
+166 and the two effective-lock acquisition regressions raised it to 168. Two
+same-runtime-step Decision reconciliation regressions now raise it to 170; the
+authoritative ingress module was green at 30/30. The preceding mutable-source
+discovery found all 168 then-required names among 6,750 library tests with none
+missing or ignored, and direct exact execution was green at 168/168. Fresh
+170-name discovery/execution and the clean committed, detached, source-sealed
+serial release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
 The Core delivery relation and normalized trace replay match exact-lock
-admission and post-WAL pruning. The repaired full strict induction discharged
-all 7,826 obligations and the downstream Core safety wrapper discharged all
-565, promoting only historical TC-lock authorization and timeout protection.
+admission and post-WAL pruning. A recorded pre-current-edit strict run
+discharged all 7,826 induction obligations and all 565 downstream Core safety
+obligations, promoting only historical TC-lock authorization and timeout
+protection.
 The asynchronous liveness proof-premise repairs remain outstanding. Full
 strict proof completion, the release-profile 100,000-height chaos rerun, and
 the 24-hour Taira-profile soak remain pending.

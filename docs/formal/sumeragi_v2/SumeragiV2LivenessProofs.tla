@@ -46,6 +46,12 @@ RotatingLeaderProgressProperty(specification) ==
                  /\ ~ResponsiveNodesDecide)
              ~> ResponsiveNodesDecide
 
+ApplicationCompletionProgressProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters:
+         (gst /\ NodeHasDecision(node))
+           ~> NodeHasApplication(node)
+
 ApplicationLivenessProperty(specification) ==
   specification
     => /\ \A node \in AsyncCurrentResponsiveVoters:

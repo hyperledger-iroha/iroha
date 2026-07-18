@@ -1695,26 +1695,30 @@ SuccessorActivationCredentialReady(parentContext, node,
                parentContext, node, successorContext, application)
 
 BeginSuccessorActivation(parentContext, node, successorContext) ==
-  /\ successorContext =
-       CanonicalIndexedContext(parentContext.height + 1)
-  /\ successorActivationStatus[parentContext][node] = "Queued"
-  /\ successorPredecessorStatusOwnership[parentContext][node] = "Published"
-  /\ \E application \in Chain!DecisionEvidenceSet:
-       ExactDurableParentApplication(parentContext, node, application)
-  /\ successorActivationStatus' =
-       [successorActivationStatus EXCEPT
-          ![parentContext][node] = "Running"]
-  /\ UNCHANGED <<successorPredecessorStatusOwnership,
-                  successorActivationPrerequisites,
-                  successorActivationTokens,
-                  successorRecoveryAuthorities,
-                  preparedSuccessorActivationMarkers,
-                  publishedSuccessorActivationMarkers,
-                  successorActivationFailures,
-                  successorActivationFailureHistory,
-                  successorActivationCompletions,
-                  joinedByContext>>
-  /\ SuccessorActivationEnvironmentStutter
+  LET token == SuccessorActivationToken(
+                 "Applied", parentContext, node, successorContext)
+  IN /\ successorContext =
+          CanonicalIndexedContext(parentContext.height + 1)
+     /\ successorActivationStatus[parentContext][node] = "Queued"
+     /\ successorPredecessorStatusOwnership[parentContext][node] = "Published"
+     /\ successorActivationPrerequisites[parentContext][node] = {}
+     /\ token \notin successorActivationTokens
+     /\ \E application \in Chain!DecisionEvidenceSet:
+          ExactDurableParentApplication(parentContext, node, application)
+     /\ successorActivationStatus' =
+          [successorActivationStatus EXCEPT
+             ![parentContext][node] = "Running"]
+     /\ UNCHANGED <<successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     successorActivationTokens,
+                     successorRecoveryAuthorities,
+                     preparedSuccessorActivationMarkers,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailures,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
 
 BindAppliedSuccessorActivationToken(parentContext, node,
                                     successorContext) ==

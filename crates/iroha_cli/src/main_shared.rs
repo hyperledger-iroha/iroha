@@ -4683,7 +4683,7 @@ mod multisig {
                 render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
 
             assert!(rendered.contains("multisig_account_id: "));
-            assert!(rendered.contains(&format!("proposal_id: {}", "a".repeat(64))));
+            assert!(rendered.contains(&format!("proposal_id: {:0>64}", "a")));
             assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
             assert!(rendered.contains("operation_type: TRANSFER"));
             assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
@@ -8758,7 +8758,7 @@ mod tests {
 
     #[test]
     fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
-        let domain = DomainId::try_new("hbl.sbp", "universal").expect("canonical domain");
+        let domain = DomainId::try_new("hbl", "sbp").expect("canonical domain");
         let literal = domain.to_string();
         let parsed = FxCorridorDomainParserHarness::try_parse_from([
             "fx-corridor-domain-parser",
@@ -8771,7 +8771,7 @@ mod tests {
         let error = FxCorridorDomainParserHarness::try_parse_from([
             "fx-corridor-domain-parser",
             "--allowed-destination-alias-domain",
-            "hbl.sbp",
+            "hbl",
         ])
         .expect_err("a domain without its dataspace must fail during argument parsing");
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);

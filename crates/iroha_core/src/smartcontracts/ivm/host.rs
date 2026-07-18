@@ -528,6 +528,8 @@ enum HostExecutionClass {
     Contract,
     View,
     IvmProvedContract,
+    LocalContractDebug,
+    LocalViewDebug,
 }
 
 impl HostExecutionClass {
@@ -537,7 +539,7 @@ impl HostExecutionClass {
         {
             return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
         }
-        if matches!(self, Self::View)
+        if matches!(self, Self::View | Self::LocalViewDebug)
             && matches!(
                 ivm::syscalls::syscall_access(number),
                 ivm::syscalls::SyscallAccess::StateWrite
@@ -559,6 +561,7 @@ impl HostExecutionClass {
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     execution_class: HostExecutionClass,
+    local_debug_artifacts: bool,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
@@ -2206,6 +2209,7 @@ enum NestedContractCallOutcome {
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
     execution_class: HostExecutionClass,
+    local_debug_artifacts: bool,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     args: Option<iroha_primitives::json::Json>,
@@ -2680,6 +2684,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2805,6 +2810,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2890,6 +2896,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2983,6 +2990,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.args = None;
         self.entrypoint_argument_record = record;
         self.prepared_argument_record_pointer = None;
+    }
+
+    /// Enable the contract syscall surface for an unauthenticated local debug run.
+    ///
+    /// This mode deliberately leaves deployed-contract identity and authorization
+    /// unset. Callers may inspect the resulting in-memory queue and durable-state
+    /// overlay, but must not treat those local artifacts as authorized for commit.
+    pub fn set_local_contract_debug_execution(&mut self) {
+        self.clear_contract_runtime_binding();
+        self.execution_class = HostExecutionClass::LocalContractDebug;
+        self.local_debug_artifacts = true;
+    }
+
+    /// Enable the read-only contract syscall surface for an unauthenticated local debug run.
+    ///
+    /// State and ledger writes remain rejected, and deployed-contract identity and
+    /// authorization remain unset. This is intended only for inspecting local views.
+    pub fn set_local_contract_debug_view_execution(&mut self) {
+        self.clear_contract_runtime_binding();
+        self.execution_class = HostExecutionClass::LocalViewDebug;
+        self.local_debug_artifacts = true;
     }
 
     /// Preserve the currently executing contract identity for queued runtime instructions.
@@ -4905,17 +4933,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn ensure_view_execution_has_no_effect_artifacts(&self) -> Result<(), ValidationFail> {
-        if matches!(self.execution_class, HostExecutionClass::View)
-            && (!self.queued.is_empty()
-                || self.fastpq_batch_entries.is_some()
-                || !self.durable_state_overlay.is_empty()
-                || !self.durable_state_authorizations.is_empty()
-                || self.axt_state.is_some()
-                || !self.completed_axt.is_empty()
-                || self.instruction_queue_violation.is_some())
+        if matches!(
+            self.execution_class,
+            HostExecutionClass::View | HostExecutionClass::LocalViewDebug
+        ) && (!self.queued.is_empty()
+            || self.fastpq_batch_entries.is_some()
+            || !self.durable_state_overlay.is_empty()
+            || !self.durable_state_authorizations.is_empty()
+            || self.axt_state.is_some()
+            || !self.completed_axt.is_empty()
+            || self.instruction_queue_violation.is_some())
         {
             return Err(ValidationFail::NotPermitted(
                 "read-only view execution retained mutable host artifacts".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_execution_artifacts_are_committable(&self) -> Result<(), ValidationFail> {
+        if self.local_debug_artifacts {
+            return Err(ValidationFail::NotPermitted(
+                "local debug execution artifacts cannot be committed".to_owned(),
             ));
         }
         Ok(())
@@ -4925,6 +4964,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
         self.validate_queued_for_zk(
@@ -4970,6 +5010,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued =
             self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
@@ -6440,6 +6481,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             execution_class: self.execution_class,
+            local_debug_artifacts: self.local_debug_artifacts,
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             args: self.args.take(),
@@ -6480,6 +6522,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let NestedContractCallHostSnapshot {
             authority,
             execution_class,
+            local_debug_artifacts,
             current_contract_runtime_context,
             current_entrypoint_authorization,
             args,
@@ -6520,6 +6563,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         self.authority = authority;
         self.execution_class = execution_class;
+        self.local_debug_artifacts |= local_debug_artifacts;
         self.current_contract_runtime_context = current_contract_runtime_context;
         self.current_entrypoint_authorization = current_entrypoint_authorization;
         self.args = args;
@@ -12474,6 +12518,132 @@ seiyaku ReadOnlyBinding {
             Ok(()),
             "a prior view binding must not leave the host over-restricted"
         );
+    }
+
+    #[test]
+    fn local_debug_execution_classes_are_unbound_and_preserve_view_restrictions() {
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority);
+
+        host.set_local_contract_debug_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::LocalContractDebug);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert!(host.ensure_execution_artifacts_are_committable().is_err());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET),
+            Ok(())
+        );
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(())
+        );
+
+        host.set_local_contract_debug_view_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::LocalViewDebug);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert!(host.ensure_execution_artifacts_are_committable().is_err());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_GET),
+            Ok(())
+        );
+        for syscall in [ivm_sys::SYSCALL_STATE_SET, ivm_sys::SYSCALL_REGISTER_DOMAIN] {
+            assert_eq!(
+                host.execution_class.ensure_syscall_allowed(syscall),
+                Err(ivm::VMError::PermissionDenied),
+                "local debug views must reject effect syscall 0x{syscall:02x}"
+            );
+        }
+        host.durable_state_overlay.insert(
+            "debug_view_effect"
+                .parse()
+                .expect("valid durable state path"),
+            Some(vec![1]),
+        );
+        assert!(
+            host.ensure_view_execution_has_no_effect_artifacts()
+                .is_err(),
+            "local debug views must fail closed if mutable artifacts survive dispatch"
+        );
+        host.set_generic_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::Generic);
+        assert!(
+            host.ensure_execution_artifacts_are_committable().is_err(),
+            "changing execution class must not clear local-debug provenance"
+        );
+    }
+
+    #[test]
+    fn local_contract_debug_artifacts_survive_runtime_rebinding_and_fail_closed() {
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority.clone());
+        host.set_local_contract_debug_execution();
+
+        let attempted_domain =
+            DomainId::try_new("local_debug_guard", "universal").expect("valid domain id");
+        let attempted = InstructionBox::from(RegisterBox::from(Register::domain(Domain::new(
+            attempted_domain.clone(),
+        ))));
+        host.queue_instruction(attempted.clone());
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            49,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive rebound contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "execute".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"local debug rebound guard"),
+            },
+        );
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
+        assert!(host.local_debug_artifacts);
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let error = host
+            .apply_queued(&mut stx, &authority)
+            .expect_err("local debug artifacts must never be applied");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "local debug execution artifacts cannot be committed"
+        ));
+        assert!(stx.world.domain(&attempted_domain).is_err());
+        assert!(
+            stx.tx_call_hash.is_none(),
+            "the local debug guard must run before execution identity is seeded"
+        );
+        assert_eq!(host.queued.len(), 1, "the guard must run before draining");
+        assert_eq!(host.queued[0].instruction, attempted);
+
+        let error = match host.into_execution_artifacts(None) {
+            Err(error) => error,
+            Ok(_) => panic!("local debug artifacts must never be exported"),
+        };
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "local debug execution artifacts cannot be committed"
+        ));
     }
 
     #[test]

@@ -72,6 +72,10 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >docs/formal/sumeragi_v2/proof_coverage.json
     printf '%s\n' '{{"backend_verification":true}}' \
       >target/formal/sumeragi_v2/proof_evidence.json
+    printf '%s\n' '{{"backend_verification":true}}' \
+      >target/formal/sumeragi_v2/verus_evidence.json
+    printf '%s\n' 'fixture production Verus verification passed' \
+      >target/formal/sumeragi_v2/verus.log
     ;;
 esac
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
@@ -114,6 +118,7 @@ case "${{1:-}}" in
     fi
     ;;
   *check_sumeragi_v2_proof_ledger.py) exit "$FORMAL_CHECKER_STATUS" ;;
+  *sumeragi_v2_verus_evidence.py) exit 0 ;;
   *seal_workspace_source.py) exit 0 ;;
   *) exec /usr/bin/python3 "$@" ;;
 esac
@@ -197,6 +202,10 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
     assert fields["proof_evidence_sha256"] == _sha256(
         invocation / "proof_evidence.json"
     )
+    assert fields["verus_evidence_sha256"] == _sha256(
+        invocation / "verus_evidence.json"
+    )
+    assert fields["verus_log_sha256"] == _sha256(invocation / "verus.log")
     assert fields["harness_cargo_lock_sha256"] == _sha256(
         invocation / "harness-Cargo.lock"
     )

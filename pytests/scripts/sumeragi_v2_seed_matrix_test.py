@@ -20,7 +20,7 @@ SCENARIOS = (
     "authoritative_v2_genesis_commits_on_every_validator",
     "authoritative_v2_finalizes_through_validator_restart",
     "taira_npos_leader_timeout_commits_within_rotation_bound",
-    "real_network_divergent_prepare_qcs_converge_after_ordered_release",
+    "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
 )
 SOURCE_MANIFEST = "a" * 64
 HEAD_COMMIT = "1" * 40
