@@ -2,7 +2,7 @@
 //! add any custom end-point related logic.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt::{self, Write as _},
     future::Future,
     num::{NonZeroU32, NonZeroU64},
@@ -26,6 +26,14 @@ use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
+    alias_setup::{
+        AccountAliasName, AliasAssetTotalV1, AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1,
+        AliasIntentV1, AliasLeaseAcquisitionV1, AliasLeaseRenewPlanRequestV1,
+        AliasLifecycleOperationV1, AliasLifecyclePlanDispositionV1,
+        AliasLifecycleTransactionPlanBodyV1, AliasLifecycleTransactionPlanV1, AliasPlanAnchorV1,
+        AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
+        AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
+    },
     block::consensus::{
         EvidenceRecord, SumeragiDiagnosticsStatus, SumeragiQcEntry, SumeragiQcSnapshot,
     },
@@ -203,9 +211,910 @@ fn apply_fee_quote_intent(
     Ok(())
 }
 
+fn alias_setup_dependency_rank(intent: &AliasIntentV1) -> u8 {
+    match intent {
+        AliasIntentV1::Dataspace(_) => 0,
+        AliasIntentV1::Domain(_) => 1,
+        AliasIntentV1::AccountAlias(_) => 2,
+    }
+}
+
+/// Decode and verify every exact instruction frame in an alias setup plan.
+///
+/// This verifies the domain-separated plan-body hash, rejects blocker/conflict
+/// plans, requires the setup-only instruction surface, and proves that each
+/// framed instruction survives a registry decode/re-encode without changing
+/// either its stable wire identifier or bytes.  Resource-to-instruction indexes
+/// are also checked so a plan cannot hide an extra executable instruction.
+///
+/// # Errors
+///
+/// Returns an error when the plan version or hash is invalid, the plan is not
+/// executable, a frame is unknown or non-canonical, or its resource mapping is
+/// incomplete or inconsistent.
+pub fn decode_and_verify_alias_setup_plan(
+    plan: &AliasTransactionPlanV1,
+) -> Result<Vec<InstructionBox>> {
+    if plan.body.version != AliasTransactionPlanBodyV1::VERSION {
+        return Err(eyre!(
+            "unsupported alias setup plan version {}; expected {}",
+            plan.body.version,
+            AliasTransactionPlanBodyV1::VERSION,
+        ));
+    }
+    let mut canonical_body = plan.body.clone();
+    canonical_body.canonicalize_unordered_fields();
+    if canonical_body != plan.body {
+        return Err(eyre!(
+            "alias setup plan totals and diagnostics are not canonically ordered"
+        ));
+    }
+    if !plan.verify_hash() {
+        return Err(eyre!(
+            "alias setup plan hash does not match its canonical body"
+        ));
+    }
+    if !plan.body.blockers.is_empty() {
+        return Err(eyre!(
+            "alias setup plan contains {} blocker(s) and is not executable",
+            plan.body.blockers.len(),
+        ));
+    }
+    if plan
+        .body
+        .resources
+        .iter()
+        .any(|resource| resource.disposition == AliasPlanDispositionV1::Conflict)
+    {
+        return Err(eyre!(
+            "alias setup plan contains a conflicting resource and is not executable"
+        ));
+    }
+    if plan.body.resources.is_empty() {
+        return Err(eyre!(
+            "alias setup plan must contain at least one resource and EnsureAlias instruction"
+        ));
+    }
+    if plan.body.instructions.len() != plan.body.resources.len() {
+        return Err(eyre!(
+            "alias setup plan must contain exactly one EnsureAlias instruction per resource"
+        ));
+    }
+
+    let mut instructions = Vec::with_capacity(plan.body.instructions.len());
+    for (index, frame) in plan.body.instructions.iter().enumerate() {
+        if frame.wire_id != iroha_data_model::isi::alias_setup::EnsureAlias::WIRE_ID {
+            return Err(eyre!(
+                "alias setup instruction {index} uses disallowed wire id `{}`",
+                frame.wire_id,
+            ));
+        }
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .wrap_err_with(|| format!("decode alias setup instruction frame {index}"))?;
+        let (wire_id, reencoded) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .ok_or_else(|| eyre!("alias setup instruction {index} is not registered"))?;
+        if wire_id != frame.wire_id || reencoded != frame.framed_payload {
+            return Err(eyre!(
+                "alias setup instruction {index} is not canonically framed"
+            ));
+        }
+        instructions.push(instruction);
+    }
+
+    let mut referenced = vec![false; instructions.len()];
+    let mut previous_instruction_index = None;
+    let mut previous_resource_rank = None;
+    let mut quote_totals = BTreeMap::new();
+    let mut quoted_valid_until_ms = u64::MAX;
+    for (resource_index, resource) in plan.body.resources.iter().enumerate() {
+        let resource_rank = alias_setup_dependency_rank(&resource.intent);
+        if previous_resource_rank.is_some_and(|previous| resource_rank < previous) {
+            return Err(eyre!(
+                "alias setup resources are not in dataspace/domain/account dependency order"
+            ));
+        }
+        previous_resource_rank = Some(resource_rank);
+        let instruction_index = resource.instruction_index.ok_or_else(|| {
+            eyre!(
+                "alias setup resource {resource_index} has no EnsureAlias instruction for apply-time revalidation"
+            )
+        })?;
+        let instruction_index = usize::try_from(instruction_index)
+            .map_err(|_| eyre!("alias setup resource {resource_index} index is out of range"))?;
+        let Some(instruction) = instructions.get(instruction_index) else {
+            return Err(eyre!(
+                "alias setup resource {resource_index} references missing instruction {instruction_index}"
+            ));
+        };
+        if previous_instruction_index.is_some_and(|previous| instruction_index <= previous) {
+            return Err(eyre!(
+                "alias setup resource instruction indexes are not strictly ordered"
+            ));
+        }
+        previous_instruction_index = Some(instruction_index);
+        if referenced[instruction_index] {
+            return Err(eyre!(
+                "alias setup instruction {instruction_index} is referenced more than once"
+            ));
+        }
+        referenced[instruction_index] = true;
+        let ensure = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+            .ok_or_else(|| {
+                eyre!("alias setup instruction {instruction_index} is not EnsureAlias")
+            })?;
+        if ensure.intent != resource.intent {
+            return Err(eyre!(
+                "alias setup resource {resource_index} does not match instruction {instruction_index}"
+            ));
+        }
+        match (&resource.quote, resource.disposition) {
+            (Some(quote), AliasPlanDispositionV1::Create) => {
+                if quote.target != resource.intent.target() {
+                    return Err(eyre!(
+                        "alias setup resource {resource_index} quote targets a different resource"
+                    ));
+                }
+                if quote.guard != ensure.quote_guard {
+                    return Err(eyre!(
+                        "alias setup resource {resource_index} quote guard does not match its instruction"
+                    ));
+                }
+                if quote.exact_amount > quote.guard.max_amount {
+                    return Err(eyre!(
+                        "alias setup resource {resource_index} exact quote exceeds its authorized cap"
+                    ));
+                }
+                let current = quote_totals
+                    .get(&quote.guard.expected_payment_asset)
+                    .cloned()
+                    .unwrap_or_else(Quantity::zero);
+                let total = current
+                    .try_add(&quote.exact_amount)
+                    .wrap_err("alias setup quoted total overflow")?;
+                quote_totals.insert(quote.guard.expected_payment_asset.clone(), total);
+                quoted_valid_until_ms = quoted_valid_until_ms.min(quote.guard.valid_until_ms);
+            }
+            (None, AliasPlanDispositionV1::Create) => {
+                return Err(eyre!(
+                    "alias setup create resource {resource_index} is missing its exact quote"
+                ));
+            }
+            (Some(_), _) => {
+                return Err(eyre!(
+                    "alias setup non-create resource {resource_index} must not carry an acquisition quote"
+                ));
+            }
+            (None, _) => {}
+        }
+    }
+    if let Some(unreferenced) = referenced.iter().position(|is_referenced| !is_referenced) {
+        return Err(eyre!(
+            "alias setup instruction {unreferenced} is not referenced by a resource"
+        ));
+    }
+    let calculated_totals: Vec<_> = quote_totals
+        .into_iter()
+        .map(|(payment_asset, amount)| AliasAssetTotalV1 {
+            payment_asset,
+            amount,
+        })
+        .collect();
+    if calculated_totals != plan.body.totals_by_asset {
+        return Err(eyre!(
+            "alias setup plan totals do not match its exact resource quotes"
+        ));
+    }
+    if plan.body.valid_until_ms == 0 || plan.body.valid_until_ms == u64::MAX {
+        return Err(eyre!(
+            "alias setup plan must carry a finite, nonzero deadline"
+        ));
+    }
+    if plan.body.valid_until_ms > quoted_valid_until_ms {
+        return Err(eyre!(
+            "alias setup plan deadline exceeds an exact resource quote guard"
+        ));
+    }
+
+    Ok(instructions)
+}
+
+/// Verify that an alias setup plan is the complete canonical result for one request.
+///
+/// This extends [`decode_and_verify_alias_setup_plan`] by sorting the requested
+/// `EnsureAlias` instructions with the planner's public dependency order and
+/// comparing every acquisition term, quote guard, and resolved intent against
+/// the decoded response frames. A partial or substituted response therefore
+/// fails before it can be persisted or signed.
+///
+/// # Errors
+///
+/// Returns an error when the request version is unsupported, targets are
+/// duplicated, the plan itself is invalid, or the plan is not an exact complete
+/// rendering of the request.
+pub fn decode_and_verify_alias_setup_plan_for_request(
+    request: &AliasSetupPlanRequestV1,
+    plan: &AliasTransactionPlanV1,
+) -> Result<Vec<InstructionBox>> {
+    if request.schema_version != AliasSetupPlanRequestV1::VERSION {
+        return Err(eyre!(
+            "unsupported alias setup request version {}; expected {}",
+            request.schema_version,
+            AliasSetupPlanRequestV1::VERSION,
+        ));
+    }
+    if request.intents.is_empty() {
+        return Err(eyre!(
+            "alias setup request must contain at least one EnsureAlias intent"
+        ));
+    }
+
+    let mut expected = request.intents.clone();
+    expected.sort_by(|left, right| {
+        alias_setup_dependency_rank(&left.intent)
+            .cmp(&alias_setup_dependency_rank(&right.intent))
+            .then_with(|| left.intent.target().cmp(&right.intent.target()))
+    });
+    if expected
+        .windows(2)
+        .any(|pair| pair[0].intent.target() == pair[1].intent.target())
+    {
+        return Err(eyre!(
+            "alias setup request contains more than one intent for the same resource"
+        ));
+    }
+
+    let instructions = decode_and_verify_alias_setup_plan(plan)?;
+    if instructions.len() != expected.len() {
+        return Err(eyre!(
+            "alias setup plan is partial: request contains {} resources but plan contains {}",
+            expected.len(),
+            instructions.len(),
+        ));
+    }
+    for (index, (expected, actual)) in expected.iter().zip(&instructions).enumerate() {
+        let actual = actual
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+            .ok_or_else(|| eyre!("alias setup instruction {index} is not EnsureAlias"))?;
+        if actual != expected {
+            return Err(eyre!(
+                "alias setup instruction {index} does not exactly match the signed planning request"
+            ));
+        }
+    }
+    Ok(instructions)
+}
+
+/// Decode and verify the exact instruction committed by an alias lifecycle plan.
+///
+/// This validates the domain-separated plan hash, canonical set ordering, the
+/// operation-specific wire identifier and decode/re-encode identity, renewal
+/// quote/cap/totals/deadline consistency, and no-op shape. No transaction is
+/// created or submitted.
+///
+/// # Errors
+///
+/// Returns an error when the plan is malformed, non-canonical, blocked,
+/// internally inconsistent, or carries a substituted lifecycle instruction.
+pub fn decode_and_verify_alias_lifecycle_plan(
+    plan: &AliasLifecycleTransactionPlanV1,
+) -> Result<Option<InstructionBox>> {
+    if plan.body.version != AliasLifecycleTransactionPlanBodyV1::VERSION {
+        return Err(eyre!(
+            "unsupported alias lifecycle plan version {}; expected {}",
+            plan.body.version,
+            AliasLifecycleTransactionPlanBodyV1::VERSION,
+        ));
+    }
+    let mut canonical_body = plan.body.clone();
+    canonical_body.canonicalize_unordered_fields();
+    if canonical_body != plan.body {
+        return Err(eyre!(
+            "alias lifecycle plan totals and diagnostics are not canonically ordered"
+        ));
+    }
+    if !plan.verify_hash() {
+        return Err(eyre!(
+            "alias lifecycle plan hash does not match its canonical body"
+        ));
+    }
+    if !plan.body.blockers.is_empty() {
+        return Err(eyre!(
+            "alias lifecycle plan contains {} blocker(s) and is not executable",
+            plan.body.blockers.len(),
+        ));
+    }
+
+    if plan.body.disposition == AliasLifecyclePlanDispositionV1::NoOp {
+        if !matches!(
+            &plan.body.operation,
+            AliasLifecycleOperationV1::ConfigureAutoRenew(_)
+        ) {
+            return Err(eyre!(
+                "only an exact auto-renew configuration may produce a lifecycle no-op"
+            ));
+        }
+        if plan.body.instruction.is_some()
+            || plan.body.quote.is_some()
+            || !plan.body.totals_by_asset.is_empty()
+        {
+            return Err(eyre!(
+                "alias lifecycle no-op must not carry an instruction, quote, or charge"
+            ));
+        }
+        return Ok(None);
+    }
+
+    let frame = plan
+        .body
+        .instruction
+        .as_ref()
+        .ok_or_else(|| eyre!("alias lifecycle apply plan is missing its exact instruction"))?;
+    let expected_wire_id = match &plan.body.operation {
+        AliasLifecycleOperationV1::RenewLease(_) => {
+            iroha_data_model::isi::alias_setup::RenewAliasLease::WIRE_ID
+        }
+        AliasLifecycleOperationV1::ConfigureAutoRenew(_) => {
+            iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew::WIRE_ID
+        }
+    };
+    if frame.wire_id != expected_wire_id {
+        return Err(eyre!(
+            "alias lifecycle instruction uses wire id `{}`; expected `{expected_wire_id}`",
+            frame.wire_id,
+        ));
+    }
+    let instruction =
+        iroha_data_model::isi::decode_instruction_from_pair(&frame.wire_id, &frame.framed_payload)
+            .wrap_err("decode alias lifecycle instruction frame")?;
+    let (wire_id, reencoded) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+        .ok_or_else(|| eyre!("alias lifecycle instruction is not registered"))?;
+    if wire_id != frame.wire_id || reencoded != frame.framed_payload {
+        return Err(eyre!(
+            "alias lifecycle instruction is not canonically framed"
+        ));
+    }
+
+    match &plan.body.operation {
+        AliasLifecycleOperationV1::RenewLease(expected) => {
+            let actual = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
+                .ok_or_else(|| eyre!("alias lifecycle instruction is not RenewAliasLease"))?;
+            if actual != expected {
+                return Err(eyre!(
+                    "alias lifecycle renewal instruction differs from the committed operation"
+                ));
+            }
+            let quote = plan
+                .body
+                .quote
+                .as_ref()
+                .ok_or_else(|| eyre!("alias lifecycle renewal is missing its exact quote"))?;
+            if quote.target != expected.target
+                || quote.guard != expected.quote_guard
+                || quote.expires_at_ms != expected.target_expiry_ms
+            {
+                return Err(eyre!(
+                    "alias lifecycle renewal quote does not match its exact operation"
+                ));
+            }
+            if quote.exact_amount > quote.guard.max_amount {
+                return Err(eyre!(
+                    "alias lifecycle renewal exact quote exceeds its authorized cap"
+                ));
+            }
+            let expected_totals = vec![AliasAssetTotalV1 {
+                payment_asset: quote.guard.expected_payment_asset.clone(),
+                amount: quote.exact_amount.clone(),
+            }];
+            if plan.body.totals_by_asset != expected_totals {
+                return Err(eyre!(
+                    "alias lifecycle renewal total does not match its exact quote"
+                ));
+            }
+            if plan.body.valid_until_ms != quote.guard.valid_until_ms {
+                return Err(eyre!(
+                    "alias lifecycle renewal deadline does not match its quote guard"
+                ));
+            }
+        }
+        AliasLifecycleOperationV1::ConfigureAutoRenew(expected) => {
+            let actual = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
+                .ok_or_else(|| {
+                    eyre!("alias lifecycle instruction is not ConfigureAliasAutoRenew")
+                })?;
+            if actual != expected {
+                return Err(eyre!(
+                    "alias lifecycle auto-renew instruction differs from the committed operation"
+                ));
+            }
+            if plan.body.quote.is_some() || !plan.body.totals_by_asset.is_empty() {
+                return Err(eyre!(
+                    "auto-renew configuration plan must not carry a lease quote or charge"
+                ));
+            }
+        }
+    }
+
+    Ok(Some(instruction))
+}
+
+/// Verify a lifecycle plan against its exact signed renewal request.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported request version or any substituted
+/// operation, in addition to all errors from
+/// [`decode_and_verify_alias_lifecycle_plan`].
+pub fn decode_and_verify_alias_renewal_plan_for_request(
+    request: &AliasLeaseRenewPlanRequestV1,
+    plan: &AliasLifecycleTransactionPlanV1,
+) -> Result<InstructionBox> {
+    if request.schema_version != AliasLeaseRenewPlanRequestV1::VERSION {
+        return Err(eyre!(
+            "unsupported alias renewal request version {}; expected {}",
+            request.schema_version,
+            AliasLeaseRenewPlanRequestV1::VERSION,
+        ));
+    }
+    if plan.body.operation != AliasLifecycleOperationV1::RenewLease(request.renewal.clone()) {
+        return Err(eyre!(
+            "alias lifecycle plan does not match the signed renewal request"
+        ));
+    }
+    decode_and_verify_alias_lifecycle_plan(plan)?
+        .ok_or_else(|| eyre!("alias lease renewal cannot be a no-op plan"))
+}
+
+/// Verify a lifecycle plan against its exact signed auto-renew request.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported request version or any substituted
+/// operation, in addition to all errors from
+/// [`decode_and_verify_alias_lifecycle_plan`].
+pub fn decode_and_verify_alias_auto_renew_plan_for_request(
+    request: &AliasAutoRenewPlanRequestV1,
+    plan: &AliasLifecycleTransactionPlanV1,
+) -> Result<Option<InstructionBox>> {
+    if request.schema_version != AliasAutoRenewPlanRequestV1::VERSION {
+        return Err(eyre!(
+            "unsupported alias auto-renew request version {}; expected {}",
+            request.schema_version,
+            AliasAutoRenewPlanRequestV1::VERSION,
+        ));
+    }
+    if plan.body.operation
+        != AliasLifecycleOperationV1::ConfigureAutoRenew(request.configuration.clone())
+    {
+        return Err(eyre!(
+            "alias lifecycle plan does not match the signed auto-renew request"
+        ));
+    }
+    decode_and_verify_alias_lifecycle_plan(plan)
+}
+
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
+
+const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
+    b"iroha:account-onboarding-plan-receipt:v1\0";
+
+/// Secret-free intent accepted by the sponsored account-onboarding planner.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::Encode,
+    norito::derive::Decode,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanRequestV1 {
+    /// Request layout version. The only supported value is `1`.
+    pub version: u8,
+    /// Catalog-free account alias such as `merchant@banka.paynet`.
+    pub alias: String,
+    /// Canonical domainless account identifier to create or repair.
+    pub account_id: String,
+    /// Optional unscoped permission names selected from the server allowlist.
+    #[norito(default)]
+    pub permissions: Vec<String>,
+}
+
+impl AccountOnboardingPlanRequestV1 {
+    /// Current planner request layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Construct a canonical, secret-free sponsored onboarding intent.
+    ///
+    /// # Errors
+    /// Returns an error if the alias or account identifier is not canonical, or
+    /// if a permission name is empty or malformed.
+    pub fn try_new(
+        alias: impl Into<String>,
+        account_id: &AccountId,
+        permissions: impl IntoIterator<Item = String>,
+    ) -> Result<Self> {
+        Self {
+            version: Self::VERSION,
+            alias: alias.into(),
+            account_id: account_id.to_string(),
+            permissions: permissions.into_iter().collect(),
+        }
+        .canonicalized()
+    }
+
+    fn canonicalized(&self) -> Result<Self> {
+        if self.version != Self::VERSION {
+            return Err(eyre!(
+                "unsupported account onboarding request version {}; expected {}",
+                self.version,
+                Self::VERSION,
+            ));
+        }
+        let alias = self
+            .alias
+            .parse::<AccountAliasName>()
+            .map_err(|error| eyre!("invalid account onboarding alias: {error}"))?
+            .to_string();
+        ensure_canonical_i105_account_id(&self.account_id, "account_id")?;
+        let parsed_account = AccountId::parse_encoded(&self.account_id)
+            .map_err(|error| eyre!("invalid canonical account_id: {error}"))?
+            .into_account_id();
+        let account_id = parsed_account.to_string();
+        if account_id != self.account_id {
+            return Err(eyre!(
+                "account_id must use the canonical domainless representation"
+            ));
+        }
+
+        let mut permissions = Vec::with_capacity(self.permissions.len());
+        for permission in &self.permissions {
+            let canonical = permission.trim();
+            if canonical.is_empty() {
+                return Err(eyre!(
+                    "account onboarding permission name must not be empty"
+                ));
+            }
+            canonical
+                .parse::<Name>()
+                .map_err(|error| eyre!("invalid account onboarding permission name: {error}"))?;
+            permissions.push(canonical.to_owned());
+        }
+        permissions.sort();
+        permissions.dedup();
+        Ok(Self {
+            version: Self::VERSION,
+            alias,
+            account_id,
+            permissions,
+        })
+    }
+}
+
+/// Canonical body committed by a stateless sponsored-onboarding receipt.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::Encode,
+    norito::derive::Decode,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanBodyV1 {
+    /// Receipt body layout version. The only supported value is `1`.
+    pub version: u8,
+    /// Canonical request embedded for stateless apply-time revalidation.
+    pub request: AccountOnboardingPlanRequestV1,
+    /// Configured Torii authority and transaction payer.
+    pub authority: AccountId,
+    /// Chain to which this receipt is bound.
+    pub chain_id: ChainId,
+    /// Committed world-state anchor used during planning.
+    pub anchor: AliasPlanAnchorV1,
+    /// Canonical account-alias resource and live-state classification.
+    pub resource: AliasPlanResourceV1,
+    /// Lease terms used only if the alias remains absent at apply time.
+    pub acquisition: AliasLeaseAcquisitionV1,
+    /// Policy, asset, cap, and deadline bounds revalidated at apply time.
+    pub quote_guard: AliasQuoteGuardV1,
+    /// Exact framed instructions for the one server-signed transaction.
+    pub instructions: Vec<AliasFramedInstructionV1>,
+    /// Optional native auto-renew follow-up that the owner must sign locally.
+    #[norito(default)]
+    pub owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
+    /// Last block timestamp at which this receipt may be applied.
+    pub valid_until_ms: u64,
+}
+
+impl AccountOnboardingPlanBodyV1 {
+    /// Current canonical receipt body layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Compute the domain-separated hash signed by the onboarding authority.
+    #[must_use]
+    pub fn canonical_hash(&self) -> Hash {
+        use norito::codec::Encode as _;
+
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[
+            ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1,
+            encoded.as_slice(),
+        ])
+    }
+}
+
+/// Stateless signed receipt returned by sponsored account-onboarding planning.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::Encode,
+    norito::derive::Decode,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanReceiptV1 {
+    /// Canonical receipt body.
+    pub body: AccountOnboardingPlanBodyV1,
+    /// Domain-separated hash of [`Self::body`].
+    pub plan_hash: Hash,
+    /// Onboarding-authority signature over [`Self::plan_hash`].
+    pub signature: Signature,
+}
+
+impl AccountOnboardingPlanReceiptV1 {
+    /// Verify the body hash and configured-authority signature.
+    #[must_use]
+    pub fn verify(&self) -> bool {
+        self.plan_hash == self.body.canonical_hash()
+            && self
+                .signature
+                .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
+                .is_ok()
+    }
+}
+
+/// Verify a sponsored onboarding receipt against the exact secret-free request.
+///
+/// The receipt hash and signature, normalized request, resource disposition,
+/// lease quote guard, and every framed instruction are checked locally. The
+/// returned instructions are diagnostic only: sponsored apply must submit the
+/// exact receipt to Torii and must never sign these instructions with a client
+/// key.
+///
+/// # Errors
+/// Returns an error if the receipt is stale, substituted, conflicting, or not
+/// canonically framed.
+pub fn decode_and_verify_account_onboarding_plan_for_request(
+    request: &AccountOnboardingPlanRequestV1,
+    receipt: &AccountOnboardingPlanReceiptV1,
+) -> Result<Vec<InstructionBox>> {
+    let canonical_request = request.canonicalized()?;
+    if receipt.body.version != AccountOnboardingPlanBodyV1::VERSION {
+        return Err(eyre!(
+            "unsupported account onboarding receipt version {}; expected {}",
+            receipt.body.version,
+            AccountOnboardingPlanBodyV1::VERSION,
+        ));
+    }
+    if receipt.body.request != canonical_request {
+        return Err(eyre!(
+            "account onboarding receipt does not match the exact normalized request"
+        ));
+    }
+    if !receipt.verify() {
+        return Err(eyre!(
+            "account onboarding receipt hash or authority signature is invalid"
+        ));
+    }
+    if receipt.body.resource.disposition == AliasPlanDispositionV1::Conflict {
+        return Err(eyre!(
+            "account onboarding receipt contains a conflicting resource"
+        ));
+    }
+    let AliasIntentV1::AccountAlias(intent) = &receipt.body.resource.intent else {
+        return Err(eyre!(
+            "account onboarding receipt resource is not an account alias"
+        ));
+    };
+    if intent.alias.canonical_text() != canonical_request.alias
+        || intent.target_account.to_string() != canonical_request.account_id
+        || intent.provision != iroha_data_model::alias_setup::AccountProvisionV1::Create
+        || intent.role != iroha_data_model::alias_setup::AccountAliasRoleV1::Primary
+    {
+        return Err(eyre!(
+            "account onboarding receipt resource differs from the requested account and alias"
+        ));
+    }
+    if receipt.body.quote_guard.valid_until_ms != receipt.body.valid_until_ms {
+        return Err(eyre!(
+            "account onboarding receipt deadline differs from its quote guard"
+        ));
+    }
+    if receipt.body.valid_until_ms == 0 || receipt.body.valid_until_ms == u64::MAX {
+        return Err(eyre!(
+            "account onboarding receipt must carry a finite, nonzero deadline"
+        ));
+    }
+    match (
+        receipt.body.resource.disposition,
+        &receipt.body.resource.quote,
+    ) {
+        (AliasPlanDispositionV1::Create, Some(quote)) => {
+            if quote.target != receipt.body.resource.intent.target()
+                || quote.guard != receipt.body.quote_guard
+                || quote.exact_amount > quote.guard.max_amount
+            {
+                return Err(eyre!(
+                    "account onboarding receipt carries an invalid acquisition quote"
+                ));
+            }
+        }
+        (AliasPlanDispositionV1::Create, None) => {
+            return Err(eyre!(
+                "account onboarding create receipt is missing its exact acquisition quote"
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(eyre!(
+                "account onboarding no-op or repair receipt must not carry a lease quote"
+            ));
+        }
+        (_, None) => {}
+    }
+
+    if receipt.body.instructions.is_empty() {
+        if receipt.body.resource.disposition != AliasPlanDispositionV1::NoOp
+            || receipt.body.resource.instruction_index.is_some()
+        {
+            return Err(eyre!(
+                "only an exact unchanged onboarding receipt may omit instructions"
+            ));
+        }
+    } else if receipt.body.resource.instruction_index != Some(0) {
+        return Err(eyre!(
+            "account onboarding executable receipt must reference instruction zero"
+        ));
+    }
+
+    let mut instructions = Vec::with_capacity(receipt.body.instructions.len());
+    for (index, frame) in receipt.body.instructions.iter().enumerate() {
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .wrap_err_with(|| format!("decode account onboarding instruction frame {index}"))?;
+        let (wire_id, reencoded) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .ok_or_else(|| eyre!("account onboarding instruction {index} is not registered"))?;
+        if wire_id != frame.wire_id || reencoded != frame.framed_payload {
+            return Err(eyre!(
+                "account onboarding instruction {index} is not canonically framed"
+            ));
+        }
+        instructions.push(instruction);
+    }
+    if let Some(first) = instructions.first() {
+        let ensure = first
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+            .ok_or_else(|| eyre!("account onboarding first instruction is not EnsureAlias"))?;
+        if ensure.intent != receipt.body.resource.intent
+            || ensure.acquisition != receipt.body.acquisition
+            || ensure.quote_guard != receipt.body.quote_guard
+        {
+            return Err(eyre!(
+                "account onboarding EnsureAlias frame differs from the receipt body"
+            ));
+        }
+    }
+
+    if let Some(frame) = &receipt.body.owner_auto_renew_instruction {
+        if frame.wire_id != iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew::WIRE_ID {
+            return Err(eyre!(
+                "account onboarding owner auto-renew frame uses an unexpected wire id"
+            ));
+        }
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .wrap_err("decode account onboarding owner auto-renew frame")?;
+        let (wire_id, reencoded) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .ok_or_else(|| eyre!("account onboarding owner auto-renew frame is not registered"))?;
+        if wire_id != frame.wire_id || reencoded != frame.framed_payload {
+            return Err(eyre!(
+                "account onboarding owner auto-renew frame is not canonical"
+            ));
+        }
+        let configuration = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
+            .ok_or_else(|| {
+                eyre!("account onboarding owner auto-renew frame has the wrong instruction type")
+            })?;
+        if configuration.target != receipt.body.resource.intent.target() {
+            return Err(eyre!(
+                "account onboarding owner auto-renew frame targets a different alias"
+            ));
+        }
+    }
+    Ok(instructions)
+}
+
+/// Apply request containing exactly one previously issued onboarding receipt.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::Encode,
+    norito::derive::Decode,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingApplyRequestV1 {
+    /// Exact stateless receipt returned by the planning endpoint.
+    pub receipt: AccountOnboardingPlanReceiptV1,
+}
+
+/// Sponsored onboarding apply result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+pub enum AccountOnboardingStatusV1 {
+    /// One atomic transaction was queued.
+    #[codec(index = 0)]
+    Queued,
+    /// Missing derived or allowlisted ancillary state was queued for repair.
+    #[codec(index = 1)]
+    Repaired,
+    /// Exact desired state already existed; no transaction was queued.
+    #[codec(index = 2)]
+    Unchanged,
+}
+
+/// Result returned after applying a sponsored onboarding receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountOnboardingResponseV1 {
+    /// Canonical target account identifier.
+    pub account_id: String,
+    /// Canonical account alias.
+    pub alias: String,
+    /// Queued transaction hash, absent for an exact unchanged replay.
+    pub tx_hash_hex: Option<String>,
+    /// Apply result classification.
+    pub status: AccountOnboardingStatusV1,
+    /// Live alias disposition observed immediately before apply.
+    pub disposition: AliasPlanDispositionV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountOnboardingResponseWireV1 {
+    account_id: String,
+    alias: String,
+    #[norito(default)]
+    tx_hash_hex: Option<String>,
+    status: String,
+    disposition: AliasPlanDispositionV1,
+}
 
 #[derive(
     Clone,
@@ -2222,6 +3131,17 @@ fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
     AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
     Ok(())
+}
+
+fn validate_account_onboarding_token(token: &str) -> Result<&str> {
+    let bytes = token.as_bytes();
+    if !(32..=256).contains(&bytes.len()) || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
+    {
+        return Err(eyre!(
+            "account onboarding token must contain 32 through 256 printable ASCII bytes without spaces"
+        ));
+    }
+    Ok(token)
 }
 
 /// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
@@ -11255,7 +12175,10 @@ pub struct Client {
     pub torii_request_timeout: Duration,
     /// Current account
     pub account: AccountId,
-    /// Http headers which will be appended to each request
+    /// HTTP headers which will be appended to each request.
+    ///
+    /// Canonical account-authenticated requests replace any configured authentication headers
+    /// with fresh values. Explicitly unsigned alias reads strip those headers entirely.
     pub headers: HashMap<String, String>,
     /// Optional key pair used to sign operator-only endpoint requests.
     pub operator_key_pair: Option<KeyPair>,
@@ -11427,6 +12350,28 @@ impl Client {
         builder
     }
 
+    fn request_without_canonical_account_auth(
+        &self,
+        method: HttpMethod,
+        url: Url,
+    ) -> DefaultRequestBuilder {
+        let headers = self.headers.iter().filter(|(name, _)| {
+            ![
+                HEADER_ACCOUNT,
+                HEADER_SIGNATURE,
+                HEADER_TIMESTAMP_MS,
+                HEADER_NONCE,
+            ]
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+        });
+        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        builder
+    }
+
     fn send_builder(&self, builder: DefaultRequestBuilder) -> Result<Response<Vec<u8>>> {
         let request = builder.build()?;
         self.send_prepared_request(request)
@@ -11546,7 +12491,7 @@ impl Client {
             .wrap_err("failed to sign account request headers")?;
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
         let mut builder = self
-            .default_request(method, url)
+            .request_without_canonical_account_auth(method, url)
             .header(HEADER_ACCOUNT, &self.account.to_string())
             .header(HEADER_SIGNATURE, &signature_b64)
             .header(HEADER_TIMESTAMP_MS, &timestamp_ms.to_string())
@@ -13664,11 +14609,629 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/aliases/resolve` with an alias string.
+    /// Canonical-account-signed POST `/v1/aliases/setup/plan`.
+    ///
+    /// The endpoint is read-only: the request contains only declarative setup
+    /// intents and returns the exact ordinary-transaction instruction frames a
+    /// client may later verify, sign, and submit.
+    ///
+    /// # Errors
+    /// Returns an error if request serialization, canonical request signing, or
+    /// the HTTP call fails.
+    pub fn post_alias_setup_plan(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+    ) -> Result<Response<Vec<u8>>> {
+        if request.schema_version != AliasSetupPlanRequestV1::VERSION {
+            return Err(eyre!(
+                "unsupported alias setup request version {}; expected {}",
+                request.schema_version,
+                AliasSetupPlanRequestV1::VERSION,
+            ));
+        }
+        let url = join_torii_url(&self.torii_url, "v1/aliases/setup/plan");
+        let body = norito::json::to_vec(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )
+    }
+
+    /// Request and fully verify one executable alias setup plan.
+    ///
+    /// In addition to verifying the plan hash and exact instruction frames,
+    /// this binds the response to this client's configured account and chain and
+    /// rejects expired plans.
+    ///
+    /// # Errors
+    /// Returns an error for request failures, non-success planner responses,
+    /// malformed JSON, an invalid plan, an authority/chain mismatch, or expiry.
+    pub fn plan_alias_setup(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+    ) -> Result<AliasTransactionPlanV1> {
+        let response = self.post_alias_setup_plan(request)?;
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let detail = String::from_utf8_lossy(response.body());
+            let detail = detail.trim();
+            if status == StatusCode::CONFLICT {
+                return Err(eyre!(
+                    "alias setup conflicts with live state; no executable plan was returned{}",
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {detail}")
+                    }
+                ));
+            }
+            return Err(eyre!(
+                "alias setup planning failed with HTTP status {status}{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            ));
+        }
+        let plan: AliasTransactionPlanV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode alias setup transaction plan")?;
+        self.verify_alias_setup_plan_for_request(request, &plan)?;
+        Ok(plan)
+    }
+
+    /// Verify an alias setup plan against this client's signing context.
+    ///
+    /// The returned vector contains the exact ordered instructions that may be
+    /// placed into one ordinary transaction. No transaction is created or sent.
+    ///
+    /// # Errors
+    /// Returns an error when plan verification fails, the plan belongs to a
+    /// different authority or chain, or its deadline has passed.
+    pub fn verify_alias_setup_plan(
+        &self,
+        plan: &AliasTransactionPlanV1,
+    ) -> Result<Vec<InstructionBox>> {
+        if plan.body.authority != self.account {
+            return Err(eyre!(
+                "alias setup plan authority `{}` does not match client authority `{}`",
+                plan.body.authority,
+                self.account,
+            ));
+        }
+        if plan.body.chain_id != self.chain {
+            return Err(eyre!(
+                "alias setup plan chain `{}` does not match client chain `{}`",
+                plan.body.chain_id,
+                self.chain,
+            ));
+        }
+        let now_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        if now_ms > plan.body.valid_until_ms {
+            return Err(eyre!(
+                "alias setup plan expired at {} (current time is {now_ms})",
+                plan.body.valid_until_ms,
+            ));
+        }
+        decode_and_verify_alias_setup_plan(plan)
+    }
+
+    /// Verify a plan against both this client and the exact signed planner request.
+    ///
+    /// # Errors
+    /// Returns an error for any context, deadline, hash, frame, ordering,
+    /// completeness, acquisition-term, or quote-guard mismatch.
+    pub fn verify_alias_setup_plan_for_request(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+        plan: &AliasTransactionPlanV1,
+    ) -> Result<Vec<InstructionBox>> {
+        self.verify_alias_setup_plan(plan)?;
+        decode_and_verify_alias_setup_plan_for_request(request, plan)
+    }
+
+    /// Verify, locally sign, and submit one alias setup plan.
+    ///
+    /// The complete ordered `EnsureAlias` vector is placed into one ordinary
+    /// transaction and sent through the existing transaction endpoint. The
+    /// planner is never called again and the plan is never split.
+    ///
+    /// # Errors
+    /// Returns an error when plan verification, fee quoting, local signing, or
+    /// transaction submission fails.
+    pub fn submit_alias_setup_plan(
+        &self,
+        plan: &AliasTransactionPlanV1,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> Result<HashOf<SignedTransaction>> {
+        let instructions = self.verify_alias_setup_plan(plan)?;
+        self.submit_all_with_metadata(instructions, fee_payment, metadata)
+            .wrap_err("submit verified alias setup plan")
+    }
+
+    /// Verify, locally sign, submit, and wait for one alias setup plan.
+    ///
+    /// # Errors
+    /// Returns an error when plan verification, fee quoting, local signing,
+    /// submission, or final transaction confirmation fails.
+    pub fn submit_alias_setup_plan_blocking(
+        &self,
+        plan: &AliasTransactionPlanV1,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> Result<HashOf<SignedTransaction>> {
+        let instructions = self.verify_alias_setup_plan(plan)?;
+        self.submit_all_blocking_with_metadata(instructions, fee_payment, metadata)
+            .wrap_err("submit and confirm verified alias setup plan")
+    }
+
+    /// Canonical-account-signed POST `/v1/aliases/lease/renew/plan`.
+    ///
+    /// # Errors
+    /// Returns an error if request serialization, canonical request signing, or
+    /// the read-only planner HTTP call fails.
+    pub fn post_alias_lease_renew_plan(
+        &self,
+        request: &AliasLeaseRenewPlanRequestV1,
+    ) -> Result<Response<Vec<u8>>> {
+        if request.schema_version != AliasLeaseRenewPlanRequestV1::VERSION {
+            return Err(eyre!(
+                "unsupported alias renewal request version {}; expected {}",
+                request.schema_version,
+                AliasLeaseRenewPlanRequestV1::VERSION,
+            ));
+        }
+        let url = join_torii_url(&self.torii_url, "v1/aliases/lease/renew/plan");
+        let body = norito::json::to_vec(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )
+    }
+
+    /// Request and fully verify one executable alias lease-renewal plan.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP, structured conflict, decoding, context,
+    /// deadline, plan hash, quote, or exact-frame verification failures.
+    pub fn plan_alias_lease_renewal(
+        &self,
+        request: &AliasLeaseRenewPlanRequestV1,
+    ) -> Result<AliasLifecycleTransactionPlanV1> {
+        let response = self.post_alias_lease_renew_plan(request)?;
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let detail = String::from_utf8_lossy(response.body());
+            return Err(eyre!(
+                "alias lease renewal planning failed with HTTP status {status}{}",
+                if detail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", detail.trim())
+                }
+            ));
+        }
+        let plan: AliasLifecycleTransactionPlanV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode alias lease renewal transaction plan")?;
+        self.verify_alias_renewal_plan_for_request(request, &plan)?;
+        Ok(plan)
+    }
+
+    /// Canonical-account-signed POST `/v1/aliases/auto-renew/plan`.
+    ///
+    /// # Errors
+    /// Returns an error if request serialization, canonical request signing, or
+    /// the read-only planner HTTP call fails.
+    pub fn post_alias_auto_renew_plan(
+        &self,
+        request: &AliasAutoRenewPlanRequestV1,
+    ) -> Result<Response<Vec<u8>>> {
+        if request.schema_version != AliasAutoRenewPlanRequestV1::VERSION {
+            return Err(eyre!(
+                "unsupported alias auto-renew request version {}; expected {}",
+                request.schema_version,
+                AliasAutoRenewPlanRequestV1::VERSION,
+            ));
+        }
+        let url = join_torii_url(&self.torii_url, "v1/aliases/auto-renew/plan");
+        let body = norito::json::to_vec(request)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )
+    }
+
+    /// Request and fully verify one alias auto-renew configuration plan.
+    ///
+    /// Exact existing configuration returns a verified no-op plan with no
+    /// instruction. Changed configuration returns one exact ordinary-transaction
+    /// instruction.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP, structured conflict, decoding, context,
+    /// deadline, plan hash, or exact-frame verification failures.
+    pub fn plan_alias_auto_renew(
+        &self,
+        request: &AliasAutoRenewPlanRequestV1,
+    ) -> Result<AliasLifecycleTransactionPlanV1> {
+        let response = self.post_alias_auto_renew_plan(request)?;
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let detail = String::from_utf8_lossy(response.body());
+            return Err(eyre!(
+                "alias auto-renew planning failed with HTTP status {status}{}",
+                if detail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", detail.trim())
+                }
+            ));
+        }
+        let plan: AliasLifecycleTransactionPlanV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode alias auto-renew transaction plan")?;
+        self.verify_alias_auto_renew_plan_for_request(request, &plan)?;
+        Ok(plan)
+    }
+
+    /// Verify an alias lifecycle plan against this client's signing context.
+    ///
+    /// # Errors
+    /// Returns an error when hash/frame verification fails, the plan belongs to
+    /// another authority or chain, or its deadline has passed.
+    pub fn verify_alias_lifecycle_plan(
+        &self,
+        plan: &AliasLifecycleTransactionPlanV1,
+    ) -> Result<Option<InstructionBox>> {
+        if plan.body.authority != self.account {
+            return Err(eyre!(
+                "alias lifecycle plan authority `{}` does not match client authority `{}`",
+                plan.body.authority,
+                self.account,
+            ));
+        }
+        if plan.body.chain_id != self.chain {
+            return Err(eyre!(
+                "alias lifecycle plan chain `{}` does not match client chain `{}`",
+                plan.body.chain_id,
+                self.chain,
+            ));
+        }
+        let now_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        if now_ms > plan.body.valid_until_ms {
+            return Err(eyre!(
+                "alias lifecycle plan expired at {} (current time is {now_ms})",
+                plan.body.valid_until_ms,
+            ));
+        }
+        decode_and_verify_alias_lifecycle_plan(plan)
+    }
+
+    /// Verify a lifecycle plan against an exact signed lease-renewal request.
+    ///
+    /// # Errors
+    /// Returns an error for context, expiry, hash, quote, frame, or request mismatch.
+    pub fn verify_alias_renewal_plan_for_request(
+        &self,
+        request: &AliasLeaseRenewPlanRequestV1,
+        plan: &AliasLifecycleTransactionPlanV1,
+    ) -> Result<InstructionBox> {
+        self.verify_alias_lifecycle_plan(plan)?;
+        decode_and_verify_alias_renewal_plan_for_request(request, plan)
+    }
+
+    /// Verify a lifecycle plan against an exact signed auto-renew request.
+    ///
+    /// # Errors
+    /// Returns an error for context, expiry, hash, frame, or request mismatch.
+    pub fn verify_alias_auto_renew_plan_for_request(
+        &self,
+        request: &AliasAutoRenewPlanRequestV1,
+        plan: &AliasLifecycleTransactionPlanV1,
+    ) -> Result<Option<InstructionBox>> {
+        self.verify_alias_lifecycle_plan(plan)?;
+        decode_and_verify_alias_auto_renew_plan_for_request(request, plan)
+    }
+
+    /// Verify, locally sign, and submit one alias lifecycle plan.
+    ///
+    /// A verified no-op returns `Ok(None)` without creating a transaction.
+    ///
+    /// # Errors
+    /// Returns an error when plan verification, fee quoting, local signing, or
+    /// transaction submission fails.
+    pub fn submit_alias_lifecycle_plan(
+        &self,
+        plan: &AliasLifecycleTransactionPlanV1,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> Result<Option<HashOf<SignedTransaction>>> {
+        let Some(instruction) = self.verify_alias_lifecycle_plan(plan)? else {
+            return Ok(None);
+        };
+        self.submit_all_with_metadata([instruction], fee_payment, metadata)
+            .map(Some)
+            .wrap_err("submit verified alias lifecycle plan")
+    }
+
+    /// Verify, locally sign, submit, and wait for one alias lifecycle plan.
+    ///
+    /// A verified no-op returns `Ok(None)` without creating a transaction.
+    ///
+    /// # Errors
+    /// Returns an error when plan verification, fee quoting, local signing,
+    /// submission, or final transaction confirmation fails.
+    pub fn submit_alias_lifecycle_plan_blocking(
+        &self,
+        plan: &AliasLifecycleTransactionPlanV1,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> Result<Option<HashOf<SignedTransaction>>> {
+        let Some(instruction) = self.verify_alias_lifecycle_plan(plan)? else {
+            return Ok(None);
+        };
+        self.submit_all_blocking_with_metadata([instruction], fee_payment, metadata)
+            .map(Some)
+            .wrap_err("submit and confirm verified alias lifecycle plan")
+    }
+
+    /// Token-authenticated, read-only `POST /v1/accounts/onboard/plan`.
+    ///
+    /// The dedicated credential is sent only in the onboarding header. The
+    /// request body contains no key, raw token, payment proof, or payer field.
+    ///
+    /// # Errors
+    /// Returns an error if request normalization, token validation, JSON
+    /// encoding, request construction, or the HTTP call fails.
+    pub fn post_account_onboarding_plan(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        onboarding_token: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let canonical_request = request.canonicalized()?;
+        let token = validate_account_onboarding_token(onboarding_token)?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboard/plan");
+        let body = norito::json::to_vec(&canonical_request)?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .header("x-iroha-onboarding-token", token)
+                .body(body),
+        )
+    }
+
+    /// Request and locally verify a stateless sponsored-onboarding receipt.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP failure, receipt decoding, request substitution,
+    /// an invalid signer/hash, a different chain, expiry, or non-canonical frames.
+    pub fn plan_account_onboarding(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        onboarding_token: &str,
+    ) -> Result<AccountOnboardingPlanReceiptV1> {
+        let response = self.post_account_onboarding_plan(request, onboarding_token)?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "account onboarding planning failed with HTTP status {}",
+                response.status()
+            ));
+        }
+        let receipt: AccountOnboardingPlanReceiptV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode account onboarding plan receipt")?;
+        self.verify_account_onboarding_plan_for_request(request, &receipt)?;
+        Ok(receipt)
+    }
+
+    /// Verify a sponsored onboarding receipt in this client's chain context.
+    ///
+    /// # Errors
+    /// Returns an error for a substituted request, invalid receipt signature or
+    /// frames, chain mismatch, or expired deadline.
+    pub fn verify_account_onboarding_plan_for_request(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        receipt: &AccountOnboardingPlanReceiptV1,
+    ) -> Result<Vec<InstructionBox>> {
+        if receipt.body.chain_id != self.chain {
+            return Err(eyre!(
+                "account onboarding receipt chain `{}` does not match client chain `{}`",
+                receipt.body.chain_id,
+                self.chain,
+            ));
+        }
+        let now_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        if now_ms > receipt.body.valid_until_ms {
+            return Err(eyre!(
+                "account onboarding receipt expired at {} (current time is {now_ms})",
+                receipt.body.valid_until_ms,
+            ));
+        }
+        decode_and_verify_account_onboarding_plan_for_request(request, receipt)
+    }
+
+    /// Token-authenticated apply of one exact sponsored-onboarding receipt.
+    ///
+    /// # Errors
+    /// Returns an error if the receipt is invalid for this client, token
+    /// validation or JSON encoding fails, or the HTTP call fails.
+    pub fn post_account_onboarding_apply(
+        &self,
+        receipt: &AccountOnboardingPlanReceiptV1,
+        onboarding_token: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        self.verify_account_onboarding_plan_for_request(&receipt.body.request, receipt)?;
+        let token = validate_account_onboarding_token(onboarding_token)?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboard");
+        let body = norito::json::to_vec(&AccountOnboardingApplyRequestV1 {
+            receipt: receipt.clone(),
+        })?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .header("x-iroha-onboarding-token", token)
+                .body(body),
+        )
+    }
+
+    /// Revalidate and apply one stateless sponsored-onboarding receipt.
+    ///
+    /// Exact replay returns [`AccountOnboardingStatusV1::Unchanged`] without a
+    /// transaction hash. Create and repair results contain one queued hash.
+    ///
+    /// # Errors
+    /// Returns an error for receipt, token, HTTP, response-decoding, or response
+    /// consistency failures.
+    pub fn apply_account_onboarding(
+        &self,
+        receipt: &AccountOnboardingPlanReceiptV1,
+        onboarding_token: &str,
+    ) -> Result<AccountOnboardingResponseV1> {
+        let response = self.post_account_onboarding_apply(receipt, onboarding_token)?;
+        if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+            return Err(eyre!(
+                "account onboarding apply failed with HTTP status {}",
+                response.status()
+            ));
+        }
+        let wire: AccountOnboardingResponseWireV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode account onboarding apply response")?;
+        let status = match wire.status.as_str() {
+            "Queued" => AccountOnboardingStatusV1::Queued,
+            "Repaired" => AccountOnboardingStatusV1::Repaired,
+            "Unchanged" => AccountOnboardingStatusV1::Unchanged,
+            _ => {
+                return Err(eyre!(
+                    "account onboarding response has unknown status `{}`",
+                    wire.status
+                ));
+            }
+        };
+        let result = AccountOnboardingResponseV1 {
+            account_id: wire.account_id,
+            alias: wire.alias,
+            tx_hash_hex: wire.tx_hash_hex,
+            status,
+            disposition: wire.disposition,
+        };
+        ensure_canonical_i105_account_id(&result.account_id, "response.account_id")?;
+        let alias = result
+            .alias
+            .parse::<AccountAliasName>()
+            .map_err(|error| eyre!("invalid response alias: {error}"))?
+            .to_string();
+        if result.account_id != receipt.body.request.account_id
+            || alias != receipt.body.request.alias
+            || result.alias != alias
+        {
+            return Err(eyre!(
+                "account onboarding response account or alias differs from the receipt"
+            ));
+        }
+        match result.status {
+            AccountOnboardingStatusV1::Unchanged => {
+                if response.status() != StatusCode::OK
+                    || result.tx_hash_hex.is_some()
+                    || result.disposition != AliasPlanDispositionV1::NoOp
+                {
+                    return Err(eyre!(
+                        "unchanged account onboarding response has an invalid status, hash, or disposition"
+                    ));
+                }
+            }
+            AccountOnboardingStatusV1::Queued | AccountOnboardingStatusV1::Repaired => {
+                let tx_hash = result.tx_hash_hex.as_deref().ok_or_else(|| {
+                    eyre!("queued account onboarding response is missing tx_hash_hex")
+                })?;
+                if response.status() != StatusCode::ACCEPTED
+                    || tx_hash.len() != 64
+                    || tx_hash != tx_hash.to_ascii_lowercase()
+                    || hex::decode(tx_hash).is_err()
+                {
+                    return Err(eyre!(
+                        "queued account onboarding response has an invalid status or tx_hash_hex"
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Fetch the authenticated account-onboarding readiness report.
+    ///
+    /// The dedicated credential is sent only in the onboarding header and is
+    /// never serialized into a request body.
+    ///
+    /// # Errors
+    /// Returns an error if the token is empty, the HTTP call fails, Torii
+    /// rejects the credential, or the shared readiness report cannot be decoded.
+    pub fn get_account_onboarding_readiness(
+        &self,
+        onboarding_token: &str,
+    ) -> Result<AliasSetupReportV1> {
+        let onboarding_token = validate_account_onboarding_token(onboarding_token)?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboarding/readiness");
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("x-iroha-onboarding-token", onboarding_token)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "account onboarding readiness failed with HTTP status {}",
+                response.status()
+            ));
+        }
+        norito::json::from_slice(response.body())
+            .wrap_err("decode account onboarding readiness report")
+    }
+
+    /// POST `/v1/aliases/resolve` without canonical account authentication.
+    ///
+    /// This variant is intended for aliases in public dataspaces. Restricted
+    /// dataspaces reject unsigned requests without revealing whether the alias exists.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+    pub fn post_alias_resolve_unsigned(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .body(body),
+        )
+    }
+
+    /// POST `/v1/aliases/resolve` with canonical account authentication.
+    ///
+    /// The request carries the configured account, signature, timestamp, and nonce headers.
+    /// Use this variant when resolving aliases in restricted dataspaces.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
+    /// fails.
+    pub fn post_alias_resolve_authenticated(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
         self.send_builder(
@@ -13677,11 +15240,32 @@ impl Client {
         )
     }
 
-    /// Convenience: POST `/v1/aliases/resolve-index` with an index payload.
+    /// POST `/v1/aliases/resolve-index` without canonical account authentication.
+    ///
+    /// This variant is intended for indexes in public dataspaces. Restricted
+    /// dataspaces reject unsigned requests without revealing whether the index exists.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_resolve_index(&self, index: u64) -> Result<Response<Vec<u8>>> {
+    pub fn post_alias_resolve_index_unsigned(&self, index: u64) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
+        let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
+        self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .body(body),
+        )
+    }
+
+    /// POST `/v1/aliases/resolve-index` with canonical account authentication.
+    ///
+    /// The request carries the configured account, signature, timestamp, and nonce headers.
+    /// Use this variant when resolving indexes in restricted dataspaces.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
+    /// fails.
+    pub fn post_alias_resolve_index_authenticated(&self, index: u64) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
         let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
         self.send_builder(
@@ -13690,12 +15274,41 @@ impl Client {
         )
     }
 
-    /// Convenience: POST `/v1/aliases/by-account` with a canonical account id and optional
-    /// alias-scope filters.
+    /// POST `/v1/aliases/by-account` without canonical account authentication.
+    ///
+    /// Results contain only entries visible through public dataspace policy. Restricted entries
+    /// are filtered before pagination and totals are calculated.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_lookup_by_account(
+    pub fn post_alias_lookup_by_account_unsigned(
+        &self,
+        account_id: &str,
+        dataspace: Option<&str>,
+        domain: Option<&str>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/by-account");
+        let body = norito::json::to_vec(&norito::json!({
+            "account_id": account_id,
+            "dataspace": dataspace,
+            "domain": domain,
+        }))?;
+        self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .body(body),
+        )
+    }
+
+    /// POST `/v1/aliases/by-account` with canonical account authentication.
+    ///
+    /// The request carries the configured account, signature, timestamp, and nonce headers so
+    /// Torii can include restricted aliases that the configured account may resolve.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
+    /// fails.
+    pub fn post_alias_lookup_by_account_authenticated(
         &self,
         account_id: &str,
         dataspace: Option<&str>,
@@ -21764,9 +23377,20 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountAddress,
+        alias_setup::{
+            AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+            AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasLeaseQuoteV1, AliasLeaseRenewPlanRequestV1,
+            AliasLifecycleOperationV1, AliasLifecyclePlanDispositionV1,
+            AliasLifecycleTransactionPlanBodyV1, AliasLifecycleTransactionPlanV1,
+            AliasPlanAnchorV1, AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1,
+            AliasSetupPlanRequestV1, AliasTargetV1, AliasTransactionPlanBodyV1,
+            AliasTransactionPlanV1, ResolvedAccountAliasV1,
+        },
+        asset::AssetDefinitionId,
         block::{
             BlockHeader,
             consensus::{
@@ -21793,6 +23417,8 @@ mod tests {
                 ExtraMetadata, RetentionPolicy, StorageTicketId,
             },
         },
+        domain::DomainId,
+        isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         peer::PeerId,
         query::parameters::Pagination,
@@ -21842,6 +23468,403 @@ mod tests {
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
+    #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct SharedAccountOnboardingReceiptVector {
+        name: String,
+        domain: String,
+        canonical_body_norito_hex: String,
+        canonical_plan_hash_hex: String,
+        authority: String,
+        signature_hex: String,
+        receipt_json: AccountOnboardingPlanReceiptV1,
+    }
+
+    #[derive(JsonDeserialize)]
+    struct SharedAliasSetupOnboardingFixture {
+        account_onboarding_receipt_vector: SharedAccountOnboardingReceiptVector,
+    }
+
+    fn deterministic_account_onboarding_receipt_vector() -> SharedAccountOnboardingReceiptVector {
+        use norito::codec::Encode as _;
+
+        let target_signer = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
+            .expect("derive deterministic onboarding target");
+        let target_account = AccountId::new(target_signer.public_key().clone());
+        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("derive deterministic onboarding authority");
+        let authority = AccountId::new(onboarding_signer.public_key().clone());
+        let request = AccountOnboardingPlanRequestV1::try_new(
+            "merchant@banka.paynet",
+            &target_account,
+            Vec::new(),
+        )
+        .expect("canonical deterministic onboarding request");
+        let alias = ResolvedAccountAliasV1::new(
+            request
+                .alias
+                .parse::<AccountAliasName>()
+                .expect("deterministic onboarding alias"),
+            DataSpaceId::new(7),
+        );
+        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: alias.clone(),
+            target_account,
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        });
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 2,
+            expected_payment_asset: "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+                .parse()
+                .expect("deterministic onboarding payment asset"),
+            max_amount: 3_u64.into(),
+            valid_until_ms: 50_000,
+        };
+        let acquisition = AliasLeaseAcquisitionV1::new(1, None);
+        let ensure: InstructionBox =
+            EnsureAlias::new(intent.clone(), acquisition, guard.clone()).into();
+        let (wire_id, framed_payload) = iroha_data_model::isi::framed_instruction_payload(&ensure)
+            .expect("registered deterministic onboarding instruction");
+        let body = AccountOnboardingPlanBodyV1 {
+            version: AccountOnboardingPlanBodyV1::VERSION,
+            request,
+            authority: authority.clone(),
+            chain_id: ChainId::from("alias-fixture-chain"),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 11,
+                block_hash: Hash::new(b"account-onboarding-receipt-fixture-anchor"),
+            },
+            resource: AliasPlanResourceV1 {
+                intent: intent.clone(),
+                disposition: AliasPlanDispositionV1::Create,
+                quote: Some(AliasLeaseQuoteV1 {
+                    target: intent.target(),
+                    pricing_class: 1,
+                    exact_amount: 3_u64.into(),
+                    guard: guard.clone(),
+                    expires_at_ms: 1_000,
+                    grace_expires_at_ms: 2_000,
+                    redemption_expires_at_ms: 3_000,
+                }),
+                instruction_index: Some(0),
+            },
+            acquisition,
+            quote_guard: guard,
+            instructions: vec![AliasFramedInstructionV1 {
+                wire_id: wire_id.to_owned(),
+                framed_payload,
+            }],
+            owner_auto_renew_instruction: None,
+            valid_until_ms: 50_000,
+        };
+        let body_bytes = body.encode();
+        let plan_hash = body.canonical_hash();
+        let signature = Signature::try_new(onboarding_signer.private_key(), plan_hash.as_ref())
+            .expect("sign deterministic onboarding receipt");
+        let receipt = AccountOnboardingPlanReceiptV1 {
+            body,
+            plan_hash,
+            signature,
+        };
+        SharedAccountOnboardingReceiptVector {
+            name: "sponsored_account_alias_create".to_owned(),
+            domain: String::from_utf8(ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1.to_vec())
+                .expect("onboarding receipt hash domain is UTF-8"),
+            canonical_body_norito_hex: hex::encode(body_bytes),
+            canonical_plan_hash_hex: hex::encode(receipt.plan_hash.as_ref()),
+            authority: authority.to_string(),
+            signature_hex: hex::encode_upper(receipt.signature.payload()),
+            receipt_json: receipt,
+        }
+    }
+
+    #[test]
+    #[ignore = "fixture regeneration helper; the committed vector is checked separately"]
+    fn print_deterministic_account_onboarding_receipt_vector() {
+        let vector = deterministic_account_onboarding_receipt_vector();
+        println!(
+            "{}",
+            norito::json::to_string_pretty(&vector)
+                .expect("render deterministic onboarding receipt vector")
+        );
+    }
+
+    #[test]
+    fn shared_account_onboarding_receipt_vector_matches_rust_canonicalization() {
+        use norito::codec::Decode as _;
+
+        let fixture: SharedAliasSetupOnboardingFixture = norito::json::from_str(include_str!(
+            "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+        ))
+        .expect("decode shared onboarding receipt fixture");
+        let expected = deterministic_account_onboarding_receipt_vector();
+        let vector = fixture.account_onboarding_receipt_vector;
+        assert_eq!(vector, expected);
+        assert_eq!(
+            vector.domain.as_bytes(),
+            ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1
+        );
+        let body_bytes =
+            hex::decode(&vector.canonical_body_norito_hex).expect("decode onboarding body hex");
+        let decoded = AccountOnboardingPlanBodyV1::decode(&mut body_bytes.as_slice())
+            .expect("decode canonical onboarding body");
+        assert_eq!(decoded, vector.receipt_json.body);
+        assert_eq!(
+            hex::encode(vector.receipt_json.body.canonical_hash().as_ref()),
+            vector.canonical_plan_hash_hex
+        );
+        assert_eq!(
+            vector.authority,
+            vector.receipt_json.body.authority.to_string()
+        );
+        assert_eq!(
+            vector.signature_hex,
+            hex::encode_upper(vector.receipt_json.signature.payload())
+        );
+        assert!(vector.receipt_json.verify());
+    }
+
+    fn alias_setup_plan_fixture(client: &Client) -> AliasTransactionPlanV1 {
+        let alias = ResolvedAccountAliasV1::new(
+            "merchant@banka.paynet"
+                .parse::<AccountAliasName>()
+                .expect("alias literal"),
+            DataSpaceId::new(7),
+        );
+        let payment_asset = AssetDefinitionId::new(
+            DomainId::try_new("assets", "paynet").expect("asset domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias,
+            target_account: client.account.clone(),
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        });
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 1,
+            expected_payment_asset: payment_asset,
+            max_amount: 10_u64.into(),
+            valid_until_ms: u64::MAX - 1,
+        };
+        let ensure = EnsureAlias::new(
+            intent.clone(),
+            AliasLeaseAcquisitionV1::new(1, None),
+            guard.clone(),
+        );
+        let instruction: InstructionBox = ensure.into();
+        let (wire_id, framed_payload) =
+            iroha_data_model::isi::framed_instruction_payload(&instruction)
+                .expect("registered ensure instruction");
+        AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
+            version: AliasTransactionPlanBodyV1::VERSION,
+            authority: client.account.clone(),
+            chain_id: client.chain.clone(),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 1,
+                block_hash: Hash::new(b"alias-client-plan-anchor"),
+            },
+            resources: vec![AliasPlanResourceV1 {
+                intent: intent.clone(),
+                disposition: AliasPlanDispositionV1::Create,
+                quote: Some(AliasLeaseQuoteV1 {
+                    target: intent.target(),
+                    pricing_class: 0,
+                    exact_amount: 5_u64.into(),
+                    guard: guard.clone(),
+                    expires_at_ms: 10,
+                    grace_expires_at_ms: 20,
+                    redemption_expires_at_ms: 30,
+                }),
+                instruction_index: Some(0),
+            }],
+            instructions: vec![AliasFramedInstructionV1 {
+                wire_id: wire_id.to_owned(),
+                framed_payload,
+            }],
+            totals_by_asset: vec![AliasAssetTotalV1 {
+                payment_asset: guard.expected_payment_asset,
+                amount: 5_u64.into(),
+            }],
+            warnings: Vec::new(),
+            blockers: Vec::new(),
+            // The planner's own short lifetime may be stricter than the quote guard.
+            valid_until_ms: u64::MAX - 2,
+        })
+    }
+
+    fn account_onboarding_plan_fixture(
+        client: &Client,
+    ) -> (
+        AccountOnboardingPlanRequestV1,
+        AccountOnboardingPlanReceiptV1,
+    ) {
+        let request = AccountOnboardingPlanRequestV1::try_new(
+            "merchant@banka.paynet",
+            &client.account,
+            ["CanSetKeyValueInAccount".to_owned()],
+        )
+        .expect("canonical onboarding request");
+        let alias = ResolvedAccountAliasV1::new(
+            request
+                .alias
+                .parse::<AccountAliasName>()
+                .expect("alias literal"),
+            DataSpaceId::new(7),
+        );
+        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias,
+            target_account: client.account.clone(),
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        });
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 3,
+            expected_payment_asset: AssetDefinitionId::new(
+                DomainId::try_new("assets", "paynet").expect("asset domain"),
+                "xor".parse().expect("asset name"),
+            ),
+            max_amount: 9_u64.into(),
+            valid_until_ms: u64::MAX - 1,
+        };
+        let acquisition = AliasLeaseAcquisitionV1::new(1, None);
+        let ensure: InstructionBox =
+            EnsureAlias::new(intent.clone(), acquisition, guard.clone()).into();
+        let (wire_id, framed_payload) = iroha_data_model::isi::framed_instruction_payload(&ensure)
+            .expect("registered onboarding instruction");
+        let signer = checked_random_keypair();
+        let body = AccountOnboardingPlanBodyV1 {
+            version: AccountOnboardingPlanBodyV1::VERSION,
+            request: request.clone(),
+            authority: AccountId::new(signer.public_key().clone()),
+            chain_id: client.chain.clone(),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 3,
+                block_hash: Hash::new(b"account-onboarding-plan-anchor"),
+            },
+            resource: AliasPlanResourceV1 {
+                intent: intent.clone(),
+                disposition: AliasPlanDispositionV1::Create,
+                quote: Some(AliasLeaseQuoteV1 {
+                    target: intent.target(),
+                    pricing_class: 0,
+                    exact_amount: 7_u64.into(),
+                    guard: guard.clone(),
+                    expires_at_ms: 10,
+                    grace_expires_at_ms: 20,
+                    redemption_expires_at_ms: 30,
+                }),
+                instruction_index: Some(0),
+            },
+            acquisition,
+            quote_guard: guard,
+            instructions: vec![AliasFramedInstructionV1 {
+                wire_id: wire_id.to_owned(),
+                framed_payload,
+            }],
+            owner_auto_renew_instruction: None,
+            valid_until_ms: u64::MAX - 1,
+        };
+        let plan_hash = body.canonical_hash();
+        let signature = Signature::try_new(signer.private_key(), plan_hash.as_ref())
+            .expect("sign onboarding receipt");
+        (
+            request,
+            AccountOnboardingPlanReceiptV1 {
+                body,
+                plan_hash,
+                signature,
+            },
+        )
+    }
+
+    fn alias_renewal_request_fixture(client: &Client) -> AliasLeaseRenewPlanRequestV1 {
+        let alias = ResolvedAccountAliasV1::new(
+            "merchant@banka.paynet"
+                .parse::<AccountAliasName>()
+                .expect("alias literal"),
+            DataSpaceId::new(7),
+        );
+        let payment_asset = AssetDefinitionId::new(
+            DomainId::try_new("assets", "paynet").expect("asset domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let _ = client;
+        AliasLeaseRenewPlanRequestV1::new(RenewAliasLease::new(
+            AliasTargetV1::AccountAlias(alias),
+            1_000,
+            2_000,
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset,
+                max_amount: 10_u64.into(),
+                valid_until_ms: u64::MAX,
+            },
+        ))
+    }
+
+    fn alias_renewal_plan_fixture(client: &Client) -> AliasLifecycleTransactionPlanV1 {
+        let request = alias_renewal_request_fixture(client);
+        let instruction: InstructionBox = request.renewal.clone().into();
+        let (wire_id, framed_payload) =
+            iroha_data_model::isi::framed_instruction_payload(&instruction)
+                .expect("registered renewal instruction");
+        AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
+            version: AliasLifecycleTransactionPlanBodyV1::VERSION,
+            authority: client.account.clone(),
+            chain_id: client.chain.clone(),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 2,
+                block_hash: Hash::new(b"alias-lifecycle-plan-anchor"),
+            },
+            operation: AliasLifecycleOperationV1::RenewLease(request.renewal.clone()),
+            disposition: AliasLifecyclePlanDispositionV1::Apply,
+            instruction: Some(AliasFramedInstructionV1 {
+                wire_id: wire_id.to_owned(),
+                framed_payload,
+            }),
+            quote: Some(AliasLeaseQuoteV1 {
+                target: request.renewal.target.clone(),
+                pricing_class: 0,
+                exact_amount: 5_u64.into(),
+                guard: request.renewal.quote_guard.clone(),
+                expires_at_ms: request.renewal.target_expiry_ms,
+                grace_expires_at_ms: 2_100,
+                redemption_expires_at_ms: 2_200,
+            }),
+            totals_by_asset: vec![AliasAssetTotalV1 {
+                payment_asset: request.renewal.quote_guard.expected_payment_asset,
+                amount: 5_u64.into(),
+            }],
+            warnings: Vec::new(),
+            blockers: Vec::new(),
+            valid_until_ms: request.renewal.quote_guard.valid_until_ms,
+        })
+    }
+
+    fn alias_auto_renew_noop_fixture(client: &Client) -> AliasLifecycleTransactionPlanV1 {
+        let target = alias_renewal_request_fixture(client).renewal.target;
+        let operation = ConfigureAliasAutoRenew::new(target, 7, None);
+        AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
+            version: AliasLifecycleTransactionPlanBodyV1::VERSION,
+            authority: client.account.clone(),
+            chain_id: client.chain.clone(),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 2,
+                block_hash: Hash::new(b"alias-auto-renew-noop-anchor"),
+            },
+            operation: AliasLifecycleOperationV1::ConfigureAutoRenew(operation),
+            disposition: AliasLifecyclePlanDispositionV1::NoOp,
+            instruction: None,
+            quote: None,
+            totals_by_asset: Vec::new(),
+            warnings: Vec::new(),
+            blockers: Vec::new(),
+            valid_until_ms: u64::MAX,
+        })
+    }
+
     fn lifecycle_status_fixture(enabled: bool) -> LaneLifecycleStatusV1 {
         let catalog = LaneCatalog::default();
         let incarnations = std::collections::BTreeMap::from([(
@@ -21883,6 +23906,22 @@ mod tests {
 
     fn assert_canonical_account_signed_request(client: &Client, snapshot: &RequestSnapshot) {
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+        ] {
+            assert_eq!(
+                snapshot
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name == header)
+                    .count(),
+                1,
+                "canonical authentication header {header} must be sent exactly once",
+            );
+        }
         assert_eq!(
             headers.get(HEADER_ACCOUNT),
             Some(&client.account.to_string()),
@@ -21926,6 +23965,40 @@ mod tests {
         );
     }
 
+    fn assert_unsigned_json_request(snapshot: &RequestSnapshot) {
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+        ] {
+            assert!(
+                !headers.contains_key(header),
+                "unsigned request must not send canonical authentication header {header}",
+            );
+        }
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned()),
+        );
+    }
+
+    fn client_with_static_canonical_auth_headers() -> Client {
+        let mut client = client_with_base_url(base_url());
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+        ] {
+            client
+                .headers
+                .insert(header.to_owned(), "untrusted-static-value".to_owned());
+        }
+        client
+    }
+
     #[test]
     fn signed_request_nonce_reports_rng_failure() {
         let mut rng = FailingClientRng;
@@ -21939,14 +24012,39 @@ mod tests {
     }
 
     #[test]
-    fn account_alias_resolve_sends_canonical_account_signed_request() {
-        let client = client_with_base_url(base_url());
+    fn account_alias_resolve_unsigned_omits_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve("bright-brook-5859@ubl.sbp")
+                .post_alias_resolve_unsigned("bright-brook-5859@ubl.sbp")
+                .expect("unsigned alias resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias resolve body");
+        assert_eq!(
+            body,
+            norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
+        );
+        assert_unsigned_json_request(snapshot);
+    }
+
+    #[test]
+    fn account_alias_resolve_authenticated_sends_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve_authenticated("bright-brook-5859@ubl.sbp")
                 .expect("signed alias resolve request");
         });
 
@@ -21964,14 +24062,36 @@ mod tests {
     }
 
     #[test]
-    fn account_alias_resolve_index_sends_canonical_account_signed_request() {
-        let client = client_with_base_url(base_url());
+    fn account_alias_resolve_index_unsigned_omits_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve_index(42)
+                .post_alias_resolve_index_unsigned(42)
+                .expect("unsigned alias-index resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve-index");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-index resolve body");
+        assert_eq!(body, norito::json!({ "index": 42_u64 }));
+        assert_unsigned_json_request(snapshot);
+    }
+
+    #[test]
+    fn account_alias_resolve_index_authenticated_sends_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve_index_authenticated(42)
                 .expect("signed alias-index resolve request");
         });
 
@@ -21986,14 +24106,51 @@ mod tests {
     }
 
     #[test]
-    fn account_alias_by_account_sends_canonical_account_signed_request() {
-        let client = client_with_base_url(base_url());
+    fn account_alias_by_account_unsigned_omits_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_lookup_by_account(TEST_WORKER_I105, Some("sbp"), Some("ubl.sbp"))
+                .post_alias_lookup_by_account_unsigned(
+                    TEST_WORKER_I105,
+                    Some("sbp"),
+                    Some("ubl.sbp"),
+                )
+                .expect("unsigned alias-by-account request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-by-account body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "account_id": TEST_WORKER_I105,
+                "dataspace": "sbp",
+                "domain": "ubl.sbp",
+            }),
+        );
+        assert_unsigned_json_request(snapshot);
+    }
+
+    #[test]
+    fn account_alias_by_account_authenticated_sends_canonical_account_headers() {
+        let client = client_with_static_canonical_auth_headers();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_lookup_by_account_authenticated(
+                    TEST_WORKER_I105,
+                    Some("sbp"),
+                    Some("ubl.sbp"),
+                )
                 .expect("signed alias-by-account request");
         });
 
@@ -22012,6 +24169,404 @@ mod tests {
             }),
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn alias_setup_plan_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let request = AliasSetupPlanRequestV1::new(Vec::new());
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_setup_plan(&request)
+                .expect("signed alias setup planning request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/setup/plan");
+        let decoded: AliasSetupPlanRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("decode alias setup request");
+        assert_eq!(decoded, request);
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn alias_setup_plan_response_is_bound_to_complete_signed_request() {
+        let client = client_with_base_url(base_url());
+        let plan = alias_setup_plan_fixture(&client);
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &plan.body.instructions[0].wire_id,
+            &plan.body.instructions[0].framed_payload,
+        )
+        .expect("decode fixture frame");
+        let request = AliasSetupPlanRequestV1::new(vec![
+            instruction
+                .as_any()
+                .downcast_ref::<EnsureAlias>()
+                .expect("ensure fixture")
+                .clone(),
+        ]);
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response_body = norito::json::to_json(&plan).expect("encode plan response");
+        let response = json_response(StatusCode::OK, &response_body);
+
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client
+                .plan_alias_setup(&request)
+                .expect("verified typed alias setup plan")
+        });
+
+        assert_eq!(actual, plan);
+    }
+
+    #[test]
+    fn alias_setup_plan_verification_preserves_exact_registry_frames() {
+        let client = client_with_base_url(base_url());
+        let plan = alias_setup_plan_fixture(&client);
+
+        let instructions = client
+            .verify_alias_setup_plan(&plan)
+            .expect("valid alias setup plan");
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0]
+                .as_any()
+                .downcast_ref::<EnsureAlias>()
+                .is_some()
+        );
+        let ensure = instructions[0]
+            .as_any()
+            .downcast_ref::<EnsureAlias>()
+            .expect("ensure instruction")
+            .clone();
+        let request = AliasSetupPlanRequestV1::new(vec![ensure]);
+        client
+            .verify_alias_setup_plan_for_request(&request, &plan)
+            .expect("plan exactly matches signed request");
+        let mut changed_request = request;
+        changed_request.intents[0].acquisition.term_years = 2;
+        let error = client
+            .verify_alias_setup_plan_for_request(&changed_request, &plan)
+            .expect_err("changed acquisition terms must fail");
+        assert!(error.to_string().contains("signed planning request"));
+
+        let payload = client
+            .try_build_transaction_payload_from_items(
+                instructions,
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build one normal alias setup transaction payload");
+        let Executable::Instructions(payload_instructions) = payload.instructions else {
+            panic!("alias setup apply must use an ordinary instruction transaction");
+        };
+        assert_eq!(payload_instructions.len(), 1);
+        assert_eq!(payload.authority, client.account);
+        assert_eq!(payload.chain, client.chain);
+
+        let mut no_op_body = plan.body.clone();
+        no_op_body.resources[0].disposition = AliasPlanDispositionV1::NoOp;
+        no_op_body.resources[0].quote = None;
+        no_op_body.totals_by_asset.clear();
+        no_op_body.valid_until_ms = u64::MAX - 3;
+        let no_op_plan = AliasTransactionPlanV1::new(no_op_body);
+        client
+            .verify_alias_setup_plan(&no_op_plan)
+            .expect("finite planner deadline is valid without an acquisition quote");
+
+        let mut hash_tampered = plan.clone();
+        hash_tampered.body.valid_until_ms -= 1;
+        let error = client
+            .verify_alias_setup_plan(&hash_tampered)
+            .expect_err("tampered plan hash must fail");
+        assert!(error.to_string().contains("plan hash"));
+
+        let mut frame_tampered_body = plan.body;
+        frame_tampered_body.instructions[0].framed_payload.push(0);
+        let frame_tampered = AliasTransactionPlanV1::new(frame_tampered_body);
+        let error = client
+            .verify_alias_setup_plan(&frame_tampered)
+            .expect_err("non-canonical frame must fail");
+        assert!(
+            error.to_string().contains("frame")
+                || error.to_string().contains("decode alias setup instruction")
+        );
+    }
+
+    #[test]
+    fn alias_lifecycle_planners_send_canonical_account_signed_requests() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let renewal = alias_renewal_request_fixture(&client);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_lease_renew_plan(&renewal)
+                .expect("signed alias renewal planning request");
+        });
+        {
+            let snapshots = store.lock().expect("snapshot store");
+            let snapshot = snapshots.first().expect("snapshot");
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), "/v1/aliases/lease/renew/plan");
+            let decoded: AliasLeaseRenewPlanRequestV1 =
+                norito::json::from_slice(&snapshot.body).expect("decode renewal request");
+            assert_eq!(decoded, renewal);
+            assert_canonical_account_signed_json_request(&client, snapshot);
+        }
+
+        store.lock().expect("snapshot store").clear();
+        let auto_request = AliasAutoRenewPlanRequestV1::new(ConfigureAliasAutoRenew::new(
+            renewal.renewal.target,
+            0,
+            None,
+        ));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_auto_renew_plan(&auto_request)
+                .expect("signed alias auto-renew planning request");
+        });
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/auto-renew/plan");
+        let decoded: AliasAutoRenewPlanRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("decode auto-renew request");
+        assert_eq!(decoded, auto_request);
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn alias_lifecycle_plan_verification_binds_exact_operation_quote_and_frame() {
+        let client = client_with_base_url(base_url());
+        let request = alias_renewal_request_fixture(&client);
+        let plan = alias_renewal_plan_fixture(&client);
+        let instruction = client
+            .verify_alias_renewal_plan_for_request(&request, &plan)
+            .expect("verify exact renewal plan");
+        assert!(
+            instruction
+                .as_any()
+                .downcast_ref::<RenewAliasLease>()
+                .is_some()
+        );
+
+        let mut quote_tampered_body = plan.body.clone();
+        quote_tampered_body
+            .quote
+            .as_mut()
+            .expect("renewal quote")
+            .exact_amount = 6_u64.into();
+        let quote_tampered = AliasLifecycleTransactionPlanV1::new(quote_tampered_body);
+        let error = client
+            .verify_alias_lifecycle_plan(&quote_tampered)
+            .expect_err("quote/total mismatch must fail");
+        assert!(error.to_string().contains("total"));
+
+        let mut frame_tampered_body = plan.body;
+        frame_tampered_body
+            .instruction
+            .as_mut()
+            .expect("renewal frame")
+            .framed_payload
+            .push(0);
+        let frame_tampered = AliasLifecycleTransactionPlanV1::new(frame_tampered_body);
+        let error = client
+            .verify_alias_lifecycle_plan(&frame_tampered)
+            .expect_err("non-canonical lifecycle frame must fail");
+        assert!(
+            error.to_string().contains("frame")
+                || error
+                    .to_string()
+                    .contains("decode alias lifecycle instruction")
+        );
+
+        let no_op = alias_auto_renew_noop_fixture(&client);
+        assert!(
+            client
+                .verify_alias_lifecycle_plan(&no_op)
+                .expect("verify exact auto-renew no-op")
+                .is_none()
+        );
+        let mut invalid_noop_body = no_op.body;
+        invalid_noop_body.instruction = Some(AliasFramedInstructionV1 {
+            wire_id: ConfigureAliasAutoRenew::WIRE_ID.to_owned(),
+            framed_payload: Vec::new(),
+        });
+        let invalid_noop = AliasLifecycleTransactionPlanV1::new(invalid_noop_body);
+        assert!(client.verify_alias_lifecycle_plan(&invalid_noop).is_err());
+    }
+
+    #[test]
+    fn onboarding_readiness_uses_dedicated_header_and_decodes_shared_report() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let token = "T".repeat(32);
+        let report = iroha_data_model::alias_setup::AliasSetupReportV1::new(
+            iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
+            Vec::new(),
+        );
+        let response_body = norito::json::to_json(&report).expect("encode readiness report");
+        let response = json_response(StatusCode::OK, &response_body);
+
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client
+                .get_account_onboarding_readiness(&token)
+                .expect("fetch onboarding readiness")
+        });
+        assert_eq!(actual, report);
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/accounts/onboarding/readiness");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(headers.get("x-iroha-onboarding-token"), Some(&token));
+        assert!(snapshot.body.is_empty());
+    }
+
+    #[test]
+    fn sponsored_onboarding_plan_is_token_header_only_and_verified() {
+        let client = client_with_base_url(base_url());
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
+        let token = "P".repeat(32);
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response_body = norito::json::to_json(&receipt).expect("encode onboarding receipt");
+        let response = json_response(StatusCode::OK, &response_body);
+
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client
+                .plan_account_onboarding(&request, &token)
+                .expect("plan sponsored onboarding")
+        });
+        assert_eq!(actual, receipt);
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/accounts/onboard/plan");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(headers.get("x-iroha-onboarding-token"), Some(&token));
+        assert!(!String::from_utf8_lossy(&snapshot.body).contains(&token));
+        let decoded: AccountOnboardingPlanRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("typed planning request");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn sponsored_onboarding_apply_forwards_exact_receipt_without_secret_body_fields() {
+        let client = client_with_base_url(base_url());
+        let (_, receipt) = account_onboarding_plan_fixture(&client);
+        let token = "A".repeat(32);
+        let expected = AccountOnboardingResponseV1 {
+            account_id: receipt.body.request.account_id.clone(),
+            alias: receipt.body.request.alias.clone(),
+            tx_hash_hex: Some("ab".repeat(32)),
+            status: AccountOnboardingStatusV1::Queued,
+            disposition: AliasPlanDispositionV1::Create,
+        };
+        let response_body = norito::json::to_json(&AccountOnboardingResponseWireV1 {
+            account_id: expected.account_id.clone(),
+            alias: expected.alias.clone(),
+            tx_hash_hex: expected.tx_hash_hex.clone(),
+            status: "Queued".to_owned(),
+            disposition: expected.disposition,
+        })
+        .expect("encode onboarding result");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, &response_body);
+
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client
+                .apply_account_onboarding(&receipt, &token)
+                .expect("apply sponsored onboarding receipt")
+        });
+        assert_eq!(actual, expected);
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/accounts/onboard");
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(headers.get("x-iroha-onboarding-token"), Some(&token));
+        assert!(!String::from_utf8_lossy(&snapshot.body).contains(&token));
+        let decoded: AccountOnboardingApplyRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("typed apply request");
+        assert_eq!(decoded.receipt, receipt);
+    }
+
+    #[test]
+    fn sponsored_onboarding_rejects_short_tokens_and_tampered_receipts_before_http() {
+        let client = client_with_base_url(base_url());
+        let (request, mut receipt) = account_onboarding_plan_fixture(&client);
+        assert!(
+            client
+                .post_account_onboarding_plan(&request, "short")
+                .expect_err("short token rejected")
+                .to_string()
+                .contains("32 through 256")
+        );
+        receipt.body.request.alias = "substituted@paynet".to_owned();
+        assert!(
+            client
+                .post_account_onboarding_apply(&receipt, &"T".repeat(32))
+                .expect_err("tampered receipt rejected")
+                .to_string()
+                .contains("hash or authority signature")
+        );
+    }
+
+    #[test]
+    fn sponsored_onboarding_rejects_unbounded_or_misdirected_owner_follow_up() {
+        fn resign(receipt: &mut AccountOnboardingPlanReceiptV1) {
+            let signer = checked_random_keypair();
+            receipt.body.authority = AccountId::new(signer.public_key().clone());
+            receipt.plan_hash = receipt.body.canonical_hash();
+            receipt.signature =
+                Signature::try_new(signer.private_key(), receipt.plan_hash.as_ref())
+                    .expect("re-sign onboarding receipt fixture");
+        }
+
+        let client = client_with_base_url(base_url());
+        let (request, mut receipt) = account_onboarding_plan_fixture(&client);
+        let other_alias = ResolvedAccountAliasV1::new(
+            "other@banka.paynet"
+                .parse::<AccountAliasName>()
+                .expect("other alias literal"),
+            DataSpaceId::new(7),
+        );
+        let follow_up: InstructionBox =
+            ConfigureAliasAutoRenew::new(AliasTargetV1::AccountAlias(other_alias), 0, None).into();
+        let (wire_id, framed_payload) =
+            iroha_data_model::isi::framed_instruction_payload(&follow_up)
+                .expect("registered owner auto-renew instruction");
+        receipt.body.owner_auto_renew_instruction = Some(AliasFramedInstructionV1 {
+            wire_id: wire_id.to_owned(),
+            framed_payload,
+        });
+        resign(&mut receipt);
+        assert!(
+            decode_and_verify_account_onboarding_plan_for_request(&request, &receipt)
+                .expect_err("mismatched owner follow-up target must fail")
+                .to_string()
+                .contains("targets a different alias")
+        );
+
+        let (request, mut receipt) = account_onboarding_plan_fixture(&client);
+        receipt.body.valid_until_ms = u64::MAX;
+        receipt.body.quote_guard.valid_until_ms = u64::MAX;
+        resign(&mut receipt);
+        assert!(
+            decode_and_verify_account_onboarding_plan_for_request(&request, &receipt)
+                .expect_err("unbounded receipt deadline must fail")
+                .to_string()
+                .contains("finite, nonzero deadline")
+        );
     }
 
     #[test]

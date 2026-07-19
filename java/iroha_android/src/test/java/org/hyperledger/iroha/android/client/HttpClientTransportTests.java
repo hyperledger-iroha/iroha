@@ -26,6 +26,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
+import org.hyperledger.iroha.android.alias.AccountAliasName;
+import org.hyperledger.iroha.android.alias.AliasQuoteGuardV1;
+import org.hyperledger.iroha.android.alias.AliasSetupModels;
+import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
+import org.hyperledger.iroha.android.alias.EnsureAlias;
+import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -162,6 +169,8 @@ public final class HttpClientTransportTests {
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
+    resolveRestrictedAccountAliasUsesCanonicalAuthentication();
+    aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan();
     resolveAccountAliasRequestParsesResponseWithoutIndex();
     resolveAccountAliasAllowsNotFound();
     resolveAccountAliasRejectsNonIntegerIndex();
@@ -3736,7 +3745,7 @@ public final class HttpClientTransportTests {
     final AccountAliasResolution resolution = response.orElseThrow();
     assert "alice@universal".equals(resolution.alias()) : "Alias mismatch";
     assert accountId.equals(resolution.accountId()) : "Account id mismatch";
-    assert Long.valueOf(7L).equals(resolution.index()) : "Index mismatch";
+    assert BigInteger.valueOf(7L).equals(resolution.index()) : "Index mismatch";
     assert "directory".equals(resolution.source()) : "Source mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -3748,6 +3757,128 @@ public final class HttpClientTransportTests {
         : "Account alias resolve must send JSON";
     assert readBody(request).equals("{\"alias\":\"alice@universal\"}")
         : "Account alias resolve payload mismatch";
+  }
+
+  private static void resolveRestrictedAccountAliasUsesCanonicalAuthentication()
+      throws Exception {
+    final String json =
+        "{"
+            + "\"alias\":\"merchant@private\","
+            + "\"account_id\":\"aid:merchant-123\","
+            + "\"source\":\"world_state\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_000L, "alias-resolve-nonce-1");
+
+    final Optional<AccountAliasResolution> response =
+        transport.resolveAccountAlias("merchant@private", auth).join();
+
+    assert response.isPresent() : "Restricted alias resolution should be present";
+    assert "aid:merchant-123".equals(response.orElseThrow().accountId())
+        : "Restricted alias target mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Restricted alias request must be captured";
+    assert "alice".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+        : "Canonical account header mismatch";
+    assert "1700000000000"
+        .equals(request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0))
+        : "Canonical timestamp header mismatch";
+    assert "alias-resolve-nonce-1"
+        .equals(request.headers().get(CanonicalRequestSigner.HEADER_NONCE).get(0))
+        : "Canonical nonce header mismatch";
+    assertCanonicalSignature(
+        request, keyPair.getPublic(), 1_700_000_000_000L, "alias-resolve-nonce-1");
+  }
+
+  static void aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan()
+      throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x41);
+    final String asset = TestAssetDefinitionIds.PRIMARY;
+    final ResolvedAccountAliasV1 alias =
+        new ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L);
+    final AliasQuoteGuardV1 guard =
+        new AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L);
+    final AliasSetupModels.AccountAliasIntent intent =
+        new AliasSetupModels.AccountAliasIntent(
+            new AliasSetupModels.AliasAccountIntentV1(
+                alias,
+                authority,
+                AliasSetupModels.AccountProvisionV1.CREATE,
+                AliasSetupModels.AccountAliasRoleV1.PRIMARY));
+    final AliasSetupPlanRequestV1 requestBody =
+        new AliasSetupPlanRequestV1(
+            Collections.singletonList(
+                new EnsureAlias(
+                    intent,
+                    new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
+                    guard)));
+    final AliasSetupModels.AliasTransactionPlanBodyV1 planBody =
+        new AliasSetupModels.AliasTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
+            Collections.singletonList(
+                new AliasSetupModels.AliasPlanResourceV1(
+                    intent,
+                    AliasSetupModels.AliasPlanDispositionV1.CREATE,
+                    new AliasSetupModels.AliasLeaseQuoteV1(
+                        new AliasSetupModels.AccountAliasTarget(alias),
+                        1,
+                        "3",
+                        guard,
+                        1_800_000_000_000L,
+                        1_800_000_100_000L,
+                        1_800_000_200_000L),
+                    0L)),
+            Collections.singletonList(
+                new AliasSetupModels.AliasFramedInstructionV1(
+                    EnsureAlias.WIRE_ID, new byte[] {0x4e, 0x52, 0x54, 0x30})),
+            Collections.singletonList(new AliasSetupModels.AliasAssetTotalV1(asset, "3")),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            1_700_000_100_000L);
+    final AliasTransactionPlanV1 responsePlan =
+        new AliasTransactionPlanV1(planBody, "03".repeat(32));
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            JsonEncoder.encode(responsePlan.toJsonMap()).getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth(authority, keyPair, 1_700_000_000_000L, "alias-plan-nonce-1");
+
+    final AliasTransactionPlanV1 plan = transport.planAliasSetup(requestBody, auth).join();
+
+    assert authority.equals(plan.body().authority()) : "Alias plan authority mismatch";
+    assert plan.body().resources().get(0).disposition()
+        == AliasSetupModels.AliasPlanDispositionV1.CREATE;
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Alias setup plan request must be captured";
+    assert "POST".equals(request.method()) : "Alias setup planning must use POST";
+    assert "https://torii.example/api/v1/aliases/setup/plan".equals(request.uri().toString())
+        : "Alias setup planning must use the read-only planner route";
+    assert authority.equals(
+        request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> sent = (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert Long.valueOf(1L).equals(sent.get("schema_version"));
+    assert ((List<?>) sent.get("intents")).size() == 1;
+    assert !sent.containsKey("private_key");
+    assert !sent.containsKey("payment_proof");
+    assertCanonicalSignature(
+        request, keyPair.getPublic(), 1_700_000_000_000L, "alias-plan-nonce-1");
   }
 
   private static void resolveAccountAliasAllowsNotFound() {

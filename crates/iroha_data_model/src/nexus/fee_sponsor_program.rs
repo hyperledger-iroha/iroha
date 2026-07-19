@@ -486,7 +486,9 @@ impl FeeSponsorProgramRevision {
 pub struct FeeSponsorProgramActivation {
     /// Revision that will become active.
     pub revision: u64,
-    /// Consensus height at which the switch takes effect.
+    /// Earliest consensus height at which the switch may take effect.
+    ///
+    /// Consensus postpones the switch until every older-revision spend lease has expired.
     pub activate_at_height: u64,
 }
 

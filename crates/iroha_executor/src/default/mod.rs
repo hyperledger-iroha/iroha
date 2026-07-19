@@ -50,6 +50,10 @@ use iroha_smart_contract::data_model::{
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
         SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
         UnregisterProviderOwner, UpsertProviderCredit,
+        alias_setup::{
+            CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
+            RebindAccountAlias, RenewAliasLease,
+        },
         asset_alias::{SetAssetDefinitionAlias, SetAssetDefinitionBalancePolicy},
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         contract_alias::SetContractAlias,
@@ -767,6 +771,43 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
     isi.dispatch(executor);
 }
 
+/// Forward declarative alias setup to Core's consensus-critical classifier and executor.
+pub fn visit_ensure_alias<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &EnsureAlias) {
+    execute!(executor, isi);
+}
+
+/// Forward guarded alias lease renewal to Core's expiry-CAS executor.
+pub fn visit_renew_alias_lease<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &RenewAliasLease,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward alias auto-renew configuration to Core's owner-only CAS executor.
+pub fn visit_configure_alias_auto_renew<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &ConfigureAliasAutoRenew,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward explicit alias rebinding to Core's target-account CAS executor.
+pub fn visit_rebind_account_alias<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &RebindAccountAlias,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward primary-alias compare-and-set to Core's lifecycle executor.
+pub fn visit_compare_and_set_primary_account_alias<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &CompareAndSetPrimaryAccountAlias,
+) {
+    execute!(executor, isi);
+}
+
 trait InstructionDispatch {
     fn dispatch<V: Execute + Visit + ?Sized>(&self, executor: &mut V);
 }
@@ -787,6 +828,26 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<ExecuteTrigger>() {
             executor.visit_execute_trigger(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<EnsureAlias>() {
+            executor.visit_ensure_alias(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RenewAliasLease>() {
+            executor.visit_renew_alias_lease(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ConfigureAliasAutoRenew>() {
+            executor.visit_configure_alias_auto_renew(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RebindAccountAlias>() {
+            executor.visit_rebind_account_alias(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CompareAndSetPrimaryAccountAlias>() {
+            executor.visit_compare_and_set_primary_account_alias(isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<BurnBox>() {
@@ -1221,8 +1282,19 @@ mod core_authorization_dispatch_tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
+        alias_setup::{
+            AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+            AliasTargetV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+        },
         block::BlockHeader,
-        isi::settlement::SettleFxCorridor,
+        isi::{
+            alias_setup::{
+                CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
+                RebindAccountAlias, RenewAliasLease,
+            },
+            settlement::SettleFxCorridor,
+        },
+        nexus::DataSpaceId,
         offline::{
             KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
             OfflineDeviceAttestationRegistration,
@@ -1282,7 +1354,30 @@ mod core_authorization_dispatch_tests {
         }
     }
 
-    impl Visit for TestExecutor {}
+    impl Visit for TestExecutor {
+        fn visit_ensure_alias(&mut self, operation: &EnsureAlias) {
+            super::visit_ensure_alias(self, operation);
+        }
+
+        fn visit_renew_alias_lease(&mut self, operation: &RenewAliasLease) {
+            super::visit_renew_alias_lease(self, operation);
+        }
+
+        fn visit_configure_alias_auto_renew(&mut self, operation: &ConfigureAliasAutoRenew) {
+            super::visit_configure_alias_auto_renew(self, operation);
+        }
+
+        fn visit_rebind_account_alias(&mut self, operation: &RebindAccountAlias) {
+            super::visit_rebind_account_alias(self, operation);
+        }
+
+        fn visit_compare_and_set_primary_account_alias(
+            &mut self,
+            operation: &CompareAndSetPrimaryAccountAlias,
+        ) {
+            super::visit_compare_and_set_primary_account_alias(self, operation);
+        }
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -1388,6 +1483,56 @@ mod core_authorization_dispatch_tests {
             assert!(
                 executor.verdict().is_ok(),
                 "offline instructions must reach Core authorization"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_lifecycle_instructions_reach_core_dispatch() {
+        let authority = account(0x44);
+        let replacement = account(0x45);
+        let dataspace = ResolvedDataSpaceV1::new(
+            "universal".parse().expect("canonical dataspace alias"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let target = AliasTargetV1::Dataspace(dataspace.clone());
+        let account_alias = ResolvedAccountAliasV1::new(
+            "merchant@universal"
+                .parse()
+                .expect("canonical account alias"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 1,
+            expected_payment_asset: "61CtjvNd9T3THAR65GsMVHr82Bjc"
+                .parse()
+                .expect("payment asset definition id"),
+            max_amount: Quantity::one(),
+            valid_until_ms: u64::MAX,
+        };
+        let instructions: Vec<InstructionBox> = vec![
+            EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace,
+                    owner: authority.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                guard.clone(),
+            )
+            .into(),
+            RenewAliasLease::new(target.clone(), 1, 2, guard).into(),
+            ConfigureAliasAutoRenew::new(target, 0, None).into(),
+            RebindAccountAlias::new(account_alias.clone(), authority.clone(), replacement).into(),
+            CompareAndSetPrimaryAccountAlias::new(authority.clone(), None, Some(account_alias))
+                .into(),
+        ];
+
+        for instruction in instructions {
+            let mut executor = TestExecutor::new(authority.clone());
+            visit_instruction(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_ok(),
+                "registered alias instruction must reach Core dispatch: {instruction:?}"
             );
         }
     }
@@ -2223,96 +2368,23 @@ pub mod domain {
         account::is_account_owner, domain::is_domain_owner, revoke_permissions,
     };
 
-    /// Registers a domain after deferring exact authorization to the native SNS lease invariant.
+    /// Registers a domain only while applying genesis.
     ///
-    /// Native execution requires an active domain-name lease owned by the transaction authority
-    /// (outside genesis/replay bootstrap). Keeping a second, global `CanRegisterDomain` gate here
-    /// would prevent a correctly leased domain from being materialized on a private dataspace
-    /// route where that route-local account has not inherited universal permissions.
+    /// Ordinary signed transactions must use the declarative `EnsureAlias`
+    /// instruction so lease acquisition, catalog resolution, and ownership
+    /// checks stay atomic.
     pub fn visit_register_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Domain>,
     ) {
-        execute!(executor, isi);
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use core::num::NonZeroU64;
-
-        use iroha_crypto::{Algorithm, KeyPair};
-
-        use super::*;
-        use crate::{Iroha, prelude};
-
-        #[derive(Debug)]
-        struct TestExecutor {
-            host: Iroha,
-            context: prelude::Context,
-            verdict: crate::data_model::executor::Result<(), ValidationFail>,
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
         }
 
-        impl TestExecutor {
-            fn post_genesis(authority: AccountId) -> Self {
-                Self {
-                    host: Iroha,
-                    context: prelude::Context {
-                        authority,
-                        curr_block: BlockHeader::new(
-                            NonZeroU64::new(2).expect("non-zero block height"),
-                            None,
-                            None,
-                            None,
-                            0,
-                            0,
-                        ),
-                    },
-                    verdict: Ok(()),
-                }
-            }
-        }
-
-        impl Execute for TestExecutor {
-            fn host(&self) -> &Iroha {
-                &self.host
-            }
-
-            fn context(&self) -> &prelude::Context {
-                &self.context
-            }
-
-            fn context_mut(&mut self) -> &mut prelude::Context {
-                &mut self.context
-            }
-
-            fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
-                &self.verdict
-            }
-
-            fn deny(&mut self, reason: ValidationFail) {
-                self.verdict = Err(reason);
-            }
-        }
-
-        impl Visit for TestExecutor {}
-
-        #[test]
-        fn register_domain_reaches_native_sns_lease_authorization_without_global_permission() {
-            let key_pair = KeyPair::try_from_seed(vec![0xD0; 32], Algorithm::Ed25519)
-                .expect("deterministic domain registrar key");
-            let authority = AccountId::new(key_pair.public_key().clone());
-            let registration = Register::domain(Domain::new(
-                DomainId::try_new("leased", "sbp").expect("domain id"),
-            ));
-            let mut executor = TestExecutor::post_genesis(authority);
-
-            visit_register_domain(&mut executor, &registration);
-
-            assert!(
-                executor.verdict().is_ok(),
-                "the executor must leave exact lease ownership enforcement to native execution"
-            );
-        }
+        deny!(
+            executor,
+            "Raw domain registration is reserved for genesis; use EnsureAlias"
+        );
     }
 
     /// Unregisters a domain after checking that the caller governs the domain or holds the revoke permission.
@@ -2439,25 +2511,34 @@ pub mod domain {
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
             AnyPermission::CanRegisterAccount(permission) => &permission.domain == domain_id,
             AnyPermission::CanResolveAccountAlias(permission) => {
-                matches!(
-                    permission.scope,
-                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
-                )
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
             }
             AnyPermission::CanDelegateAccountAliasResolution(permission) => {
-                matches!(
-                    permission.scope,
-                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
-                )
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
             }
             AnyPermission::CanManageAccountAlias(permission) => {
-                matches!(
-                    permission.scope,
-                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
-                )
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
             }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
@@ -5021,7 +5102,7 @@ mod sorafs_permission_tests {
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
-        parameter::CanSetParameters, sccp::CanManageSccpGovernance,
+        domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
 
     use super::*;
@@ -5791,6 +5872,22 @@ mod sorafs_permission_tests {
             PermissionObject::from(CanSetParameters),
             parameter::visit_set_parameter,
         );
+    }
+
+    #[test]
+    fn raw_domain_registration_is_genesis_only() {
+        let domain_id = DomainId::try_new("planned", "universal").expect("valid domain id");
+        let instruction = Register::domain(Domain::new(domain_id));
+
+        assert_denied_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanRegisterDomain),
+            domain::visit_register_domain,
+        );
+
+        let mut genesis = MockExecutor::new(true);
+        domain::visit_register_domain(&mut genesis, &instruction);
+        assert!(genesis.verdict().is_ok());
     }
 
     #[test]

@@ -34,11 +34,12 @@ use iroha_data_model::{
             SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
-            ConsensusRound, HeightContextId, SumeragiV2BodyState, SumeragiV2LivenessBlocker,
-            SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
-            SumeragiV2ProgressTransition, SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind,
-            SumeragiV2QueueStatus, SumeragiV2Status, SumeragiV2StatusPhase,
-            SumeragiV2TimeoutQuorumStatus, SumeragiV2VoteQuorumStatus,
+            BlockSubject, ConsensusRound, HeightContextId, SumeragiV2BodyState,
+            SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind,
+            SumeragiV2OutboundIntentStage, SumeragiV2ProgressTransition,
+            SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
+            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
+            SumeragiV2VoteQuorumStatus,
         },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
@@ -65,6 +66,12 @@ use crate::{
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
 static SUMERAGI_V2_EFFECT_STATUS: OnceLock<Mutex<Option<EffectExecutorStatus>>> = OnceLock::new();
 static SUMERAGI_V2_PROGRESS_CLOCK: OnceLock<Mutex<Option<V2ProgressClock>>> = OnceLock::new();
+static SUMERAGI_V2_WATCHDOG_REVISION: AtomicU64 = AtomicU64::new(0);
+
+fn bump_v2_watchdog_revision() {
+    SUMERAGI_V2_WATCHDOG_REVISION.fetch_add(1, Ordering::Release);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct V2StatusOwner {
     height_context_id: HeightContextId,
@@ -566,6 +573,14 @@ impl V2HeightProgressRank {
         self.commit_power = self.commit_power.max(next.commit_power);
         advanced
     }
+
+    fn strictly_advances(self, previous: Self) -> bool {
+        self.stage > previous.stage
+            || self.prepare_signers > previous.prepare_signers
+            || self.prepare_power > previous.prepare_power
+            || self.commit_signers > previous.commit_signers
+            || self.commit_power > previous.commit_power
+    }
 }
 
 const fn progress_transition_rank(transition: SumeragiV2ProgressTransition) -> u8 {
@@ -645,7 +660,7 @@ impl V2ProgressClock {
         &self,
         status: &mut SumeragiV2Status,
         now: Instant,
-    ) -> Option<(Duration, Option<Duration>)> {
+    ) -> Option<(Duration, Option<Duration>, Instant)> {
         if self.owner != V2StatusOwner::from_status(status) {
             return None;
         }
@@ -670,7 +685,11 @@ impl V2ProgressClock {
                 age_queue_at_read(queue, status_age);
             }
         }
-        Some((no_progress_age, self.watchdog_threshold))
+        Some((
+            no_progress_age,
+            self.watchdog_threshold,
+            self.height_progress_at,
+        ))
     }
 }
 
@@ -700,6 +719,7 @@ fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let owner_changed = status_slot.as_ref().map(V2StatusOwner::from_status) != Some(owner);
     match &mut *clock_slot {
         Some(clock) => clock.observe(&status, now, watchdog_threshold),
         None => {
@@ -707,6 +727,11 @@ fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
         }
     }
     *status_slot = Some(status);
+    drop(clock_slot);
+    drop(status_slot);
+    if owner_changed {
+        bump_v2_watchdog_revision();
+    }
 }
 
 /// Publish the exact protocol-v2 reducer snapshot served by Torii.
@@ -723,12 +748,21 @@ pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
         height: status.height,
     };
     let watchdog_threshold = status.watchdog_threshold;
-    {
-        *SUMERAGI_V2_EFFECT_STATUS
+    let watchdog_boundary_changed = {
+        let mut slot = SUMERAGI_V2_EFFECT_STATUS
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(status);
-    }
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = slot.as_ref().map(|previous| {
+            (
+                previous.height_context_id,
+                previous.height,
+                previous.watchdog_threshold,
+            )
+        }) != Some((owner.height_context_id, owner.height, watchdog_threshold));
+        *slot = Some(status);
+        changed
+    };
 
     let published_owner = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -745,6 +779,9 @@ pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
         if let Some(clock) = clock.as_mut().filter(|clock| clock.owner == owner) {
             clock.watchdog_threshold = Some(watchdog_threshold);
         }
+    }
+    if watchdog_boundary_changed {
+        bump_v2_watchdog_revision();
     }
 }
 
@@ -1419,7 +1456,7 @@ fn classify_v2_liveness_blocker(
 fn overlay_v2_liveness_clock(
     status: &mut SumeragiV2Status,
     now: Instant,
-) -> Option<(Duration, Option<Duration>)> {
+) -> Option<(Duration, Option<Duration>, Instant)> {
     SUMERAGI_V2_PROGRESS_CLOCK
         .get()
         .and_then(|slot| {
@@ -1430,7 +1467,13 @@ fn overlay_v2_liveness_clock(
         .overlay_ages(status, now)
 }
 
-fn v2_status_at(now: Instant) -> Option<SumeragiV2Status> {
+struct V2StatusObservation {
+    status: SumeragiV2Status,
+    watchdog_threshold: Option<Duration>,
+    semantic_progress_at: Option<Instant>,
+}
+
+fn v2_status_observation_at(now: Instant) -> Option<V2StatusObservation> {
     let mut status = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1464,13 +1507,23 @@ fn v2_status_at(now: Instant) -> Option<SumeragiV2Status> {
         V2EffectCompletionObservation::Unregistered => {}
     }
     let network_ingress_service_idle_age = overlay_v2_network_ingress(&mut status, now);
-    let (no_progress_age, retained_watchdog_threshold) =
-        overlay_v2_liveness_clock(&mut status, now).unwrap_or_else(|| {
-            (
-                Duration::from_millis(status.liveness.no_progress_age_ms),
-                None,
-            )
-        });
+    let (no_progress_age, retained_watchdog_threshold, semantic_progress_at) =
+        overlay_v2_liveness_clock(&mut status, now).map_or_else(
+            || {
+                (
+                    Duration::from_millis(status.liveness.no_progress_age_ms),
+                    None,
+                    None,
+                )
+            },
+            |(no_progress_age, watchdog_threshold, height_progress_at)| {
+                (
+                    no_progress_age,
+                    watchdog_threshold,
+                    Some(height_progress_at),
+                )
+            },
+        );
     let watchdog_threshold = effect_status
         .as_ref()
         .map(|effect_status| effect_status.watchdog_threshold)
@@ -1481,7 +1534,413 @@ fn v2_status_at(now: Instant) -> Option<SumeragiV2Status> {
         (no_progress_age >= watchdog_threshold)
             .then(|| classify_v2_liveness_blocker(&status, network_ingress_service_stalled))
     });
-    Some(status)
+    Some(V2StatusObservation {
+        status,
+        watchdog_threshold,
+        semantic_progress_at,
+    })
+}
+
+fn v2_status_at(now: Instant) -> Option<SumeragiV2Status> {
+    v2_status_observation_at(now).map(|observation| observation.status)
+}
+
+fn current_v2_status_owner() -> Option<V2StatusOwner> {
+    SUMERAGI_V2_STATUS.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(V2StatusOwner::from_status)
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2LivenessQuorumKind {
+    Prepare,
+    Commit,
+    Timeout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct V2LivenessQuorumContext {
+    kind: V2LivenessQuorumKind,
+    pool_count: usize,
+    round: ConsensusRound,
+    subject: Option<BlockSubject>,
+    signer_count: u32,
+    min_signers: u32,
+    signed_power: u64,
+    total_power: u64,
+    certificate_formed: Option<bool>,
+}
+
+fn relevant_vote_quorum(
+    status: &SumeragiV2Status,
+    pools: &[SumeragiV2VoteQuorumStatus],
+) -> Option<SumeragiV2VoteQuorumStatus> {
+    pools.iter().copied().max_by_key(|quorum| {
+        (
+            quorum.round.view == status.view,
+            quorum.signer_count,
+            quorum.signed_power,
+            quorum.round.view,
+        )
+    })
+}
+
+fn relevant_timeout_quorum(status: &SumeragiV2Status) -> Option<SumeragiV2TimeoutQuorumStatus> {
+    status
+        .liveness
+        .timeout_quorums
+        .iter()
+        .copied()
+        .max_by_key(|quorum| {
+            (
+                quorum.round.view == status.view,
+                quorum.certificate_formed,
+                quorum.signer_count,
+                quorum.signed_power,
+                quorum.round.view,
+            )
+        })
+}
+
+fn relevant_quorum_context(
+    status: &SumeragiV2Status,
+    blocker: SumeragiV2LivenessBlocker,
+) -> Option<V2LivenessQuorumContext> {
+    match blocker {
+        SumeragiV2LivenessBlocker::PrepareQuorumMissing => {
+            relevant_vote_quorum(status, &status.liveness.prepare_quorums).map(|exact| {
+                V2LivenessQuorumContext {
+                    kind: V2LivenessQuorumKind::Prepare,
+                    pool_count: status.liveness.prepare_quorums.len(),
+                    round: exact.round,
+                    subject: Some(exact.subject),
+                    signer_count: exact.signer_count,
+                    min_signers: exact.min_signers,
+                    signed_power: exact.signed_power,
+                    total_power: exact.total_power,
+                    certificate_formed: None,
+                }
+            })
+        }
+        SumeragiV2LivenessBlocker::CommitQuorumMissing => {
+            relevant_vote_quorum(status, &status.liveness.commit_quorums).map(|exact| {
+                V2LivenessQuorumContext {
+                    kind: V2LivenessQuorumKind::Commit,
+                    pool_count: status.liveness.commit_quorums.len(),
+                    round: exact.round,
+                    subject: Some(exact.subject),
+                    signer_count: exact.signer_count,
+                    min_signers: exact.min_signers,
+                    signed_power: exact.signed_power,
+                    total_power: exact.total_power,
+                    certificate_formed: None,
+                }
+            })
+        }
+        SumeragiV2LivenessBlocker::TimeoutCertificateMissing => relevant_timeout_quorum(status)
+            .map(|exact| V2LivenessQuorumContext {
+                kind: V2LivenessQuorumKind::Timeout,
+                pool_count: status.liveness.timeout_quorums.len(),
+                round: exact.round,
+                subject: None,
+                signer_count: exact.signer_count,
+                min_signers: exact.min_signers,
+                signed_power: exact.signed_power,
+                total_power: exact.total_power,
+                certificate_formed: Some(exact.certificate_formed),
+            }),
+        SumeragiV2LivenessBlocker::MissingProposal
+        | SumeragiV2LivenessBlocker::BodyUnavailable
+        | SumeragiV2LivenessBlocker::SchedulerStarvation
+        | SumeragiV2LivenessBlocker::ApplicationPending
+        | SumeragiV2LivenessBlocker::LocalControlPending => None,
+    }
+}
+
+fn relevant_queue_context(status: &SumeragiV2Status) -> Option<SumeragiV2QueueStatus> {
+    status
+        .liveness
+        .queues
+        .iter()
+        .copied()
+        .filter(|queue| queue.depth != 0)
+        .max_by_key(|queue| {
+            (
+                queue.service_debt,
+                queue.oldest_age_ms.unwrap_or_default(),
+                queue.depth,
+            )
+        })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2LivenessWatchdogTransition {
+    Blocked {
+        blocker: SumeragiV2LivenessBlocker,
+        previous_blocker: Option<SumeragiV2LivenessBlocker>,
+    },
+    Recovered {
+        blocker: SumeragiV2LivenessBlocker,
+    },
+}
+
+struct V2LivenessWatchdogEvent {
+    transition: V2LivenessWatchdogTransition,
+    status: SumeragiV2Status,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct V2LivenessActiveAlert {
+    blocker: SumeragiV2LivenessBlocker,
+    semantic_progress: V2SemanticProgressWitness,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct V2SemanticProgressWitness {
+    height_progress_at: Option<Instant>,
+    fallback_rank: V2HeightProgressRank,
+}
+
+impl V2SemanticProgressWitness {
+    fn strictly_advances(self, previous: Self) -> bool {
+        match (self.height_progress_at, previous.height_progress_at) {
+            (Some(current), Some(previous)) => current > previous,
+            _ => self.fallback_rank.strictly_advances(previous.fallback_rank),
+        }
+    }
+}
+
+/// Edge-triggered operator watchdog for one process-local v2 status stream.
+///
+/// The serialized runner polls this on every turn. Full status overlays are
+/// rebuilt only when their semantic deadline expires, when no deadline exists
+/// yet, or when ownership changes.
+#[derive(Debug)]
+pub(crate) struct V2LivenessWatchdog {
+    initialized: bool,
+    owner: Option<V2StatusOwner>,
+    active: Option<V2LivenessActiveAlert>,
+    next_due_at: Option<Instant>,
+    seen_revision: u64,
+    #[cfg(test)]
+    observation_count: u64,
+}
+
+impl Default for V2LivenessWatchdog {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            owner: None,
+            active: None,
+            next_due_at: None,
+            seen_revision: 0,
+            #[cfg(test)]
+            observation_count: 0,
+        }
+    }
+}
+
+impl V2LivenessWatchdog {
+    const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    fn reset_to_owner(&mut self, owner: Option<V2StatusOwner>) {
+        self.initialized = true;
+        self.owner = owner;
+        self.active = None;
+        self.next_due_at = None;
+    }
+
+    fn schedule_next(
+        &mut self,
+        status: &SumeragiV2Status,
+        watchdog_threshold: Option<Duration>,
+        now: Instant,
+    ) {
+        self.next_due_at = watchdog_threshold.and_then(|threshold| {
+            let no_progress_age = Duration::from_millis(status.liveness.no_progress_age_ms);
+            let delay = if status.liveness.blocker.is_some() {
+                threshold
+            } else {
+                threshold.saturating_sub(no_progress_age)
+            }
+            .max(Self::MIN_POLL_INTERVAL);
+            now.checked_add(delay)
+        });
+    }
+
+    fn observe(
+        &mut self,
+        observation: V2StatusObservation,
+        now: Instant,
+    ) -> Option<V2LivenessWatchdogEvent> {
+        let V2StatusObservation {
+            status,
+            watchdog_threshold,
+            semantic_progress_at,
+        } = observation;
+        let owner = V2StatusOwner::from_status(&status);
+        if self.owner != Some(owner) {
+            self.reset_to_owner(Some(owner));
+        }
+
+        let semantic_progress = V2SemanticProgressWitness {
+            height_progress_at: semantic_progress_at,
+            fallback_rank: V2HeightProgressRank::from_status(&status),
+        };
+        let transition = match status.liveness.blocker {
+            Some(blocker) => match self.active {
+                Some(active)
+                    if active.blocker == blocker
+                        && !semantic_progress.strictly_advances(active.semantic_progress) =>
+                {
+                    None
+                }
+                previous => {
+                    self.active = Some(V2LivenessActiveAlert {
+                        blocker,
+                        semantic_progress,
+                    });
+                    Some(V2LivenessWatchdogTransition::Blocked {
+                        blocker,
+                        previous_blocker: previous.map(|active| active.blocker),
+                    })
+                }
+            },
+            None => self.active.and_then(|active| {
+                semantic_progress
+                    .strictly_advances(active.semantic_progress)
+                    .then(|| {
+                        self.active = None;
+                        V2LivenessWatchdogTransition::Recovered {
+                            blocker: active.blocker,
+                        }
+                    })
+            }),
+        };
+        self.schedule_next(&status, watchdog_threshold, now);
+        transition.map(|transition| V2LivenessWatchdogEvent { transition, status })
+    }
+
+    fn poll_event_at(&mut self, now: Instant) -> Option<V2LivenessWatchdogEvent> {
+        let revision = SUMERAGI_V2_WATCHDOG_REVISION.load(Ordering::Acquire);
+        let revision_changed = !self.initialized || revision != self.seen_revision;
+        let due = self.next_due_at.is_some_and(|deadline| now >= deadline);
+        if self.initialized && !due {
+            if !revision_changed {
+                return None;
+            }
+            let owner = current_v2_status_owner();
+            if owner != self.owner {
+                self.reset_to_owner(owner);
+                self.seen_revision = revision;
+                if owner.is_none() {
+                    return None;
+                }
+            } else if self.next_due_at.is_some() {
+                // Publications can defer the semantic deadline or change an
+                // active classification, but neither requires rebuilding the
+                // overlays before the already scheduled observation boundary.
+                self.seen_revision = revision;
+                return None;
+            }
+        }
+
+        self.initialized = true;
+        self.seen_revision = revision;
+        #[cfg(test)]
+        {
+            self.observation_count = self.observation_count.saturating_add(1);
+        }
+        let Some(observation) = v2_status_observation_at(now) else {
+            self.reset_to_owner(None);
+            self.seen_revision = revision;
+            return None;
+        };
+        self.observe(observation, now)
+    }
+
+    /// Poll and emit only edge-triggered liveness diagnostics.
+    pub(crate) fn poll(&mut self, now: Instant) {
+        if let Some(event) = self.poll_event_at(now) {
+            log_v2_liveness_watchdog_event(&event);
+        }
+    }
+
+    #[cfg(test)]
+    const fn observation_count(&self) -> u64 {
+        self.observation_count
+    }
+}
+
+fn log_v2_liveness_watchdog_event(event: &V2LivenessWatchdogEvent) {
+    let status = &event.status;
+    let queue = relevant_queue_context(status);
+    match event.transition {
+        V2LivenessWatchdogTransition::Blocked {
+            blocker,
+            previous_blocker,
+        } => {
+            let quorum = relevant_quorum_context(status, blocker);
+            iroha_logger::warn!(
+                height = status.height,
+                height_context_id = ?status.height_context_id,
+                view = status.view,
+                generation = status.liveness.generation,
+                leader = status.leader,
+                blocker = ?blocker,
+                previous_blocker = ?previous_blocker,
+                no_progress_age_ms = status.liveness.no_progress_age_ms,
+                quorum_kind = ?quorum.map(|context| context.kind),
+                quorum_pool_count = ?quorum.map(|context| context.pool_count),
+                quorum_round = ?quorum.map(|context| context.round),
+                quorum_subject = ?quorum.and_then(|context| context.subject),
+                quorum_signer_count = ?quorum.map(|context| context.signer_count),
+                quorum_min_signers = ?quorum.map(|context| context.min_signers),
+                quorum_signed_power = ?quorum.map(|context| context.signed_power),
+                quorum_total_power = ?quorum.map(|context| context.total_power),
+                timeout_certificate_formed = ?quorum.and_then(|context| context.certificate_formed),
+                queue_kind = ?queue.map(|context| context.queue),
+                queue_depth = ?queue.map(|context| context.depth),
+                queue_capacity = ?queue.map(|context| context.capacity),
+                queue_oldest_age_ms = ?queue.and_then(|context| context.oldest_age_ms),
+                queue_service_debt = ?queue.map(|context| context.service_debt),
+                work = ?status.liveness.work,
+                "Sumeragi v2 height has no classified semantic progress"
+            );
+        }
+        V2LivenessWatchdogTransition::Recovered { blocker } => {
+            let quorum = relevant_quorum_context(status, blocker);
+            iroha_logger::info!(
+                height = status.height,
+                height_context_id = ?status.height_context_id,
+                view = status.view,
+                generation = status.liveness.generation,
+                leader = status.leader,
+                recovered_blocker = ?blocker,
+                no_progress_age_ms = status.liveness.no_progress_age_ms,
+                last_progress = ?status.liveness.last_progress,
+                quorum_kind = ?quorum.map(|context| context.kind),
+                quorum_pool_count = ?quorum.map(|context| context.pool_count),
+                quorum_round = ?quorum.map(|context| context.round),
+                quorum_subject = ?quorum.and_then(|context| context.subject),
+                quorum_signer_count = ?quorum.map(|context| context.signer_count),
+                quorum_min_signers = ?quorum.map(|context| context.min_signers),
+                quorum_signed_power = ?quorum.map(|context| context.signed_power),
+                quorum_total_power = ?quorum.map(|context| context.total_power),
+                timeout_certificate_formed = ?quorum.and_then(|context| context.certificate_formed),
+                queue_kind = ?queue.map(|context| context.queue),
+                queue_depth = ?queue.map(|context| context.depth),
+                queue_capacity = ?queue.map(|context| context.capacity),
+                queue_oldest_age_ms = ?queue.and_then(|context| context.oldest_age_ms),
+                queue_service_debt = ?queue.map(|context| context.service_debt),
+                work = ?status.liveness.work,
+                "Sumeragi v2 semantic height progress cleared the liveness alert"
+            );
+        }
+    }
 }
 
 /// Return the latest protocol-v2 reducer snapshot, if v2 has started.
@@ -1557,6 +2016,7 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+    bump_v2_watchdog_revision();
 }
 
 #[cfg(test)]
@@ -1567,23 +2027,26 @@ mod v2_liveness_watchdog_tests {
         time::{Duration, Instant},
     };
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::block::{
         BlockHeader,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
-            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker,
-            SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+            BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
+            ConsensusRound, DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext,
+            HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
+            SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage,
+            SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
             SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
             SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
             SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
-            SumeragiV2VoteQuorumStatus,
+            SumeragiV2VoteQuorumStatus, Vote,
         },
     };
+    use iroha_data_model::peer::PeerId;
 
     use super::{
-        EffectExecutorStatus, V2IoCompletionQueueObserver, V2SuccessorActivationError,
+        EffectExecutorStatus, V2IoCompletionQueueObserver, V2LivenessWatchdog,
+        V2LivenessWatchdogTransition, V2SuccessorActivationError,
         activate_recovered_v2_successor_height_at, activate_v2_successor_height_at,
         begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
         set_v2_effect_completion_observer, set_v2_effect_status, set_v2_network_ingress,
@@ -1598,6 +2061,44 @@ mod v2_liveness_watchdog_tests {
         HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
             b"v2-liveness-watchdog-context",
         )))
+    }
+
+    fn authenticated_ingress_prepare(
+        seed: &[u8],
+        context_id: HeightContextId,
+        height: u64,
+    ) -> (PeerId, InboundBlockMessage) {
+        let transport = PeerId::new(
+            KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+                .expect("derive authenticated ingress fixture")
+                .public_key()
+                .clone(),
+        );
+        let message = BlockMessage::V2(ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(
+            Vote {
+                round: ConsensusRound {
+                    context_id,
+                    height,
+                    view: 0,
+                },
+                phase: GlobalPhase::Prepare,
+                subject: BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
+                    payload_hash: Hash::new(b"watchdog-network-ingress-payload"),
+                },
+                execution_commitment: ExecutionCommitment::without_topups(
+                    Hash::new(b"watchdog-network-ingress-parent-state"),
+                    Hash::new(b"watchdog-network-ingress-post-state"),
+                    Hash::new(b"watchdog-network-ingress-writes"),
+                    Hash::new(b"watchdog-network-ingress-executed-wire"),
+                ),
+                signer: 0,
+                signature: vec![0x5A],
+            },
+        )));
+        let inbound = InboundBlockMessage::new(message, Some(transport.clone()));
+        (transport, inbound)
     }
 
     fn status() -> SumeragiV2Status {
@@ -2267,17 +2768,17 @@ mod v2_liveness_watchdog_tests {
             }),
         });
         set_v2_effect_completion_observer(successor_context_id, successor_height, &observer);
-        let ingress = Arc::new(FairV2Ingress::new(2, 1024 * 1024, 1024 * 1024, 0));
+        let (validator, inbound) = authenticated_ingress_prepare(
+            b"successor-overlay-network-ingress",
+            successor_context_id,
+            successor_height,
+        );
+        let ingress = Arc::new(FairV2Ingress::new(6, 2 * 1024 * 1024, 1024 * 1024, 0, 0));
         ingress
-            .configure_roster(std::iter::empty())
+            .configure_roster([validator])
             .expect("configure test ingress");
         ingress.open().expect("open successor ingress");
-        ingress
-            .try_push(InboundBlockMessage::new(
-                BlockMessage::invalid_wire_sentinel(),
-                None,
-            ))
-            .expect("queue successor input");
+        ingress.try_push(inbound).expect("queue successor input");
         set_v2_network_ingress(successor_context_id, successor_height, &ingress);
 
         let during_startup =
@@ -3184,16 +3685,18 @@ mod v2_liveness_watchdog_tests {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
         let captured_at = Instant::now();
-        let ingress = Arc::new(FairV2Ingress::new(4, 1024 * 1024, 1024 * 1024, 0));
+        let (validator, inbound) = authenticated_ingress_prepare(
+            b"watchdog-network-ingress-service-clock",
+            context_id(),
+            7,
+        );
+        let ingress = Arc::new(FairV2Ingress::new(6, 2 * 1024 * 1024, 1024 * 1024, 0, 0));
         ingress
-            .configure_roster(std::iter::empty())
-            .expect("untrusted ingress lane fits");
+            .configure_roster([validator])
+            .expect("validator ingress geometry fits");
         ingress.open().expect("open test network ingress");
         ingress
-            .try_push_at(
-                InboundBlockMessage::new(BlockMessage::invalid_wire_sentinel(), None),
-                captured_at - Duration::from_millis(250),
-            )
+            .try_push_at(inbound, captured_at - Duration::from_millis(250))
             .expect("enqueue transport message");
         set_v2_network_ingress(context_id(), 7, &ingress);
 
@@ -3218,7 +3721,7 @@ mod v2_liveness_watchdog_tests {
             .find(|queue| queue.queue == SumeragiV2QueueKind::NetworkIngress)
             .expect("live network ingress queue");
         assert_eq!(network.depth, 1);
-        assert_eq!(network.capacity, 4);
+        assert_eq!(network.capacity, 6);
         assert_eq!(network.oldest_age_ms, Some(1_250));
         assert_eq!(network.service_debt, 0);
         assert!(
@@ -3287,6 +3790,173 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&commit, false),
             SumeragiV2LivenessBlocker::CommitQuorumMissing
         );
+    }
+
+    #[test]
+    fn active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        set_v2_status_at(status(), started_at);
+        set_v2_effect_status(effect_status(Duration::from_secs(1), started_at));
+        let mut watchdog = V2LivenessWatchdog::default();
+
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_millis(500))
+                .is_none(),
+            "the watchdog must remain silent below its retained threshold"
+        );
+        assert_eq!(watchdog.observation_count(), 1);
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_millis(750))
+                .is_none(),
+            "the runner's fast loop must not rebuild a snapshot before it is due"
+        );
+        assert_eq!(watchdog.observation_count(), 1);
+
+        let alert = watchdog
+            .poll_event_at(started_at + Duration::from_secs(1))
+            .expect("threshold crossing emits one alert");
+        assert_eq!(
+            alert.transition,
+            V2LivenessWatchdogTransition::Blocked {
+                blocker: SumeragiV2LivenessBlocker::MissingProposal,
+                previous_blocker: None,
+            }
+        );
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_millis(1_500))
+                .is_none(),
+            "an unchanged active blocker must not repeat before the next deadline"
+        );
+        assert_eq!(watchdog.observation_count(), 2);
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_secs(2))
+                .is_none(),
+            "an unchanged active blocker must remain edge-triggered at reclassification"
+        );
+        assert_eq!(watchdog.observation_count(), 3);
+
+        let blocker_changed_at = started_at + Duration::from_millis(2_001);
+        let mut timeout = status();
+        let timeout_round = round(&timeout, 0);
+        timeout
+            .liveness
+            .timeout_quorums
+            .push(SumeragiV2TimeoutQuorumStatus {
+                round: timeout_round,
+                signer_count: 1,
+                signed_power: 1,
+                min_signers: 3,
+                total_power: 4,
+                certificate_formed: false,
+            });
+        set_v2_status_at(timeout, blocker_changed_at);
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_millis(2_500))
+                .is_none(),
+            "a publication does not force an expensive overlay rebuild before the due time"
+        );
+        assert_eq!(watchdog.observation_count(), 3);
+        let changed = watchdog
+            .poll_event_at(started_at + Duration::from_secs(3))
+            .expect("an active blocker change emits one warning edge");
+        assert_eq!(
+            changed.transition,
+            V2LivenessWatchdogTransition::Blocked {
+                blocker: SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
+                previous_blocker: Some(SumeragiV2LivenessBlocker::MissingProposal),
+            }
+        );
+
+        let recovered_at = started_at + Duration::from_millis(3_001);
+        let mut progressed = status();
+        progressed.phase = SumeragiV2StatusPhase::Prepare;
+        progressed.body_state = SumeragiV2BodyState::Validated;
+        set_progress(
+            &mut progressed,
+            0,
+            0,
+            SumeragiV2ProgressTransition::ProposalAdmitted,
+        );
+        set_v2_status_at(progressed, recovered_at);
+        assert!(
+            watchdog.poll_event_at(recovered_at).is_none(),
+            "semantic progress is sampled at the next bounded observation deadline"
+        );
+        let recovered = watchdog
+            .poll_event_at(started_at + Duration::from_secs(4))
+            .expect("semantic height progress emits one recovery edge");
+        assert_eq!(
+            recovered.transition,
+            V2LivenessWatchdogTransition::Recovered {
+                blocker: SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
+            }
+        );
+        assert!(
+            watchdog
+                .poll_event_at(started_at + Duration::from_secs(4))
+                .is_none()
+        );
+        clear_v2_status();
+    }
+
+    #[test]
+    fn active_watchdog_resets_on_successor_owner_and_status_clear() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        set_v2_status_at(status(), started_at);
+        set_v2_effect_status(effect_status(Duration::from_secs(1), started_at));
+        let mut watchdog = V2LivenessWatchdog::default();
+        let predecessor = watchdog
+            .poll_event_at(started_at + Duration::from_secs(1))
+            .expect("predecessor crosses its threshold");
+        assert_eq!(
+            predecessor.transition,
+            V2LivenessWatchdogTransition::Blocked {
+                blocker: SumeragiV2LivenessBlocker::MissingProposal,
+                previous_blocker: None,
+            }
+        );
+
+        let successor_started_at = started_at + Duration::from_millis(1_100);
+        let mut successor = status();
+        successor.height = 8;
+        successor.last_committed_height = 7;
+        set_v2_status_at(successor, successor_started_at);
+        let mut successor_effects = effect_status(Duration::from_secs(1), successor_started_at);
+        successor_effects.height = 8;
+        set_v2_effect_status(successor_effects);
+        assert!(
+            watchdog.poll_event_at(successor_started_at).is_none(),
+            "a successor owner resets the predecessor alert without claiming recovery"
+        );
+
+        let successor = watchdog
+            .poll_event_at(successor_started_at + Duration::from_secs(1))
+            .expect("the successor owns an independent alert interval");
+        assert_eq!(
+            successor.transition,
+            V2LivenessWatchdogTransition::Blocked {
+                blocker: SumeragiV2LivenessBlocker::MissingProposal,
+                previous_blocker: None,
+            }
+        );
+
+        clear_v2_status();
+        assert!(
+            watchdog
+                .poll_event_at(successor_started_at + Duration::from_secs(2))
+                .is_none()
+        );
+        assert_eq!(watchdog.owner, None);
+        assert!(watchdog.active.is_none());
     }
 
     #[test]

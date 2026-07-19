@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use super::{Account, AccountId, Name};
 use crate::{
+    alias_setup::AccountAliasName,
     domain::DomainId,
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
@@ -119,21 +120,16 @@ impl AccountAlias {
     /// # Errors
     /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
     pub fn from_literal(input: &str, catalog: &DataSpaceCatalog) -> Result<Self, ParseError> {
-        let canonical = canonicalize_literal(input)?;
-        let segments = split_alias_segments(&canonical)?;
-        let label = segments
-            .label
-            .parse()
-            .map_err(|_| ParseError::new("account alias label segment is invalid"))?;
-        let domain = segments
-            .domain
-            .map(str::parse::<AccountAliasDomain>)
-            .transpose()?;
+        let name = input.parse::<AccountAliasName>()?;
         let dataspace = catalog
-            .by_alias(segments.dataspace)
+            .by_alias(name.dataspace.as_ref())
             .map(|entry| entry.id)
             .ok_or_else(|| ParseError::new("unknown dataspace alias in account alias"))?;
-        Ok(Self::new_in_dataspace(label, domain, dataspace))
+        Ok(Self::new_in_dataspace(
+            name.label,
+            name.domain.map(AccountAliasDomain::new),
+            dataspace,
+        ))
     }
 
     /// Render the canonical account alias literal using dataspace aliases from the catalog.
@@ -144,18 +140,12 @@ impl AccountAlias {
         let dataspace = catalog
             .by_id(self.dataspace)
             .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
-        let label = self.label.as_ref().to_ascii_lowercase();
-        let dataspace_alias = dataspace.alias.to_ascii_lowercase();
-        Ok(self.domain.as_ref().map_or_else(
-            || format!("{label}@{dataspace_alias}"),
-            |domain| {
-                format!(
-                    "{label}@{}.{}",
-                    domain.to_string().to_ascii_lowercase(),
-                    dataspace_alias
-                )
-            },
-        ))
+        AccountAliasName::try_new(
+            self.label.as_ref(),
+            self.domain.as_ref().map(|domain| domain.name().as_ref()),
+            dataspace.alias.as_str(),
+        )
+        .map(|name| name.to_string())
     }
 
     /// Resolve the alias-domain scope into a dataspace-qualified [`DomainId`].
@@ -175,77 +165,6 @@ impl AccountAlias {
             .map_err(|_| ParseError::new("dataspace alias in catalog is invalid"))?;
         Ok(Some(DomainId::try_new(domain.name(), &dataspace_alias)?))
     }
-}
-
-fn canonicalize_literal(input: &str) -> Result<String, ParseError> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(ParseError::new("account alias must not be empty"));
-    }
-    if trimmed != input {
-        return Err(ParseError::new(
-            "account alias must not contain leading or trailing whitespace",
-        ));
-    }
-    if trimmed.chars().any(char::is_control) {
-        return Err(ParseError::new(
-            "account alias must not contain control characters",
-        ));
-    }
-    Ok(trimmed.to_ascii_lowercase())
-}
-
-struct AliasSegments<'a> {
-    label: &'a str,
-    domain: Option<&'a str>,
-    dataspace: &'a str,
-}
-
-fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
-    let (label, right) = input.split_once('@').ok_or_else(|| {
-        ParseError::new("account alias must use `name@domain.dataspace` or `name@dataspace` format")
-    })?;
-    if right.contains('@') {
-        return Err(ParseError::new(
-            "account alias must contain exactly one `@` separator",
-        ));
-    }
-
-    if label.is_empty() {
-        return Err(ParseError::new(
-            "account alias label segment must not be empty",
-        ));
-    }
-    if right.is_empty() {
-        return Err(ParseError::new(
-            "account alias dataspace segment must not be empty",
-        ));
-    }
-
-    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
-    if dot_count == 1 {
-        let (domain, dataspace) = right.split_once('.').expect("counted dot");
-        if domain.is_empty() || dataspace.is_empty() {
-            return Err(ParseError::new(
-                "account alias domain and dataspace segments must not be empty",
-            ));
-        }
-        return Ok(AliasSegments {
-            label,
-            domain: Some(domain),
-            dataspace,
-        });
-    }
-    if dot_count > 1 {
-        return Err(ParseError::new(
-            "account alias must contain at most one `.` after `@`",
-        ));
-    }
-    Ok(AliasSegments {
-        label,
-        domain: None,
-        dataspace: right,
-    })
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountAlias {

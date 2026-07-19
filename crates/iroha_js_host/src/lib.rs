@@ -118,7 +118,6 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
-        sns::RegisterSnsName,
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
@@ -146,7 +145,6 @@ use iroha_data_model::{
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
-    sns::RegisterNameRequestV1,
     soracloud::{
         SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
@@ -7537,11 +7535,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     napi::Status::InvalidArg,
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
-            }
-            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName") {
-                let request: RegisterNameRequestV1 =
-                    json::from_value(register_sns_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(RegisterSnsName::new(request)));
             }
             if let Some(json::Value::Object(mut burn_map)) = map.remove("Burn") {
                 if let Some(json::Value::Object(mut asset_fields)) = burn_map.remove("Asset") {
@@ -21058,6 +21051,30 @@ seiyaku Privacy {
             )]));
             let error = value_to_instruction(value)
                 .expect_err("retired SCCP route-manifest instruction must not decode");
+            assert!(
+                error.reason.contains("unsupported instruction"),
+                "unexpected rejection for {retired}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
+    fn retired_sns_mutation_instructions_are_rejected() {
+        for retired in [
+            "RegisterSnsName",
+            "RenewSnsName",
+            "TransferSnsName",
+            "UpdateSnsNameControllers",
+            "FreezeSnsName",
+            "UnfreezeSnsName",
+        ] {
+            let value = json::Value::Object(json::Map::from_iter([(
+                retired.to_owned(),
+                json::Value::Object(json::Map::new()),
+            )]));
+            let error = value_to_instruction(value)
+                .expect_err("retired SNS mutation instruction must not decode");
             assert!(
                 error.reason.contains("unsupported instruction"),
                 "unexpected rejection for {retired}: {}",

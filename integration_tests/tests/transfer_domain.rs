@@ -92,7 +92,7 @@ fn domain_owner_domain_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(
@@ -159,7 +159,7 @@ fn domain_owner_account_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id);
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let mad_hatter = Account::new(mad_hatter_id.clone());
     test_client.submit_blocking(
@@ -235,7 +235,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(
@@ -321,7 +321,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(
@@ -391,7 +391,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(
@@ -467,7 +467,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id);
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(
@@ -583,7 +583,7 @@ fn domain_owner_transfer() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
+    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(

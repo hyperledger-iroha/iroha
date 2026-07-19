@@ -231,7 +231,6 @@ export {
   buildTransactionPayload,
   signQuotedTransactionPayload,
   quoteAndSignTransaction,
-  buildRegisterSnsNameTransaction,
   buildIvmProvedTransaction,
   submitIvmProvedContractCall,
   submitValidationFeeIvmProvedContractCall,
@@ -300,7 +299,6 @@ export {
   buildTimeTriggerAction,
   buildPrecommitTriggerAction,
   submitSignedTransaction,
-  registerSnsNameViaConsensus,
   submitTransactionEntrypoint,
 } from "./transaction.js";
 export {

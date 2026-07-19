@@ -15,7 +15,7 @@ public final class AccountAliasJsonParser {
         requiredExactString(root.get("alias"), "account alias resolution.alias"),
         requiredExactString(root.get("account_id"), "account alias resolution.account_id"),
         root.containsKey("index")
-            ? asOptionalLong(root.get("index"), "account alias resolution.index")
+            ? asOptionalUInt64(root.get("index"), "account alias resolution.index")
             : null,
         optionalExactString(root.get("source"), "account alias resolution.source"));
   }
@@ -72,13 +72,10 @@ public final class AccountAliasJsonParser {
     return value instanceof String ? (String) value : String.valueOf(value);
   }
 
-  private static Long asOptionalLong(final Object value, final String path) {
+  private static java.math.BigInteger asOptionalUInt64(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    if (!(value instanceof Number number)) {
-      throw new IllegalStateException(path + " must be a number");
-    }
-    return JsonNumbers.asLong(number, path);
+    return AccountAliasUInt64.parse(value, path);
   }
 }

@@ -31,7 +31,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
-    domain::CanUnregisterDomain,
 };
 
 /// Create block
@@ -45,9 +44,13 @@ pub fn create_block(
 ) -> CommittedBlock {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let transaction = TransactionBuilder::new(chain_id.clone(), account_id, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-        .with_instructions(instructions)
-        .sign(account_private_key);
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(account_private_key);
     let (max_clock_drift, tx_limits) = {
         let params = state.world.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
@@ -82,24 +85,12 @@ pub fn create_block(
 }
 
 pub fn populate_state(
-    domains: &[DomainId],
+    _domains: &[DomainId],
     accounts: &[AccountId],
     asset_definitions: &[AssetDefinitionId],
     owner_id: &AccountId,
 ) -> Vec<InstructionBox> {
     let mut instructions: Vec<InstructionBox> = Vec::new();
-
-    for domain_id in domains {
-        let domain = Domain::new(domain_id.clone());
-        instructions.push(Register::domain(domain).into());
-        let can_unregister_domain = Grant::account_permission(
-            CanUnregisterDomain {
-                domain: domain_id.clone(),
-            },
-            owner_id.clone(),
-        );
-        instructions.push(can_unregister_domain.into());
-    }
 
     for account_id in accounts {
         let account = Account::new(account_id.clone());
@@ -136,27 +127,25 @@ pub fn delete_every_nth(
 ) -> Vec<InstructionBox> {
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
-        if i % nth == 0 {
-            instructions.push(Unregister::domain(domain_id.clone()).into());
-        } else {
-            for (j, account_id) in accounts
-                .iter()
-                .filter(|account_id| account_id.domain() == domain_id)
-                .enumerate()
-            {
-                if j % nth == 0 {
-                    instructions.push(Unregister::account(account_id.clone()).into());
-                }
+        // Runtime domain re-registration is intentionally unavailable; churn the
+        // domain's children while retaining its genesis-created parent.
+        let delete_all_children = i % nth == 0;
+        for (j, account_id) in accounts
+            .iter()
+            .filter(|account_id| account_id.domain() == domain_id)
+            .enumerate()
+        {
+            if delete_all_children || j % nth == 0 {
+                instructions.push(Unregister::account(account_id.clone()).into());
             }
-            for (k, asset_definition_id) in asset_definitions
-                .iter()
-                .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
-                .enumerate()
-            {
-                if k % nth == 0 {
-                    instructions
-                        .push(Unregister::asset_definition(asset_definition_id.clone()).into());
-                }
+        }
+        for (k, asset_definition_id) in asset_definitions
+            .iter()
+            .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
+            .enumerate()
+        {
+            if delete_all_children || k % nth == 0 {
+                instructions.push(Unregister::asset_definition(asset_definition_id.clone()).into());
             }
         }
     }
@@ -171,10 +160,8 @@ pub fn restore_every_nth(
 ) -> Vec<InstructionBox> {
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
-        if i % nth == 0 {
-            let domain = Domain::new(domain_id.clone());
-            instructions.push(Register::domain(domain).into());
-        }
+        // Domains remain present so this restore batch uses only ordinary
+        // post-genesis instructions.
         for (j, account_id) in accounts
             .iter()
             .filter(|account_id| account_id.domain() == domain_id)
@@ -229,9 +216,13 @@ pub fn build_state(
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(account_private_key);
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(account_private_key);
         let (max_clock_drift, tx_limits) = {
             let params = state.world.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
@@ -313,8 +304,7 @@ mod tests {
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone(),
-        );
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         build_state(rt.handle(), &account_id, keypair.private_key());
     }
@@ -323,15 +313,18 @@ mod tests {
     fn build_state_records_init_transaction() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone(),
-        );
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         let state = build_state(rt.handle(), &account_id, keypair.private_key());
 
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let tx = TransactionBuilder::new(chain_id, account_id.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(keypair.private_key());
 
         assert!(state.transactions.view().get(&tx.hash()).is_some());
     }

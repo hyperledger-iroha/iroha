@@ -19,7 +19,8 @@ HEAD = "1" * 40
 TREE = "2" * 40
 LOCK = "3" * 64
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
 
@@ -41,6 +42,8 @@ def _fixture(
     gate_mode: str = "pass",
     drift_after: int = 0,
     checker_status: int = 0,
+    cross_tool_required: bool = False,
+    emit_cross_tool: bool | None = None,
 ) -> tuple[Path, dict[str, str], Path]:
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -60,6 +63,8 @@ def _fixture(
 
     checker = formal / "check_sumeragi_v2_proof_ledger.py"
     checker.write_text("raise SystemExit(99)\n", encoding="utf-8")
+    if emit_cross_tool is None:
+        emit_cross_tool = cross_tool_required
     gate = ci / "check_sumeragi_formal.sh"
     gate.write_text(
         f"""#!/usr/bin/env bash
@@ -76,6 +81,10 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >target/formal/sumeragi_v2/verus_evidence.json
     printf '%s\n' 'fixture production Verus verification passed' \
       >target/formal/sumeragi_v2/verus.log
+    if [[ "${{FORMAL_EMIT_CROSS_TOOL:-0}}" == 1 ]]; then
+      printf '%s\n' '{{"backend_verification":true,"canonical":true}}' \
+        >target/formal/sumeragi_v2/cross_tool_evidence.json
+    fi
     ;;
 esac
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
@@ -117,7 +126,26 @@ case "${{1:-}}" in
       printf '%s\n' '{identity}'
     fi
     ;;
-  *check_sumeragi_v2_proof_ledger.py) exit "$FORMAL_CHECKER_STATUS" ;;
+  *check_sumeragi_v2_proof_ledger.py)
+    case " $* " in
+      *" --print-cross-tool-obligations "*)
+        if [[ "$FORMAL_CROSS_TOOL_REQUIRED" == 1 ]]; then
+          printf '%s\n' 'effective-lock-body-acquisition-production-refinement'
+        fi
+        exit 0
+        ;;
+    esac
+    if [[ "$FORMAL_CROSS_TOOL_REQUIRED" == 1 ]]; then
+      [[ " $* " == *" --verus-evidence "* ]] || exit 86
+      [[ " $* " == *" --verus-log "* ]] || exit 90
+      [[ " $* " == *" --cross-tool-evidence "* ]] || exit 87
+    else
+      [[ " $* " == *" --verus-evidence "* ]] || exit 88
+      [[ " $* " == *" --verus-log "* ]] || exit 90
+      [[ " $* " != *" --cross-tool-evidence "* ]] || exit 89
+    fi
+    exit "$FORMAL_CHECKER_STATUS"
+    ;;
   *sumeragi_v2_verus_evidence.py) exit 0 ;;
   *seal_workspace_source.py) exit 0 ;;
   *) exec /usr/bin/python3 "$@" ;;
@@ -142,6 +170,8 @@ esac
     env["FORMAL_IDENTITY_COUNTER"] = str(counter)
     env["FORMAL_DRIFT_AFTER"] = str(drift_after)
     env["FORMAL_CHECKER_STATUS"] = str(checker_status)
+    env["FORMAL_CROSS_TOOL_REQUIRED"] = "1" if cross_tool_required else "0"
+    env["FORMAL_EMIT_CROSS_TOOL"] = "1" if emit_cross_tool else "0"
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = MANIFEST
     env["JAVA_BIN"] = str(tools["java"])
     env["TLAPM_BIN"] = str(tools["tlapm"])
@@ -206,6 +236,8 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
         invocation / "verus_evidence.json"
     )
     assert fields["verus_log_sha256"] == _sha256(invocation / "verus.log")
+    assert "cross_tool_evidence_sha256" not in fields
+    assert not (invocation / "cross_tool_evidence.json").exists()
     assert fields["harness_cargo_lock_sha256"] == _sha256(
         invocation / "harness-Cargo.lock"
     )
@@ -217,6 +249,48 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
     ] == FINAL_MARKER
     assert pointer.read_text(encoding="utf-8").strip() == str(completion)
     assert not (evidence / ".formal-release.lock").exists()
+
+
+def test_formal_launcher_archives_required_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(tmp_path, cross_tool_required=True)
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 0, result.stderr
+    invocation = _invocation(evidence)
+    cross_tool = invocation / "cross_tool_evidence.json"
+    assert cross_tool.is_file()
+    assert _fields(invocation / "COMPLETED.tsv")[
+        "cross_tool_evidence_sha256"
+    ] == _sha256(cross_tool)
+
+
+def test_formal_launcher_rejects_missing_required_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(
+        tmp_path, cross_tool_required=True, emit_cross_tool=False
+    )
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 1
+    assert "did not produce required cross-tool evidence" in result.stderr
+    assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
+
+
+def test_formal_launcher_rejects_cross_tool_evidence_while_dormant(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(tmp_path, emit_cross_tool=True)
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 1
+    assert "produced forbidden dormant cross-tool evidence" in result.stderr
+    assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
 
 
 def test_formal_launcher_preserves_pipeline_failure_without_completion(
@@ -374,6 +448,14 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_service_rank_mutation.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_ingress_causal_freshness_mutation.sh",
     )
     for entrypoint in entrypoints:
         source = entrypoint.read_text(encoding="utf-8")
@@ -389,3 +471,77 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
     assert "unset JAVA_BIN" in release
     assert 'release_java_bin="$("$repo_root/scripts/formal/resolve_java.sh")"' in release
     assert "canonical_executable java" not in release
+
+
+def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert 'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.11"\'' in runner
+    assert 'readonly MODEL="SumeragiV2IngressCausalFreshnessMutation.tla"' in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert "-fp 96 -seed 139154308881391968" in runner
+
+    fixed_case = (
+        "run_case scheduler-wide-fixed ingress_causal_freshness_fixed.cfg 0 \\\n"
+        '  "Model checking completed. No error has been found." \\\n'
+        '  "2 states generated, 2 distinct states found, 0 states left on queue." '
+        '\\\n  "depth of the complete state graph search is 2"'
+    )
+    mutation_case = (
+        "run_case inflight-only-mutation \\\n"
+        "  ingress_causal_freshness_inflight_only_bug.cfg 12 \\\n"
+        '  "Invariant PairwiseSingleOwnership is violated." \\\n'
+        "  'phase = \"Admitted\"' \\\n"
+        '  "trackedDuplicateCreated = TRUE" \\\n'
+        '  "queuedDuplicateCreated = TRUE" \\\n'
+        '  "2 states generated, 2 distinct states found, 0 states left on queue." '
+        '\\\n  "depth of the complete state graph search is 2"'
+    )
+    assert fixed_case in runner
+    assert mutation_case in runner
+    assert runner.count("depth of the complete state graph search is 2") == 2
+    assert runner.count(
+        "2 states generated, 2 distinct states found, 0 states left on queue."
+    ) == 2
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    fixed = (formal_dir / "ingress_causal_freshness_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutation = (
+        formal_dir / "ingress_causal_freshness_inflight_only_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.splitlines().count(
+        "CONSTANT RequireSchedulerWideFreshness = TRUE"
+    ) == 1
+    assert "INVARIANT SchedulerWideDuplicateCoalesced\n" in fixed
+    assert "INVARIANT IngressOccurrenceConsumedExactlyOnce\n" in fixed
+    assert mutation.splitlines().count(
+        "CONSTANT RequireSchedulerWideFreshness = FALSE"
+    ) == 1
+    assert "INVARIANT PairwiseSingleOwnership\n" in mutation
+
+    model = (
+        formal_dir / "SumeragiV2IngressCausalFreshnessMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert model.splitlines().count("CONSTANT RequireSchedulerWideFreshness") == 1
+    assert (
+        "IF RequireSchedulerWideFreshness\n  THEN ~CandidateScheduled(candidate)"
+        in model
+    )
+    assert "ELSE ~CandidateInFlight(candidate)" in model

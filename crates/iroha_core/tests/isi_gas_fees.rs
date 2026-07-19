@@ -748,6 +748,16 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    {
+        let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Quantity::from(1_u32);
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
+        nexus.fees.fee_asset_id = asset_def_id.canonical_address();
+        nexus.fees.fee_sink_account_id = gas_id.to_string();
+    }
 
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
@@ -755,14 +765,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         iroha_primitives::json::Json::new("v"),
     )
     .into();
-    let fee_payment = FeePaymentIntent::authority(
-        vec![FeeChargeLimit::new(
-            FeeChargeKind::PipelineGas,
-            asset_def_id.clone(),
-            Quantity::from(init),
-        )],
-        NonZeroU64::new(1_000_000),
-    );
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
 
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let tx = TransactionBuilder::new(chain, alice_id.clone(), fee_payment)

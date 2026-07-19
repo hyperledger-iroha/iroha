@@ -149,6 +149,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -458,7 +459,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             sorafs_appeal_finance_settlement:
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
-            onboarding: None,
+            account_onboarding: None,
             faucet: None,
             kagemusha_commands: None,
         },

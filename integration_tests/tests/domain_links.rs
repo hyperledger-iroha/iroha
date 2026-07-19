@@ -3,27 +3,10 @@
 
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{
-    client::Client,
-    data_model::{
-        account::AccountAddress,
-        metadata::Metadata,
-        prelude::*,
-        sns::{
-            DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameSelectorV1, PaymentProofV1,
-            RegisterNameRequestV1,
-        },
-    },
-    sns::SnsNamespacePath,
-};
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha::{client::Client, data_model::prelude::*};
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
-
-fn test_sns_lease_payment() -> Quantity {
-    "0.5".parse().expect("valid test payment")
-}
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(
@@ -33,83 +16,26 @@ fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, R
     .unwrap()
 }
 
-fn account_controller(account: &AccountId) -> Result<NameControllerV1> {
-    let address = AccountAddress::from_account_id(account)?;
-    Ok(NameControllerV1::account(&address))
-}
-
-fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
-    PaymentProofV1 {
-        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: test_sns_lease_payment(),
-        net_amount: test_sns_lease_payment(),
-        settlement_tx: Json::from("mock-settlement"),
-        payer: payer.clone(),
-        signature: Json::from("mock-signature"),
-    }
-}
-
-fn build_domain_register_request(
-    domain: &DomainId,
-    owner: &AccountId,
-) -> Result<RegisterNameRequestV1> {
-    let domain_label = domain.to_string();
-    Ok(RegisterNameRequestV1 {
-        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)?,
-        owner: owner.clone(),
-        controllers: vec![account_controller(owner)?],
-        term_years: 1,
-        pricing_class_hint: Some(0),
-        payment: stub_payment_proof(owner),
-        governance: None,
-        metadata: Metadata::default(),
-    })
-}
-
 fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
-    let domain_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|existing| existing.id() == domain);
-    if domain_exists {
-        return Ok(());
-    }
-
-    // Runtime domain registration now requires a matching active SNS domain
-    // lease owned by the same authority.
-    let domain_label = domain.to_string();
-    if client
-        .sns()
-        .get_name(SnsNamespacePath::Domain, &domain_label)
-        .is_err()
-    {
-        client.sns().register(
-            &build_domain_register_request(domain, &client.account)?,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
-    }
-
-    client.submit_blocking(
-        Register::domain(Domain::new(domain.clone())),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    Ok(())
+    ensure_domain_setup(client, domain)
 }
 
 #[test]
-fn build_domain_register_request_uses_domain_label_and_owner_controller() -> Result<()> {
+fn domain_setup_instruction_pins_domain_dataspace_and_owner() -> Result<()> {
     let domain: DomainId = DomainId::try_new("helperdomain", "universal")?;
     let (owner, _) = gen_account_in("helper_owner");
-    let request = build_domain_register_request(&domain, &owner)?;
-
-    assert_eq!(request.selector.suffix_id, DOMAIN_NAME_SUFFIX_ID);
-    assert_eq!(request.selector.normalized_label(), domain.to_string());
-    assert_eq!(request.owner, owner);
-    assert_eq!(request.controllers, vec![account_controller(&owner)?]);
-    assert_eq!(request.payment.payer, owner);
-    assert_eq!(request.pricing_class_hint, Some(0));
-    assert_eq!(request.term_years, 1);
+    let instruction = domain_setup_instruction(&domain, &owner)?;
+    let ensure = instruction
+        .as_any()
+        .downcast_ref::<iroha::data_model::isi::alias_setup::EnsureAlias>()
+        .expect("domain setup helper must emit EnsureAlias");
+    let AliasIntentV1::Domain(intent) = &ensure.intent else {
+        panic!("domain setup helper must emit a domain intent");
+    };
+    assert_eq!(intent.domain.canonical_name, domain);
+    assert_eq!(intent.domain.dataspace_id, DataSpaceId::UNIVERSAL);
+    assert_eq!(intent.owner, owner);
+    assert_eq!(ensure.acquisition, AliasLeaseAcquisitionV1::new(1, None));
 
     Ok(())
 }

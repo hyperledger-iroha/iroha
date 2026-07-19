@@ -240,35 +240,6 @@ public struct ClaimIdentifierRequest {
     }
 }
 
-public struct SetPrimaryAccountAliasRequest {
-    public let chainId: String
-    public let authority: String
-    public let accountId: String
-    public let aliasDomain: String?
-    public let aliasDataspaceId: UInt64
-    public let alias: String
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(chainId: String,
-                authority: String,
-                accountId: String,
-                aliasDomain: String? = nil,
-                aliasDataspaceId: UInt64,
-                alias: String,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
-        self.chainId = chainId
-        self.authority = authority
-        self.accountId = accountId
-        self.aliasDomain = aliasDomain
-        self.aliasDataspaceId = aliasDataspaceId
-        self.alias = alias
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-}
-
 /// Inputs for the atomic nonce- and alias-CAS guarded contract deployment instruction.
 public struct CommitContractDeploymentRequest {
     public let chainId: String
@@ -1366,6 +1337,176 @@ public final class IrohaSDK: @unchecked Sendable {
                                                           creationTimeMs: creationTimeMs)
     }
 
+    /// Verify the planner commitment and exact frames, then locally sign one
+    /// indivisible ordinary transaction containing the complete setup vector.
+    public func buildAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) throws -> SignedTransactionEnvelope {
+        try SingleInstructionSwiftNoritoEncoder.encodeAliasSetupPlan(
+            request: request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            signingKey: signingKey,
+            decodeAndReencode: frameCodec
+        )
+    }
+
+    /// Ed25519 convenience overload for a verified atomic alias setup plan.
+    public func buildAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try buildAliasSetupPlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+    }
+
+    /// Build, locally sign, and submit one verified alias setup transaction.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) async throws {
+        let envelope = try buildAliasSetupPlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+        try await submit(envelope: envelope)
+    }
+
+    /// Verify a lease-renewal or auto-renew plan and locally sign its one exact
+    /// instruction. Exact auto-renew no-ops return `nil` without a transaction.
+    public func buildAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) throws -> SignedTransactionEnvelope? {
+        try SingleInstructionSwiftNoritoEncoder.encodeAliasLifecyclePlan(
+            request: request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            signingKey: signingKey,
+            decodeAndReencode: frameCodec
+        )
+    }
+
+    /// Ed25519 convenience overload for a verified alias lifecycle plan.
+    public func buildAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) throws -> SignedTransactionEnvelope? {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try buildAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+    }
+
+    /// Build and submit one verified lifecycle transaction. Returns `false`
+    /// for an exact auto-renew no-op and never submits an empty transaction.
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func submitAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) async throws -> Bool {
+        guard let envelope = try buildAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        ) else { return false }
+        try await submit(envelope: envelope)
+        return true
+    }
+
+    /// Ed25519 convenience overload for lifecycle-plan submission.
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func submitAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) async throws -> Bool {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try await submitAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+    }
+
     /// Build and submit a transfer transaction using the experimental Swift encoder.
     public func submit(transfer: TransferRequest, keypair: Keypair, completion: @Sendable @escaping (Error?) -> Void) throws {
         let envelope = try buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -1478,16 +1619,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                                                  creationTimeMs: creationTimeMs)
     }
 
-    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                            keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-            request: request,
-            keypair: keypair,
-            creationTimeMs: creationTimeMs
-        )
-    }
-
     public func buildCommitContractDeployment(request: CommitContractDeploymentRequest,
                                               keypair: Keypair) throws -> SignedTransactionEnvelope {
         try SwiftTransactionEncoder.encodeCommitContractDeployment(
@@ -1503,16 +1634,6 @@ public final class IrohaSDK: @unchecked Sendable {
             request: request,
             signingKey: signingKey,
             creationTimeMs: makeCreationTimeMs()
-        )
-    }
-
-    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-            request: request,
-            signingKey: signingKey,
-            creationTimeMs: creationTimeMs
         )
     }
 

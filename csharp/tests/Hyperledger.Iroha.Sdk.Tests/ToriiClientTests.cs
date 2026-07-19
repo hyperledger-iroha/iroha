@@ -14,6 +14,10 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class ToriiClientTests
 {
     private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
+    private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
+    private const string OnboardingFixtureAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
+    private const string OnboardingFixtureChainId = "alias-fixture-chain";
+    private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
@@ -42,7 +46,6 @@ public sealed class ToriiClientTests
     private static readonly string UaidManifestAccountId = TestAccountId(0x51);
     private static readonly string OnboardingAccountId = TestAccountId(0x52);
     private static readonly string FaucetAccountId = TestAccountId(0x53);
-    private static readonly string MultisigOnboardingAccountId = TestAccountId(0x54);
     private static FeePaymentIntent EmptyAuthorityFeePayment =>
         FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
 
@@ -3282,9 +3285,6 @@ public sealed class ToriiClientTests
             AssertOriginal(getNode(dto));
         }
 
-        AssertSnapshot(
-            node => new ToriiAccountOnboardingRequest { Identity = node },
-            dto => dto.Identity);
         AssertSnapshot(
             node => new ToriiAccountPermission { Name = "can_update_metadata", Payload = node },
             dto => dto.Payload);
@@ -14378,12 +14378,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task RegisterAccountAsyncPostsJsonAndDeserializesQueuedResponse()
+    public async Task PlanAccountOnboardingAsyncPostsSecretFreeIntentAndVerifiesPinnedReceipt()
     {
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/accounts/onboard/plan", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal(
                 AccountOnboardingToken,
@@ -14391,26 +14391,17 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal("global-api-token", Assert.Single(request.Headers.GetValues("X-API-Token")));
             Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
             Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
-            Assert.Equal("merchant@paynet", payload.RootElement.GetProperty("alias").GetString());
-            Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
-            Assert.Equal(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                payload.RootElement.GetProperty("identity_commitment_hex").GetString());
-            Assert.Equal(
-                "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                payload.RootElement.GetProperty("uaid").GetString());
+            Assert.Equal(1, payload.RootElement.GetProperty("version").GetByte());
+            Assert.Equal(OnboardingFixtureAlias, payload.RootElement.GetProperty("alias").GetString());
+            Assert.Equal(OnboardingFixtureAccountId, payload.RootElement.GetProperty("account_id").GetString());
+            Assert.False(payload.RootElement.TryGetProperty("private_key", out _));
+            Assert.False(payload.RootElement.TryGetProperty("token", out _));
+            Assert.False(payload.RootElement.TryGetProperty("identity", out _));
             Assert.DoesNotContain(AccountOnboardingToken, request.Content.ReadAsStringAsync().GetAwaiter().GetResult());
 
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{CanonicalAccountId}}",
-                      "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
-                    }
-                    """),
+                Content = new StringContent(SharedOnboardingReceiptJson()),
             };
         });
 
@@ -14422,30 +14413,109 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
         Assert.False(httpClient.DefaultRequestHeaders.Contains(
             ToriiClient.AccountOnboardingTokenHeaderName));
-        var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
+        var receipt = await client.PlanAccountOnboardingAsync(new ToriiAccountOnboardingPlanRequest
         {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('A', 64),
-            Uaid = "UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-            Permissions = ["CanResolveAccountAlias"],
-        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
+            Alias = "Merchant@Banka.Paynet",
+            AccountId = OnboardingFixtureAccountId,
+            Permissions = [],
+        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(CanonicalAccountId, response.AccountId);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
+        Assert.Equal(OnboardingFixtureAuthority, receipt.Body.Authority);
+        Assert.Equal(OnboardingFixtureChainId, receipt.Body.ChainId);
+        Assert.Equal(OnboardingFixtureAccountId, receipt.Body.Request.AccountId);
     }
 
     [Fact]
-    public void AccountOnboardingRequestSnapshotsPermissionListsOnInitAndAccess()
+    public async Task ApplyAccountOnboardingAsyncPostsOnlyPinnedReceipt()
+    {
+        var receipt = SharedOnboardingReceipt();
+        using var handler = new RecordingHandler(request =>
+        {
+            using var payload = ReadBodyAsJson(request);
+            Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(["receipt"], payload.RootElement.EnumerateObject().Select(static item => item.Name));
+            Assert.Equal(
+                receipt.PlanHash,
+                payload.RootElement.GetProperty("receipt").GetProperty("plan_hash").GetString());
+            Assert.DoesNotContain(AccountOnboardingToken, request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+
+            return new HttpResponseMessage(HttpStatusCode.Accepted)
+            {
+                Content = new StringContent($$"""
+                    {
+                      "account_id": "{{OnboardingFixtureAccountId}}",
+                      "alias": "{{OnboardingFixtureAlias}}",
+                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
+                      "status": "Queued",
+                      "disposition": { "kind": "create", "value": null }
+                    }
+                    """),
+            };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var response = await client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(OnboardingFixtureAccountId, response.AccountId);
+        Assert.Equal(OnboardingFixtureAlias, response.Alias);
+        Assert.Equal("Queued", response.Status);
+    }
+
+    [Fact]
+    public async Task ApplyAccountOnboardingAsyncRejectsUnpinnedOrInvalidReceiptBeforeDispatch()
+    {
+        var receipt = SharedOnboardingReceipt();
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid onboarding receipt reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            "wrong-chain",
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt with { Signature = "00" + receipt.Signature[2..] },
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            body =>
+            {
+                var encoded = SharedOnboardingBodyEncoder(body);
+                encoded[^1] ^= 1;
+                return encoded;
+            },
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void AccountOnboardingPlanRequestSnapshotsPermissionListsOnInitAndAccess()
     {
         string[] permissions = ["CanResolveAccountAlias"];
-        var request = new ToriiAccountOnboardingRequest
+        var request = new ToriiAccountOnboardingPlanRequest
         {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('a', 64),
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            Alias = OnboardingFixtureAlias,
+            AccountId = OnboardingFixtureAccountId,
             Permissions = permissions,
         };
 
@@ -14456,7 +14526,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(["CanResolveAccountAlias"], request.Permissions);
         Assert.NotSame(returnedPermissions, request.Permissions);
 
-        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiAccountOnboardingRequest
+        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiAccountOnboardingPlanRequest
         {
             Permissions = ["CanResolveAccountAlias", null!],
         });
@@ -14464,48 +14534,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("must not be null", nullElementError.Message);
     }
 
-    public static IEnumerable<object[]> InvalidAccountOnboardingRequests()
+    public static IEnumerable<object[]> InvalidAccountOnboardingPlanRequests()
     {
-        var valid = ValidAccountOnboardingRequest();
-        yield return new object[] { valid with { Alias = " merchant@paynet" }, "Alias", "whitespace" };
-        yield return new object[] { valid with { Alias = "merchant@paynet\u0001" }, "Alias", "control characters" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = null }, "AccountId", "either account_id or public_key_hex" };
-        yield return new object[]
-        {
-            valid with { PublicKeyHex = new string('1', 64) },
-            "AccountId",
-            "exactly one of account_id or public_key_hex",
-        };
+        var valid = ValidAccountOnboardingPlanRequest();
+        yield return new object[] { valid with { Version = 2 }, "Version", "Version must be 1" };
+        yield return new object[] { valid with { Alias = " merchant@paynet" }, "Alias", "exact text" };
+        yield return new object[] { valid with { Alias = "merchant@paynet\u0001" }, "Alias", "exact text" };
+        yield return new object[] { valid with { Alias = "merchant@pay!net" }, "Alias", "invalid segment" };
         yield return new object[] { valid with { AccountId = " " + CanonicalAccountId }, "AccountId", "whitespace" };
         yield return new object[] { valid with { AccountId = CanonicalAccountId + "\u0001" }, "AccountId", "control characters" };
         yield return new object[] { valid with { AccountId = "merchant@sora" }, "AccountId", "canonical I105" };
         yield return new object[] { valid with { AccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "AccountId", "canonical I105" };
         yield return new object[] { valid with { AccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "AccountId", "canonical I105" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = "11" }, "PublicKeyHex", "32-byte hex string" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = new string('g', 64) }, "PublicKeyHex", "32-byte hex string" };
-        yield return new object[]
-        {
-            valid with { Identity = new JsonObject { ["email"] = "merchant@example.com" } },
-            "Identity",
-            "Raw identity metadata is not accepted",
-        };
-        yield return new object[] { valid with { IdentityCommitmentHex = "abcd" }, "IdentityCommitmentHex", "32-byte hex string" };
-        yield return new object[] { valid with { IdentityCommitmentHex = new string('g', 64) }, "IdentityCommitmentHex", "32-byte hex string" };
-        yield return new object[] { valid with { IdentityCommitmentHex = " " + new string('a', 64) }, "IdentityCommitmentHex", "whitespace" };
-        yield return new object[] { valid with { Uaid = null }, "Uaid", "null or whitespace" };
-        yield return new object[] { valid with { Uaid = " UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF" }, "Uaid", "whitespace" };
-        yield return new object[] { valid with { Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\u0001" }, "Uaid", "control characters" };
-        yield return new object[] { valid with { Uaid = "uaid:1234" }, "Uaid", "64 hex chars" };
-        yield return new object[] { valid with { Uaid = $"uaid:{new string('0', 64)}" }, "Uaid", "canonical low bit" };
-        yield return new object[] { valid with { Permissions = null! }, "Permissions", "cannot be null" };
-        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias "] }, "Permissions[0]", "whitespace" };
-        yield return new object[] { valid with { Permissions = ["CanResolve\u0001AccountAlias"] }, "Permissions[0]", "control characters" };
+        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias "] }, "Permissions[0]", "exact text" };
+        yield return new object[] { valid with { Permissions = ["CanResolve\u0001AccountAlias"] }, "Permissions[0]", "exact text" };
+        yield return new object[] { valid with { Permissions = ["Can ResolveAccountAlias"] }, "Permissions[0]", "forbidden character" };
+        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias", "CanResolveAccountAlias"] }, "Permissions", "unique" };
     }
 
     [Theory]
-    [MemberData(nameof(InvalidAccountOnboardingRequests))]
-    public async Task RegisterAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch(
-        ToriiAccountOnboardingRequest request,
+    [MemberData(nameof(InvalidAccountOnboardingPlanRequests))]
+    public async Task PlanAccountOnboardingAsyncRejectsMalformedRequestsBeforeDispatch(
+        ToriiAccountOnboardingPlanRequest request,
         string expectedParamName,
         string expectedMessage)
     {
@@ -14514,9 +14564,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterAccountAsync(
+            client.PlanAccountOnboardingAsync(
                 request,
                 AccountOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
@@ -14544,13 +14597,19 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         foreach (var operation in new Func<Task>[]
                  {
-                     () => client.RegisterAccountAsync(
-                         ValidAccountOnboardingRequest(),
+                     () => client.PlanAccountOnboardingAsync(
+                         ValidAccountOnboardingPlanRequest(),
                          onboardingToken!,
+                         OnboardingFixtureAuthority,
+                         OnboardingFixtureChainId,
+                         SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
-                     () => client.RegisterMultisigAccountAsync(
-                         ValidMultisigAccountOnboardingRequest(),
+                     () => client.ApplyAccountOnboardingAsync(
+                         SharedOnboardingReceipt(),
                          onboardingToken!,
+                         OnboardingFixtureAuthority,
+                         OnboardingFixtureChainId,
+                         SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
                  })
         {
@@ -14566,7 +14625,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task RegisterAccountAsyncRejectsRedirectWithoutReplayingCredential()
+    public async Task PlanAccountOnboardingAsyncRejectsRedirectWithoutReplayingCredential()
     {
         var requestCount = 0;
         using var handler = new RecordingHandler(_ =>
@@ -14574,7 +14633,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             requestCount++;
             return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
             {
-                Headers = { Location = new Uri("https://redirect.example/v1/accounts/onboard") },
+                Headers = { Location = new Uri("https://redirect.example/v1/accounts/onboard/plan") },
                 ReasonPhrase = AccountOnboardingToken,
                 Content = new StringContent($"server echoed {AccountOnboardingToken}"),
             };
@@ -14582,9 +14641,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
-            client.RegisterAccountAsync(
-                ValidAccountOnboardingRequest(),
+            client.PlanAccountOnboardingAsync(
+                ValidAccountOnboardingPlanRequest(),
                 AccountOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.TemporaryRedirect, error.StatusCode);
@@ -14595,7 +14657,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task RegisterAccountAsyncRedactsCredentialBeforeDecodingSuccessResponse()
+    public async Task PlanAccountOnboardingAsyncRedactsCredentialBeforeDecodingSuccessResponse()
     {
         var escapedOnboardingToken = new string('"', 32);
         var responseJson = JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -14612,10 +14674,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         });
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.RegisterAccountAsync(
-                ValidAccountOnboardingRequest(),
+        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+            client.PlanAccountOnboardingAsync(
+                ValidAccountOnboardingPlanRequest(),
                 escapedOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.DoesNotContain(escapedOnboardingToken, error.Message);
@@ -15322,131 +15387,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("QUEUED", response.Status);
     }
 
-    [Fact]
-    public async Task RegisterMultisigAccountAsyncPostsMembersAndAcceptsExistsResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/onboard/multisig", request.RequestUri!.AbsolutePath);
-            Assert.Equal(
-                AccountOnboardingToken,
-                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
-            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
-            Assert.Equal("treasury@paynet", payload.RootElement.GetProperty("alias").GetString());
-            Assert.Equal(2, payload.RootElement.GetProperty("required_signers").GetInt32());
-            Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
-            Assert.Equal(MultisigMemberAccountId2, payload.RootElement.GetProperty("member_account_ids")[1].GetString());
-            Assert.Equal(2, payload.RootElement.GetProperty("member_weights")[1].GetInt32());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{MultisigOnboardingAccountId}}",
-                      "tx_hash_hex": "",
-                      "status": "EXISTS"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.RegisterMultisigAccountAsync(new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
-            MemberWeights = [1, 2],
-            TransactionTtlMilliseconds = 60_000,
-        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
-        Assert.Equal(string.Empty, response.TransactionHashHex);
-        Assert.Equal("EXISTS", response.Status);
-    }
-
-    [Fact]
-    public async Task RegisterMultisigAccountAsyncSnapshotsMemberListsBeforeDispatch()
-    {
-        string[] memberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2];
-        byte[] memberWeights = [1, 2];
-
-        using var handler = new RecordingHandler(request =>
-        {
-            memberAccountIds[0] = "merchant@sora";
-            memberWeights[1] = 9;
-
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
-            Assert.Equal(MultisigMemberAccountId2, payload.RootElement.GetProperty("member_account_ids")[1].GetString());
-            Assert.Equal(1, payload.RootElement.GetProperty("member_weights")[0].GetInt32());
-            Assert.Equal(2, payload.RootElement.GetProperty("member_weights")[1].GetInt32());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{MultisigOnboardingAccountId}}",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.RegisterMultisigAccountAsync(new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = memberAccountIds,
-            MemberWeights = memberWeights,
-            TransactionTtlMilliseconds = 60_000,
-        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
-    }
-
-    [Fact]
-    public void MultisigAccountOnboardingRequestSnapshotsMemberListsOnInitAndAccess()
-    {
-        string[] memberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2];
-        byte[] memberWeights = [1, 2];
-        var request = new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = memberAccountIds,
-            MemberWeights = memberWeights,
-            TransactionTtlMilliseconds = 60_000,
-        };
-
-        memberAccountIds[0] = "merchant@sora";
-        memberWeights[1] = 9;
-        var returnedMemberAccountIds = Assert.IsType<string[]>(request.MemberAccountIds);
-        returnedMemberAccountIds[1] = "merchant@sora";
-        var returnedMemberWeights = Assert.IsType<byte[]>(request.MemberWeights);
-        returnedMemberWeights[0] = 9;
-
-        Assert.Equal([MultisigMemberAccountId1, MultisigMemberAccountId2], request.MemberAccountIds);
-        Assert.Equal([1, 2], request.MemberWeights);
-        Assert.NotSame(returnedMemberAccountIds, request.MemberAccountIds);
-        Assert.NotSame(returnedMemberWeights, request.MemberWeights);
-
-        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiMultisigAccountOnboardingRequest
-        {
-            MemberAccountIds = [MultisigMemberAccountId1, null!],
-        });
-        Assert.Equal("MemberAccountIds[1]", nullElementError.ParamName);
-        Assert.Contains("must not be null", nullElementError.Message);
-    }
-
     public static IEnumerable<object[]> InvalidToriiTransactionHashResponses()
     {
-        yield return new object[] { "account-onboarding", "tx_hash_hex", " " + ToriiTransactionHashHex, "surrounding whitespace" };
         yield return new object[] { "account-faucet", "tx_hash_hex", ToriiTransactionHashHex + " ", "surrounding whitespace" };
         yield return new object[] { "contract-call", "tx_hash_hex", ToriiTransactionHashHex[..32] + " " + ToriiTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "multisig-propose", "tx_hash_hex", ToriiTransactionHashHex + "\u0001", "control characters" };
@@ -15481,18 +15423,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidOnboardingRequiredStringResponses()
     {
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "account_id", OnboardingAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", ""), "non-empty" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "uaid", OnboardingTransactionHashResponseJson("account-onboarding", "uaid", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "uaid", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "uaid", "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), "uaid"), "must not be null" };
-        yield return new object[] { "account-onboarding", "uaid", OnboardingTransactionHashResponseJson("account-onboarding", "uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), "surrounding whitespace" };
-        yield return new object[] { "account-onboarding", "status", OnboardingTransactionHashResponseJson("account-onboarding", "status", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "status", "QUEUED"), "status"), "must not be null" };
-        yield return new object[] { "account-onboarding", "status", OnboardingTransactionHashResponseJson("account-onboarding", "status", "QUEUED\u0001"), "control characters" };
         yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", null), "must not be null" };
         yield return new object[] { "account-faucet", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "account_id", FaucetAccountId), "account_id"), "must not be null" };
         yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", "merchant@sora"), "canonical I105" };
@@ -15509,15 +15439,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", null), "must not be null" };
         yield return new object[] { "account-faucet", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUED"), "status"), "must not be null" };
         yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUE D"), "whitespace" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", null), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", MultisigOnboardingAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "sorauﾛ1Nmulti\u0001sig"), "control characters" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "status", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", null), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", "QUEUED"), "status"), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "status", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", ""), "non-empty" };
     }
 
     [Theory]
@@ -15544,36 +15465,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidRawOnboardingTransactionHashResponses()
     {
-        yield return new object[] { "account-onboarding", "account onboarding response", "null", "must not be null" };
-        yield return new object[] { "account-onboarding", "account onboarding response", "[]", "object" };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashDuplicatePropertyJson("account-onboarding", "tx_hash_hex"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "account onboarding response.audit.nonce",
-            OnboardingTransactionHashUnknownExtensionDuplicateJson("account-onboarding"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("account-onboarding", "tx_hash_hex", 1),
-            "string",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("account-onboarding", "tx_hash_hex", " " + ToriiTransactionHashHex),
-            "surrounding whitespace",
-        };
         yield return new object[]
         {
             "account-faucet",
@@ -15593,27 +15484,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "account-faucet",
             "amount",
             OnboardingTransactionHashResponseJson("account-faucet", "amount", 100),
-            "string",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("multisig-account-onboarding", "tx_hash_hex", "0x" + ToriiTransactionHashHex),
-            "32-byte hex string",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "multisig account onboarding response.audit.nonce",
-            OnboardingTransactionHashUnknownExtensionDuplicateJson("multisig-account-onboarding"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "status",
-            OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", true),
             "string",
         };
     }
@@ -15649,9 +15519,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("account-onboarding")]
     [InlineData("account-faucet")]
-    [InlineData("multisig-account-onboarding")]
     public void RawOnboardingTransactionHashResponsesAllowEmptyOrNullTransactionHash(string operation)
     {
         var emptyResponse = DeserializeRawOnboardingTransactionHashResponse(
@@ -15667,21 +15535,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object?[]> InvalidDirectOnboardingFaucetMetadata()
     {
-        yield return new object?[] { "account-onboarding", "AccountId", "merchant@sora" };
-        yield return new object?[] { "account-onboarding", "Uaid", "uaid:0123 4567" };
-        yield return new object?[] { "account-onboarding", "TransactionHashHex", " " + ToriiTransactionHashHex };
-        yield return new object?[] { "account-onboarding", "Status", "QUE UED" };
-
         yield return new object?[] { "account-faucet", "AccountId", "merchant@sora" };
         yield return new object?[] { "account-faucet", "AssetDefinitionId", "rose #wonderland" };
         yield return new object?[] { "account-faucet", "AssetId", "rose#wonderland #holder" };
         yield return new object?[] { "account-faucet", "Amount", "100 coins" };
         yield return new object?[] { "account-faucet", "TransactionHashHex", ToriiTransactionHashHex.ToUpperInvariant() };
         yield return new object?[] { "account-faucet", "Status", "" };
-
-        yield return new object?[] { "multisig-account-onboarding", "AccountId", "merchant@sora" };
-        yield return new object?[] { "multisig-account-onboarding", "TransactionHashHex", "0x" + ToriiTransactionHashHex };
-        yield return new object?[] { "multisig-account-onboarding", "Status", "QUEUED\u0001" };
 
         yield return new object?[] { "faucet-puzzle", "Algorithm", " " + ToriiAccountFaucetPow.Algorithm };
         yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v2" };
@@ -15707,34 +15566,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(propertyName, error.ParamName);
     }
 
-    [Fact]
-    public void RawOnboardingTransactionHashResponseWriteRejectsMalformedHash()
-    {
-        var response = new ToriiAccountOnboardingResponse
-        {
-            AccountId = OnboardingAccountId,
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-        SetPrivateField(response, "transactionHashHex", " " + ToriiTransactionHashHex);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("tx_hash_hex", error.Message);
-        Assert.Contains("surrounding whitespace", error.Message);
-    }
-
     [Theory]
-    [InlineData("account-onboarding", "merchant@sora")]
-    [InlineData("account-onboarding", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData("account-onboarding", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     [InlineData("account-faucet", "merchant@sora")]
     [InlineData("account-faucet", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
     [InlineData("account-faucet", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
-    [InlineData("multisig-account-onboarding", "merchant@sora")]
-    [InlineData("multisig-account-onboarding", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData("multisig-account-onboarding", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void RawOnboardingTransactionHashResponseWriteRejectsNoncanonicalAccountId(
         string operation,
         string accountId)
@@ -15744,48 +15579,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Contains("account_id", error.Message);
         Assert.Contains("canonical I105", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidMultisigAccountOnboardingRequests()
-    {
-        var valid = ValidMultisigAccountOnboardingRequest();
-        yield return new object[] { valid with { Alias = " treasury@paynet" }, "Alias", "whitespace" };
-        yield return new object[] { valid with { Alias = "treasury@paynet\u0001" }, "Alias", "control characters" };
-        yield return new object[] { valid with { RequiredSigners = 0 }, "RequiredSigners", "positive" };
-        yield return new object[] { valid with { RequiredSigners = 4 }, "RequiredSigners", "total member weight" };
-        yield return new object[] { valid with { MemberAccountIds = [] }, "MemberAccountIds", "must not be empty" };
-        yield return new object[] { valid with { MemberAccountIds = null! }, "MemberAccountIds", "cannot be null" };
-        yield return new object[] { valid with { MemberAccountIds = [" " + MultisigMemberAccountId1, MultisigMemberAccountId2] }, "MemberAccountIds[0]", "whitespace" };
-        yield return new object[] { valid with { MemberAccountIds = [MultisigMemberAccountId1 + "\u0001", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "control characters" };
-        yield return new object[] { valid with { MemberAccountIds = ["merchant@sora", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberAccountIds = ["0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberAccountIds = ["n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberWeights = null! }, "MemberWeights", "cannot be null" };
-        yield return new object[] { valid with { MemberWeights = [1] }, "MemberWeights", "count must match" };
-        yield return new object[] { valid with { MemberWeights = [1, 0] }, "MemberWeights", "positive" };
-        yield return new object[] { valid with { TransactionTtlMilliseconds = 0 }, "TransactionTtlMilliseconds", "must be positive" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidMultisigAccountOnboardingRequests))]
-    public async Task RegisterMultisigAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch(
-        ToriiMultisigAccountOnboardingRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed multisig onboarding request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterMultisigAccountAsync(
-                request,
-                AccountOnboardingToken,
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -21130,22 +20923,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("account-onboarding", "AccountId") => ValidAccountOnboardingResponse() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("account-onboarding", "Uaid") => ValidAccountOnboardingResponse() with
-            {
-                Uaid = RequiredStringValue(value),
-            },
-            ("account-onboarding", "TransactionHashHex") => ValidAccountOnboardingResponse() with
-            {
-                TransactionHashHex = RequiredStringValue(value),
-            },
-            ("account-onboarding", "Status") => ValidAccountOnboardingResponse() with
-            {
-                Status = RequiredStringValue(value),
-            },
             ("account-faucet", "AccountId") => ValidAccountFaucetResponse() with
             {
                 AccountId = RequiredStringValue(value),
@@ -21167,18 +20944,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 TransactionHashHex = RequiredStringValue(value),
             },
             ("account-faucet", "Status") => ValidAccountFaucetResponse() with
-            {
-                Status = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "AccountId") => ValidMultisigAccountOnboardingResponse() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "TransactionHashHex") => ValidMultisigAccountOnboardingResponse() with
-            {
-                TransactionHashHex = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "Status") => ValidMultisigAccountOnboardingResponse() with
             {
                 Status = RequiredStringValue(value),
             },
@@ -21222,17 +20987,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         GC.KeepAlive(constructed);
     }
 
-    private static ToriiAccountOnboardingResponse ValidAccountOnboardingResponse()
-    {
-        return new ToriiAccountOnboardingResponse
-        {
-            AccountId = OnboardingAccountId,
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-    }
-
     private static ToriiAccountFaucetResponse ValidAccountFaucetResponse()
     {
         return new ToriiAccountFaucetResponse
@@ -21241,16 +20995,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             AssetDefinitionId = "rose#wonderland",
             AssetId = $"rose#wonderland#{FaucetAccountId}",
             Amount = "100",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-    }
-
-    private static ToriiMultisigAccountOnboardingResponse ValidMultisigAccountOnboardingResponse()
-    {
-        return new ToriiMultisigAccountOnboardingResponse
-        {
-            AccountId = MultisigOnboardingAccountId,
             TransactionHashHex = ToriiTransactionHashHex,
             Status = "QUEUED",
         };
@@ -28525,28 +28269,39 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return JsonWithIgnoredAuditDuplicate(AccountFaucetPuzzleResponseJson("algorithm", ToriiAccountFaucetPow.Algorithm));
     }
 
-    private static ToriiAccountOnboardingRequest ValidAccountOnboardingRequest()
+    private static ToriiAccountOnboardingPlanRequest ValidAccountOnboardingPlanRequest()
     {
-        return new ToriiAccountOnboardingRequest
+        return new ToriiAccountOnboardingPlanRequest
         {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('a', 64),
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            Permissions = ["CanResolveAccountAlias"],
+            Alias = OnboardingFixtureAlias,
+            AccountId = OnboardingFixtureAccountId,
+            Permissions = [],
         };
     }
 
-    private static ToriiMultisigAccountOnboardingRequest ValidMultisigAccountOnboardingRequest()
+    private static string SharedOnboardingReceiptJson()
     {
-        return new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
-            MemberWeights = [1, 2],
-            TransactionTtlMilliseconds = 60_000,
-        };
+        using var fixture = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
+        return fixture.RootElement
+            .GetProperty("account_onboarding_receipt_vector")
+            .GetProperty("receipt_json")
+            .GetRawText();
+    }
+
+    private static ToriiAccountOnboardingPlanReceipt SharedOnboardingReceipt() =>
+        JsonSerializer.Deserialize<ToriiAccountOnboardingPlanReceipt>(SharedOnboardingReceiptJson())
+        ?? throw new InvalidOperationException("shared onboarding receipt fixture decoded to null");
+
+    private static byte[] SharedOnboardingBodyEncoder(ToriiAccountOnboardingPlanBody _)
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
+        return Convert.FromHexString(fixture.RootElement
+            .GetProperty("account_onboarding_receipt_vector")
+            .GetProperty("canonical_body_norito_hex")
+            .GetString()
+            ?? throw new InvalidOperationException("shared onboarding body fixture is missing"));
     }
 
     private static string ContractMetadataHashResponseJson(string operation, string field, string value)
@@ -29993,16 +29748,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => client.RegisterAccountAsync(
-                ValidAccountOnboardingRequest(),
-                AccountOnboardingToken),
             "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
             {
                 AccountId = CanonicalAccountId,
             }),
-            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(
-                ValidMultisigAccountOnboardingRequest(),
-                AccountOnboardingToken),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),
@@ -30044,25 +29793,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var response = operation switch
         {
-            "account-onboarding" => new JsonObject
-            {
-                ["account_id"] = OnboardingAccountId,
-                ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                ["tx_hash_hex"] = ToriiTransactionHashHex,
-                ["status"] = "QUEUED",
-            },
             "account-faucet" => new JsonObject
             {
                 ["account_id"] = FaucetAccountId,
                 ["asset_definition_id"] = "rose#wonderland",
                 ["asset_id"] = $"rose#wonderland#{FaucetAccountId}",
                 ["amount"] = "100",
-                ["tx_hash_hex"] = ToriiTransactionHashHex,
-                ["status"] = "QUEUED",
-            },
-            "multisig-account-onboarding" => new JsonObject
-            {
-                ["account_id"] = MultisigOnboardingAccountId,
                 ["tx_hash_hex"] = ToriiTransactionHashHex,
                 ["status"] = "QUEUED",
             },
@@ -30079,29 +29815,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => $$"""
-                {
-                  "account_id": "{{OnboardingAccountId}}",
-                  "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """,
             "account-faucet" => $$"""
                 {
                   "account_id": "{{FaucetAccountId}}",
                   "asset_definition_id": "rose#wonderland",
                   "asset_id": "rose#wonderland#{{FaucetAccountId}}",
                   "amount": "100",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """,
-            "multisig-account-onboarding" => $$"""
-                {
-                  "account_id": "{{MultisigOnboardingAccountId}}",
                   "{{propertyName}}": "{{ToriiTransactionHashHex}}",
                   "{{propertyName}}": "{{ToriiTransactionHashHex}}",
                   "status": "QUEUED"
@@ -30134,9 +29853,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => JsonSerializer.Deserialize<ToriiAccountOnboardingResponse>(json),
             "account-faucet" => JsonSerializer.Deserialize<ToriiAccountFaucetResponse>(json),
-            "multisig-account-onboarding" => JsonSerializer.Deserialize<ToriiMultisigAccountOnboardingResponse>(json),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
         };
     }
@@ -30145,12 +29862,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => SerializeWithPrivateField(ValidAccountOnboardingResponse(), "accountId", accountId),
             "account-faucet" => SerializeWithPrivateField(ValidAccountFaucetResponse(), "accountId", accountId),
-            "multisig-account-onboarding" => SerializeWithPrivateField(
-                ValidMultisigAccountOnboardingResponse(),
-                "accountId",
-                accountId),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
         };
     }

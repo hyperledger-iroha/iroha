@@ -169,10 +169,14 @@ pub fn finalize_committed_block(
     mut state_block: StateBlock<'_>,
     committed_block: CommittedBlock,
 ) {
+    let signed_block: SignedBlock = committed_block.as_ref().clone();
+    state
+        .view()
+        .kura()
+        .store_block(Arc::new(signed_block))
+        .expect("store committed test block before publishing its state height");
     let _ = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().unwrap();
-    let signed_block: SignedBlock = committed_block.into();
-    let _ = state.view().kura().store_block(Arc::new(signed_block));
 }
 
 /// Build a minimal self-describing contract artifact containing a single HALT.
@@ -552,6 +556,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
@@ -882,7 +887,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_por: Default::default(),
             sorafs_appeal_finance_settlement: Default::default(),
-            onboarding: None,
+            account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
@@ -1434,10 +1439,15 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = Arc::new(State::new_for_testing(world, kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
+        let state = Arc::new(State::new_with_chain_for_testing(
+            world,
+            kura,
+            query,
+            chain_id.clone(),
+        ));
 
-        assert_ne!(&state.chain_id, &chain_id);
+        assert_eq!(&state.chain_id, &chain_id);
 
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(
@@ -1447,7 +1457,7 @@ mod tests {
 
         let tx = TransactionBuilder::new(
             chain_id.clone(),
-            authority,
+            authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
@@ -1455,10 +1465,82 @@ mod tests {
             "queued transaction fixture".to_owned(),
         )])
         .sign(keypair.private_key());
+        let first_tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
 
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
         assert_eq!(applied, 1);
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        let first_block = view
+            .latest_block()
+            .expect("committed test block remains readable from Kura");
+        let first_block_hash = first_block.hash();
+        assert_eq!(first_block.header().height().get(), 1);
+        assert_eq!(
+            view.kura().get_block_height_by_hash(first_block_hash),
+            core::num::NonZeroUsize::new(1)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        drop(view);
+
+        let second_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "second queued transaction fixture".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let second_tx_hash = second_tx.hash();
+        queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(second_tx)),
+                state.view(),
+            )
+            .expect("second queue push");
+        assert_eq!(apply_queued_in_one_block(&state, &queue, &chain_id, 2), 1);
+        let view = state.view();
+        assert_eq!(view.height(), 2);
+        let second_block = view
+            .latest_block()
+            .expect("second committed test block remains readable from Kura");
+        assert_eq!(second_block.header().height().get(), 2);
+        assert_eq!(
+            second_block.header().prev_block_hash(),
+            Some(first_block_hash),
+            "the synthetic test chain must preserve canonical parent linkage"
+        );
+        assert_eq!(
+            view.kura().get_block_height_by_hash(second_block.hash()),
+            core::num::NonZeroUsize::new(2)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(second_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(2).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index remains complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect(),
+            "storing the successor must preserve the first transaction index"
+        );
     }
 }

@@ -734,7 +734,8 @@ impl<E> std::error::Error for CommitCertificateAdmissionError<E> where E: std::e
 {}
 
 #[cfg(test)]
-mod tests {
+/// Shared deterministic fixtures for sibling Sumeragi v2 unit tests.
+pub(super) mod tests {
     use std::{cell::Cell, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash};
@@ -949,6 +950,132 @@ mod tests {
         response.signature = Signature::new(key.private_key(), &response.signature_preimage())
             .payload()
             .to_vec();
+    }
+
+    /// Exact historical source and responses shared with worker rollover tests.
+    pub(in crate::sumeragi) struct DurableHistoryFixture {
+        /// Kura containing the canonical block and finality artifact.
+        pub(in crate::sumeragi) kura: Arc<Kura>,
+        /// Historical finality artifact at height one.
+        pub(in crate::sumeragi) artifact: wire::finality::V2FinalityArtifact,
+        /// Historical validator keys used only by deterministic tests.
+        pub(in crate::sumeragi) validators: Vec<KeyPair>,
+        /// Authenticated requester targeted by both responses.
+        pub(in crate::sumeragi) requester: PeerId,
+        /// Signed CommitQC response reconstructed from the finality artifact.
+        pub(in crate::sumeragi) commit_response: wire::ConsensusMessageV2,
+        /// Signed body response reconstructed from the canonical block.
+        pub(in crate::sumeragi) body_response: wire::ConsensusMessageV2,
+    }
+
+    /// Build exact Kura-backed historical responses for worker rollover tests.
+    pub(in crate::sumeragi) fn durable_history_fixture() -> DurableHistoryFixture {
+        let fixture = Fixture::new();
+        let committed = ValidBlock::new_dummy_and_modify_header(
+            fixture.old_validators[0].private_key(),
+            |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(4);
+                header.merkle_root = None;
+            },
+        )
+        .commit_unchecked()
+        .unpack(|_| {});
+        let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
+        executed_block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach deterministic history-fixture results");
+        let executed_block_wire_hash = executed_block
+            .executed_block_wire_hash()
+            .expect("encode executed history-fixture block");
+        let proposal = executed_block.canonical_resultless_proposal();
+        let canonical_wire = proposal
+            .encode_wire()
+            .expect("encode history-fixture proposal");
+        let block = Arc::new(executed_block);
+        let mut context = fixture.context.clone();
+        context.da_layout.max_payload_size_bytes = 1_048_576;
+        context.da_layout.max_chunk_count = 1024;
+        context.validate().expect("valid history-fixture context");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let mut execution = execution_commitment(0x43);
+        execution.executed_block_wire_hash = executed_block_wire_hash;
+        let mut certificate = wire::QuorumCertificate {
+            round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            },
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: execution,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        certificate.aggregate_signature = aggregate_commit(&certificate, &fixture.old_validators);
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            context.clone(),
+            subject,
+            certificate.clone(),
+            fixture.proofs_of_possession.clone(),
+        );
+        artifact.validate().expect("valid history-fixture finality");
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(block)
+            .expect("store history-fixture block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store history-fixture finality");
+        let context_store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("history context store");
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), fixture.proofs_of_possession.clone())
+                .expect("verify history-fixture context");
+        context_store
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist history-fixture context");
+
+        let requester = peer(&fixture.requester);
+        let mut commit_request = wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            chain_id: context.chain_id.clone(),
+            context_id: context.id(),
+            height: context.height,
+            requester: requester.clone(),
+            signature: Vec::new(),
+        };
+        resign_request(&mut commit_request, &fixture.requester);
+        let commit_response = serve_commit_certificate_from_artifact(
+            &artifact,
+            commit_request,
+            &requester,
+            &fixture.old_validators[0],
+        )
+        .expect("build durable CommitQC response");
+        let body_request = fixture.body_request(certificate);
+        let body_response = build_historical_body_response(
+            kura.as_ref(),
+            &context_store,
+            body_request,
+            &requester,
+            &fixture.old_validators[0],
+        )
+        .expect("build durable body response")
+        .expect("history fixture has a certified responder");
+        DurableHistoryFixture {
+            kura,
+            artifact,
+            validators: fixture.old_validators,
+            requester,
+            commit_response,
+            body_response,
+        }
     }
 
     #[test]

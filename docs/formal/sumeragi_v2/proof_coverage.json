@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "protocol": "sumeragi-v2",
   "status_values": [
     "tlaps_proved",
+    "cross_tool_proved",
     "specified_unproved",
     "trusted_contract",
     "out_of_scope"
@@ -168,7 +169,7 @@
       "requirement": "The executable height-scoped acquisition owner keeps physical ID and subject immutable across same-lock consumer rebinds, defers a higher different-subject replacement until the active local read terminates, rejects future/wrong/duplicate completions, waits for the exact certified durable store, retries once, and under weak fairness eventually makes every stable effective lock ready and repeatedly deliverable to the latest consumer",
       "module": "SumeragiV2EffectiveLockAcquisitionProofs",
       "symbol": "EffectiveLockAcquisitionModelObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "effective-lock-body-acquisition-production-refinement",
@@ -182,28 +183,35 @@
       "requirement": "Every concrete responsive run-loop transition preserves the scheduler type invariant",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncRunnerStepPreservesSchedulerType",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "async-type-invariant",
       "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncTypeInvariantObligation",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "async-progress-ownership-invariant",
+      "requirement": "Every behavior of the executable asynchronous specification preserves duplicate-free logical candidate ownership within scheduler sequences and pairwise disjoint queued, deferred, causal, and outstanding-work carriers; outstanding work equals the modeled Consensus-I/O plus ready-completion carrier union; serialized Busy owners remain node-unique and every non-idle node retains an active Completion witness. This is an abstract model invariant; production effect/work identity refinement remains outside this leaf.",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "AsyncSpecAlwaysProgressOwnershipInvariant",
       "status": "specified_unproved"
     },
     {
       "id": "post-decision-timeout-exclusion",
-      "requirement": "Once a node has a durable Decision in the current context, no pending timeout write, pending TC install, or timeout-signature owner remains; BeginTimeout, FormTC, and BeginInstallTC are structurally disabled; authenticated TimeoutVote and TC envelopes are consumed without repopulating volatile receipt pools; and the asynchronous causal adapter emits no post-Decision FormTC or BeginInstallTC successor. Pending Decision persistence carries the historical timeout-work exclusion needed by PersistDecision. The initialization and direct Core/source lemmas are present, but the full state/action induction and temporal Async decomposition remain proofless until the pinned strict backend discharges them",
+      "requirement": "Once a node has a durable Decision in the current context, no pending timeout write, pending TC install, or timeout-signature owner remains; BeginTimeout, FormTC, BeginInstallTC, and durable timeout replay are structurally disabled; authenticated TimeoutVote and TC envelopes are consumed without repopulating volatile receipt pools; and the asynchronous causal adapter emits no post-Decision FormTC or BeginInstallTC successor. Pending Decision persistence carries the historical timeout-work exclusion needed by PersistDecision, and the complete Core action induction is lifted through the asynchronous bracket and temporal specification",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "PostDecisionTimeoutExclusionObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "decision-recovery-across-restart",
-      "requirement": "Durable Decisions are unique by node and context; a responsive crash replaces every lost volatile Decision-pipeline owner with exact node-and-generation recovery authority; restart advances that authority to the new generation; and replay retires it only after reconstructing the exact current-consumer FetchBody frontier, after which ordinary body recovery, validation, and application ownership is preserved. Crash and restart source lemmas are present, but uniqueness, replay handoff, and all-stage inductive preservation remain proofless",
+      "requirement": "Durable Commit Decisions are unique by node and context, and pending Decision persistence excludes an existing durable Decision at that exact node/context frontier. Crash and authenticated restart preserve one generation-free certified-request registration identity derived from requester, height, view, subject, certificate, and exact signed request while the executor generation advances separately. Replay clears the old registration and installs exactly one FetchBody candidate carrying the same Commit certificate at the current node generation. The complete Core frontier induction and asynchronous temporal lift prove this Commit-only lifecycle and explicitly reject Prepare authority; generic all-stage body, validation, application, and production trace preservation remain separate progress-witness debts",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "DecisionRecoveryAcrossRestartObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "async-fair-action-refinement",
@@ -221,7 +229,7 @@
     },
     {
       "id": "progress-witness-production-refinement",
-      "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, and successor activation refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state, reset and admission lifetimes agree, scheduler service ranks preserve production FIFO/capacity semantics, and application completion reconstructs the next-height activation witness. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
+      "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, successor activation, unified V2/lane-local ingress, and reliable outbound transport refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state; reset and admission lifetimes agree; lane-local and V2 classes share the modeled count/byte owner without conflating semantic origin with the authenticated resource-owning hop; every reliable occurrence retains its exact source, target or remaining broadcast cursor, bytes, and attempt identity through actor, encode, frame, batch, write, and flush stages until the matching flush acknowledgement; scheduler service ranks preserve production FIFO/capacity semantics; and application completion reconstructs the next-height activation witness. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessProductionRefinementObligation",
       "status": "specified_unproved"
@@ -241,8 +249,29 @@
       "status": "specified_unproved"
     },
     {
+      "id": "protected-service-rank-stage4-ready-causal",
+      "requirement": "In the executable asynchronous model, every protected protocol candidate already owned by a responsive current voter at an exact Stage-4 ready-completion position, under the exact weak-fairness target for PostGstRunNode, eventually leaves protected scheduler ownership or acquires a strictly smaller service rank; the proof covers ready-run auxiliary descent and non-Completion causal admission-capacity debt, while stages 2, 3, 5, and 6, candidate admission/provenance, and production transport/runtime refinement remain outside this abstract leaf",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProtectedStage4RankProgressFromFairScheduler",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "protected-service-rank-serve-fifo",
+      "requirement": "In the executable asynchronous model, every nonce-unique Serve occurrence owned by a responsive current voter in its typed I/O queue, under the exact weak fairness target for PostGstServiceIoWorker, eventually leaves Serve ownership or has a strictly smaller Stage-5 FIFO position; production request admission, ingress identity, and reliable actor-to-flush refinement remain outside this abstract leaf",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProtectedServeRankProgressFromFairFifo",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "protected-service-rank-stage5-consensus-fifo",
+      "requirement": "In the executable asynchronous model, every protected candidate owned at Stage 5 by a responsive current voter, under exact progress ownership and PostGstServiceIoWorker weak fairness, eventually exits scheduler ownership, moves to a lower stage, or has a strictly smaller Consensus-I/O FIFO position; Serve/Control heads may delay but cannot overtake it. Production candidate construction/admission identity and reliable actor-to-flush refinement remain outside this leaf.",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProtectedStage5RankProgressFromFairFifo",
+      "status": "specified_unproved"
+    },
+    {
       "id": "protected-service-rank",
-      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; the Stage-6 causal rank uses a doubled causal FIFO position plus the local-source distance so removal of an earlier head strictly dominates a possible cursor reset; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress and the frozen admitted class remains protected after view movement. Source-bound Verus sequence theorems preserve continuation-before-tail order and, conditional on faithful identities plus a complete prior-owner set, retain every fresh emitted identity exactly once in stable tail order. The bounded FIFO/cursor and inverted-owner/order mutations are regression evidence only: the production effect-to-TLA identity/owner mapping, Completion causal-capacity descent, and the full temporal obligation remain unproved",
+      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, causal, or reliable-transport rank; the Stage-6 causal rank uses a doubled causal FIFO position plus the local-source distance so removal of an earlier head strictly dominates a possible cursor reset; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress, resource lanes are keyed by authenticated via rather than relay-controlled semantic origin, unified lane-local/V2 classification preserves the frozen admitted class after view movement, and reliable actor/writer ownership cannot retire before the exact flush acknowledgement. Source-bound Verus sequence theorems preserve continuation-before-tail order and, conditional on faithful identities plus a complete prior-owner set, retain every fresh emitted identity exactly once in stable tail order. The bounded FIFO/cursor and inverted-owner/order mutations are regression evidence only: the production effect-to-TLA identity/owner mapping, Completion causal-capacity descent, reliable actor-to-flush rank, and the full temporal obligation remain unproved",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServiceRankProgressObligation",
       "status": "specified_unproved"

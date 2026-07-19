@@ -463,6 +463,217 @@ final class TxBuilderTests: XCTestCase {
         }
     }
 
+    func testBuildAliasSetupPlanVerifiesAndSignsOneAtomicFrameVector() throws {
+        try requireEd25519Encoder()
+        let canonicalBody = Data([1, 3, 3, 7, 9])
+        let authority = Self.fixtureExplorerAccountId
+        let alias = try ResolvedAccountAliasV1(
+            canonicalName: "merchant@banka.paynet",
+            dataspaceId: 7
+        )
+        let intent = AliasIntentV1.accountAlias(
+            try AliasAccountIntentV1(
+                alias: alias,
+                targetAccount: authority,
+                provision: .existing,
+                role: .additional
+            )
+        )
+        let ensure = EnsureAlias(
+            intent: intent,
+            acquisition: try AliasLeaseAcquisitionV1(termYears: 1),
+            quoteGuard: try AliasQuoteGuardV1(
+                expectedPolicyVersion: 1,
+                expectedPaymentAsset: Self.fixtureAssetDefinition,
+                maxAmount: "0",
+                validUntilMs: Self.fixtureCreationTimeMs + 60_000
+            )
+        )
+        let request = try AliasSetupPlanRequestV1(intents: [ensure])
+        let frame = try AliasFramedInstructionV1(
+            wireId: EnsureAlias.wireId,
+            framedPayload: Data([0x4e, 0x52, 0x54, 0x30])
+        )
+        let plan = try AliasTransactionPlanV1(
+            body: try AliasTransactionPlanBodyV1(
+                authority: authority,
+                chainId: Self.fixtureChainId,
+                anchor: try AliasPlanAnchorV1(
+                    blockHeight: 9,
+                    blockHash: String(repeating: "01", count: 32)
+                ),
+                resources: [
+                    AliasPlanResourceV1(
+                        intent: intent,
+                        disposition: .repair,
+                        quote: nil,
+                        instructionIndex: 0
+                    )
+                ],
+                instructions: [frame],
+                totalsByAsset: [],
+                warnings: [],
+                blockers: [],
+                validUntilMs: Self.fixtureCreationTimeMs + 60_000
+            ),
+            planHash: AliasPlanVerifier.canonicalHash(
+                canonicalBodyNorito: canonicalBody
+            ).hexEncodedString()
+        )
+        let sdk = IrohaSDK(
+            toriiClient: StubPipelineClient(),
+            baseURL: URL(string: "https://torii.example")!,
+            creationTimeProvider: { Self.fixtureCreationTimeMs }
+        )
+        let envelope = try sdk.buildAliasSetupPlan(
+            request,
+            plan: plan,
+            bodyEncoder: { _ in canonicalBody },
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            keypair: makeFixtureKeypair(),
+            frameCodec: { _, payload in
+                DecodedEnsureAliasFrame(instruction: ensure, reencodedFrame: payload)
+            }
+        )
+
+        XCTAssertFalse(envelope.norito.isEmpty)
+        XCTAssertEqual(asciiOccurrenceCount(EnsureAlias.wireId, in: envelope.norito), 1)
+        XCTAssertThrowsError(
+            try sdk.buildAliasSetupPlan(
+                request,
+                plan: plan,
+                bodyEncoder: { _ in canonicalBody },
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                keypair: makeFixtureKeypair(),
+                frameCodec: { _, payload in
+                    var changed = payload
+                    changed[changed.startIndex] ^= 1
+                    return DecodedEnsureAliasFrame(
+                        instruction: ensure,
+                        reencodedFrame: changed
+                    )
+                }
+            )
+        )
+    }
+
+    func testBuildAliasLifecyclePlanSignsApplyAndSkipsNoOp() throws {
+        try requireEd25519Encoder()
+        let authority = Self.fixtureExplorerAccountId
+        let alias = try ResolvedAccountAliasV1(canonicalName: "merchant@paynet", dataspaceId: 7)
+        let guardValue = try AliasQuoteGuardV1(
+            expectedPolicyVersion: 1,
+            expectedPaymentAsset: Self.fixtureAssetDefinition,
+            maxAmount: "2",
+            validUntilMs: Self.fixtureCreationTimeMs + 60_000
+        )
+        let renewal = try RenewAliasLease(
+            target: .accountAlias(alias),
+            expectedCurrentExpiryMs: 10,
+            targetExpiryMs: 20,
+            quoteGuard: guardValue
+        )
+        let renewalRequest = AliasLifecyclePlanRequestV1.leaseRenewal(
+            AliasLeaseRenewPlanRequestV1(renewal: renewal)
+        )
+        let bodyBytes = Data([9, 8, 7, 6])
+        let plan = try AliasLifecycleTransactionPlanV1(
+            body: try AliasLifecycleTransactionPlanBodyV1(
+                authority: authority,
+                chainId: Self.fixtureChainId,
+                anchor: try AliasPlanAnchorV1(
+                    blockHeight: 9,
+                    blockHash: String(repeating: "01", count: 32)
+                ),
+                operation: .renewLease(renewal),
+                disposition: .apply,
+                instruction: try AliasFramedInstructionV1(
+                    wireId: RenewAliasLease.wireId,
+                    framedPayload: Data([0x4e, 0x52, 0x54, 0x30])
+                ),
+                quote: try AliasLeaseQuoteV1(
+                    target: renewal.target,
+                    pricingClass: 1,
+                    exactAmount: "1",
+                    quoteGuard: guardValue,
+                    expiresAtMs: renewal.targetExpiryMs,
+                    graceExpiresAtMs: 30,
+                    redemptionExpiresAtMs: 40
+                ),
+                totalsByAsset: [try AliasAssetTotalV1(
+                    paymentAsset: guardValue.expectedPaymentAsset,
+                    amount: "1"
+                )],
+                warnings: [],
+                blockers: [],
+                validUntilMs: guardValue.validUntilMs
+            ),
+            planHash: AliasPlanVerifier.canonicalLifecycleHash(
+                canonicalBodyNorito: bodyBytes
+            ).hexEncodedString()
+        )
+        let sdk = IrohaSDK(
+            toriiClient: StubPipelineClient(),
+            baseURL: URL(string: "https://torii.example")!,
+            creationTimeProvider: { Self.fixtureCreationTimeMs }
+        )
+        let envelope = try XCTUnwrap(sdk.buildAliasLifecyclePlan(
+            renewalRequest,
+            plan: plan,
+            bodyEncoder: { _ in bodyBytes },
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            keypair: makeFixtureKeypair(),
+            frameCodec: { _, payload in
+                DecodedAliasLifecycleFrame(
+                    operation: .renewLease(renewal),
+                    reencodedFrame: payload
+                )
+            }
+        ))
+        XCTAssertEqual(asciiOccurrenceCount(RenewAliasLease.wireId, in: envelope.norito), 1)
+
+        let noOpBytes = Data([1, 1, 2, 3])
+        let configuration = ConfigureAliasAutoRenew(
+            target: .accountAlias(alias),
+            expectedRevision: 0,
+            config: nil
+        )
+        let autoRenewRequest = AliasLifecyclePlanRequestV1.autoRenew(
+            AliasAutoRenewPlanRequestV1(configuration: configuration)
+        )
+        let noOp = try AliasLifecycleTransactionPlanV1(
+            body: try AliasLifecycleTransactionPlanBodyV1(
+                authority: authority,
+                chainId: Self.fixtureChainId,
+                anchor: plan.body.anchor,
+                operation: .configureAutoRenew(configuration),
+                disposition: .noOp,
+                instruction: nil,
+                quote: nil,
+                totalsByAsset: [],
+                warnings: [],
+                blockers: [],
+                validUntilMs: Self.fixtureCreationTimeMs + 60_000
+            ),
+            planHash: AliasPlanVerifier.canonicalLifecycleHash(
+                canonicalBodyNorito: noOpBytes
+            ).hexEncodedString()
+        )
+        XCTAssertNil(try sdk.buildAliasLifecyclePlan(
+            autoRenewRequest,
+            plan: noOp,
+            bodyEncoder: { _ in noOpBytes },
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            keypair: makeFixtureKeypair(),
+            frameCodec: { _, payload in
+                DecodedAliasLifecycleFrame(
+                    operation: .configureAutoRenew(configuration),
+                    reencodedFrame: payload
+                )
+            }
+        ))
+    }
+
     func testCreationTimeProviderProducesDeterministicHash() throws {
         try requireEd25519Encoder()
 
@@ -991,66 +1202,6 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertEqual(envelope.transactionHash.count, 32)
-    }
-
-    func testSetPrimaryAccountAliasUsesDataspaceIdInEncoding() throws {
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let globalRequest = SetPrimaryAccountAliasRequest(
-            chainId: Self.fixtureChainId,
-            authority: authority,
-            accountId: authority,
-            aliasDomain: "hbl",
-            aliasDataspaceId: 0,
-            alias: "ayesha",
-            ttlMs: 60
-        )
-        let paynetRequest = SetPrimaryAccountAliasRequest(
-            chainId: Self.fixtureChainId,
-            authority: authority,
-            accountId: authority,
-            aliasDomain: "hbl",
-            aliasDataspaceId: 7,
-            alias: "ayesha",
-            ttlMs: 60
-        )
-
-        let global = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-            request: globalRequest,
-            keypair: keypair,
-            creationTimeMs: Self.fixtureCreationTimeMs
-        )
-        let paynet = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-            request: paynetRequest,
-            keypair: keypair,
-            creationTimeMs: Self.fixtureCreationTimeMs
-        )
-
-        XCTAssertCanonicalExternalEntrypointHash(global)
-        XCTAssertNotEqual(global.transactionHash, paynet.transactionHash)
-        XCTAssertNotEqual(global.signedTransaction, paynet.signedTransaction)
-    }
-
-    func testSetPrimaryAccountAliasRejectsDottedAliasDomain() throws {
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = SetPrimaryAccountAliasRequest(
-            chainId: Self.fixtureChainId,
-            authority: authority,
-            accountId: authority,
-            aliasDomain: "hbl.paynet",
-            aliasDataspaceId: 7,
-            alias: "ayesha",
-            ttlMs: 60
-        )
-
-        XCTAssertThrowsError(
-            try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-                request: request,
-                keypair: keypair,
-                creationTimeMs: Self.fixtureCreationTimeMs
-            )
-        )
     }
 
     func testVerifyingKeyIdReferenceValidation() {

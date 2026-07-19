@@ -110,6 +110,8 @@ pub mod account {
         Domain(DomainId),
         /// Permission scoped to a dataspace alias segment.
         Dataspace(DataSpaceId),
+        /// Permission scoped to one exact resolved account alias.
+        Alias(ResolvedAccountAliasV1),
     }
 
     impl norito::json::JsonSerialize for AccountAliasPermissionScope {
@@ -122,6 +124,10 @@ pub mod account {
                 }
                 Self::Dataspace(value) => {
                     out.push_str("dataspace\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+                Self::Alias(value) => {
+                    out.push_str("alias\",\"value\":");
                     norito::json::JsonSerialize::json_serialize(value, out);
                 }
             }
@@ -158,6 +164,11 @@ pub mod account {
                 )),
                 "dataspace" => Ok(Self::Dataspace(
                     <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                "alias" => Ok(Self::Alias(
+                    <ResolvedAccountAliasV1 as norito::json::JsonDeserialize>::json_from_value(
+                        value,
+                    )?,
                 )),
                 other => Err(norito::json::Error::Message(format!(
                     "unknown alias permission scope `{other}`"
@@ -200,8 +211,9 @@ pub mod account {
     permission! {
         /// Permission to resolve account aliases in the specified scope.
         ///
-        /// A domain scope authorizes only that fully-qualified domain. A dataspace scope
-        /// authorizes domainless aliases in that dataspace; the two scope kinds are independent.
+        /// An alias scope authorizes one exact alias. A domain scope authorizes only that
+        /// fully-qualified domain, while a dataspace scope authorizes only dataspace-root aliases;
+        /// the three scope kinds are independent.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.
             pub scope: AccountAliasPermissionScope,
@@ -211,7 +223,7 @@ pub mod account {
     permission! {
         /// Permission to grant or revoke alias-resolution access in the specified scope.
         ///
-        /// Only the corresponding domain or dataspace-alias owner may grant or
+        /// Only the corresponding alias, domain, or dataspace-alias owner may grant or
         /// revoke this delegation token. Holding it authorizes delegation of
         /// [`CanResolveAccountAlias`] for the exact same scope; it never
         /// authorizes alias mutation or further delegation of this token.
@@ -269,7 +281,52 @@ pub mod account {
                 .map(|variant| variant.tag.as_str())
                 .collect::<Vec<_>>();
 
-            assert_eq!(tags, vec!["domain", "dataspace"]);
+            assert_eq!(tags, vec!["domain", "dataspace", "alias"]);
+        }
+
+        #[test]
+        fn alias_scope_roundtrips_exact_resolved_alias() {
+            let scope = AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
+                "merchant@banka.paynet"
+                    .parse::<AccountAliasName>()
+                    .expect("canonical account alias"),
+                DataSpaceId::new(7),
+            ));
+            let json = norito::json::to_json(&scope).expect("serialize exact alias scope");
+            let decoded: AccountAliasPermissionScope =
+                norito::json::from_str(&json).expect("deserialize exact alias scope");
+
+            assert_eq!(decoded, scope);
+            assert!(json.contains("merchant"));
+            assert!(json.contains("\"dataspace_id\":7"));
+        }
+
+        #[test]
+        fn exact_alias_scope_matches_shared_alias_setup_fixture() {
+            use norito::json::JsonDeserialize;
+
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+            ))
+            .expect("decode shared alias setup fixture");
+            let raw_scope = fixture
+                .as_object()
+                .and_then(|object| object.get("permission_scope_json_vector"))
+                .expect("shared exact alias permission scope");
+            let scope = AccountAliasPermissionScope::json_from_value(raw_scope)
+                .expect("decode shared exact alias permission scope");
+            let expected = AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
+                "merchant@banka.paynet"
+                    .parse::<AccountAliasName>()
+                    .expect("canonical account alias"),
+                DataSpaceId::new(7),
+            ));
+
+            assert_eq!(scope, expected);
+            let encoded = norito::json::to_json(&scope).expect("encode shared exact alias scope");
+            let encoded: norito::json::Value =
+                norito::json::from_str(&encoded).expect("decode encoded exact alias scope");
+            assert_eq!(&encoded, raw_scope);
         }
 
         #[test]

@@ -5,85 +5,52 @@
         "additionalProperties": false,
         "properties": {
           "alias": {
-            "description": "Canonical account alias bound by the onboarding transaction.",
-            "minLength": 1,
             "type": "string"
           },
           "auto_renew_enabled": {
-            "description": "Whether onboarding configured automatic renewal for this lease.",
             "type": "boolean"
           },
+          "auto_renew_failure_count": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "auto_renew_revision": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "auto_renew_suspended_reason": {
+            "type": "string"
+          },
           "dataspace": {
-            "description": "Canonical alias of the dataspace that owns the binding.",
-            "minLength": 1,
             "type": "string"
           },
           "domain": {
-            "description": "Optional fully qualified alias domain scope. Omitted for a dataspace-root alias.",
-            "minLength": 1,
             "type": "string"
           },
           "expires_at_ms": {
-            "description": "Lease expiry timestamp in Unix milliseconds.",
             "format": "uint64",
-            "minimum": 0,
             "type": "integer"
           },
           "grace_expires_at_ms": {
-            "description": "Grace-period expiry timestamp in Unix milliseconds.",
             "format": "uint64",
-            "minimum": 0,
             "type": "integer"
           },
           "is_primary": {
-            "description": "Whether this is the account's primary alias in the dataspace.",
             "type": "boolean"
           },
-          "last_invoice_status": {
-            "description": "Optional outcome of the most recent auto-renew invoice.",
-            "enum": [
-              "paid",
-              "failed"
-            ],
-            "type": "string"
-          },
           "lease_status": {
-            "description": "Current account-alias lease lifecycle state.",
-            "enum": [
-              "active",
-              "grace_period",
-              "redemption",
-              "frozen",
-              "tombstoned"
-            ],
             "type": "string"
           },
-          "max_charge_amount": {
-            "$ref": "#/components/schemas/Quantity",
-            "description": "Optional exact cap on an automatic renewal charge."
+          "max_renewal_amount": {
+            "$ref": "#/components/schemas/Quantity"
           },
-          "next_charge_ms": {
-            "description": "Optional next automatic charge timestamp in Unix milliseconds.",
+          "next_retry_at_ms": {
             "format": "uint64",
-            "minimum": 0,
             "type": "integer"
           },
           "redemption_expires_at_ms": {
-            "description": "Redemption-period expiry timestamp in Unix milliseconds.",
             "format": "uint64",
-            "minimum": 0,
             "type": "integer"
-          },
-          "subscription_status": {
-            "description": "Optional auto-renew subscription state.",
-            "enum": [
-              "active",
-              "paused",
-              "past_due",
-              "canceled",
-              "suspended"
-            ],
-            "type": "string"
           }
         },
         "required": [
@@ -267,60 +234,68 @@
           }
         ]
       },
-      "AccountOnboardingRequest": {
+      "AccountOnboardingApplyRequest": {
         "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "account_id"
-            ]
-          },
-          {
-            "required": [
-              "public_key_hex"
-            ]
+        "properties": {
+          "receipt": {
+            "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
           }
+        },
+        "required": [
+          "receipt"
         ],
+        "type": "object"
+      },
+      "AccountOnboardingPlanReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry.",
+            "type": "object"
+          },
+          "plan_hash": {
+            "description": "Domain-separated hash of the canonical Norito body.",
+            "type": "string"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Onboarding-authority signature over plan_hash."
+          }
+        },
+        "required": [
+          "body",
+          "plan_hash",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingPlanRequest": {
+        "additionalProperties": false,
         "properties": {
           "account_id": {
-            "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material.",
-            "minLength": 1,
+            "description": "Canonical domainless I105 AccountId.",
             "type": "string"
           },
           "alias": {
-            "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "identity_commitment_hex": {
-            "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9A-Fa-f]{64}$",
+            "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`.",
             "type": "string"
           },
           "permissions": {
-            "description": "Optional permission literals requested from the onboarding allowlist.",
+            "description": "Optional names selected from configured additional_permissions.",
             "items": {
               "type": "string"
             },
             "type": "array"
           },
-          "public_key_hex": {
-            "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          },
-          "uaid": {
-            "description": "Explicit UAID literal. Torii trims surrounding whitespace and accepts either a case-insensitive `uaid:` prefix followed by a 64-hex digest or the raw 64-hex digest.",
-            "type": "string"
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
+          "version",
           "alias",
-          "uaid"
+          "account_id"
         ],
         "type": "object"
       },
@@ -328,40 +303,32 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "description": "Canonical domainless I105 account identifier queued for registration.",
-            "minLength": 1,
             "type": "string"
           },
-          "lease": {
-            "$ref": "#/components/schemas/AccountAliasLease",
-            "description": "Alias lease derived from the accepted onboarding quote."
+          "alias": {
+            "type": "string"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/JsonValue"
           },
           "status": {
-            "const": "QUEUED",
-            "description": "Queue acceptance state; this is not ledger finality.",
+            "enum": [
+              "Queued",
+              "Repaired",
+              "Unchanged"
+            ],
             "type": "string"
           },
           "tx_hash_hex": {
-            "description": "Canonical lowercase hash of the queued onboarding transaction.",
-            "maxLength": 64,
-            "minLength": 64,
             "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "uaid": {
-            "description": "Canonical lowercase UAID literal bound to the account.",
-            "maxLength": 69,
-            "minLength": 69,
-            "pattern": "^uaid:[0-9a-f]{64}$",
             "type": "string"
           }
         },
         "required": [
           "account_id",
-          "uaid",
-          "tx_hash_hex",
+          "alias",
           "status",
-          "lease"
+          "disposition"
         ],
         "type": "object"
       },
@@ -415,6 +382,64 @@
         "required": [
           "account_id",
           "opaque_ids"
+        ],
+        "type": "object"
+      },
+      "AliasAutoRenewPlanRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact ConfigureAliasAutoRenew target, expected revision, and optional owner configuration."
+          },
+          "schema_version": {
+            "enum": [
+              1
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "configuration"
+        ],
+        "type": "object"
+      },
+      "AliasLeaseRenewPlanRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "renewal": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact RenewAliasLease target, expected-current-expiry CAS, absolute target expiry, and guarded quote cap."
+          },
+          "schema_version": {
+            "enum": [
+              1
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "renewal"
+        ],
+        "type": "object"
+      },
+      "AliasLifecycleTransactionPlanV1": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Canonical versioned lifecycle plan body containing the authority, chain, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry."
+          },
+          "plan_hash": {
+            "description": "Domain-separated hash of the canonical Norito-encoded lifecycle plan body.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "plan_hash"
         ],
         "type": "object"
       },
@@ -579,6 +604,80 @@
         "required": [
           "alias",
           "account_id"
+        ],
+        "type": "object"
+      },
+      "AliasSetupPlanRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "intents": {
+            "description": "EnsureAlias instructions. The planner canonicalizes dependency order to dataspace, domain, then account alias.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "schema_version": {
+            "enum": [
+              1
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "intents"
+        ],
+        "type": "object"
+      },
+      "AliasSetupReportV1": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostics": {
+            "description": "Deterministically sorted, secret-free diagnostics with phase, stable code, severity, resource, expected/actual values, and remediation.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "pending",
+              "blocked"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "status",
+          "diagnostics"
+        ],
+        "type": "object"
+      },
+      "AliasTransactionPlanV1": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Canonical versioned plan body containing the authority, chain, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry."
+          },
+          "plan_hash": {
+            "description": "Domain-separated hash of the canonical Norito-encoded plan body.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "plan_hash"
         ],
         "type": "object"
       },
@@ -18011,7 +18110,7 @@
     },
     "/v1/accounts/onboard": {
       "post": {
-        "description": "Register an account, bind its alias and explicit UAID, and queue the signer-backed onboarding transaction. Supply `uaid` plus exactly one of `account_id` or `public_key_hex`; raw identity metadata is rejected, while optional identity evidence is accepted only as `identity_commitment_hex`. The dedicated onboarding token is required even for CIDR-allowlisted callers and is independent of any global Torii API token. A 202 response means the transaction is queued, not finalized on the ledger.",
+        "description": "Revalidate a hash-bound, onboarding-authority-signed receipt returned by `/v1/accounts/onboard/plan`, then submit at most one atomic transaction containing `EnsureAlias::Account` and configured allowlisted ancillary instructions. Exact replay returns `Unchanged` without queueing or charging another lease. The dedicated onboarding token is required and never appears in the body.",
         "parameters": [
           {
             "description": "Exactly one opaque raw onboarding token header value. Torii requires 32 through 256 printable non-whitespace ASCII bytes (`!` through `~`) whose BLAKE3 digest matches the dedicated configured digest. Send the secret only over protected transport; CIDR allowlisting and the global Torii API token do not replace it.",
@@ -18039,13 +18138,23 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AccountOnboardingRequest"
+                "$ref": "#/components/schemas/AccountOnboardingApplyRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountOnboardingResponse"
+                }
+              }
+            },
+            "description": "The receipt revalidated to exact existing state; no transaction was submitted."
+          },
           "202": {
             "content": {
               "application/json": {
@@ -18071,7 +18180,7 @@
                 }
               }
             },
-            "description": "The canonical JSON body, headers, account/UAID/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint."
+            "description": "The canonical JSON body, headers, account/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint."
           },
           "401": {
             "content": {
@@ -18118,6 +18227,23 @@
               }
             },
             "description": "Accept does not permit the endpoint's JSON success representation (`response_not_acceptable`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The receipt hash/signature/context is invalid, expired, or live state now contains authoritative drift."
           },
           "415": {
             "content": {
@@ -18203,11 +18329,290 @@
             }
           }
         },
-        "summary": "Onboard an account.",
+        "summary": "Apply a sponsored onboarding receipt.",
         "tags": [
           "Accounts"
         ],
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/accounts/onboard/plan": {
+      "post": {
+        "description": "Resolve and classify one account-alias onboarding intent against live state without mutation. The response is a stateless, expiring receipt signed by the configured onboarding authority. Auto-renew defaults, when configured, are returned only as a separate owner-signed follow-up because native auto-renew requires explicit resource-owner authority.",
+        "parameters": [
+          {
+            "description": "Exactly one opaque raw onboarding token header value. Torii requires 32 through 256 printable non-whitespace ASCII bytes (`!` through `~`) whose BLAKE3 digest matches the dedicated configured digest. Send the secret only over protected transport; CIDR allowlisting and the global Torii API token do not replace it.",
+            "in": "header",
+            "name": "X-Iroha-Onboarding-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 32,
+              "pattern": "^[!-~]{32,256}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional deployment-wide Torii API token; required only when the node enables global API-token enforcement. It is independent of the required onboarding token.",
+            "in": "header",
+            "name": "X-API-Token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountOnboardingPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication failed before onboarding body processing. The ErrorEnvelope code is `api_token_required` when deployment-wide Torii authentication fails, or `onboarding_auth_required` when the dedicated token is missing, duplicated, malformed, or does not match the configured BLAKE3 digest.",
+            "headers": {
+              "Vary": {
+                "description": "The authentication error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "The authentication layer which rejected the request.",
+                "schema": {
+                  "enum": [
+                    "IrohaApiToken realm=\"torii\"",
+                    "IrohaOnboardingToken"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Live state conflicts with the requested owner, target account, primary status, or text-to-dataspace mapping."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Bounded pre-auth admission rejected the request with a `preauth_*_capacity`, `preauth_rate_limited`, or `preauth_temporarily_banned` ErrorEnvelope code. Retry after one second.",
+            "headers": {
+              "Retry-After": {
+                "description": "Minimum retry delay applied by the typed error boundary.",
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The admission error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication or bounded pre-auth admission is unavailable. The ErrorEnvelope code is `api_token_unavailable`, `onboarding_auth_unavailable`, or a `preauth_*_capacity` availability code. Every 503 is retryable after one second.",
+            "headers": {
+              "Retry-After": {
+                "description": "Minimum retry delay applied by the typed error boundary.",
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The availability error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Plan sponsored account onboarding.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/accounts/onboarding/readiness": {
+      "get": {
+        "description": "Recompute the secret-free account-onboarding readiness report from current world state. The endpoint never reconciles or mutates state and may move from Pending to Ready without a node restart.",
+        "parameters": [
+          {
+            "description": "Exactly one opaque raw onboarding token header value. Torii requires 32 through 256 printable non-whitespace ASCII bytes (`!` through `~`) whose BLAKE3 digest matches the dedicated configured digest. Send the secret only over protected transport; CIDR allowlisting and the global Torii API token do not replace it.",
+            "in": "header",
+            "name": "X-Iroha-Onboarding-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 32,
+              "pattern": "^[!-~]{32,256}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication failed before onboarding body processing. The ErrorEnvelope code is `api_token_required` when deployment-wide Torii authentication fails, or `onboarding_auth_required` when the dedicated token is missing, duplicated, malformed, or does not match the configured BLAKE3 digest.",
+            "headers": {
+              "Vary": {
+                "description": "The authentication error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "The authentication layer which rejected the request.",
+                "schema": {
+                  "enum": [
+                    "IrohaApiToken realm=\"torii\"",
+                    "IrohaOnboardingToken"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication or bounded pre-auth admission is unavailable. The ErrorEnvelope code is `api_token_unavailable`, `onboarding_auth_unavailable`, or a `preauth_*_capacity` availability code. Every 503 is retryable after one second.",
+            "headers": {
+              "Retry-After": {
+                "description": "Minimum retry delay applied by the typed error boundary.",
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The availability error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Inspect account-onboarding readiness.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/query": {
@@ -18721,9 +19126,148 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/aliases/auto-renew/plan": {
+      "post": {
+        "description": "Revalidates canonical text and numeric dataspace ID, active lease owner, expected revision, ranges, policy version, and payment asset without mutation. Exact clean configuration returns a zero-charge no-op; changed configuration returns the exact framed ConfigureAliasAutoRenew instruction and a canonical plan hash.",
+        "operationId": "aliasAutoRenewPlan",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasAutoRenewPlanRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasLifecycleTransactionPlanV1"
+                }
+              }
+            },
+            "description": "Verified lifecycle plan or exact no-op."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Malformed or unsupported lifecycle planning request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required; the signer becomes the transaction authority.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "A committed planning anchor is not yet available."
+          }
+        },
+        "summary": "Plan one alias auto-renew configuration CAS.",
+        "tags": [
+          "Aliases"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/aliases/by-account": {
       "post": {
-        "description": "Accepts one exact canonical I105 account identifier, routes the public reverse lookup through caller-permitted Nexus routes, merges and deterministically sorts at most 64 deduplicated alias rows, and recomputes `total`. Canonical request signing is required, and the signed caller must hold the exact alias-resolution permissions needed for returned bindings. The route is independently rate limited and does not expose prefix or index search.",
+        "description": "Accepts one exact canonical I105 account identifier, routes the reverse lookup through public dataspaces and any exactly authorized restricted routes, filters invisible aliases before merging, sorting, totals, and cursors, and returns at most 64 deduplicated rows. Canonical authentication is optional for public data and required for restricted data. The route is independently rate limited and does not expose prefix or index search.",
         "operationId": "aliasLookupByAccount",
         "parameters": [
           {
@@ -18890,9 +19434,148 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/aliases/lease/renew/plan": {
+      "post": {
+        "description": "Revalidates canonical text and numeric dataspace ID, active lease state, lifecycle authority, expected-current-expiry CAS, absolute target expiry, live policy/payment asset, cap, and deadline without mutation. Success returns the exact framed RenewAliasLease instruction, exact charge, and a canonical plan hash.",
+        "operationId": "aliasLeaseRenewPlan",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasLeaseRenewPlanRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasLifecycleTransactionPlanV1"
+                }
+              }
+            },
+            "description": "Verified lifecycle plan or exact no-op."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Malformed or unsupported lifecycle planning request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required; the signer becomes the transaction authority.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "A committed planning anchor is not yet available."
+          }
+        },
+        "summary": "Plan one guarded alias lease renewal.",
+        "tags": [
+          "Aliases"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/aliases/resolve": {
       "post": {
-        "description": "Accepts one exact canonical fully-qualified alias, routes it through the Nexus read proxy using the encoded dataspace, and returns its account binding. Canonical request signing is required, and the signer must hold exact alias-resolution permission for the qualified domain, or for the dataspace when the alias is domainless. The route is independently rate limited.",
+        "description": "Accepts one exact canonical fully-qualified alias, routes it through the Nexus read proxy using the encoded dataspace, and returns its account binding. Public dataspaces may be read unsigned. A known restricted dataspace requires canonical request signing plus exact Alias or applicable Domain/Dataspace resolve permission. Authorization is checked before alias lookup so restricted existence is not leaked. The route is independently rate limited.",
         "operationId": "aliasResolve",
         "parameters": [
           {
@@ -19061,7 +19744,7 @@
     },
     "/v1/aliases/resolve-index": {
       "post": {
-        "description": "Requires canonical request signing. Fans out the alias-index lookup across caller-visible Nexus dataspaces because the index alone does not encode a dataspace, dedupes identical bindings, and returns `source = fanout` when the result comes from multi-route merging.",
+        "description": "Fans out the alias-index lookup across public dataspaces and, when canonical authentication is supplied, exactly authorized restricted dataspaces. Invisible entries are removed before totals and cursors are computed.",
         "operationId": "aliasResolveIndex",
         "parameters": [
           {
@@ -19202,6 +19885,145 @@
           }
         },
         "summary": "Resolve an alias entry by deterministic index.",
+        "tags": [
+          "Aliases"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/aliases/setup/plan": {
+      "post": {
+        "description": "Classifies the complete dataspace/domain/account-alias dependency graph against one committed world-state anchor without mutating it. The canonical request signer is the lease payer. Success returns ordered exact Norito instruction frames, exact create-only quotes, caps, per-asset totals, an expiry, and a canonical plan hash. A parent lease ending before its child is a stable warning; an unsigned canonical transaction payload above the configured limit is a blocker, and the graph is never split. Drift returns a structured 409 report and no executable plan.",
+        "operationId": "aliasSetupPlan",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasSetupPlanRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasTransactionPlanV1"
+                }
+              }
+            },
+            "description": "Atomic setup plan; clients must reject it when blockers are present."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Malformed or empty setup intent."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required; the signer becomes the lease payer.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                }
+              }
+            },
+            "description": "A committed planning anchor is not yet available."
+          }
+        },
+        "summary": "Plan one atomic declarative alias setup transaction.",
         "tags": [
           "Aliases"
         ],
@@ -31197,38 +32019,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sns/names": {
-      "post": {
-        "description": "Register a ledger-backed SNS name record in one of the fixed namespaces.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Register a SNS name lease.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sns/names/{namespace}/{literal}": {
       "get": {
         "description": "Fetch a ledger-backed SNS name record by namespace and canonical literal.",
@@ -31269,254 +32059,6 @@
           "SNS"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sns/names/{namespace}/{literal}/controllers": {
-      "post": {
-        "description": "Update controllers for a ledger-backed SNS name record.",
-        "parameters": [
-          {
-            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-            "in": "path",
-            "name": "namespace",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical SNS literal for the namespace.",
-            "in": "path",
-            "name": "literal",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Update SNS controllers.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sns/names/{namespace}/{literal}/freeze": {
-      "delete": {
-        "description": "Unfreeze a ledger-backed SNS name record.",
-        "parameters": [
-          {
-            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-            "in": "path",
-            "name": "namespace",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical SNS literal for the namespace.",
-            "in": "path",
-            "name": "literal",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Unfreeze a SNS name record.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
-      },
-      "post": {
-        "description": "Freeze a ledger-backed SNS name record.",
-        "parameters": [
-          {
-            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-            "in": "path",
-            "name": "namespace",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical SNS literal for the namespace.",
-            "in": "path",
-            "name": "literal",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Freeze a SNS name record.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sns/names/{namespace}/{literal}/renew": {
-      "post": {
-        "description": "Renew a ledger-backed SNS name record by namespace and canonical literal.",
-        "parameters": [
-          {
-            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-            "in": "path",
-            "name": "namespace",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical SNS literal for the namespace.",
-            "in": "path",
-            "name": "literal",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Renew a SNS name record.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sns/names/{namespace}/{literal}/transfer": {
-      "post": {
-        "description": "Transfer a ledger-backed SNS name record by namespace and canonical literal.",
-        "parameters": [
-          {
-            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-            "in": "path",
-            "name": "namespace",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical SNS literal for the namespace.",
-            "in": "path",
-            "name": "literal",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Transfer a SNS name record.",
-        "tags": [
-          "SNS"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/policies/{suffix_id}": {

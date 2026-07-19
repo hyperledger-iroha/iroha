@@ -446,7 +446,7 @@ mod tests {
             _metadata: Metadata,
             _wait_for_confirmation: bool,
         ) -> Result<()> {
-            self.submit(instructions, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            self.submit(instructions)
         }
 
         fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {

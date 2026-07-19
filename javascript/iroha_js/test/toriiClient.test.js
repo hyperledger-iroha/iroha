@@ -25286,124 +25286,6 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
   });
 });
 
-test("registerSnsName posts payload and normalizes response", async () => {
-  const nameHash = "cd".repeat(32);
-  const highestCommitment = "ab".repeat(32);
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    assert.equal(url, `${BASE_URL}/v1/sns/names`);
-    assert.equal(init.method, "POST");
-    const parsed = JSON.parse(init.body);
-    assert.equal(parsed.selector.suffix_id, 1);
-    assert.equal(parsed.selector.label, "makoto");
-    assert.equal(parsed.owner, SAMPLE_ACCOUNT_ID);
-    assert.equal(parsed.payment.asset_id, FIXTURE_ASSET_ID_A);
-    assert.equal(parsed.payment.gross_amount, "120.5");
-    return createResponse({
-      status: 201,
-      jsonData: {
-        name_record: {
-          selector: { version: 1, suffix_id: 1, label: "makoto" },
-          name_hash: nameHash,
-          owner: SAMPLE_ACCOUNT_ID,
-          controllers: [
-            { controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } },
-          ],
-          status: { status: "Frozen", detail: { reason: "review", until_ms: 42 } },
-          pricing_class: 2,
-          registered_at_ms: 10,
-          expires_at_ms: 20,
-          grace_expires_at_ms: 30,
-          redemption_expires_at_ms: 40,
-          metadata: { note: "hi" },
-          auction: {
-            kind: "VickreyCommitReveal",
-            opened_at_ms: 1,
-            closes_at_ms: 2,
-            floor_price: { asset_id: FIXTURE_ASSET_ID_A, amount: "120" },
-            highest_commitment: highestCommitment,
-            settlement_tx: { tx: "abc" },
-          },
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.registerSnsName({
-    selector: { suffix_id: 1, label: "makoto" },
-    owner: SAMPLE_ACCOUNT_ID,
-    term_years: 1,
-    controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: "120.5",
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-    metadata: { note: "hi" },
-  });
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  assert.equal(response.nameRecord.nameHash, nameHash);
-  assert.equal(response.nameRecord.status.status, "Frozen");
-  assert.equal(response.nameRecord.status.reason, "review");
-  assert.equal(response.nameRecord.auction?.highestCommitment, highestCommitment);
-});
-
-test("SNS mutation helpers reject unsupported option fields", async () => {
-  const fetchImpl = async () => {
-    throw new Error("fetch should not run for invalid options");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const sampleRegisterPayload = {
-    selector: { suffix_id: 1, label: "makoto" },
-    owner: SAMPLE_ACCOUNT_ID,
-    term_years: 1,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_ID }],
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: "120",
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-  };
-  const sampleRenewPayload = {
-    term_years: 1,
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: "120",
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-  };
-  const sampleTransferPayload = {
-    new_owner: SAMPLE_ACCOUNT_ID,
-    governance: {
-      proposal_id: "proposal-1",
-      council_vote_hash: "aa".repeat(32),
-      dao_vote_hash: "bb".repeat(32),
-      steward_ack: "ack",
-      guardian_clearance: "guardian-ok",
-    },
-  };
-  await assert.rejects(
-    () => client.registerSnsName(sampleRegisterPayload, { extra: true }),
-    /registerSnsName options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () => client.renewSnsRegistration("makoto.sora", sampleRenewPayload, { note: "nope" }),
-    /renewSnsRegistration options contains unsupported fields: note/,
-  );
-  await assert.rejects(
-    () => client.transferSnsRegistration("makoto.sora", sampleTransferPayload, { retry: false }),
-    /transferSnsRegistration options contains unsupported fields: retry/,
-  );
-});
-
 test("getSnsPolicy fetches and normalizes suffix policy", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sns/policies/2`);
@@ -25465,6 +25347,23 @@ test("SNS read helpers reject unsupported option fields", async () => {
   );
 });
 
+test("retired SNS mutation helpers are absent", () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  for (const method of [
+    "registerSnsName",
+    "renewSnsRegistration",
+    "transferSnsRegistration",
+    "freezeSnsRegistration",
+    "unfreezeSnsRegistration",
+  ]) {
+    assert.equal(client[method], undefined, `${method} must not remain on the public client`);
+  }
+});
+
 test("SNS domain route helpers reject padded selectors before dispatch", async () => {
   let fetchCalled = false;
   const client = new ToriiClient(BASE_URL, {
@@ -25475,10 +25374,6 @@ test("SNS domain route helpers reject padded selectors before dispatch", async (
   });
   const cases = [
     ["getSnsRegistration", () => client.getSnsRegistration(" alice.sora")],
-    ["renewSnsRegistration", () => client.renewSnsRegistration("alice.sora ", {})],
-    ["transferSnsRegistration", () => client.transferSnsRegistration(" alice.sora ", {})],
-    ["freezeSnsRegistration", () => client.freezeSnsRegistration("alice.sora ", {})],
-    ["unfreezeSnsRegistration", () => client.unfreezeSnsRegistration(" alice.sora", {})],
   ];
 
   for (const [label, action] of cases) {
@@ -25489,168 +25384,6 @@ test("SNS domain route helpers reject padded selectors before dispatch", async (
     );
   }
   assert.equal(fetchCalled, false);
-});
-
-test("registerSnsName rejects invalid controller types", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSnsName({
-        selector: { suffix_id: 1, label: "bad" },
-        owner: SAMPLE_ACCOUNT_ID,
-        payment: {
-          asset_id: FIXTURE_ASSET_ID_A,
-          gross_amount: 1,
-          settlement_tx: {},
-          payer: SAMPLE_ACCOUNT_ID,
-          signature: {},
-        },
-        controllers: [{ controller_type: "Unknown" }],
-      }),
-    /controller_type must be one of/,
-  );
-});
-
-test("freezeSnsRegistration posts normalized payload and parses record", async () => {
-  const controller = new AbortController();
-  let captured;
-  const nameHash = "ab".repeat(32);
-  const responseBody = {
-    selector: { version: 1, suffix_id: 2, label: " alice " },
-    name_hash: `0x${nameHash}`,
-    owner: SAMPLE_ACCOUNT_FORMS.i105,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
-    status: { status: "Frozen", reason: "timeout", until_ms: 7000 },
-    pricing_class: 2,
-    registered_at_ms: 10,
-    expires_at_ms: 20,
-    grace_expires_at_ms: 30,
-    redemption_expires_at_ms: 40,
-    metadata: { note: "test" },
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: responseBody,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const result = await client.freezeSnsRegistration(
-    "alice.sora",
-    { reason: "  abuse report ", until_ms: 5000, guardian_ticket: { token: "grant" } },
-    { signal: controller.signal },
-  );
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
-  assert.equal(captured.init.method, "POST");
-  assert.deepEqual(JSON.parse(String(captured.init.body)), {
-    reason: "abuse report",
-    until_ms: 5000,
-    guardian_ticket: { token: "grant" },
-  });
-  assert.ok(captured.init.signal instanceof AbortSignal);
-  assert.equal(result.selector.label, "alice");
-  assert.equal(result.selector.suffix_id, 2);
-  assert.equal(result.nameHash, nameHash);
-  assert.equal(result.owner, SAMPLE_ACCOUNT_ID);
-  assert.deepEqual(result.status, { status: "Frozen", reason: "timeout", untilMs: 7000 });
-  assert.equal(result.pricingClass, 2);
-  assert.equal(result.registeredAtMs, 10);
-  assert.equal(result.controllers.length, 1);
-  assert.equal(result.controllers[0]?.controller_type, "Account");
-});
-
-test("unfreezeSnsRegistration posts governance hook payload", async () => {
-  let captured;
-  const responseBody = {
-    selector: { version: 1, suffix_id: 2, label: "alice" },
-    name_hash: "ff".repeat(32),
-    owner: SAMPLE_ACCOUNT_FORMS.i105,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
-    status: "Active",
-    pricing_class: 3,
-    registered_at_ms: 100,
-    expires_at_ms: 200,
-    grace_expires_at_ms: 300,
-    redemption_expires_at_ms: 400,
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: responseBody,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const result = await client.unfreezeSnsRegistration("alice.sora", {
-    proposal_id: " prop-123 ",
-    council_vote_hash: " council-hash ",
-    dao_vote_hash: " dao-hash ",
-    steward_ack: " ack ",
-    guardian_clearance: " clearance ",
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
-  assert.equal(captured.init.method, "DELETE");
-  assert.deepEqual(JSON.parse(String(captured.init.body)), {
-    proposal_id: "prop-123",
-    council_vote_hash: "council-hash",
-    dao_vote_hash: "dao-hash",
-    steward_ack: "ack",
-    guardian_clearance: "clearance",
-  });
-  assert.equal(result.selector.label, "alice");
-  assert.equal(result.owner, SAMPLE_ACCOUNT_ID);
-  assert.deepEqual(result.status, { status: "Active" });
-  assert.equal(result.pricingClass, 3);
-});
-
-test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run for validation failures");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.freezeSnsRegistration("alice.sora", {
-        reason: "r",
-        until_ms: 1,
-      }),
-    /freezeSnsRegistration\.guardian_ticket must be provided/,
-  );
-  await assert.rejects(
-    () =>
-      client.freezeSnsRegistration(
-        "alice.sora",
-        { reason: "ok", until_ms: 1, guardian_ticket: {} },
-        // @ts-expect-error runtime validation
-        { extra: true },
-      ),
-    /freezeSnsRegistration options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () =>
-      client.unfreezeSnsRegistration(
-        "alice.sora",
-        {
-          proposal_id: "p",
-          council_vote_hash: "c",
-          dao_vote_hash: "d",
-          steward_ack: "s",
-        },
-        // @ts-expect-error runtime validation
-        { retry: false },
-      ),
-    /unfreezeSnsRegistration options contains unsupported fields: retry/,
-  );
 });
 
 test("listTelemetryPeersInfo normalizes peer telemetry metadata", async () => {

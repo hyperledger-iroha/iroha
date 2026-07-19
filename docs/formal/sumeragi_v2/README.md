@@ -57,10 +57,15 @@ ledger.
   asynchronous proof obligation.
 - `SumeragiV2AsyncNetwork.tla`,
   `SumeragiV2AsyncFairnessRefinementProofs.tla`,
-  `SumeragiV2LivenessProofs.tla`, and `SumeragiV2AsyncLivenessProofs.tla`
+  `SumeragiV2LivenessProofs.tla`,
+  `SumeragiV2CertifiedRequestHashAuthorityProofs.tla`,
+  `SumeragiV2DurableDecisionRecoveryProofs.tla`, and
+  `SumeragiV2AsyncLivenessProofs.tla`
   model the production scheduler and transport abstractions, own the typed
   fair-action-to-`AsyncNext` refinement proof, and state the conditional
-  progress obligations after GST.
+  progress obligations after GST. The two recovery modules separate the exact
+  generation-free signed-request/hash authority from the generation-scoped
+  executor candidate and prove the Commit-only durable Decision lifecycle.
   The volatile vote pool is the delivery-epoch witness: an exact vote crosses
   once while present, and TC installation clears the local pool. If the
   resulting lock has the node's exact durable Commit intent, acknowledgement
@@ -80,11 +85,12 @@ ledger.
   `2 * |ValidatorIds| + 3` owners. Exact duplicates coalesce, while a distinct
   same-owner item retries without displacing another protected slot. Immutable
   authenticated history remains separate from this consumer state. Fair
-  transport ingress requires at least `3 * |ValidatorIds| + 1` entries. The
+  transport ingress requires at least `4 * |ValidatorIds| + 1` entries. The
   potential separately reserves an empty or non-timeout-progress-deficient
-  validator source, every validator's missing TimeoutVote, and the continuation
-  required when servicing a lane would recreate either reservation; anonymous
-  and non-roster senders share the final untrusted slot. The
+  validator source, every validator's missing TimeoutVote, every validator's
+  missing shared TransportCompletion owner, and the continuation required when
+  servicing a lane would recreate any reservation; anonymous and non-roster
+  senders share the final untrusted slot. The
   inductive invariant also records that every individual source lane is at
   most the aggregate ingress capacity, matching the runtime admission gate;
   this makes one-item removal decrease the counted depth by exactly one even
@@ -102,26 +108,91 @@ ledger.
   authorization fields; the augmented-record counterexample and typed async
   adapter refinement are TLAPS-proved. Thus auxiliary byte saturation or a
   field-compatible non-canonical record cannot invalidate the message-level
-  timeout admission boundary.
+  timeout admission boundary. `PayloadChunk` and `CertifiedBodyResponse` share
+  a separate one-entry validator owner and a full canonical-envelope byte
+  partition. Its checked bound mirrors bare Norito framing from the frozen DA
+  layout; overflow or an undersized partition rejects height activation before
+  the ingress opens, while generic Progress and TimeoutVote traffic cannot
+  spend the completion partition. Production now routes every live lane-local
+  message through this same fair owner: lane executable payloads and handoffs
+  use TransportCompletion, while lane votes, proposals, QCs, certificates, and
+  new-view traffic use Progress. Their exact wire ceilings are four MiB and one
+  MiB, respectively. The byte-abstract asynchronous model uses its existing
+  completion and progress representatives; proving the concrete class and byte
+  mapping remains part of the production-refinement obligation.
+  Resource lanes are keyed by the authenticated transport hop (`via`), while
+  validation, response routing, and exact-wire coalescing retain the semantic
+  origin. The abstract model's `source` is the direct-origin authenticated-hop
+  projection. The cross-tool refinement must still prove that origin churn
+  cannot multiply count or byte ownership and that distinct legitimate origins
+  are not incorrectly coalesced.
+  The production transport refinement uses exact checked canonical geometry at
+  every layer. With `F(x)` denoting compact-length framing, the manifest bound
+  is `F(8 + C * F(32)) + 228`; the proposal adds the maximal grouped TC,
+  separately carried highest PrepareQC, and signature. The recommended
+  128-validator proposal is 232,541 bare bytes, and the recommended maximum
+  transport completion is 16,811,581 bare bytes. `CertifiedBodyRequest`
+  carries a maximal PrepareQC, `CommitCertificateRequest` carries the actual
+  frozen chain id, and `CommitCertificateResponse` carries a maximal CommitQC.
+  Control takes the maximum of proposal and Commit-certificate response.
+  Requesters, rotated responders, P2P origins, and direct targets use the
+  protocol-wide 8,258-byte raw public-key payload ceiling rather than a roster
+  sample. That feature-independent bound includes the largest accepted SM2
+  distinguishing identifier and point. The checked refinement then covers
+  `BlockMessage::V2`, header-framed `BlockMessageWire`, boxed
+  `NetworkMessage::SumeragiBlock`, the direct relay and complete
+  `Message::Data`, 28 AEAD bytes, and the four-byte encrypted-frame queue
+  prefix. Although the wire body prefix can represent `u32::MAX`, production
+  uses a deterministic 2,147,483,643-byte runtime/configuration ceiling so the
+  prefix plus body fits a contiguous `i32::MAX`-byte buffer on 32-bit and 64-bit
+  hosts. Startup rejects a larger global cap before binding and rechecks each
+  encrypted length with checked arithmetic before encryption. Prefix-inclusive
+  queue charge is an optional checked value; `None` rejects activation even at
+  a `usize::MAX` configured queue rather than acting as an equal sentinel.
+  The abstract packet-publication step also collapses production actor
+  admission, encoding, frame and batch ownership, socket write, and flush into
+  one transition. The reliable production path must retain the exact source,
+  target or remaining broadcast cursor, byte owner, and attempt identity until
+  the matching writer flush acknowledgement. This actor-to-flush trace and its
+  decreasing service rank remain explicitly `specified_unproved`. A writer
+  flush is only a local transport-attempt witness: it does not acknowledge
+  final-target receipt through a relay, subscriber consumption, or application.
+  A reliable broadcast snapshots the actor-accepted relay-aware topology and
+  acquires each ordinary `(target, class)` lane independently. It may coalesce
+  with an existing target child only for the identical canonical request digest
+  in the same membership tenure. A distinct payload or direct/broadcast
+  cross-kind collision retains an exact per-target FIFO ticket with the caller;
+  there is no class-wide parent. Explicit topology removal cancels only the old
+  broadcast tenure, remove/re-add creates a new generation, and direct-post
+  ownership survives. This closes the known local parent-residual obstruction,
+  while subscriber consumption, relay/final-application acknowledgement, true
+  target-geometry exhaustion, and direct-post ownership after target removal
+  remain separate production-refinement debt. Broadcast starvation freedom
+  remains unproved.
+  Configure and open both reject overflow or an undersized ingress, topic,
+  global-frame, or high-queue owner. The default instantiation uses
+  17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
+  high-priority byte queue, and `4 * 128 + 2 = 514` outer-ingress entries.
+  Kagami and the Taira renderer reject rosters above 128 and preserve one
+  aggregate source partition for every validator plus the shared untrusted
+  lane by scaling body bytes to at least `(N + 1) * body_source_bytes`.
   The production reducer's shared Rust/Verus refinement gate checks the local
   EnterView selection boundary: the persisted TC, pre-install lock,
   post-install durable lock, effect-carried lock, and immediately following
   recovery fetch must agree on the effective maximum lock. The executable
   acquisition owner makes the body-rebind and recovery state machine explicit,
-  and `EffectiveLockAcquisitionModelObligation` now has a complete deductive
-  source proof body covering type closure, acquisition progress, and stable
-  repeated delivery. It remains `specified_unproved` until that exact body
-  passes the pinned strict TLAPS runner and receives source-manifest-bound
-  backend evidence; SANY parsing and bounded TLC are not a discharge. Proving
-  that every production executor, runtime, worker, request, byte, and queue
-  owner refines and fairly services that model remains the separate
+  and the pinned strict TLAPS run proves all 1,258 obligations in the complete
+  `SumeragiV2EffectiveLockAcquisitionProofs` module. The ledger therefore marks
+  `EffectiveLockAcquisitionModelObligation` as `tlaps_proved`, covering abstract
+  type closure, acquisition progress, and stable repeated delivery. This does
+  not prove that every production executor, runtime, worker, request, byte, and
+  queue owner refines and fairly services that model; that remains the separate
   `EffectiveLockBodyAcquisitionProductionRefinementObligation`, also
   `specified_unproved`.
-  Generation-scoped vote delivery is ledgered `tlaps_proved`. The one-height
-  `AsyncSpecAt` type-closure wrapper has a checked source proof body but remains
-  ledgered `specified_unproved` because it consumes
-  `AsyncRunnerStepPreservesSchedulerType`, which has not passed a fresh pinned
-  strict proof on the current source. Deadlock freedom now requires an enabled
+  Generation-scoped vote delivery, concrete runner scheduler preservation, and
+  the dependent one-height `AsyncSpecAt` type-closure wrapper are ledgered
+  `tlaps_proved`; the fresh hash-guarded strict evidence is summarized below.
+  Deadlock freedom now requires an enabled
   productive step that grows height evidence, consumes concrete deadline debt,
   or decreases/exits a protected candidate or Serve-occurrence rank. The weaker
   scheduler-enabled lemma cannot discharge it, so the productive obligation
@@ -338,9 +409,28 @@ branches while evaluating `ENABLED`. The structural checker pins the four
 frames, all 18 action classifications, both quantifier inventories, the typed
 claim, and the exact dedicated theorem inventory. The finite TLC specs and
 deductive specs share the same `AsyncAllVars` and `AsyncFairnessAt`; no
-TLC-only fairness relation exists. This promotes only the fair-action
-refinement entry: the 49-entry ledger still has 18 `specified_unproved`
-obligations and keeps `machine_checked_completion: false`.
+TLC-only fairness relation exists. This promotes the fair-action refinement
+entry. Independently, the complete post-Decision timeout-frontier induction
+described below is also `tlaps_proved`, as is the exact durable Commit-Decision
+crash/restart/replay lifecycle. Runner scheduler preservation and the dependent
+async type invariant are now `tlaps_proved`. Fresh hash-guarded strict TLAPS
+slices exited 0 for transport/runner closure (186/186 and 204/204), the recovery
+execution hierarchy (305/305), its strong caller and bracket (63/63), the exact
+type obligation (16/16), and the named always-strong wrapper (10/10).
+The abstract protected-rank prerequisites are now isolated as
+`async-progress-ownership-invariant`,
+`protected-service-rank-stage4-ready-causal`,
+`protected-service-rank-serve-fifo`, and
+`protected-service-rank-stage5-consensus-fifo`. All four remain
+`specified_unproved`. Progress ownership consumes the now-proved async type
+closure; Stage 4 and Serve FIFO also consume the proved exact fair-action
+refinement; and the Stage-5 Consensus FIFO leaf additionally waits for progress
+ownership. The
+aggregate `protected-service-rank` obligation depends on every one of these
+leaves, without conflating the abstract model with production admission,
+runtime, ingress, or actor-to-flush ownership. The 53-entry ledger therefore
+has 29 `tlaps_proved`, 17 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope` entries and keeps `machine_checked_completion: false`.
 
 The target statement is exactly: after GST, with a responsive dual quorum and
 terminating local work, every height eventually decides and every responsive
@@ -359,11 +449,23 @@ The mechanization boundary is narrower than the argument above. The universal
 historical TC-lock authorization and its dependent direct-or-installed-
 authorization timeout wrapper are now ledgered `tlaps_proved`, together with
 the narrower grouped-timeout kernel for Commit intents already present when
-timeout votes were made. The universal
-`AsyncTypeInvariantObligation` has a checked source proof body but remains
-ledgered `specified_unproved` because its concrete runner-preservation
-prerequisite remains `specified_unproved` without a fresh pinned strict proof;
-the timeout-view,
+timeout votes were made. The independent post-Decision frontier is also
+`tlaps_proved`: its action-by-action induction covers every Core branch,
+including crash and durable timeout replay through `ResumeTimeout`, brackets
+Core-stuttering scheduler steps, and lifts the invariant through `AsyncNext`
+and the temporal asynchronous specification. That proof does not assume or
+consume `AsyncTypeInvariantObligation`. The durable Decision recovery proof
+separately derives same-node/same-context Decision uniqueness and pending-
+persistence exclusion by a complete Core action induction. Its authority is an
+unapplied durable Commit Decision only: Prepare certificates are explicitly
+rejected. Crash and authenticated restart preserve the generation-free logical
+certified-request identity, restart advances only the executor generation, and
+replay clears the old registration before installing one exact current-
+generation `FetchBody` candidate. Generic body/validation/application stage
+preservation and the Rust-to-TLA trace mapping remain in the independent
+progress-witness debts. The universal `AsyncTypeInvariantObligation` and its
+concrete runner-preservation prerequisite are now ledgered `tlaps_proved` under
+the fresh strict slices summarized below; the timeout-view,
 rotating-leader, and application liveness declarations remain
 `specified_unproved` as well. The rotating-leader declaration is a two-stage
 claim: reach a view where the responsive honest scheduled leader itself is
@@ -440,10 +542,12 @@ consensus transition relation to stand in for that proof.
 The ledger also names the previously implicit intermediate obligations.
 Generation-scoped delivery is ledgered `tlaps_proved`. The executable
 height-scoped owner now gives the body-rebind/recovery kernel its own
-`EffectiveLockAcquisitionModelObligation`; bounded TLC explores it but does not
-prove it. The end-to-end executor/runtime/worker/request/byte/queue mapping and
-fair-service composition remains separately ledgered as
-`EffectiveLockBodyAcquisitionProductionRefinementObligation`. Both entries are
+`EffectiveLockAcquisitionModelObligation`; the complete pinned strict TLAPS
+module proves all 1,258 obligations and the ledger records it as
+`tlaps_proved`. Bounded TLC remains complementary regression evidence. The
+end-to-end executor/runtime/worker/request/byte/queue mapping and fair-service
+composition remains separately ledgered as
+`EffectiveLockBodyAcquisitionProductionRefinementObligation`, which remains
 `specified_unproved`. Historical TC-lock Commit authorization and the
 direct-or-installed-authorization timeout induction are `tlaps_proved` from
 the full action induction. Post-GST deadlock freedom excludes a bare clock,
@@ -490,37 +594,104 @@ corridor. A proofless release theorem is accepted only at its exact pinned
 module and symbol while the ledger records it as `specified_unproved`.
 Every validation mode rejects `machine_checked_completion=true` while any such
 entry remains. Promotion order is also explicit: async type closure depends on
-proved runner scheduler preservation; the post-Decision timeout frontier and
-Decision restart-recovery obligations depend on type closure; the aggregate
-progress witness depends on both; deadlock freedom depends on proved type
-closure; starvation freedom depends on the proved service-rank theorem; and
+proved runner scheduler preservation; Decision restart-recovery depends on
+type closure; the aggregate progress witness depends on type closure,
+generation-scoped delivery, the independently proved post-Decision frontier,
+Decision restart-recovery, and the production refinement seam; deadlock
+freedom depends on proved type closure; starvation freedom depends on the
+proved service-rank theorem; and
 genesis handoff and indexed height liveness each depend on proved
 rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 204 named tests
-across 17 Rust modules. The inventory includes five native-AMX lane-work
+Before network startup, the executable wrapper inventories 298 named tests
+across 21 Rust modules. Relative to the preceding 264-name inventory, it adds
+37 positive regressions: 10 bind per-target exact-output scheduling and typed
+historical/current applied-height rollover; 2 bind peer-writer flush and
+old-generation dispatch-worker custody; 20 bind exact progress-ticket identity
+and rank, relay-aware topology geometry, explicit removal semantics, generation
+replacement, identical-retry coalescing, exact per-target FIFO ownership for
+distinct/cross-kind collisions, and actor-side subscriber backlog transfer; and
+1 binds exact CommitQC coalescing across the runtime queue and Busy-deferred
+adapter owner; and 4 bind exact Nexus lane-relay ownership and source fairness.
+Removal of the obsolete adapter cursor alias and two superseded network
+broadcast-residual tests makes the net delta 34. These tests deliberately do not claim remote
+application acknowledgement, relay second-hop completion, or unbounded
+broadcast admission. The 264-name baseline added 32 regressions for atomic lane
+certificates, semantic-origin/authenticated-via ownership, P2P source fairness,
+daemon relay quotas, and the active watchdog. The 232-name baseline already
+included two exact locked-Commit
+progress-witness regressions and six outer TransportCompletion-corridor
+regressions. The current
+geometry pins four owners per validator plus two aggregate-untrusted owners
+(`4N+2` total), including a roster-origin completion relayed through an
+untrusted authenticated hop, and retains the capacity-negative boundary. It
+also retains one four-validator exact PrepareQC count-and-power quorum
+regression. The four integration names execute under one module-filtered leg;
+the complete pre-network corridor now spans 41 legs, including separate exact
+data-model status and atomic lane-certificate decode contracts. The inventory
+executes the `iroha_p2p` library with its empty default feature set. It does not
+claim the feature-gated QUIC first-packet geometry tests as part of those
+twenty-one modules or forty-one legs. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`3N+1`/`2N+3` admission boundaries in addition to exact-lock,
+`4N+2`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
-executor-batch boundaries. It also runs exact mocked contracts for active Git
-operation rejection, detached source sealing, the 160-run matrix launcher, the
+executor-batch boundaries. Those adapter boundaries pin a maximum flattened
+persistence macro-step of five effects within the reducer's eight-effect bound,
+service at most one Busy-deferred adapter macro-step per serialized runtime
+turn, and require the Completion, Progress, and Normal deferred queues all to
+be empty before terminal readiness. A production-default capacity regression
+saturates the 256 certified-request owners, 640 Normal ingress slots, and the
+128-slot reserved Progress increment while retaining the 256-slot Completion
+reserve; an exact authenticated `CertifiedBodyResponse` with a still-live
+matching logical request registration retires its old request owner. The
+durable reducer source then retransmits the still-reconstructible Fetch, which
+acquires both owners atomically without an executor-retained partial owner.
+The wrapper also runs exact mocked contracts for active Git operation
+rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
 promotion, and the aggregate release receipt. These execution contracts are
-not deductive proof. Strict proof completion, the complete PR corridor, the
-source-bound chaos run, and the 24-hour Taira-profile soak remain pending.
+not deductive proof. A fresh pinned strict whole-module aggregate release TLAPS
+run, the complete clean source-sealed PR corridor, the source-bound chaos run,
+and the 24-hour Taira-profile soak remain pending.
 
 The formal mutation gate also runs one source-sealed post-Decision model with
-eight configurations. The repaired trace completes with status 0. Seven
-single-seam mutants—one for each of the three control guards, two receive-pool
-admission branches, and two causal-successor branches—must fail at their named
-invariant with status 12. This finite matrix binds the executable model to the
-reducer/source-fidelity contract but does not discharge either new
-`specified_unproved` temporal obligation or the independent production-trace
-refinement sentinel required by the aggregate progress witness.
+nine configurations. The repaired trace completes with status 0. Eight
+single-seam mutants—one for each of `BeginTimeout`, `ResumeTimeout`, `FormTC`,
+and `BeginInstallTC`, two receive-pool admission branches, and two
+causal-successor branches—must fail at their named invariant with status 12.
+This finite matrix binds the executable model to the reducer/source-fidelity
+contract. The separate strict action induction discharges the post-Decision
+timeout frontier. The independently checked durable Decision module discharges
+the exact Commit-only crash/restart/replay handoff; neither finite matrix
+discharges the production-trace refinement sentinel required by the aggregate
+progress witness.
+
+A second source-sealed registration matrix runs one certified-response model
+with five configurations. Three repaired duplicate, authenticated-restart,
+and historical-catch-up traces require a response to match an exact currently
+registered certified request. Two missing-guard mutants accept either the
+second fan-out response after the logical request is retired or a delayed
+pre-replay response after restart clears volatile request ownership; both must
+fail their named invariants. This matrix pins rejection of unsolicited and
+replayed signed responses while retaining the intended historical recovery
+corridor. It is bounded regression evidence complementing, but not replacing,
+the strict deductive crash/restart/replay authority proof.
+
+A third source-sealed lifecycle matrix executes the exact proof split directly.
+Its repaired seven-step trace keeps durable Commit authority and logical
+request registration generation-free while advancing a separate executor
+generation, then clears the registration and installs one exact current-
+generation `FetchBody`. Eight single-seam mutants reject duplicate same-node/
+same-context Decisions, generation or recipient fan-out in the logical
+registration, replay retention, a dropped FetchBody, stale executor generation,
+Prepare authority, and a non-singleton replay queue. Across the nine configs,
+TLC generates 42 states, all distinct; the fixed case returns status 0 and each
+mutant returns status 12 at its named invariant. This is regression evidence
+for the strict theorem, not production trace refinement.
 
 Production release execution accepts only a clean committed HEAD and must be
 entered through the operator-authenticated out-of-tree bootstrap under a
@@ -537,8 +708,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 36 pre-network legs and the exact
-204-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 41 pre-network legs and the exact
+298-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -629,19 +800,58 @@ and every scheduler owner. No theorem yet maps concrete effect identities and
 that complete owner union to TLA+ candidates, so this evidence remains
 unpromoted.
 
+The production exact-output seam is also source-bound by comment/literal-free
+whole-item digests. The binding covers per-target and cross-fanout FIFO heads,
+round-robin admission, pinned returned-post payload identity, atomic
+applied-height preflight, and the exact creation scope of every typed claim.
+Historical CommitQC, certified-body, and lane-certificate response claims are
+single-target exact identities whose finality artifact, canonical body, or
+certified lane artifact is independently reread from Kura at handoff; responder,
+signature, body/manifest, proposal/QCs, and response hashes are revalidated as
+applicable. Current-height global V2 messages validate their protocol and bind
+to the exact receipt/finality artifact. Winning lane messages require an exact,
+independently readable durable Kura certificate and application receipt;
+alternate vote/QC/certificate proof variants are revalidated, and structurally
+valid same-height non-winning lane messages are explicitly superseded. Native
+AMX claims pin scope, embedded round, and message hash; merge-share claims pin
+scope and share hash. Certified sidecar request/chunk claims pin scope, target
+roles, transfer identity, and exact request/response hash. Finalized-sidecar
+pruning leaves winning data in the committed merge log and supersedes losing
+pending work before handoff. Manual, wrong-identity, substituted, or otherwise
+untyped `Exact` output remains owned and fails closed. This is production
+source fidelity, not a proof of the QC-to-application pipeline or end-to-end
+catch-up.
+
 The gate next runs the separately source-sealed effect-capacity ownership
-matrix: four compact models, nineteen exact configurations, and one standalone
-runner. Eight repaired configurations finish with TLC status 0; eleven mutants
-must fail with their pinned invariant or temporal status. Across the complete
-matrix TLC generates 117 states and finds 116 distinct states. The cases cover
+matrix: 6 compact models, 28 exact configurations, and one standalone runner.
+The 10 repaired configurations finish with TLC status 0; the 18 mutants must
+fail with their pinned invariant or temporal status. Across the complete
+matrix TLC generates 147 states and finds 146 distinct states. The cases cover
 the two-Fetch/full-capacity TimeoutVote-Sign prefix, protected and terminating
 owner retirement, reconstructible full-capacity Fetch rejection, stable
 `(class, work_id)` preemption with decided-owner exclusion, and retained-suffix
-FIFO/bound/overtaking/Decision filtering. Crash/restart reconstruction is
-explicitly delegated to `SumeragiV2CrashReplayMutation`; it is not silently
-abstracted as part of these live-process models. This exhaustive finite matrix
-is mutation and regression evidence only. It supplies no deductive liveness
-proof, changes no proof-ledger status, and promotes no obligation.
+FIFO/bound/overtaking/Decision filtering. The fifth model separates the sole
+certified-request slot from two general work slots. A `FetchBody` blocked only
+by that independent request capacity retains its exact causal owner and is the
+only producer for which that capacity result is retryable; the failed attempt
+allocates neither partial work nor partial request ownership. An authenticated
+exact `CertifiedBodyResponse` with a still-live matching logical request
+registration remains transport-only and may cross retained reducer-effect debt
+to retire the blocking request, after which the durable producer reconstructs
+and retransmits the Fetch so it atomically acquires both owners.
+`CommitCertificateResponse` remains
+reducer-ordered because it unwraps a CommitQC into reducer ingress. The sixth
+model starts both a certified response and a payload chunk behind saturated
+generic count and byte ownership. Both must share a dedicated per-validator
+TransportCompletion slot and byte reserve; independent classification mutants
+stall each kind before the executor. The finite weak-fairness witness assumes
+a responsive certified source and terminating transport and body work; it does
+not establish either premise. Crash/restart reconstruction is explicitly
+delegated to `SumeragiV2CrashReplayMutation`; it is not silently abstracted as
+part of these live-process models. This
+exhaustive finite matrix is mutation and regression evidence only. It supplies
+no deductive liveness proof, changes no proof-ledger status, and promotes no
+obligation.
 
 An exhaustive one-validator ownership configuration separately checks
 `AsyncProgressOwnershipInvariant` over 42,817 generated states (6,208 distinct,

@@ -83,6 +83,29 @@ int32_t connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
     uint8_t** out_json,
     unsigned long* out_json_len);
 
+// Parses the exact typed sponsored-onboarding plan-body JSON and returns its
+// bare canonical Norito V1 bytes. The output is cleared on failure and must be
+// released with connect_norito_free on success.
+int32_t connect_norito_encode_account_onboarding_plan_body_v1(
+    const uint8_t* json,
+    unsigned long json_len,
+    uint8_t** out_body,
+    unsigned long* out_body_len);
+
+// Decodes one alias instruction through the Rust instruction registry under
+// its exact stable wire ID, then returns the complete canonical Norito frame
+// and a typed JSON envelope. Both outputs are cleared on failure and must be
+// released with connect_norito_free on success.
+int32_t connect_norito_alias_instruction_round_trip_v1(
+    const uint8_t* wire_id,
+    unsigned long wire_id_len,
+    const uint8_t* framed_payload,
+    unsigned long framed_payload_len,
+    uint8_t** out_framed_payload,
+    unsigned long* out_framed_payload_len,
+    uint8_t** out_json,
+    unsigned long* out_json_len);
+
 // Strictly parses one complete JSON value (duplicates and trailing input are
 // rejected), returns compact key-sorted Norito JSON, and writes its 32-byte
 // BLAKE3 digest. A zero-length input intentionally maps to empty canonical

@@ -114,7 +114,7 @@ KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4
 )
 
-# The first mobile release is one exact ABI-20/V4 contract. Keep the complete
+# The first mobile release is one exact ABI-21/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
 # surface. V2 suffixes below are unchanged note, authorization, membership, and
@@ -173,6 +173,8 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_detached_transaction_scaffold_inspect_v1
   connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
   connect_norito_canonical_json_blake3_v1
+  connect_norito_encode_account_onboarding_plan_body_v1
+  connect_norito_alias_instruction_round_trip_v1
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
@@ -745,8 +747,8 @@ if lab_present:
 # Candidate-evidence exports are excluded from the shipping ABI only after all
 # checks above authenticate the complete lab-only source contract.
 actual = set(all_export_counts) - set(lab_export_counts)
-if len(abi_matches) != 1 or abi_matches[0].group(1) != "20":
-    errors.append("bridge source does not declare exact ABI 20")
+if len(abi_matches) != 1 or abi_matches[0].group(1) != "21":
+    errors.append("bridge source does not declare exact ABI 21")
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
 if missing:
@@ -1018,7 +1020,7 @@ for label, actual, expected in inventories:
     retired_or_extra = sorted(actual - expected)
     if missing or retired_or_extra:
         errors.append(
-            f"Swift Kagemusha {label} inventory is not exact ABI-20/V4 "
+            f"Swift Kagemusha {label} inventory is not exact ABI-21/V4 "
             f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
         )
 if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
@@ -1140,7 +1142,7 @@ for path in paths:
         retired_or_extra = sorted(actual - expected)
         if missing or retired_or_extra:
             errors.append(
-                f"{path}: {label} inventory is not exact ABI-20/V4 "
+                f"{path}: {label} inventory is not exact ABI-21/V4 "
                 f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
             )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
@@ -1301,7 +1303,7 @@ check_xcframework() {
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*20([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 20"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*21([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 21"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -1346,8 +1348,8 @@ PY
       local source_abi manifest_abi source_commit manifest_commit source_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "20" || "$manifest_abi" != "20" ]]; then
-        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 20"
+      if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
+        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 21"
       fi
       source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"

@@ -59,6 +59,7 @@ sm = [
     "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
+    "iroha_p2p/sm",
 ]
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []

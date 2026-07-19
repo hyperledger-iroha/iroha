@@ -2,11 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, account_alias_lease, account_recovery, asset_alias,
-        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
-        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
-        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns,
-        social, soracloud, soradns, sorafs, space_directory,
+        InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
+        bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
+        identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
+        space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -184,16 +184,11 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<endorsement::RegisterDomainCommittee>,
     InstructionRegistry::register_slice::<endorsement::SetDomainEndorsementPolicy>,
     InstructionRegistry::register_slice::<endorsement::SubmitDomainEndorsement>,
-    InstructionRegistry::register_slice::<domain_link::SetAccountAliasBinding>,
-    InstructionRegistry::register_slice::<domain_link::SetPrimaryAccountAlias>,
-    InstructionRegistry::register_slice::<account_alias_lease::AcquireAccountAliasLease>,
-    InstructionRegistry::register_slice::<account_alias_lease::RenewAccountAliasLease>,
-    InstructionRegistry::register_slice::<sns::RegisterSnsName>,
-    InstructionRegistry::register_slice::<sns::RenewSnsName>,
-    InstructionRegistry::register_slice::<sns::TransferSnsName>,
-    InstructionRegistry::register_slice::<sns::UpdateSnsNameControllers>,
-    InstructionRegistry::register_slice::<sns::FreezeSnsName>,
-    InstructionRegistry::register_slice::<sns::UnfreezeSnsName>,
+    InstructionRegistry::register_slice::<alias_setup::EnsureAlias>,
+    InstructionRegistry::register_slice::<alias_setup::RenewAliasLease>,
+    InstructionRegistry::register_slice::<alias_setup::ConfigureAliasAutoRenew>,
+    InstructionRegistry::register_slice::<alias_setup::RebindAccountAlias>,
+    InstructionRegistry::register_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>,
     InstructionRegistry::register_slice::<account_recovery::ReplaceAccountController>,
     InstructionRegistry::register_slice::<account_recovery::SetAccountRecoveryPolicy>,
     InstructionRegistry::register_slice::<account_recovery::ClearAccountRecoveryPolicy>,
@@ -581,11 +576,19 @@ fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id_slice::<endorsement::SubmitDomainEndorsement>(
         "nexus::SubmitDomainEndorsement",
     );
-    registry = registry.register_with_id_slice::<domain_link::SetAccountAliasBinding>(
-        "identity::SetAccountAliasBinding",
+    registry = registry
+        .register_with_id_slice::<alias_setup::EnsureAlias>(alias_setup::EnsureAlias::WIRE_ID);
+    registry = registry.register_with_id_slice::<alias_setup::RenewAliasLease>(
+        alias_setup::RenewAliasLease::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<domain_link::SetPrimaryAccountAlias>(
-        "identity::SetPrimaryAccountAlias",
+    registry = registry.register_with_id_slice::<alias_setup::ConfigureAliasAutoRenew>(
+        alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<alias_setup::RebindAccountAlias>(
+        alias_setup::RebindAccountAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>(
+        alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<account_recovery::ReplaceAccountController>(
         account_recovery::ReplaceAccountController::WIRE_ID,
@@ -909,6 +912,81 @@ mod tests {
         assert!(!is_instruction_wire_id_registered(
             "nexus::UpsertFeeSponsorPolicy"
         ));
+    }
+
+    #[test]
+    fn legacy_split_alias_instruction_ids_are_not_registered() {
+        let registry = default();
+        let removed_ids = [
+            "iroha.account.alias.lease.acquire",
+            "iroha.account.alias.lease.renew",
+            "iroha.account.alias.binding.set",
+            "identity::SetAccountAliasBinding",
+            "iroha.account.alias.primary.set",
+            "identity::SetPrimaryAccountAlias",
+        ];
+
+        for wire_id in removed_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "retired split alias instruction id must not decode: {wire_id}"
+            );
+            assert!(!is_instruction_wire_id_registered(wire_id));
+        }
+
+        for wire_id in [
+            alias_setup::EnsureAlias::WIRE_ID,
+            alias_setup::RenewAliasLease::WIRE_ID,
+            alias_setup::RebindAccountAlias::WIRE_ID,
+            alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
+            alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+        ] {
+            assert!(
+                registry.contains(wire_id),
+                "replacement must decode: {wire_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_sns_mutation_instruction_ids_are_not_registered() {
+        let registry = default();
+        let removed_ids = [
+            "iroha_data_model::isi::sns::RegisterSnsName",
+            "iroha.sns.name.register",
+            "iroha_data_model::isi::sns::RenewSnsName",
+            "iroha.sns.name.renew",
+            "iroha_data_model::isi::sns::TransferSnsName",
+            "iroha.sns.name.transfer",
+            "iroha_data_model::isi::sns::UpdateSnsNameControllers",
+            "iroha.sns.name.controllers.update",
+            "iroha_data_model::isi::sns::FreezeSnsName",
+            "iroha.sns.name.freeze",
+            "iroha_data_model::isi::sns::UnfreezeSnsName",
+            "iroha.sns.name.unfreeze",
+        ];
+
+        for wire_id in removed_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "retired SNS mutation instruction id must not decode: {wire_id}"
+            );
+            assert!(registry.decode(wire_id, &[]).is_none());
+            assert!(!is_instruction_wire_id_registered(wire_id));
+        }
+
+        for wire_id in [
+            alias_setup::EnsureAlias::WIRE_ID,
+            alias_setup::RenewAliasLease::WIRE_ID,
+            alias_setup::RebindAccountAlias::WIRE_ID,
+            alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
+            alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+        ] {
+            assert!(
+                registry.contains(wire_id),
+                "replacement alias lifecycle instruction must decode: {wire_id}"
+            );
+        }
     }
 
     #[test]

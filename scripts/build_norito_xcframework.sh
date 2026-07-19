@@ -383,8 +383,8 @@ if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
   echo "[-] Unable to determine native bridge ABI version" >&2
   exit 1
 fi
-if [[ "$BRIDGE_ABI_VERSION" != "20" ]]; then
-  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 20 (found $BRIDGE_ABI_VERSION)" >&2
+if [[ "$BRIDGE_ABI_VERSION" != "21" ]]; then
+  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 21 (found $BRIDGE_ABI_VERSION)" >&2
   exit 1
 fi
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
@@ -415,6 +415,8 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
+    "connect_norito_encode_account_onboarding_plan_body_v1",
+    "connect_norito_alias_instruction_round_trip_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",

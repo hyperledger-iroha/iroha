@@ -22,10 +22,10 @@ use iroha_data_model::{
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
+            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
+            LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LaneSettlementReceipt, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
+            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2 as wire,
     },
@@ -56,10 +56,14 @@ use super::{
     v2_effects::VerifiedPendingGenesisNexusAmxContext,
 };
 use crate::{
-    kura::{CertifiedLaneBlockArtifact, Kura, sumeragi_v2_validator_storage_supported},
+    kura::{
+        CertifiedLaneBlockArtifact, Kura, LaneBlockApplicationReceiptArtifact,
+        LaneBlockPayloadAvailability, sumeragi_v2_validator_storage_supported,
+    },
     lane_consensus::{
         CommittedLaneBlockSession, LaneBlockSessionCache, LaneBlockSessionInsertOutcome,
-        LaneBlockVoteV1,
+        LaneBlockVoteV1, validate_committed_lane_block_session, validate_lane_block_proposal,
+        validate_lane_block_qc, validate_lane_block_qc_aggregate,
     },
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarMessage, ChunkIngestOutcome,
@@ -321,6 +325,13 @@ pub(crate) enum V2LaneWorkEffect {
         /// Lane-local message; global legacy variants are never emitted.
         message: BlockMessage,
     },
+    /// Send one exact certificate reconstructed from an immutable Kura lane artifact.
+    PostDurableLaneCertificate {
+        /// Authenticated requester of the durable certificate.
+        peer: PeerId,
+        /// Exact proposal and Prepare/Commit QCs read from Kura.
+        certificate: LaneBlockCertificateV1,
+    },
     /// Send a context-bound Native AMX request or vote to one peer.
     PostNativeAmx {
         /// Destination participant/coordinator.
@@ -486,6 +497,286 @@ struct PendingMerge {
     signatures: BTreeMap<wire::ValidatorIndex, Vec<u8>>,
 }
 
+/// Durable semantic source for one completed lane CommitQC fanout.
+///
+/// `next_validator` advances only after the exact per-peer effect has entered
+/// the bounded effect FIFO (or coalesced with the identical queued effect).
+/// The completed session remains available for reset filtering through the end
+/// of the global height even after every destination has transferred ownership.
+#[derive(Clone, Debug)]
+struct PendingCommittedLaneOutput {
+    session: CommittedLaneBlockSession,
+    next_validator: usize,
+}
+
+/// Exact durable reconstruction source for one winning lane proposal.
+#[derive(Clone, Debug)]
+enum DurableLaneSessionSource {
+    Persistent {
+        proposal: LaneBlockProposalV1,
+        signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+        durable_source_hash: Hash,
+    },
+    #[cfg(test)]
+    ExactTestMessage {
+        message_hash: HashOf<BlockMessage>,
+        durable_source_hash: Hash,
+    },
+}
+
+/// Complete typed authority for retiring lane-local output at one applied
+/// global-height boundary.
+///
+/// The winning proposal set is complete and independently names every lane
+/// session retained by the decided carrier. Output for a winning proposal
+/// requires its exact durable certificate/application witness. Structurally
+/// valid same-height output for every other proposal is explicitly superseded
+/// by the finality artifact rather than being mistaken for reconstructible
+/// winning output.
+#[derive(Clone, Debug)]
+pub(crate) struct DurableLaneRolloverAuthority {
+    finality_artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
+    height: u64,
+    winning_proposal_hashes: BTreeSet<Hash>,
+    durable_sessions: BTreeMap<Hash, DurableLaneSessionSource>,
+}
+
+impl DurableLaneRolloverAuthority {
+    fn new(
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        winning_proposal_hashes: BTreeSet<Hash>,
+        durable_sessions: BTreeMap<Hash, DurableLaneSessionSource>,
+    ) -> Self {
+        Self {
+            finality_artifact_hash: HashOf::new(finality_artifact),
+            height: finality_artifact.height,
+            winning_proposal_hashes,
+            durable_sessions,
+        }
+    }
+
+    /// Return the exact durable/supersession source commitment for one lane
+    /// output covered by this complete applied-height authority.
+    pub(crate) fn covered_source_hash(
+        &self,
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        message: &BlockMessage,
+    ) -> Result<Option<Hash>, String> {
+        if self.finality_artifact_hash != HashOf::new(finality_artifact)
+            || self.height != finality_artifact.height
+        {
+            return Ok(None);
+        }
+        let Some((proposal_height, proposal_hash)) = lane_output_identity(message) else {
+            return Ok(None);
+        };
+        if proposal_height != self.height {
+            return Ok(None);
+        }
+
+        if self.winning_proposal_hashes.contains(&proposal_hash) {
+            let source = self.durable_sessions.get(&proposal_hash).ok_or_else(|| {
+                "winning Sumeragi v2 lane output lacks its exact durable session witness".to_owned()
+            })?;
+            let covered = match source {
+                DurableLaneSessionSource::Persistent {
+                    proposal,
+                    signer_pops,
+                    durable_source_hash,
+                } => {
+                    validate_winning_lane_output(message, proposal, signer_pops)?;
+                    Some(*durable_source_hash)
+                }
+                #[cfg(test)]
+                DurableLaneSessionSource::ExactTestMessage {
+                    message_hash,
+                    durable_source_hash,
+                } => (HashOf::new(message) == *message_hash).then_some(*durable_source_hash),
+            };
+            return covered.ok_or_else(|| {
+                "winning Sumeragi v2 lane output does not match its exact durable session witness"
+                    .to_owned()
+            }).map(Some);
+        }
+
+        validate_superseded_lane_output(message)?;
+        let message_hash = HashOf::new(message);
+        Ok(Some(Hash::new_from_chunks(&[
+            b"iroha:sumeragi:v2:lane-rollover-superseded:v1\0",
+            self.finality_artifact_hash.as_ref(),
+            message_hash.as_ref(),
+        ])))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        message: &BlockMessage,
+    ) -> Self {
+        let (_, proposal_hash) = lane_output_identity(message)
+            .expect("lane rollover test authority requires lane-local output");
+        let finality_artifact_hash = HashOf::new(finality_artifact);
+        let message_hash = HashOf::new(message);
+        let durable_source_hash = Hash::new_from_chunks(&[
+            b"iroha:sumeragi:v2:lane-rollover-test-source:v1\0",
+            finality_artifact_hash.as_ref(),
+            message_hash.as_ref(),
+        ]);
+        Self::new(
+            finality_artifact,
+            BTreeSet::from([proposal_hash]),
+            BTreeMap::from([(
+                proposal_hash,
+                DurableLaneSessionSource::ExactTestMessage {
+                    message_hash,
+                    durable_source_hash,
+                },
+            )]),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn missing_winning_witness_for_test(
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        proposal_hash: Hash,
+    ) -> Self {
+        Self::new(
+            finality_artifact,
+            BTreeSet::from([proposal_hash]),
+            BTreeMap::new(),
+        )
+    }
+}
+
+impl DurableLaneSessionSource {
+    fn persistent(
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        durable_artifact: &CertifiedLaneBlockArtifact,
+        application_receipt: &LaneBlockApplicationReceiptArtifact,
+        signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+    ) -> Self {
+        let finality_artifact_hash = HashOf::new(finality_artifact);
+        let durable_artifact_hash = HashOf::new(durable_artifact);
+        let application_receipt_hash = HashOf::new(application_receipt);
+        let durable_source_hash = Hash::new_from_chunks(&[
+            b"iroha:sumeragi:v2:lane-rollover-source:v1\0",
+            finality_artifact_hash.as_ref(),
+            durable_artifact_hash.as_ref(),
+            application_receipt_hash.as_ref(),
+        ]);
+        Self::Persistent {
+            proposal: durable_artifact.proposal.clone(),
+            signer_pops,
+            durable_source_hash,
+        }
+    }
+}
+
+fn lane_output_identity(message: &BlockMessage) -> Option<(u64, Hash)> {
+    match message {
+        BlockMessage::LaneBlockProposal(proposal) => {
+            Some((proposal.descriptor.proposal_height, proposal.proposal_hash))
+        }
+        BlockMessage::LaneBlockVote(vote) => {
+            Some((vote.body.proposal_height, vote.body.proposal_hash))
+        }
+        BlockMessage::LaneBlockQc(qc) => Some((qc.body.proposal_height, qc.body.proposal_hash)),
+        BlockMessage::LaneBlockCertificate(certificate) => Some((
+            certificate.proposal.descriptor.proposal_height,
+            certificate.proposal.proposal_hash,
+        )),
+        _ => None,
+    }
+}
+
+fn validate_winning_lane_output(
+    message: &BlockMessage,
+    proposal: &LaneBlockProposalV1,
+    signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), String> {
+    match message {
+        BlockMessage::LaneBlockProposal(output) => {
+            validate_lane_block_proposal(output).map_err(|error| error.to_string())?;
+            if output != proposal {
+                return Err(
+                    "winning lane proposal differs from the exact durable proposal".to_owned(),
+                );
+            }
+        }
+        BlockMessage::LaneBlockVote(vote) => {
+            let phase = vote.body.phase;
+            vote.validate_ingress(phase)
+                .map_err(|error| error.to_string())?;
+            if vote.body != proposal.vote_body(phase)
+                || !proposal.descriptor.validator_set.contains(&vote.signer)
+            {
+                return Err("winning lane vote differs from the exact durable proposal".to_owned());
+            }
+        }
+        BlockMessage::LaneBlockQc(qc) => {
+            validate_winning_lane_qc(qc, proposal, signer_pops)?;
+        }
+        BlockMessage::LaneBlockCertificate(certificate) => {
+            if certificate.proposal != *proposal {
+                return Err(
+                    "winning lane certificate differs from the exact durable proposal".to_owned(),
+                );
+            }
+            validate_winning_lane_qc(&certificate.prepare_qc, proposal, signer_pops)?;
+            validate_winning_lane_qc(&certificate.commit_qc, proposal, signer_pops)?;
+        }
+        _ => return Err("rollover authority received non-lane output".to_owned()),
+    }
+    Ok(())
+}
+
+fn validate_winning_lane_qc(
+    qc: &LaneBlockQcV1,
+    proposal: &LaneBlockProposalV1,
+    signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<(), String> {
+    if !matches!(qc.body.phase, CertPhase::Prepare | CertPhase::Commit)
+        || qc.body != proposal.vote_body(qc.body.phase)
+        || qc.validator_set != proposal.descriptor.validator_set
+    {
+        return Err("winning lane QC differs from the exact durable proposal".to_owned());
+    }
+    validate_lane_block_qc_aggregate(qc, signer_pops).map_err(|error| error.to_string())
+}
+
+fn validate_superseded_lane_output(message: &BlockMessage) -> Result<(), String> {
+    match message {
+        BlockMessage::LaneBlockProposal(proposal) => {
+            validate_lane_block_proposal(proposal).map_err(|error| error.to_string())
+        }
+        BlockMessage::LaneBlockVote(vote) => vote
+            .validate_ingress(vote.body.phase)
+            .map_err(|error| error.to_string()),
+        BlockMessage::LaneBlockQc(qc) => {
+            // This corridor accepts lane effects only from `V2LaneWorkAdapter`,
+            // which verifies PoPs and the aggregate before emission. Recheck
+            // the complete bounded QC shape here; the finality authority makes
+            // its non-winning proposal obsolete, not reconstructible.
+            validate_lane_block_qc(qc).map_err(|error| error.to_string())
+        }
+        BlockMessage::LaneBlockCertificate(certificate) => {
+            let session = CommittedLaneBlockSession {
+                proposal: certificate.proposal.clone(),
+                prepare_qc: certificate.prepare_qc.clone(),
+                commit_qc: certificate.commit_qc.clone(),
+            };
+            validate_committed_lane_block_session(&session).map_err(|error| error.to_string())
+        }
+        _ => Err("rollover authority received non-lane output".to_owned()),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoricalRecoveryPersistence {
+    Complete,
+    WaitingForCanonicalDependency,
+}
+
 #[derive(Clone, Debug)]
 enum PendingMergeStage {
     Collecting(crate::merge::MergeLedgerCandidate),
@@ -527,6 +818,13 @@ pub(crate) struct V2LaneWorkAdapter {
     merge_retention_scans: usize,
     locally_bound_lane_proposals: BTreeMap<Hash, LaneBlockProposalPayloadHintV1>,
     pending_committed_lanes: VecDeque<CommittedLaneBlockSession>,
+    committed_lane_outputs: VecDeque<PendingCommittedLaneOutput>,
+    /// Certified earlier-height sessions awaiting their strict Kura and
+    /// application-witness boundary. These are not speculative work for the
+    /// current global carrier and therefore must never be filtered by a
+    /// current-height lock or Decision.
+    historical_recovery_sessions: VecDeque<CommittedLaneBlockSession>,
+    committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, u64, Hash)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
@@ -716,6 +1014,9 @@ impl V2LaneWorkAdapter {
             merge_retention_scans: 0,
             locally_bound_lane_proposals: BTreeMap::new(),
             pending_committed_lanes: VecDeque::new(),
+            committed_lane_outputs: VecDeque::new(),
+            historical_recovery_sessions: VecDeque::new(),
+            committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
@@ -932,7 +1233,9 @@ impl V2LaneWorkAdapter {
         self.pending_local_lane_proposals.clear();
         self.merge_entries.clear();
         self.merge_claims.clear();
-        self.purge_queued_global_body_effects();
+        self.retain_committed_lane_outputs_for_subject(subject);
+        self.purge_queued_global_body_effects_except_committed_outputs();
+        self.schedule_committed_lane_outputs();
         Ok(GlobalBodyLockOutcome::Inserted)
     }
 
@@ -1021,6 +1324,7 @@ impl V2LaneWorkAdapter {
     }
 
     fn retire_speculative_work_after_decision(&mut self, decided: wire::BlockSubject) {
+        self.collect_committed_lane_sessions();
         self.lane_sessions
             .retire_uncommitted_global_anchors_except(decided.block_hash);
         self.planned_lane_proposals.clear();
@@ -1030,8 +1334,9 @@ impl V2LaneWorkAdapter {
         self.native_claims.clear();
         self.local_native_claims.clear();
         self.admitted_relays.clear();
-        self.effects.clear();
-        self.effect_keys.clear();
+        self.retain_committed_lane_outputs_for_subject(decided);
+        self.purge_queued_global_body_effects_except_committed_outputs();
+        self.schedule_committed_lane_outputs();
     }
 
     /// Bind lane proposals reconstructed from the exact durable globally
@@ -1326,8 +1631,231 @@ impl V2LaneWorkAdapter {
             persisted = persisted.saturating_add(1);
         }
         self.pending_committed_lanes = retained;
+        self.schedule_committed_lane_outputs();
         operation.complete();
         Ok(persisted)
+    }
+
+    /// Build the complete lane-output rollover authority after every winning
+    /// current-height session is independently readable across Kura's strict
+    /// certificate and application-receipt boundaries.
+    pub(crate) fn durable_lane_rollover_authority(
+        &self,
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<DurableLaneRolloverAuthority, V2LaneWorkError> {
+        let _permit = self
+            .output_guard
+            .acquire()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        finality_artifact
+            .validate()
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        if finality_artifact.height_context != self.context {
+            return Err(V2LaneWorkError::Persistence(
+                "lane rollover finality authority differs from the frozen height context"
+                    .to_owned(),
+            ));
+        }
+
+        let winning_proposal_hashes = self
+            .committed_lane_outputs
+            .iter()
+            .map(|output| output.session.proposal.proposal_hash)
+            .collect::<BTreeSet<_>>();
+        let mut durable_sessions = BTreeMap::new();
+        for output in &self.committed_lane_outputs {
+            let session = &output.session;
+            let pops = self.pops_for_lane_session(session);
+            let candidate = CertifiedLaneBlockArtifact::new(session.clone(), pops);
+            Kura::validate_certified_lane_block_artifact(&candidate).map_err(|message| {
+                V2LaneWorkError::Persistence(format!(
+                    "retained lane CommitQC output is invalid: {message}"
+                ))
+            })?;
+
+            let descriptor = &session.proposal.descriptor;
+            let durable = self
+                .kura
+                .read_certified_lane_block_artifact(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                )
+                .ok_or_else(|| {
+                    V2LaneWorkError::Persistence(
+                        "retained lane CommitQC has no durable certified artifact".to_owned(),
+                    )
+                })?;
+            let application_receipt = self
+                .kura
+                .read_lane_block_application_receipt(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                )
+                .ok_or_else(|| {
+                    V2LaneWorkError::Persistence(
+                        "retained lane CommitQC has no durable application receipt".to_owned(),
+                    )
+                })?;
+            let Some(hint) = session.proposal.payload_block_hint else {
+                return Err(V2LaneWorkError::Persistence(
+                    "retained current-height lane CommitQC has no global block anchor".to_owned(),
+                ));
+            };
+            let same_commit_decision = session.commit_qc.body == durable.commit_qc.body
+                && session.commit_qc.validator_set_hash_version
+                    == durable.commit_qc.validator_set_hash_version
+                && session.commit_qc.validator_set_hash == durable.commit_qc.validator_set_hash
+                && session.commit_qc.validator_set == durable.commit_qc.validator_set
+                && session.commit_qc.payload_availability_qc
+                    == durable.commit_qc.payload_availability_qc;
+            if durable.proposal != session.proposal
+                || !same_commit_decision
+                || application_receipt.proposal != session.proposal
+                || descriptor.proposal_height != finality_artifact.height
+                || hint.proposal_height != finality_artifact.height
+                || hint.proposal_block_hash != finality_artifact.block_hash
+                || application_receipt.application_block_height != finality_artifact.height
+                || application_receipt.application_block_hash != finality_artifact.block_hash
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "retained lane CommitQC is not bound to the exact applied global artifact"
+                        .to_owned(),
+                ));
+            }
+            let mut signer_pops = durable.signer_pops.clone();
+            signer_pops.extend(candidate.signer_pops);
+            let source = DurableLaneSessionSource::persistent(
+                finality_artifact,
+                &durable,
+                &application_receipt,
+                signer_pops,
+            );
+            if durable_sessions
+                .insert(session.proposal.proposal_hash, source)
+                .is_some()
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "duplicate winning lane proposal in rollover authority".to_owned(),
+                ));
+            }
+        }
+        Ok(DurableLaneRolloverAuthority::new(
+            finality_artifact,
+            winning_proposal_hashes,
+            durable_sessions,
+        ))
+    }
+
+    /// Advance one earlier-height certificate through its strict durability
+    /// and application-witness boundary.
+    ///
+    /// The FIFO is serviced independently of the current global carrier. A
+    /// missing committed anchor, predecessor receipt, block body, or execution
+    /// result keeps the exact session owned for a later fair turn. Invalid or
+    /// conflicting durable evidence returns an error without retiring the
+    /// owner, causing the process-wide output guard to fail closed.
+    pub(crate) fn service_next_historical_recovery(&mut self) -> Result<bool, V2LaneWorkError> {
+        let Some(session) = self.historical_recovery_sessions.pop_front() else {
+            return Ok(false);
+        };
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            self.historical_recovery_sessions.push_front(session);
+            return Err(V2LaneWorkError::RestartRequired);
+        };
+        match self.persist_historical_recovery_session(&session) {
+            Ok(HistoricalRecoveryPersistence::Complete) => {
+                operation.complete();
+                Ok(true)
+            }
+            Ok(HistoricalRecoveryPersistence::WaitingForCanonicalDependency) => {
+                self.historical_recovery_sessions.push_back(session);
+                operation.complete();
+                Ok(false)
+            }
+            Err(error) => {
+                self.historical_recovery_sessions.push_front(session);
+                Err(error)
+            }
+        }
+    }
+
+    /// Return whether an earlier-height certified session still owns local
+    /// persistence or application work.
+    pub(crate) fn has_pending_historical_recovery(&self) -> bool {
+        !self.historical_recovery_sessions.is_empty()
+    }
+
+    fn persist_historical_recovery_session(
+        &self,
+        session: &CommittedLaneBlockSession,
+    ) -> Result<HistoricalRecoveryPersistence, V2LaneWorkError> {
+        if !self.session_has_canonical_anchor(session)
+            || !self.proposal_anchor_is_committed_in_state(&session.proposal)
+        {
+            return Ok(HistoricalRecoveryPersistence::WaitingForCanonicalDependency);
+        }
+
+        let pops = self.pops_for_lane_session(session);
+        let candidate = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+        Kura::validate_certified_lane_block_artifact(&candidate).map_err(|message| {
+            V2LaneWorkError::Persistence(format!(
+                "historical lane certificate is invalid: {message}"
+            ))
+        })?;
+        match self.kura.recover_lane_block_payload(&session.proposal) {
+            Ok(_) => {}
+            Err(
+                LaneBlockPayloadAvailability::MissingLaneArtifact
+                | LaneBlockPayloadAvailability::MissingProposalBlock,
+            ) => return Ok(HistoricalRecoveryPersistence::WaitingForCanonicalDependency),
+            Err(availability) => {
+                return Err(V2LaneWorkError::Persistence(format!(
+                    "historical lane certificate is anchored to invalid payload: {availability:?}"
+                )));
+            }
+        }
+        let descriptor = &session.proposal.descriptor;
+        let durable = self
+            .kura
+            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height);
+        let durable_proposal = match durable {
+            Some(durable) if durable.proposal == session.proposal => durable.proposal,
+            Some(_) => {
+                return Err(V2LaneWorkError::Persistence(
+                    "historical lane certificate conflicts with the durable lane slot".to_owned(),
+                ));
+            }
+            None => {
+                self.kura
+                    .persist_committed_lane_block_session(session, &pops)
+                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+                session.proposal.clone()
+            }
+        };
+
+        if self
+            .state
+            .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+        {
+            return Ok(HistoricalRecoveryPersistence::Complete);
+        }
+        if !self
+            .state
+            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                &durable_proposal,
+            )
+        {
+            return Ok(HistoricalRecoveryPersistence::WaitingForCanonicalDependency);
+        }
+        let receipt_persisted = self
+            .kura
+            .persist_lane_block_application_receipt_if_ready(&durable_proposal)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        if !receipt_persisted {
+            return Ok(HistoricalRecoveryPersistence::WaitingForCanonicalDependency);
+        }
+        Ok(HistoricalRecoveryPersistence::Complete)
     }
 
     /// Retire losing certified merge sidecars once another carrier is durably
@@ -1391,7 +1919,8 @@ impl V2LaneWorkAdapter {
                 == Some(hint.proposal_block_hash)
     }
 
-    /// Accept a lane proposal/vote/QC from the existing bounded ingress lanes.
+    /// Accept a lane proposal, vote, QC, or atomic certificate recovery from
+    /// the existing bounded ingress lanes.
     pub(crate) fn accept_lane_message(
         &mut self,
         inbound: InboundBlockMessage,
@@ -1401,10 +1930,15 @@ impl V2LaneWorkAdapter {
         let Some(_permit) = output_guard.acquire() else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if self.decision_pending() {
+        let (message, sender) = inbound.into_message_and_sender();
+        if let BlockMessage::LaneBlockProposal(proposal) = &message
+            && let Some(outcome) = self.serve_durable_lane_certificate(proposal, sender.as_ref())
+        {
+            return outcome;
+        }
+        if self.decision_pending() && !matches!(message, BlockMessage::LaneBlockCertificate(_)) {
             return V2LaneIngressOutcome::Rejected;
         }
-        let (message, sender) = inbound.into_message_and_sender();
         let outcome = match message {
             BlockMessage::LaneBlockProposal(proposal) => {
                 self.insert_lane_proposal(proposal, sender.as_ref(), false, active_view)
@@ -1413,12 +1947,63 @@ impl V2LaneWorkAdapter {
                 self.insert_lane_vote(vote, sender.as_ref(), active_view)
             }
             BlockMessage::LaneBlockQc(qc) => self.insert_lane_qc(qc, active_view),
+            BlockMessage::LaneBlockCertificate(certificate) => {
+                self.insert_lane_certificate(*certificate, active_view)
+            }
             _ => V2LaneIngressOutcome::Rejected,
         };
         if outcome != V2LaneIngressOutcome::Rejected {
             self.drive_lane_sessions();
         }
         outcome
+    }
+
+    /// Treat an exact canonical proposal retransmission as an idempotent
+    /// request for the complete Kura-backed certificate.
+    ///
+    /// The requester retains and periodically retransmits its incomplete
+    /// proposal, so an occupied effect slot leaves reconstruction at the
+    /// durable source instead of requiring an unbounded response queue here.
+    fn serve_durable_lane_certificate(
+        &mut self,
+        proposal: &LaneBlockProposalV1,
+        sender: Option<&PeerId>,
+    ) -> Option<V2LaneIngressOutcome> {
+        let sender = sender?;
+        let artifact = self.kura.read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )?;
+        if artifact.proposal != *proposal {
+            return None;
+        }
+        // The requester need not belong to the historical lane committee: a
+        // current global validator which missed the original lane fanout must
+        // still be able to apply the already-committed global block. Limit the
+        // idempotent response to an authenticated member of either the frozen
+        // current global roster or the canonical historical lane committee.
+        let requester_is_current_validator = self
+            .context
+            .roster
+            .iter()
+            .any(|entry| &entry.validator == sender);
+        if !requester_is_current_validator && !artifact.commit_qc.validator_set.contains(sender) {
+            return Some(V2LaneIngressOutcome::Rejected);
+        }
+        let certificate = LaneBlockCertificateV1 {
+            proposal: artifact.proposal,
+            prepare_qc: artifact.prepare_qc,
+            commit_qc: artifact.commit_qc,
+        };
+        let queued = self.push_effect(V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer: sender.clone(),
+            certificate,
+        });
+        Some(if queued {
+            V2LaneIngressOutcome::Inserted
+        } else {
+            V2LaneIngressOutcome::Duplicate
+        })
     }
 
     /// Register a deterministic validation blocked only on one exact certified
@@ -1729,8 +2314,12 @@ impl V2LaneWorkAdapter {
         }
 
         if self.decision_pending() {
-            self.effects.clear();
-            self.effect_keys.clear();
+            self.collect_committed_lane_sessions();
+            if let Some((_, _, Some(decided))) = self.retained_merge_carrier_state {
+                self.retain_committed_lane_outputs_for_subject(decided);
+            }
+            self.purge_queued_global_body_effects_except_committed_outputs();
+            self.schedule_committed_lane_outputs();
             operation.complete();
             return Ok(());
         }
@@ -1784,9 +2373,29 @@ impl V2LaneWorkAdapter {
     }
 
     fn schedule_lane_artifact_retransmissions(&mut self) {
+        // Peer-queue admission is only a volatile delivery boundary. Begin a
+        // fresh bounded fanout round after the previous round transferred all
+        // destinations, so a connection-generation failure after enqueue
+        // cannot permanently erase the final lane certificate. Once Decision
+        // is installed, the decision branch above finishes the current
+        // handoff without starting another round; the durable global decision
+        // then supersedes this lane-local recovery source.
+        if !self.committed_lane_outputs.is_empty()
+            && self
+                .committed_lane_outputs
+                .iter()
+                .all(|output| output.next_validator >= output.session.commit_qc.validator_set.len())
+        {
+            for output in &mut self.committed_lane_outputs {
+                output.next_validator = 0;
+            }
+        }
+        self.schedule_committed_lane_outputs();
         let mut lane_artifacts = Vec::new();
         for proposal in self.lane_sessions.proposals_without_commit_qc() {
-            if !self.proposal_body_available(&proposal) {
+            if !self.proposal_body_available(&proposal)
+                || self.historical_certificate_is_owned_or_durable(&proposal)
+            {
                 continue;
             }
             lane_artifacts.push((
@@ -1798,7 +2407,9 @@ impl V2LaneWorkAdapter {
             .lane_sessions
             .local_vote_rebroadcast_artifacts_for(&self.local_peer)
         {
-            if !self.proposal_body_available(&proposal) {
+            if !self.proposal_body_available(&proposal)
+                || self.historical_certificate_is_owned_or_durable(&proposal)
+            {
                 continue;
             }
             lane_artifacts.push((
@@ -1807,7 +2418,9 @@ impl V2LaneWorkAdapter {
             ));
         }
         for qc in self.lane_sessions.qcs_for_incomplete_sessions() {
-            if !self.lane_vote_body_available(&qc.body) {
+            if !self.lane_vote_body_available(&qc.body)
+                || self.historical_certificate_body_is_owned_or_durable(&qc.body)
+            {
                 continue;
             }
             let validators = qc.validator_set.clone();
@@ -1827,6 +2440,38 @@ impl V2LaneWorkAdapter {
             }
             self.lane_artifact_cursor = (start + advanced.max(1)) % lane_artifacts.len();
         }
+    }
+
+    fn historical_certificate_is_owned_or_durable(&self, proposal: &LaneBlockProposalV1) -> bool {
+        if proposal.descriptor.proposal_height >= self.context.height {
+            return false;
+        }
+        self.historical_recovery_sessions
+            .iter()
+            .any(|pending| &pending.proposal == proposal)
+            || self
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_some_and(|durable| &durable.proposal == proposal)
+    }
+
+    fn historical_certificate_body_is_owned_or_durable(
+        &self,
+        body: &iroha_data_model::block::consensus::LaneBlockVoteBodyV1,
+    ) -> bool {
+        if body.proposal_height >= self.context.height {
+            return false;
+        }
+        self.historical_recovery_sessions
+            .iter()
+            .any(|pending| pending.proposal.proposal_hash == body.proposal_hash)
+            || self
+                .kura
+                .read_certified_lane_block_artifact(body.lane_id, body.lane_block_height)
+                .is_some_and(|durable| durable.proposal.proposal_hash == body.proposal_hash)
     }
 
     fn schedule_native_retransmissions(&mut self) {
@@ -2137,6 +2782,103 @@ impl V2LaneWorkAdapter {
         }
     }
 
+    fn insert_lane_certificate(
+        &mut self,
+        certificate: LaneBlockCertificateV1,
+        active_view: wire::View,
+    ) -> V2LaneIngressOutcome {
+        let LaneBlockCertificateV1 {
+            proposal,
+            prepare_qc,
+            commit_qc,
+        } = certificate;
+        if prepare_qc.body != proposal.vote_body(CertPhase::Prepare)
+            || commit_qc.body != proposal.vote_body(CertPhase::Commit)
+            || !self.proposal_body_available(&proposal)
+            || !self.lane_qc_authorized(&prepare_qc, active_view)
+            || !self.lane_qc_authorized(&commit_qc, active_view)
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+
+        if proposal.descriptor.proposal_height > self.context.height {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if proposal.descriptor.proposal_height < self.context.height {
+            return self.insert_historical_lane_certificate(proposal, prepare_qc, commit_qc);
+        }
+        if self
+            .committed_lane_outputs
+            .len()
+            .saturating_add(self.historical_recovery_sessions.len())
+            >= self.limits.session_capacity.get()
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+
+        let mut next_sessions = self.lane_sessions.clone();
+        let mut inserted = false;
+        for outcome in [
+            next_sessions.insert_recovered_proposal_replacing_uncommitted_conflict(proposal),
+            next_sessions
+                .insert_qc_with_pops(prepare_qc.clone(), &self.pops_for_lane_qc(&prepare_qc)),
+            next_sessions
+                .insert_qc_with_pops(commit_qc.clone(), &self.pops_for_lane_qc(&commit_qc)),
+        ] {
+            match outcome {
+                Ok(LaneBlockSessionInsertOutcome::Inserted) => inserted = true,
+                Ok(LaneBlockSessionInsertOutcome::Duplicate) => {}
+                Err(_) => return V2LaneIngressOutcome::Rejected,
+            }
+        }
+        self.lane_sessions = next_sessions;
+        if inserted {
+            V2LaneIngressOutcome::Inserted
+        } else {
+            V2LaneIngressOutcome::Duplicate
+        }
+    }
+
+    fn insert_historical_lane_certificate(
+        &mut self,
+        proposal: LaneBlockProposalV1,
+        prepare_qc: LaneBlockQcV1,
+        commit_qc: LaneBlockQcV1,
+    ) -> V2LaneIngressOutcome {
+        let session = CommittedLaneBlockSession {
+            proposal,
+            prepare_qc,
+            commit_qc,
+        };
+        let pops = self.pops_for_lane_session(&session);
+        let candidate = CertifiedLaneBlockArtifact::new(session.clone(), pops);
+        if Kura::validate_certified_lane_block_artifact(&candidate).is_err() {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if self
+            .state
+            .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
+        {
+            return V2LaneIngressOutcome::Duplicate;
+        }
+        if self
+            .historical_recovery_sessions
+            .iter()
+            .any(|pending| pending.proposal == session.proposal)
+        {
+            return V2LaneIngressOutcome::Duplicate;
+        }
+        let retained_sessions = self
+            .committed_lane_outputs
+            .len()
+            .saturating_add(self.historical_recovery_sessions.len());
+        if retained_sessions >= self.limits.session_capacity.get() {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        self.historical_recovery_sessions.push_back(session);
+        V2LaneIngressOutcome::Inserted
+    }
+
     fn lane_proposal_authorized(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -2291,6 +3033,12 @@ impl V2LaneWorkAdapter {
         }
 
         for qc in self.lane_sessions.drain_newly_sealed_qcs() {
+            if qc.body.proposal_height < self.context.height {
+                // Earlier-height certificates are recovery inputs, not fresh
+                // current-carrier fanout. Their durable Kura source answers
+                // exact proposal retransmissions after local persistence.
+                continue;
+            }
             let validators = qc.validator_set.clone();
             self.fanout_lane_message(BlockMessage::LaneBlockQc(qc), &validators);
         }
@@ -2360,9 +3108,21 @@ impl V2LaneWorkAdapter {
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
 
-    fn purge_queued_global_body_effects(&mut self) {
+    fn purge_queued_global_body_effects_except_committed_outputs(&mut self) {
+        let committed_proposals = self
+            .committed_lane_outputs
+            .iter()
+            .map(|output| output.session.proposal.proposal_hash)
+            .collect::<BTreeSet<_>>();
         self.effects.retain(|effect| {
-            !matches!(
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockQc(qc),
+                    ..
+                } if qc.body.phase == CertPhase::Commit
+                    && committed_proposals.contains(&qc.body.proposal_hash)
+            ) || !matches!(
                 effect,
                 V2LaneWorkEffect::PostLaneBlock { .. } | V2LaneWorkEffect::BroadcastMerge(_)
             )
@@ -2370,14 +3130,128 @@ impl V2LaneWorkAdapter {
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
 
+    fn retain_committed_lane_outputs_for_subject(&mut self, subject: wire::BlockSubject) {
+        self.pending_committed_lanes.retain(|session| {
+            session
+                .proposal
+                .payload_block_hint
+                .as_ref()
+                .is_some_and(|hint| hint.proposal_block_hash == subject.block_hash)
+        });
+        self.committed_lane_outputs.retain(|output| {
+            output
+                .session
+                .proposal
+                .payload_block_hint
+                .is_some_and(|hint| hint.proposal_block_hash == subject.block_hash)
+        });
+    }
+
+    fn schedule_committed_lane_outputs(&mut self) {
+        let output_count = self.committed_lane_outputs.len();
+        if output_count == 0 {
+            self.committed_lane_output_cursor = 0;
+            return;
+        }
+
+        let mut consecutive_complete = 0usize;
+        while consecutive_complete < output_count {
+            let output_index = self.committed_lane_output_cursor % output_count;
+            self.committed_lane_output_cursor = (output_index + 1) % output_count;
+            let attempt = {
+                let output = &self.committed_lane_outputs[output_index];
+                let validators = &output.session.commit_qc.validator_set;
+                let mut validator_index = output.next_validator;
+                while validator_index < validators.len()
+                    && validators[validator_index] == self.local_peer
+                {
+                    validator_index = validator_index.saturating_add(1);
+                }
+                (validator_index < validators.len()).then(|| {
+                    (
+                        validator_index,
+                        validators[validator_index].clone(),
+                        output.session.commit_qc.clone(),
+                    )
+                })
+            };
+            let Some((validator_index, peer, commit_qc)) = attempt else {
+                self.committed_lane_outputs[output_index].next_validator = self
+                    .committed_lane_outputs[output_index]
+                    .session
+                    .commit_qc
+                    .validator_set
+                    .len();
+                consecutive_complete = consecutive_complete.saturating_add(1);
+                continue;
+            };
+            self.committed_lane_outputs[output_index].next_validator = validator_index;
+            if !self.push_effect(V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: BlockMessage::LaneBlockQc(commit_qc),
+            }) {
+                return;
+            }
+            self.committed_lane_outputs[output_index].next_validator =
+                validator_index.saturating_add(1);
+            consecutive_complete = 0;
+        }
+    }
+
+    /// Return whether a completed lane CommitQC still awaits transfer into the
+    /// network actor's exact-output corridor.
+    pub(crate) fn has_pending_committed_output_handoff(&self) -> bool {
+        let committed_proposals = self
+            .committed_lane_outputs
+            .iter()
+            .map(|output| output.session.proposal.proposal_hash)
+            .collect::<BTreeSet<_>>();
+        self.committed_lane_outputs.iter().any(|output| {
+            output.session.commit_qc.validator_set[output.next_validator..]
+                .iter()
+                .any(|peer| peer != &self.local_peer)
+        }) || self.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockQc(qc),
+                    ..
+                } if qc.body.phase == CertPhase::Commit
+                    && committed_proposals.contains(&qc.body.proposal_hash)
+            )
+        })
+    }
+
     fn collect_committed_lane_sessions(&mut self) {
-        let remaining = self
-            .limits
-            .session_capacity
-            .get()
-            .saturating_sub(self.pending_committed_lanes.len());
-        self.pending_committed_lanes
-            .extend(self.lane_sessions.drain_committed_sessions_up_to(remaining));
+        let remaining = self.limits.session_capacity.get().saturating_sub(
+            self.committed_lane_outputs
+                .len()
+                .saturating_add(self.historical_recovery_sessions.len()),
+        );
+        for session in self.lane_sessions.drain_committed_sessions_up_to(remaining) {
+            if session.proposal.descriptor.proposal_height < self.context.height {
+                if !self
+                    .historical_recovery_sessions
+                    .iter()
+                    .any(|pending| pending.proposal == session.proposal)
+                    && !self
+                        .state
+                        .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(
+                            &session,
+                        )
+                {
+                    self.historical_recovery_sessions.push_back(session);
+                }
+                continue;
+            }
+            self.committed_lane_outputs
+                .push_back(PendingCommittedLaneOutput {
+                    session: session.clone(),
+                    next_validator: 0,
+                });
+            self.pending_committed_lanes.push_back(session);
+        }
+        self.schedule_committed_lane_outputs();
     }
 
     fn proposal_body_available(&self, proposal: &LaneBlockProposalV1) -> bool {
@@ -4202,6 +5076,11 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
             encoded.extend(peer.encode());
             encoded.extend(message.encode());
         }
+        V2LaneWorkEffect::PostDurableLaneCertificate { peer, certificate } => {
+            encoded.push(4);
+            encoded.extend(peer.encode());
+            encoded.extend(certificate.encode());
+        }
         V2LaneWorkEffect::PostNativeAmx { peer, message } => {
             encoded.push(1);
             encoded.extend(peer.encode());
@@ -4394,7 +5273,8 @@ fn proposal_from_ownership(
 }
 
 #[cfg(test)]
-mod tests {
+/// Shared durable-lane fixtures and lane-work unit tests.
+pub(super) mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -4452,6 +5332,45 @@ mod tests {
         height: u64,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         fixture_at_height_inner(mode, height, false)
+    }
+
+    /// Exact certified lane source shared with worker rollover tests.
+    pub(in crate::sumeragi) struct DurableLaneHistoryFixture {
+        /// Kura containing the certified lane artifact.
+        pub(in crate::sumeragi) kura: Arc<Kura>,
+        /// Exact certificate reconstructed from the Kura artifact.
+        pub(in crate::sumeragi) certificate: LaneBlockCertificateV1,
+        /// Global context which anchored the certified lane proposal.
+        pub(in crate::sumeragi) context: wire::HeightContext,
+        /// Validator keys used only by deterministic tests.
+        pub(in crate::sumeragi) validators: Vec<KeyPair>,
+    }
+
+    /// Persist one exact certified lane artifact for worker rollover tests.
+    pub(in crate::sumeragi) fn durable_lane_history_fixture() -> DurableLaneHistoryFixture {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (_, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        let pops = adapter.pops_for_lane_session(&session);
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&session, &pops)
+            .expect("persist durable lane-history fixture");
+        let certificate = LaneBlockCertificateV1 {
+            proposal: session.proposal,
+            prepare_qc: session.prepare_qc,
+            commit_qc: session.commit_qc,
+        };
+        DurableLaneHistoryFixture {
+            kura: Arc::clone(&adapter.kura),
+            certificate,
+            context: adapter.context.clone(),
+            validators: keys,
+        }
     }
 
     fn fixture_at_height_inner(
@@ -6036,7 +6955,7 @@ mod tests {
             .kura
             .store_block(block.clone())
             .expect("persist canonical lane anchor");
-        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
 
         let persisted = CommittedLaneBlockSession {
@@ -6142,6 +7061,12 @@ mod tests {
         adapter
             .pending_committed_lanes
             .push_back(alternative_qc.clone());
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session: alternative_qc.clone(),
+                next_validator: 0,
+            });
         assert_eq!(
             adapter
                 .persist_anchored_sessions()
@@ -6160,6 +7085,53 @@ mod tests {
         assert_eq!(durable.proposal, persisted.proposal);
         assert_eq!(durable.prepare_qc, persisted.prepare_qc);
         assert_eq!(durable.commit_qc, persisted.commit_qc);
+
+        let finality_artifact = finality_artifact_for_block(&adapter, &keys, &block);
+        let authority = adapter
+            .durable_lane_rollover_authority(&finality_artifact)
+            .expect("build exact durable lane rollover authority");
+        let winning_vote = signed_lane_vote(&proposal, CertPhase::Prepare, &keys[3]);
+        let winning_certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: alternative_qc.prepare_qc.clone(),
+            commit_qc: alternative_qc.commit_qc.clone(),
+        };
+        for message in [
+            BlockMessage::LaneBlockProposal(proposal.clone()),
+            BlockMessage::LaneBlockVote(winning_vote),
+            BlockMessage::LaneBlockQc(alternative_qc.prepare_qc.clone()),
+            BlockMessage::LaneBlockQc(alternative_qc.commit_qc.clone()),
+            BlockMessage::LaneBlockCertificate(Box::new(winning_certificate)),
+        ] {
+            assert!(
+                authority
+                    .covered_source_hash(&finality_artifact, &message)
+                    .expect("validate winning lane rollover output")
+                    .is_some(),
+                "every exact winning lane artifact must share the durable session witness"
+            );
+        }
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockProposal(conflicting_body.proposal.clone()),
+                )
+                .expect("classify same-height losing lane output")
+                .is_some(),
+            "the finality artifact must explicitly supersede a non-winning proposal"
+        );
+        let mut invalid_winning_qc = alternative_qc.commit_qc;
+        invalid_winning_qc.bls_aggregate_signature[0] ^= 0x80;
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(invalid_winning_qc),
+                )
+                .is_err(),
+            "a winning proposal hash must not hide invalid proof bytes"
+        );
     }
 
     #[test]
@@ -6842,6 +7814,76 @@ mod tests {
                 payload_hash: Hash::new(&canonical_wire),
             },
         )
+    }
+
+    fn finality_artifact_for_block(
+        adapter: &V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        block: &SignedBlock,
+    ) -> wire::finality::V2FinalityArtifact {
+        let (round, subject) = global_lock_for_block(adapter, block);
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            adapter.context.clone(),
+            subject,
+            wire::QuorumCertificate {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"lane rollover parent state"),
+                    Hash::new(b"lane rollover post state"),
+                    Hash::new(b"lane rollover writes"),
+                    Hash::new(b"lane rollover executed block"),
+                ),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA5; 48],
+            },
+            keys.iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("global validator proof of possession")
+                })
+                .collect(),
+        );
+        artifact
+            .validate()
+            .expect("valid lane rollover finality artifact");
+        artifact
+    }
+
+    fn successor_context_for_parent(
+        adapter: &V2LaneWorkAdapter,
+        parent: &SignedBlock,
+    ) -> wire::HeightContext {
+        let parent_context_id = adapter.context.id();
+        let parent_wire = parent.encode_wire().expect("encode parent block");
+        let mut context = adapter.context.clone();
+        context.height = context.height.checked_add(1).expect("successor height");
+        context.parent_commit_qc = Some(wire::QuorumCertificate {
+            round: wire::ConsensusRound {
+                context_id: parent_context_id,
+                height: parent.header().height().get(),
+                view: parent.header().view_change_index(),
+            },
+            phase: wire::GlobalPhase::Commit,
+            subject: wire::BlockSubject {
+                parent_block_hash: parent.header().prev_block_hash(),
+                block_hash: parent.hash(),
+                payload_hash: Hash::new(&parent_wire),
+            },
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"lane-certificate parent state"),
+                Hash::new(b"lane-certificate parent post-state"),
+                Hash::new(b"lane-certificate parent writes"),
+                Hash::new(&parent_wire),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xA5; 48],
+        });
+        context.snapshot_bootstrap = None;
+        context.nexus_amx_context_hash =
+            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        context
     }
 
     fn globally_anchored_lane_block_fixture(
@@ -8133,6 +9175,804 @@ mod tests {
             )),
             "safety-retained state for the losing carrier must not remain live traffic"
         );
+    }
+
+    #[test]
+    fn decision_cleanup_fairly_reconstructs_completed_commit_qc_fanout() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (locked_round, locked_subject) = global_lock_for_block(&adapter, &block);
+        assert_eq!(
+            adapter.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_ne!(
+            adapter.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Rejected
+        );
+        let _ = adapter.drain_effects(usize::MAX);
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+
+        assert_eq!(
+            adapter.insert_lane_qc(
+                lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter.insert_lane_qc(
+                lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        adapter.drive_lane_sessions();
+        assert!(adapter.has_pending_committed_output_handoff());
+
+        adapter
+            .retain_merge_sidecars_for_global_view(
+                locked_round.view,
+                Some(locked_subject),
+                Some(locked_subject),
+            )
+            .expect("install decided carrier state");
+
+        let expected = proposal
+            .descriptor
+            .validator_set
+            .iter()
+            .filter(|peer| *peer != &adapter.local_peer)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut observed = BTreeSet::new();
+        for _ in 0..=expected.len() {
+            adapter
+                .schedule_retransmission()
+                .expect("reconstruct the next final CommitQC destination");
+            for effect in adapter.drain_effects(1) {
+                match effect {
+                    V2LaneWorkEffect::PostLaneBlock {
+                        peer,
+                        message: BlockMessage::LaneBlockQc(qc),
+                    } => {
+                        assert_eq!(qc.body.phase, CertPhase::Commit);
+                        assert_eq!(qc.body.proposal_hash, proposal.proposal_hash);
+                        assert!(
+                            observed.insert(peer),
+                            "destination must transfer exactly once"
+                        );
+                    }
+                    other => panic!("decision cleanup retained non-final lane output: {other:?}"),
+                }
+            }
+            if !adapter.has_pending_committed_output_handoff() {
+                break;
+            }
+        }
+
+        assert_eq!(observed, expected);
+        assert!(!adapter.has_pending_committed_output_handoff());
+    }
+
+    #[test]
+    fn durable_lane_certificate_is_one_atomic_kura_backed_response() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (_, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        let pops = adapter.pops_for_lane_session(&session);
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&session, &pops)
+            .expect("persist the authoritative recovery source");
+        adapter.effects.clear();
+        adapter.effect_keys.clear();
+        adapter.lane_sessions = LaneBlockSessionCache::new(adapter.limits.session_capacity.get());
+
+        let requester = session
+            .commit_qc
+            .validator_set
+            .iter()
+            .find(|peer| *peer != &adapter.local_peer)
+            .cloned()
+            .expect("fixture has a remote committee member");
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockProposal(proposal),
+                    Some(requester.clone()),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        let effects = adapter.drain_effects(usize::MAX);
+        assert_eq!(
+            effects.len(),
+            1,
+            "Prepare and Commit must cross one owner boundary"
+        );
+        assert!(matches!(
+            &effects[0],
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer,
+                certificate,
+            } if peer == &requester
+                && certificate.proposal == session.proposal
+                && certificate.prepare_qc == session.prepare_qc
+                && certificate.commit_qc == session.commit_qc
+        ));
+    }
+
+    #[test]
+    fn durable_lane_certificate_serves_rotated_validator_after_pressure() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let requester = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &adapter.local_peer)
+            .expect("fixture has a remote current validator");
+        let historical_keys = keys
+            .iter()
+            .filter(|key| key.public_key() != requester.public_key())
+            .cloned()
+            .collect::<Vec<_>>();
+        let lane_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(LaneId::SINGLE, adapter.context.height)
+            .expect("default lane incarnation");
+        let proposal = proposal_for_route(
+            &adapter,
+            &historical_keys,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            adapter.context.height,
+            1,
+        );
+        let proposal = store_canonical_anchor(&adapter, &proposal, &historical_keys[0]);
+        let session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &historical_keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &historical_keys, CertPhase::Commit),
+        };
+        assert!(!session.commit_qc.validator_set.contains(&requester));
+        let pops = adapter.pops_for_lane_session(&session);
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&session, &pops)
+            .expect("persist historical-committee certificate");
+        adapter.effects.clear();
+        adapter.effect_keys.clear();
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
+            peer: requester.clone(),
+            message: BlockMessage::LaneBlockProposal(proposal.clone()),
+        }));
+
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockProposal(proposal.clone()),
+                    Some(requester.clone()),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Duplicate,
+            "a full response slot must leave reconstruction at the requester's exact proposal"
+        );
+        let _ = adapter.drain_effects(1);
+
+        let unauthorized = PeerId::new(
+            KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
+                .expect("outsider key")
+                .public_key()
+                .clone(),
+        );
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockProposal(proposal.clone()),
+                    Some(unauthorized),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "an authenticated transport identity outside both canonical rosters is unauthorized"
+        );
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockProposal(proposal),
+                    Some(requester.clone()),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "the durable request must reconstruct the atomic response after capacity opens"
+        );
+        assert!(matches!(
+            adapter.drain_effects(1).as_slice(),
+            [V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer,
+                certificate,
+            }] if peer == &requester && certificate.proposal == session.proposal
+        ));
+    }
+
+    #[test]
+    fn decided_lane_accepts_atomic_certificate_recovery_and_rejects_mismatch() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (locked_round, locked_subject) = global_lock_for_block(&adapter, &block);
+        assert_eq!(
+            adapter.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_ne!(
+            adapter.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Rejected
+        );
+        let _ = adapter.drain_effects(usize::MAX);
+        adapter
+            .retain_merge_sidecars_for_global_view(
+                locked_round.view,
+                Some(locked_subject),
+                Some(locked_subject),
+            )
+            .expect("install the exact decided carrier");
+
+        let certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        let mut mismatched = certificate.clone();
+        mismatched.prepare_qc.body.phase = CertPhase::Commit;
+        let before = adapter.lane_sessions.len();
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(mismatched)),
+                    Some(keys[0].public_key().clone().into()),
+                ),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert_eq!(adapter.lane_sessions.len(), before);
+
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                    Some(keys[0].public_key().clone().into()),
+                ),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(adapter.pending_committed_lanes.len(), 1);
+        assert!(adapter.has_pending_committed_output_handoff());
+    }
+
+    #[test]
+    fn historical_certificate_survives_successor_lock_decision_persistence_and_restart() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (parent_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(parent_block.clone())
+            .expect("persist the globally committed lane carrier");
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+        let certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        let successor_context = successor_context_for_parent(&adapter, &parent_block);
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        let mut successor = V2LaneWorkAdapter::new(
+            successor_context.clone(),
+            local_peer.clone(),
+            local_key.clone(),
+            true,
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            limits,
+            None,
+        )
+        .expect("open the true successor-height adapter");
+        assert!(
+            successor
+                .lane_sessions
+                .proposals_without_commit_qc()
+                .iter()
+                .any(|pending| pending == &proposal),
+            "the successor must hydrate the exact older proposal as its request source"
+        );
+        let _ = successor.drain_effects(usize::MAX);
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(successor.historical_recovery_sessions.len(), 1);
+        assert!(
+            successor.pending_committed_lanes.is_empty(),
+            "historical evidence must not enter current-carrier persistence ownership"
+        );
+        assert!(
+            successor.committed_lane_outputs.is_empty(),
+            "historical recovery must not create a fresh CommitQC fanout"
+        );
+
+        let successor_block = test_block(
+            successor.context.height,
+            Some(parent_block.hash()),
+            None,
+            &keys[0],
+        );
+        let (locked_round, locked_subject) = global_lock_for_block(&successor, &successor_block);
+        assert_eq!(
+            successor.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        successor
+            .retain_merge_sidecars_for_global_view(
+                locked_round.view,
+                Some(locked_subject),
+                Some(locked_subject),
+            )
+            .expect("install a distinct successor Decision");
+        assert_eq!(
+            successor.historical_recovery_sessions.len(),
+            1,
+            "successor lock and Decision filtering must preserve the historical owner"
+        );
+
+        assert!(
+            successor
+                .service_next_historical_recovery()
+                .expect("persist historical certificate and application witness")
+        );
+        assert!(!successor.has_pending_historical_recovery());
+        assert_eq!(
+            kura.read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .map(|artifact| artifact.proposal),
+            Some(proposal.clone())
+        );
+        assert!(kura.lane_block_application_receipt_available(&proposal));
+        assert!(
+            state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .is_empty(),
+            "the recovered application witness must unblock the lane frontier"
+        );
+        drop(successor);
+
+        let reopened = V2LaneWorkAdapter::new(
+            successor_context,
+            local_peer,
+            local_key,
+            true,
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            limits,
+            None,
+        )
+        .expect("restart after historical recovery remains self-sufficient");
+        assert!(!reopened.has_pending_historical_recovery());
+        assert!(
+            state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn historical_certificate_keeps_exact_owner_while_state_anchor_is_not_ready() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let lane_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(LaneId::SINGLE, 1)
+            .expect("historical default-lane incarnation");
+        let proposal = proposal_for_route(
+            &adapter,
+            &keys,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            1,
+            1,
+        );
+        let proposal = store_canonical_anchor(&adapter, &proposal, &keys[0]);
+        let certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        assert_ne!(
+            adapter.state.committed_block_hash_at_height(1),
+            proposal
+                .payload_block_hint
+                .map(|hint| hint.proposal_block_hash),
+            "fixture must model Kura body arrival before the matching State anchor"
+        );
+        adapter.limits.session_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session: CommittedLaneBlockSession {
+                    proposal: certificate.proposal.clone(),
+                    prepare_qc: certificate.prepare_qc.clone(),
+                    commit_qc: certificate.commit_qc.clone(),
+                },
+                next_validator: 0,
+            });
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate.clone())),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "historical recovery must be charged against the shared session bound"
+        );
+        assert!(adapter.historical_recovery_sessions.is_empty());
+        adapter.committed_lane_outputs.clear();
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
+            peer: PeerId::new(keys[1].public_key().clone()),
+            message: BlockMessage::LaneBlockProposal(proposal.clone()),
+        }));
+        let mut invalid = certificate.clone();
+        invalid.commit_qc.bls_aggregate_signature[0] ^= 0x01;
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(invalid)),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(adapter.historical_recovery_sessions.is_empty());
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter.effects.len(),
+            1,
+            "historical persistence ownership must not require effect capacity or create fanout"
+        );
+        assert!(
+            !adapter
+                .service_next_historical_recovery()
+                .expect("an unavailable State dependency is retryable")
+        );
+        assert_eq!(adapter.historical_recovery_sessions.len(), 1);
+        assert!(
+            adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "certificate persistence must wait for the exact committed State anchor"
+        );
+    }
+
+    #[test]
+    fn historical_certificate_payload_corruption_is_fail_stop_and_retains_owner() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let lane_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(LaneId::SINGLE, 1)
+            .expect("default lane incarnation");
+        let proposal = proposal_for_route(
+            &adapter,
+            &keys,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            1,
+            1,
+        );
+        let proposal = store_canonical_anchor(&adapter, &proposal, &keys[0]);
+        let parent_block = adapter
+            .kura
+            .get_block(NonZeroUsize::new(1).expect("non-zero parent height"))
+            .expect("canonical corrupt-payload carrier")
+            .as_ref()
+            .clone();
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+        let certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        let successor_context = successor_context_for_parent(&adapter, &parent_block);
+        let mut successor = V2LaneWorkAdapter::new(
+            successor_context,
+            adapter.local_peer.clone(),
+            adapter.key_pair.clone(),
+            true,
+            Arc::clone(&adapter.state),
+            Arc::clone(&adapter.kura),
+            adapter.limits,
+            None,
+        )
+        .expect("open successor before the historical certificate arrives");
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+
+        let error = successor
+            .service_next_historical_recovery()
+            .expect_err("an immutable missing entrypoint must fail closed");
+        assert!(
+            error.to_string().contains("MissingEntrypoint"),
+            "unexpected historical corruption error: {error}"
+        );
+        assert_eq!(
+            successor.historical_recovery_sessions.len(),
+            1,
+            "fail-stop diagnosis must retain the exact recovery owner"
+        );
+        assert!(successor.output_guard.restart_required());
+    }
+
+    #[test]
+    fn committed_output_source_remains_hard_bounded_after_persistence() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (locked_round, locked_subject) = global_lock_for_block(&adapter, &block);
+        assert_eq!(
+            adapter.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_ne!(
+            adapter.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Rejected
+        );
+        let _ = adapter.drain_effects(usize::MAX);
+
+        let prepare_qc = lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare);
+        let commit_qc = lane_qc_for_phase(&proposal, &keys, CertPhase::Commit);
+        let completed = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: prepare_qc.clone(),
+            commit_qc: commit_qc.clone(),
+        };
+        adapter.limits.session_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                next_validator: commit_qc.validator_set.len(),
+                session: completed,
+            });
+
+        assert_eq!(
+            adapter.insert_lane_qc(prepare_qc, locked_round.view),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter.insert_lane_qc(commit_qc, locked_round.view),
+            V2LaneIngressOutcome::Inserted
+        );
+        adapter.drive_lane_sessions();
+        assert_eq!(adapter.committed_lane_outputs.len(), 1);
+        assert!(
+            adapter.pending_committed_lanes.is_empty(),
+            "persisting the first source must not free its bounded reconstruction slot"
+        );
+
+        adapter.committed_lane_outputs.clear();
+        adapter.collect_committed_lane_sessions();
+        assert_eq!(adapter.committed_lane_outputs.len(), 1);
+        assert_eq!(adapter.pending_committed_lanes.len(), 1);
+    }
+
+    #[test]
+    fn carrier_replacement_filters_persistence_and_output_sources_together() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (losing_block, losing_proposal) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (winning_block, winning_proposal) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, 1);
+        let (_, winning_subject) = global_lock_for_block(&adapter, &winning_block);
+        assert_ne!(
+            global_lock_for_block(&adapter, &losing_block).1,
+            winning_subject,
+            "carrier replacement fixture must use distinct global subjects"
+        );
+
+        let sessions =
+            [losing_proposal, winning_proposal].map(|proposal| CommittedLaneBlockSession {
+                prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+                commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+                proposal,
+            });
+        adapter.limits.session_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        for session in sessions {
+            adapter.pending_committed_lanes.push_back(session.clone());
+            adapter
+                .committed_lane_outputs
+                .push_back(PendingCommittedLaneOutput {
+                    next_validator: session.commit_qc.validator_set.len(),
+                    session,
+                });
+        }
+
+        adapter.retain_committed_lane_outputs_for_subject(winning_subject);
+        assert_eq!(adapter.pending_committed_lanes.len(), 1);
+        assert_eq!(adapter.committed_lane_outputs.len(), 1);
+        assert!(adapter.pending_committed_lanes.iter().all(|session| {
+            session
+                .proposal
+                .payload_block_hint
+                .as_ref()
+                .is_some_and(|hint| hint.proposal_block_hash == winning_subject.block_hash)
+        }));
+        assert!(adapter.committed_lane_outputs.iter().all(|output| {
+            output
+                .session
+                .proposal
+                .payload_block_hint
+                .as_ref()
+                .is_some_and(|hint| hint.proposal_block_hash == winning_subject.block_hash)
+        }));
+    }
+
+    #[test]
+    fn completed_commit_qc_round_robin_does_not_restart_ahead_of_pending_source() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (_, first_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (_, second_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 1);
+        let first_session = CommittedLaneBlockSession {
+            prepare_qc: lane_qc_for_phase(&first_proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&first_proposal, &keys, CertPhase::Commit),
+            proposal: first_proposal.clone(),
+        };
+        let second_session = CommittedLaneBlockSession {
+            prepare_qc: lane_qc_for_phase(&second_proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&second_proposal, &keys, CertPhase::Commit),
+            proposal: second_proposal.clone(),
+        };
+        adapter.effects.clear();
+        adapter.effect_keys.clear();
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                next_validator: first_session.commit_qc.validator_set.len(),
+                session: first_session,
+            });
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                next_validator: 0,
+                session: second_session,
+            });
+
+        adapter.schedule_lane_artifact_retransmissions();
+        let effect = adapter
+            .drain_effects(1)
+            .pop()
+            .expect("pending source must receive the only effect slot");
+        assert!(matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockQc(qc),
+                ..
+            } if qc.body.phase == CertPhase::Commit
+                && qc.body.proposal_hash == second_proposal.proposal_hash
+        ));
+    }
+
+    #[test]
+    fn completed_commit_qc_retransmits_after_volatile_peer_handoff() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (locked_round, locked_subject) = global_lock_for_block(&adapter, &block);
+        assert_eq!(
+            adapter.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_ne!(
+            adapter.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Rejected
+        );
+        let _ = adapter.drain_effects(usize::MAX);
+
+        assert_eq!(
+            adapter.insert_lane_qc(
+                lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter.insert_lane_qc(
+                lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        adapter.drive_lane_sessions();
+        let _ = adapter.drain_effects(usize::MAX);
+        assert!(
+            !adapter.has_pending_committed_output_handoff(),
+            "the first complete fanout must have transferred to the volatile peer corridor"
+        );
+
+        adapter
+            .schedule_retransmission()
+            .expect("durable completed certificate starts another fanout round");
+        let observed = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .filter_map(|effect| match effect {
+                V2LaneWorkEffect::PostLaneBlock {
+                    peer,
+                    message: BlockMessage::LaneBlockQc(qc),
+                } if qc.body.phase == CertPhase::Commit
+                    && qc.body.proposal_hash == proposal.proposal_hash =>
+                {
+                    Some(peer)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let expected = proposal
+            .descriptor
+            .validator_set
+            .iter()
+            .filter(|peer| *peer != &adapter.local_peer)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(observed, expected);
     }
 
     #[test]

@@ -131,14 +131,11 @@ define_instruction_handlers! {
     dispatch_instruction::<SetParameter>,
     dispatch_instruction::<Upgrade>,
     dispatch_instruction::<Log>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::sns::RegisterSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::RenewSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::TransferSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::UpdateSnsNameControllers>,
-    dispatch_instruction::<iroha_data_model::isi::sns::FreezeSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::UnfreezeSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::EnsureAlias>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::RenewAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::RebindAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -230,8 +227,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetPrimaryAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy>,
@@ -577,6 +572,35 @@ mod registry_dispatch_tests {
                 !registry.contains(wire_id),
                 "{wire_id} must not alias any default dispatcher entry"
             );
+        }
+    }
+
+    #[test]
+    fn retired_sns_mutations_have_no_native_dispatch_handler() {
+        let registry = iroha_data_model::isi::registry::default();
+        let removed_type_names = [
+            "iroha_data_model::isi::sns::RegisterSnsName",
+            "iroha_data_model::isi::sns::RenewSnsName",
+            "iroha_data_model::isi::sns::TransferSnsName",
+            "iroha_data_model::isi::sns::UpdateSnsNameControllers",
+            "iroha_data_model::isi::sns::FreezeSnsName",
+            "iroha_data_model::isi::sns::UnfreezeSnsName",
+        ];
+        let removed_wire_ids = [
+            "iroha.sns.name.register",
+            "iroha.sns.name.renew",
+            "iroha.sns.name.transfer",
+            "iroha.sns.name.controllers.update",
+            "iroha.sns.name.freeze",
+            "iroha.sns.name.unfreeze",
+        ];
+
+        for type_name in removed_type_names {
+            assert!(!has_dispatch_handler(type_name));
+            assert!(!registry.contains(type_name));
+        }
+        for wire_id in removed_wire_ids {
+            assert!(!registry.contains(wire_id));
         }
     }
 }

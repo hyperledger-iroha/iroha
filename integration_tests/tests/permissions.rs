@@ -605,12 +605,8 @@ fn permissions_differ_not_only_by_names() {
         return;
     };
     let client = network.client();
-    submit_register_domain_with_network_lease(
-        &network,
-        &client,
-        Domain::new(outfit_domain.clone()),
-    )
-    .expect("Failed to register outfit domain");
+    submit_ensure_domain_for_network(&network, &client, Domain::new(outfit_domain.clone()))
+        .expect("Failed to register outfit domain");
 
     let submit_with_authority = |isi: InstructionBox,
                                  authority: &AccountId,

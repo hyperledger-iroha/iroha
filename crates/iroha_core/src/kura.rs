@@ -20264,9 +20264,16 @@ impl CertifiedLaneBlockArtifact {
     ///
     /// # Errors
     ///
-    /// Returns an error if framing fails.
+    /// Returns an error if framing fails or the complete certified source
+    /// exceeds its protocol-reserved merge envelope.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        let bytes = norito::to_bytes(self)?;
+        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
+            return Err(norito::Error::Message(
+                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -22175,6 +22182,80 @@ impl Kura {
         Ok(signers)
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    fn should_persist_lane_payload_ownership_for_block(
+        block: &SignedBlock,
+        ownership: &SumeragiLanePayloadOwnership,
+    ) -> bool {
+        let Some(bundle) = block.execution_context() else {
+            return true;
+        };
+        let entrypoint_count = block.external_entrypoint_count();
+        let expected_mode_tag = iroha_data_model::nexus::LaneRelayEnvelope::lane_qc_mode_tag_for(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            "block-builder-test",
+        );
+        let is_exact_block_builder_test_ownership = bundle.merge_entry.is_none()
+            && bundle.lane_payload_ownerships.len() == 1
+            && ownership.proposal_height == block.header().height().get()
+            && ownership.proposal_view == block.header().view_change_index()
+            && ownership.lane_id == LaneId::SINGLE
+            && ownership.dataspace_id == DataSpaceId::UNIVERSAL
+            && ownership.lane_block_height == 1
+            && ownership.lane_block_view == block.header().view_change_index()
+            && ownership.qc_mode_tag == expected_mode_tag
+            && ownership.previous_lane_block_height == 0
+            && ownership.previous_lane_block_descriptor_hash.is_none()
+            && ownership.lane_block_descriptor_hash.is_some()
+            && ownership.lane_block_descriptor_validator_set.len() == 1
+            && ownership.lane_block_descriptor_validator_count == 1
+            && ownership.lane_block_descriptor_min_quorum == 1
+            && ownership.accepted_candidate_indices.len() == entrypoint_count
+            && ownership
+                .accepted_candidate_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .all(|(index, candidate_index)| u64::try_from(index) == Ok(candidate_index))
+            && ownership.accepted_transaction_hashes.len() == entrypoint_count
+            && ownership
+                .accepted_transaction_hashes
+                .iter()
+                .copied()
+                .enumerate()
+                .all(|(index, entrypoint_hash)| {
+                    Self::block_entrypoint_hash_at(block, index) == Some(entrypoint_hash)
+                })
+            && bundle.external.len() == entrypoint_count
+            && bundle.external.iter().enumerate().all(|(index, context)| {
+                Self::block_entrypoint_at(block, index).is_some_and(|entrypoint| {
+                    context
+                        == &iroha_data_model::block::ExternalExecutionContext::new(
+                            entrypoint.hash(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                })
+            })
+            && ownership.validate_replay_material().is_ok();
+
+        // `BlockBuilder` intentionally attaches lane-height-one ownership to ordinary test
+        // blocks so execution-context validation stays realistic. It is not consensus evidence:
+        // persisting it would make the second block in every synthetic chain conflict at lane
+        // height one. Keep canonical block and index storage on the ordinary Kura path while
+        // excluding only this exact test fixture sidecar.
+        !is_exact_block_builder_test_ownership
+    }
+
+    #[cfg(not(any(test, feature = "iroha-core-tests")))]
+    const fn should_persist_lane_payload_ownership_for_block(
+        _block: &SignedBlock,
+        _ownership: &SumeragiLanePayloadOwnership,
+    ) -> bool {
+        true
+    }
+
     fn lane_artifact_required_bytes_for_block(block: &SignedBlock) -> Result<u64> {
         let Some(bundle) = block.execution_context() else {
             return Ok(0);
@@ -22186,6 +22267,9 @@ impl Kura {
         let block_hash = block.hash();
         let mut total = 0u64;
         for ownership in &bundle.lane_payload_ownerships {
+            if !Self::should_persist_lane_payload_ownership_for_block(block, ownership) {
+                continue;
+            }
             let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
             let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
             total = total
@@ -22219,11 +22303,19 @@ impl Kura {
         if bundle.lane_payload_ownerships.is_empty() {
             return Ok(());
         }
+        if !bundle.lane_payload_ownerships.iter().any(|ownership| {
+            Self::should_persist_lane_payload_ownership_for_block(block, ownership)
+        }) {
+            return Ok(());
+        }
 
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _guard = self.sidecar_lock.lock();
         let block_hash = block.hash();
         for ownership in &bundle.lane_payload_ownerships {
+            if !Self::should_persist_lane_payload_ownership_for_block(block, ownership) {
+                continue;
+            }
             let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
             artifact.encode_framed()?;
             self.validate_lane_block_artifact_write_locked(&artifact, conflict_policy)?;
@@ -22242,10 +22334,18 @@ impl Kura {
         if bundle.lane_payload_ownerships.is_empty() {
             return Ok(None);
         }
+        if !bundle.lane_payload_ownerships.iter().any(|ownership| {
+            Self::should_persist_lane_payload_ownership_for_block(block, ownership)
+        }) {
+            return Ok(None);
+        }
 
         let mut batch = LaneBlockArtifactWriteBatch::new(self);
         let block_hash = block.hash();
         for ownership in &bundle.lane_payload_ownerships {
+            if !Self::should_persist_lane_payload_ownership_for_block(block, ownership) {
+                continue;
+            }
             let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
             match self.write_lane_block_artifact_locked(&artifact, conflict_policy) {
                 Ok(Some(checkpoint)) => batch.push(checkpoint),
@@ -22796,7 +22896,7 @@ impl Kura {
         ) {
             return Err(Self::invalid_lane_artifact_error(
                 data_path,
-                "failed to recover certified lane block data/index pair",
+                "failed to recover certified lane block data/index pair to a durable fixed point",
             ));
         }
         let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
@@ -26671,7 +26771,9 @@ impl Kura {
     /// This read is deliberately not a durability witness: the same writer reopens the
     /// pair under the geometry and sidecar locks and reissues every strict barrier before
     /// it can report success. Keeping the observation non-attesting ensures a failed
-    /// barrier cannot be consumed by a preliminary read and then hidden by the retry.
+    /// barrier cannot be consumed by a preliminary read and then hidden by the retry. In
+    /// particular, pending sidecar recovery is reserved for that locked writer because it
+    /// may itself execute the barrier sequence.
     fn read_active_lane_block_application_receipt_for_write_observation(
         &self,
         lane_id: LaneId,
@@ -26682,13 +26784,7 @@ impl Kura {
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required()
-            || !self.recover_bound_progress_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                "lane block application receipt",
-            )
-        {
+        if self.prune_recovery_is_required() {
             return None;
         }
         let mut bound = self
@@ -51375,6 +51471,27 @@ mod tests {
         blocks: Vec<Arc<SignedBlock>>,
     }
 
+    fn block_with_synthetic_block_builder_execution_context(
+        previous: Option<&SignedBlock>,
+        message: &str,
+    ) -> Arc<SignedBlock> {
+        let transaction = TransactionBuilder::new(
+            ChainId::from("kura-block-builder-sidecar-filter"),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        Arc::new(
+            BlockBuilder::new(vec![accepted])
+                .chain(0, previous)
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                .unpack(|_| {})
+                .into(),
+        )
+    }
+
     impl DummyBlocks {
         fn new() -> Self {
             Self {
@@ -55565,6 +55682,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn certified_lane_block_encoding_enforces_source_envelope() {
+        let lane_id = LaneId::from(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, dataspace_id, 1);
+        let mut artifact = CertifiedLaneBlockArtifact::new(session, signer_pops);
+
+        assert!(
+            artifact.encode_framed().is_ok(),
+            "a normal certified lane source must fit its reserved envelope"
+        );
+        artifact.commit_qc.bls_aggregate_signature =
+            vec![0xA5; MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES];
+
+        assert!(
+            artifact.encode_framed().is_err(),
+            "an oversized certified source must fail before persistence or recovery fanout"
+        );
+        assert_eq!(
+            Kura::validate_certified_lane_block_artifact(&artifact),
+            Err("certified lane block exceeds the merge source envelope byte limit")
+        );
+    }
+
     fn certified_lane_block_strict_retry_reissues_every_barrier() {
         for (label, failure) in strict_progress_sidecar_failure_modes() {
             let temp_dir = TempDir::new().expect("create temp dir");
@@ -56164,6 +56306,64 @@ mod tests {
         assert_eq!(
             latest.ownership.lane_block_height, 1,
             "latest artifact scan must skip corrupt newer replay material"
+        );
+    }
+
+    #[test]
+    fn synthetic_block_builder_lane_ownership_is_not_persisted_as_consensus_evidence() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let first = block_with_synthetic_block_builder_execution_context(None, "first");
+        let second =
+            block_with_synthetic_block_builder_execution_context(Some(first.as_ref()), "second");
+
+        for block in [&first, &second] {
+            let ownership = block
+                .execution_context()
+                .expect("block builder attaches test execution context")
+                .lane_payload_ownerships
+                .first()
+                .expect("block builder attaches test lane ownership");
+            assert!(
+                !Kura::should_persist_lane_payload_ownership_for_block(block, ownership),
+                "the exact block-builder test ownership must remain fixture-only"
+            );
+            assert_eq!(
+                Kura::lane_artifact_required_bytes_for_block(block)
+                    .expect("calculate lane artifact storage requirement"),
+                0,
+                "fixture-only ownership must not reserve durable sidecar storage"
+            );
+
+            let mut non_synthetic = ownership.clone();
+            non_synthetic.qc_mode_tag = "real-lane-evidence".to_owned();
+            assert!(
+                Kura::should_persist_lane_payload_ownership_for_block(block, &non_synthetic),
+                "changing any fixture identity field must restore ordinary persistence"
+            );
+        }
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        kura.store_block(Arc::clone(&first))
+            .expect("store first canonical block");
+        kura.store_block(Arc::clone(&second))
+            .expect("store second canonical block without a lane-height-one conflict");
+
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(
+            kura.get_block_height_by_hash(second.hash()),
+            Some(nonzero!(2_usize)),
+            "ordinary Kura height indexing must still record the second block"
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(2_usize)).as_deref(),
+            Some(second.as_ref()),
+            "ordinary Kura block storage must retain canonical bytes"
+        );
+        assert!(
+            kura.read_lane_block_artifact(LaneId::SINGLE, 1).is_none(),
+            "synthetic lane-height-one ownership must not become durable consensus evidence"
         );
     }
 

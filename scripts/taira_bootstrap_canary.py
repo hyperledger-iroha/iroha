@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import os
@@ -393,8 +392,8 @@ def load_existing_config(path: Path) -> dict[str, Any] | None:
 def build_alias(prefix: str, public_key: str, domain: str) -> str:
     label_prefix = re.sub(r"[^a-z0-9]", "", prefix.lower()) or "tairacanary"
     suffix = re.sub(r"[^a-z0-9]", "", public_key[-16:].lower())
-    dataspace = normalize_domain(domain).lower().split(".")[-1]
-    return f"{label_prefix}{suffix}@{dataspace}"
+    normalized_domain = normalize_domain(domain).lower()
+    return f"{label_prefix}{suffix}@{normalized_domain}"
 
 
 def is_loopback_torii_root(torii_root: str) -> bool:
@@ -646,114 +645,135 @@ def fund_account_with_local_registrar(
 
 
 def normalize_permissions(values: list[str]) -> list[str]:
-    normalized: list[str] = []
     seen: set[str] = set()
     for raw in values:
         value = raw.strip()
         if not value or value in seen:
             continue
         seen.add(value)
-        normalized.append(value)
-    return normalized
+    return sorted(seen)
 
 
 def onboard_account(
     torii_root: str,
     alias: str,
-    public_key_hex: str,
+    account_id: str,
     *,
     onboarding_token: str,
     permissions: list[str] | None = None,
 ) -> dict[str, Any]:
     exact_onboarding_token = validate_onboarding_token(onboarding_token)
-    payload: dict[str, Any] = {
+    plan_request: dict[str, Any] = {
+        "version": 1,
         "alias": alias,
-        "public_key_hex": public_key_hex,
-        "uaid": derive_canary_uaid(public_key_hex),
+        "account_id": account_id,
+        "permissions": normalize_permissions(list(permissions or [])),
     }
-    requested_permissions = normalize_permissions(list(permissions or []))
-    if requested_permissions:
-        payload["permissions"] = requested_permissions
-    status, response = _http_json(
+    plan_status, plan_response = _http_json(
         "POST",
-        f"{torii_root.rstrip('/')}/v1/accounts/onboard",
-        payload,
+        f"{torii_root.rstrip('/')}/v1/accounts/onboard/plan",
+        plan_request,
         headers={ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token},
         allow_redirects=False,
         sensitive_value=exact_onboarding_token,
     )
-    # The response is controlled by the peer.  Redact an echoed credential
-    # before validation, reporting, or exception formatting can expose it.
-    response = _redact_sensitive(response, exact_onboarding_token)
-    if status == 202:
-        validate_onboarding_response(response, payload["uaid"], alias)
-        return {
-            "status": "created",
-            "response_status": status,
-            "response": response,
-        }
+    plan_response = _redact_sensitive(plan_response, exact_onboarding_token)
+    if plan_status != 200:
+        raise RuntimeError(
+            "account onboarding planning failed: "
+            f"status={plan_status} body={plan_response!r}"
+        )
+    receipt = validate_onboarding_plan_receipt(plan_response, plan_request)
 
-    rendered = response if isinstance(response, str) else json.dumps(response, sort_keys=True)
-    if status == 400 and "account already exists" in rendered:
-        return {
-            "status": "existing",
-            "response_status": status,
-            "response": response,
-        }
-
-    raise RuntimeError(f"account onboarding failed: status={status} body={response!r}")
-
-
-def derive_canary_uaid(public_key_hex: str) -> str:
-    digest = bytearray(
-        hashlib.blake2b(
-            f"taira-canary-account:{public_key_hex.strip().lower()}".encode("utf-8"),
-            digest_size=32,
-        ).digest()
+    apply_status, apply_response = _http_json(
+        "POST",
+        f"{torii_root.rstrip('/')}/v1/accounts/onboard",
+        {"receipt": receipt},
+        headers={ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token},
+        allow_redirects=False,
+        sensitive_value=exact_onboarding_token,
     )
-    digest[-1] |= 1
-    return f"uaid:{digest.hex()}"
+    apply_response = _redact_sensitive(apply_response, exact_onboarding_token)
+    result_status = validate_onboarding_apply_response(
+        apply_response,
+        expected_account_id=account_id,
+        expected_alias=alias,
+    )
+    expected_http = 200 if result_status == "unchanged" else 202
+    if apply_status != expected_http:
+        raise RuntimeError(
+            "account onboarding apply returned an incompatible HTTP status: "
+            f"status={apply_status} body={apply_response!r}"
+        )
+    return {
+        "status": result_status,
+        "plan_response_status": plan_status,
+        "response_status": apply_status,
+        "receipt": receipt,
+        "response": apply_response,
+    }
 
 
-def validate_onboarding_response(
+def validate_onboarding_plan_receipt(
     payload: Any,
-    expected_uaid: str,
-    expected_alias: str,
-) -> None:
+    expected_request: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise RuntimeError("account onboarding response must be an object")
-    for key in ("account_id", "uaid", "tx_hash_hex", "status"):
-        if not isinstance(payload.get(key), str) or not payload[key]:
-            raise RuntimeError(f"account onboarding response is missing {key}")
-    if payload["uaid"] != expected_uaid:
+        raise RuntimeError("account onboarding plan receipt must be an object")
+    body = payload.get("body")
+    if not isinstance(body, dict) or body.get("version") != 1:
+        raise RuntimeError("account onboarding plan receipt has an invalid body version")
+    if body.get("request") != expected_request:
         raise RuntimeError(
-            f"account onboarding UAID does not match request: "
-            f"expected={expected_uaid} actual={payload['uaid']}"
+            "account onboarding plan receipt request differs from the submitted intent"
         )
-    if payload["status"] != "QUEUED":
-        raise RuntimeError(
-            f"account onboarding status must be QUEUED, got {payload['status']}"
-        )
+    for key in (
+        "authority",
+        "chain_id",
+        "anchor",
+        "resource",
+        "acquisition",
+        "quote_guard",
+        "instructions",
+        "valid_until_ms",
+    ):
+        if key not in body:
+            raise RuntimeError(f"account onboarding plan receipt body is missing {key}")
+    for key in ("plan_hash", "signature"):
+        if key not in payload:
+            raise RuntimeError(f"account onboarding plan receipt is missing {key}")
+    return payload
+
+
+def validate_onboarding_apply_response(
+    payload: Any,
+    *,
+    expected_account_id: str,
+    expected_alias: str,
+) -> str:
+    if not isinstance(payload, dict):
+        raise RuntimeError("account onboarding apply response must be an object")
+    if payload.get("account_id") != expected_account_id:
+        raise RuntimeError("account onboarding apply account_id does not match request")
+    if payload.get("alias") != expected_alias:
+        raise RuntimeError("account onboarding apply alias does not match request")
+    if "disposition" not in payload:
+        raise RuntimeError("account onboarding apply response is missing disposition")
+    status = payload.get("status")
+    tx_hash_hex = payload.get("tx_hash_hex")
+    if status == "Unchanged" and tx_hash_hex is None:
+        return "unchanged"
+    if status not in {"Queued", "Repaired"}:
+        raise RuntimeError(f"unexpected account onboarding apply status: {status!r}")
+    if not isinstance(tx_hash_hex, str) or tx_hash_hex != tx_hash_hex.lower():
+        raise RuntimeError("account onboarding tx_hash_hex is not canonical lowercase hex")
     try:
-        tx_hash = bytes.fromhex(payload["tx_hash_hex"])
+        tx_hash = bytes.fromhex(tx_hash_hex)
     except ValueError as exc:
         raise RuntimeError("account onboarding tx_hash_hex is not hex") from exc
     if len(tx_hash) != 32:
         raise RuntimeError("account onboarding tx_hash_hex must encode 32 bytes")
-    lease = payload.get("lease")
-    if not isinstance(lease, dict):
-        raise RuntimeError("account onboarding response is missing lease")
-    if lease.get("alias") != expected_alias:
-        raise RuntimeError("account onboarding lease alias does not match request")
-    for key in ("dataspace", "lease_status"):
-        if not isinstance(lease.get(key), str) or not lease[key]:
-            raise RuntimeError(f"account onboarding lease is missing {key}")
-    for key in ("expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms"):
-        if not isinstance(lease.get(key), int) or isinstance(lease[key], bool):
-            raise RuntimeError(f"account onboarding lease is missing integer {key}")
-    for key in ("is_primary", "auto_renew_enabled"):
-        if not isinstance(lease.get(key), bool):
-            raise RuntimeError(f"account onboarding lease is missing boolean {key}")
+    return "created" if status == "Queued" else "repaired"
 
 
 def resolve_alias_account_id(torii_root: str, alias: str) -> str:
@@ -1019,7 +1039,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_CHAIN_DISCRIMINANT,
         help=f"I105 chain discriminant (default: {DEFAULT_CHAIN_DISCRIMINANT})",
     )
-    parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="Account domain")
+    parser.add_argument(
+        "--domain",
+        default=DEFAULT_DOMAIN,
+        help="Account and alias scope domain; single labels expand to <label>.universal",
+    )
     parser.add_argument(
         "--alias-prefix",
         default=DEFAULT_ALIAS_PREFIX,
@@ -1085,13 +1109,23 @@ def main(argv: list[str] | None = None) -> int:
         domain = normalize_domain(args.domain)
 
     alias = build_alias(args.alias_prefix, public_key, domain)
-    account_id = None
+    account_id = canonical_account_id_from_public_key(
+        public_key,
+        chain_discriminant,
+        args.iroha_bin,
+    )
+    if account_id is None and existing is not None:
+        stored_account_id = existing.get("account_id")
+        if isinstance(stored_account_id, str) and stored_account_id:
+            account_id = stored_account_id
+    if account_id is None:
+        raise RuntimeError("failed to derive the canonical onboarding account id")
     try:
         onboarding_token = read_onboarding_token_file(args.onboarding_token_file)
         onboarding = onboard_account(
             args.torii_root,
             alias,
-            public_key_raw_hex,
+            account_id,
             onboarding_token=onboarding_token,
             permissions=args.permissions,
         )
@@ -1101,7 +1135,7 @@ def main(argv: list[str] | None = None) -> int:
             value = response.get("account_id")
             if isinstance(value, str) and value:
                 account_id = value
-            if onboarding.get("status") == "created":
+            if onboarding.get("status") in {"created", "repaired"}:
                 tx_hash_hex = response.get("tx_hash_hex")
                 final_status = wait_for_transaction_status(
                     args.torii_root,
@@ -1119,8 +1153,6 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(
             "account onboarding failed; faucet funding was not attempted"
         ) from onboarding_error
-    if account_id is None:
-        account_id = resolve_alias_account_id(args.torii_root, alias)
     faucet = (
         {"status": "skipped"}
         if args.skip_faucet

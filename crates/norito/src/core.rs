@@ -7796,7 +7796,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     Ok((payload, final_flags))
 }
 
-/// Return the exact canonical framed length without allocating an output buffer.
+/// Return the exact canonical payload length without allocating an output buffer.
 ///
 /// This deliberately counts a real serialization pass instead of trusting
 /// [`NoritoSerialize::encoded_len_exact`], because that method is only an
@@ -7805,9 +7805,8 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 ///
 /// # Errors
 ///
-/// Returns a serialization error or [`Error::LengthMismatch`] if the framed
-/// length cannot be represented by `usize`.
-pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+/// Returns the underlying serialization error.
+pub fn encoded_payload_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     let mut sink = std::io::sink();
@@ -7821,6 +7820,20 @@ pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> 
     }
     let payload_len = counted.len;
     drop(encode_guard);
+    Ok(payload_len)
+}
+
+/// Return the exact canonical framed length without allocating an output buffer.
+///
+/// Like [`encoded_payload_len`], this counts a real serialization pass instead
+/// of trusting length hints.
+///
+/// # Errors
+///
+/// Returns a serialization error or [`Error::LengthMismatch`] if the framed
+/// length cannot be represented by `usize`.
+pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+    let payload_len = encoded_payload_len(value)?;
     Header::SIZE
         .checked_add(payload_alignment_padding_for::<T>())
         .and_then(|framing| framing.checked_add(payload_len))
@@ -9573,6 +9586,15 @@ mod tests {
         assert_eq!(
             encoded_frame_len(&value).expect("count canonical frame"),
             to_bytes(&value).expect("encode canonical frame").len()
+        );
+    }
+
+    #[test]
+    fn encoded_payload_len_ignores_bad_encoded_len_exact() {
+        let value = BadExactLen(0xAABBCCDD);
+        assert_eq!(
+            encoded_payload_len(&value).expect("count canonical payload"),
+            core::mem::size_of::<u32>()
         );
     }
 

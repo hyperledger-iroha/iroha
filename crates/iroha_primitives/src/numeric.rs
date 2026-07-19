@@ -1304,10 +1304,8 @@ impl Numeric {
         spec: NumericSpec,
         mode: RoundingMode,
     ) -> Result<Self, NumericOperationError> {
-        match spec.scale {
-            Some(scale) => self.try_quantize(scale, mode),
-            None => Ok(self.clone()),
-        }
+        spec.scale
+            .map_or_else(|| Ok(self.clone()), |scale| self.try_quantize(scale, mode))
     }
 
     /// Convert [`Numeric`] to [`f64`] with possible loss of precision.
@@ -3617,6 +3615,19 @@ mod tests {
         assert_eq!(
             decimal("1").try_quantize(29, RoundingMode::TowardZero),
             Err(NumericOperationError::InvalidScale)
+        );
+    }
+
+    #[test]
+    fn quantization_to_spec_preserves_unconstrained_values_and_applies_scale() {
+        let value = decimal("1.25");
+        assert_eq!(
+            value.try_quantize_to_spec(NumericSpec::unconstrained(), RoundingMode::NearestEven,),
+            Ok(value.clone())
+        );
+        assert_eq!(
+            value.try_quantize_to_spec(NumericSpec::fractional(1), RoundingMode::NearestEven),
+            Ok(decimal("1.2"))
         );
     }
 

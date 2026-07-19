@@ -9,7 +9,7 @@ use iroha::{
     client::{Client, QueryError},
     data_model::{prelude::*, query::builder::SingleQueryError},
 };
-use iroha_test_network::submit_register_domain_with_network_lease;
+use iroha_test_network::submit_ensure_domain_for_network;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 const UNREGISTER_ATTEMPTS: usize = 30;
@@ -30,7 +30,7 @@ fn find_asset_total_quantity() -> Result<()> {
     let result: Result<()> = (|| {
         // Register new domain
         let domain_id: DomainId = DomainId::try_new("looking-glass", "universal")?;
-        submit_register_domain_with_network_lease(&network, &test_client, Domain::new(domain_id))?;
+        submit_ensure_domain_for_network(&network, &test_client, Domain::new(domain_id))?;
 
         let accounts: [AccountId; 5] = [
             ALICE_ID.clone(),

@@ -15,7 +15,7 @@ proposal_queue_scan_multiplier = 3
 commands = 512
 bodies = 96
 body_bytes = 67108864
-body_source_bytes = 16777216
+body_source_bytes = 17825792
 chunks = 768
 ready_bodies = 48
 

@@ -459,11 +459,22 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         )?;
 
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
-    let world = World::with(
+    let mut world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
         [Account::new(authority.clone()).build(&authority)],
         [],
     );
+    let default_nexus;
+    let dataspace_catalog = if let Some(config) = config {
+        &config.nexus.dataspace_catalog
+    } else {
+        default_nexus = actual::Nexus::default();
+        &default_nexus.dataspace_catalog
+    };
+    // Match fresh-node and `irohad --check-config` semantics exactly: genesis aliases are
+    // pre-seeded before the block executes so declarative EnsureAlias instructions repair
+    // derived state without charging or depending on policy activation order.
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &provisional.0, dataspace_catalog);
     let kura = match config {
         Some(config) => Kura::new_temporary_with_configured_lane_catalog(
             &config.kura,

@@ -556,8 +556,7 @@ impl NexusFeeRelayWorker {
 
     fn allocation_candidates(&self, current_height: u64) -> Result<Vec<DurableAllocationWork>> {
         let view = self.state.view();
-        let expiry_height =
-            current_height.saturating_add(view.nexus.axt.replay_retention_slots.get());
+        let replay_retention_slots = view.nexus.axt.replay_retention_slots.get();
         let mut candidates = Vec::new();
 
         for (program_id, program) in view.world().fee_sponsor_programs().iter() {
@@ -565,6 +564,17 @@ impl NexusFeeRelayWorker {
                 continue;
             }
             let Some(program_revision) = program.active_revision else {
+                continue;
+            };
+            let Some(expiry_height) = fee_sponsor_allocation_expiry_height(
+                current_height,
+                replay_retention_slots,
+                program
+                    .scheduled_activation
+                    .map(|activation| activation.activate_at_height),
+            ) else {
+                // A worker submission cannot execute before the scheduled
+                // switch, so an old-revision proof would be stale on arrival.
                 continue;
             };
             let revision_key =
@@ -696,7 +706,7 @@ impl NexusFeeRelayWorker {
                     DurableWorkStatus::Pending
                         | DurableWorkStatus::Proving
                         | DurableWorkStatus::Submitted
-                )
+                ) && work.expires_at_height <= candidate.expires_at_height
             })
             .cloned()
             .unwrap_or(candidate)
@@ -897,6 +907,22 @@ fn fee_sponsor_route_allocation_eligible(
 ) -> bool {
     has_enrollment
         || (eligibility == FeeSponsorEligibility::EnrolledOrRouteDefault && route_default)
+}
+
+fn fee_sponsor_allocation_expiry_height(
+    current_height: u64,
+    replay_retention_slots: u64,
+    scheduled_activation_height: Option<u64>,
+) -> Option<u64> {
+    let normal_expiry = current_height.saturating_add(replay_retention_slots);
+    let Some(activation_height) = scheduled_activation_height else {
+        return Some(normal_expiry);
+    };
+    let earliest_execution_height = current_height.checked_add(1)?;
+    if earliest_execution_height >= activation_height {
+        return None;
+    }
+    Some(normal_expiry.min(activation_height.checked_sub(1)?))
 }
 
 fn partition_fee_sponsor_vault(
@@ -1509,6 +1535,31 @@ mod tests {
     }
 
     #[test]
+    fn fee_sponsor_allocation_expiry_respects_scheduled_revision_boundary() {
+        assert_eq!(fee_sponsor_allocation_expiry_height(10, 20, None), Some(30));
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(25)),
+            Some(24),
+            "an old-revision lease must drain before the scheduled activation"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 5, Some(25)),
+            Some(15),
+            "a later activation must not extend the ordinary lease"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(12)),
+            Some(11),
+            "the last executable pre-activation block remains eligible"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(11)),
+            None,
+            "work that cannot execute before activation must not be emitted"
+        );
+    }
+
+    #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let envelope = sample_envelope([0x42; 32]);
         let (proven, proof_blob) = prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
@@ -1549,7 +1600,7 @@ mod tests {
             &verified_allocation,
             source_dataspace_id,
             source_height,
-        )?;
+        );
         let lease_id = fee_sponsor_vault_lease_id(
             &program_id,
             3,

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from typing import Any
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
 DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 MIN_VALIDATORS = 4
+# Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
+MAX_VALIDATORS = 128
 
 
 @dataclass(frozen=True)
@@ -43,8 +46,12 @@ class RosterDefaults:
 class SharedSecrets:
     """Runtime-only shared secret material injected into rendered configs."""
 
-    torii_onboarding_authority: str | None = None
-    torii_onboarding_private_key: str | None = None
+    account_onboarding_authority: str | None = None
+    account_onboarding_private_key: str | None = None
+    account_onboarding_api_token: str | None = None
+    account_onboarding_credential_id: str | None = None
+    account_onboarding_scope_domain: str | None = None
+    account_onboarding_scope_dataspace: str | None = None
     torii_faucet_authority: str | None = None
     torii_faucet_private_key: str | None = None
     streaming_identity_public_key: str | None = None
@@ -86,9 +93,91 @@ def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     return value.strip()
 
 
+def _require_positive_integer(
+    payload: dict[str, Any], key: str, context: str
+) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{context} field `{key}` must be a positive integer")
+    return value
+
+
+def _scaled_sumeragi_body_bytes(
+    template: dict[str, Any], validator_count: int
+) -> int:
+    """Return an aggregate ingress budget isolating every roster source."""
+
+    sumeragi = template.get("sumeragi")
+    if not isinstance(sumeragi, dict):
+        raise ValueError("config template must define a `[sumeragi]` table")
+    queues = sumeragi.get("queues")
+    if not isinstance(queues, dict):
+        raise ValueError("config template must define a `[sumeragi.queues]` table")
+    context = "config template `[sumeragi.queues]`"
+    configured = _require_positive_integer(queues, "body_bytes", context)
+    source_bytes = _require_positive_integer(queues, "body_source_bytes", context)
+    minimum = (validator_count + 1) * source_bytes
+    return max(configured, minimum)
+
+
 def _quote_toml(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _blake3_token_hash(token: str) -> str:
+    """Return the canonical digest stored in account-onboarding config."""
+
+    try:
+        import blake3
+    except ModuleNotFoundError as error:  # pragma: no cover - environment specific
+        raise SystemExit(
+            "install scripts/requirements.txt before rendering Taira bundles"
+        ) from error
+    return f"blake3:{blake3.blake3(token.encode('utf-8')).hexdigest()}"
+
+
+def _write_private_text(path: Path, value: str) -> None:
+    """Create or replace one runtime-only sidecar without a permissive mode window."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(value)
+            if not value.endswith("\n"):
+                handle.write("\n")
+    finally:
+        if descriptor >= 0:  # pragma: no cover - defensive cleanup
+            os.close(descriptor)
+    path.chmod(0o600)
+
+
+def _validate_account_onboarding_secrets(
+    shared: SharedSecrets, context: str
+) -> None:
+    fields = {
+        "account_onboarding_authority": shared.account_onboarding_authority,
+        "account_onboarding_private_key": shared.account_onboarding_private_key,
+        "account_onboarding_api_token": shared.account_onboarding_api_token,
+        "account_onboarding_credential_id": shared.account_onboarding_credential_id,
+    }
+    scopes = [
+        shared.account_onboarding_scope_domain,
+        shared.account_onboarding_scope_dataspace,
+    ]
+    if any(value is not None for value in (*fields.values(), *scopes)):
+        missing = [key for key, value in fields.items() if value is None]
+        if missing:
+            raise ValueError(
+                f"{context} account onboarding is incomplete; missing "
+                + ", ".join(missing)
+            )
+        if sum(value is not None for value in scopes) != 1:
+            raise ValueError(
+                f"{context} account onboarding must set exactly one of "
+                "account_onboarding_scope_domain or account_onboarding_scope_dataspace"
+            )
 
 
 def _load_validator_tables(payload: dict[str, Any], context: str) -> list[dict[str, Any]]:
@@ -203,6 +292,17 @@ def load_secret_material(path: Path) -> SecretMaterial:
     shared_raw = payload.get("shared", {})
     if not isinstance(shared_raw, dict):
         raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
+    legacy_onboarding_fields = sorted(
+        field
+        for field in ("torii_onboarding_authority", "torii_onboarding_private_key")
+        if field in shared_raw
+    )
+    if legacy_onboarding_fields:
+        raise ValueError(
+            f"secrets file `{path}` uses removed onboarding fields: "
+            + ", ".join(legacy_onboarding_fields)
+            + "; use account_onboarding_* fields"
+        )
     sorafs_council_public_keys = _optional_string_list(
         shared_raw,
         "sorafs_council_public_keys",
@@ -240,30 +340,52 @@ def load_secret_material(path: Path) -> SecretMaterial:
             f"secrets file `{path}` SoraFS council threshold exceeds the trusted key count"
         )
 
+    shared = SharedSecrets(
+        account_onboarding_authority=_optional_string(
+            shared_raw, "account_onboarding_authority", f"secrets file `{path}`"
+        ),
+        account_onboarding_private_key=_optional_string(
+            shared_raw, "account_onboarding_private_key", f"secrets file `{path}`"
+        ),
+        account_onboarding_api_token=_optional_string(
+            shared_raw, "account_onboarding_api_token", f"secrets file `{path}`"
+        ),
+        account_onboarding_credential_id=_optional_string(
+            shared_raw, "account_onboarding_credential_id", f"secrets file `{path}`"
+        ),
+        account_onboarding_scope_domain=_optional_string(
+            shared_raw, "account_onboarding_scope_domain", f"secrets file `{path}`"
+        ),
+        account_onboarding_scope_dataspace=_optional_string(
+            shared_raw,
+            "account_onboarding_scope_dataspace",
+            f"secrets file `{path}`",
+        ),
+        torii_faucet_authority=_optional_string(
+            shared_raw, "torii_faucet_authority", f"secrets file `{path}`"
+        ),
+        torii_faucet_private_key=_optional_string(
+            shared_raw, "torii_faucet_private_key", f"secrets file `{path}`"
+        ),
+        streaming_identity_public_key=_optional_string(
+            shared_raw, "streaming_identity_public_key", f"secrets file `{path}`"
+        ),
+        streaming_identity_private_key=_optional_string(
+            shared_raw, "streaming_identity_private_key", f"secrets file `{path}`"
+        ),
+        sorafs_council_public_keys=sorafs_council_public_keys,
+        sorafs_council_signature_threshold=sorafs_council_signature_threshold,
+    )
+    _validate_account_onboarding_secrets(shared, f"secrets file `{path}`")
+    if bool(shared.torii_faucet_authority) != bool(shared.torii_faucet_private_key):
+        raise ValueError(
+            f"secrets file `{path}` must configure both torii_faucet_authority "
+            "and torii_faucet_private_key"
+        )
+
     return SecretMaterial(
         validators=secrets,
-        shared=SharedSecrets(
-            torii_onboarding_authority=_optional_string(
-                shared_raw, "torii_onboarding_authority", f"secrets file `{path}`"
-            ),
-            torii_onboarding_private_key=_optional_string(
-                shared_raw, "torii_onboarding_private_key", f"secrets file `{path}`"
-            ),
-            torii_faucet_authority=_optional_string(
-                shared_raw, "torii_faucet_authority", f"secrets file `{path}`"
-            ),
-            torii_faucet_private_key=_optional_string(
-                shared_raw, "torii_faucet_private_key", f"secrets file `{path}`"
-            ),
-            streaming_identity_public_key=_optional_string(
-                shared_raw, "streaming_identity_public_key", f"secrets file `{path}`"
-            ),
-            streaming_identity_private_key=_optional_string(
-                shared_raw, "streaming_identity_private_key", f"secrets file `{path}`"
-            ),
-            sorafs_council_public_keys=sorafs_council_public_keys,
-            sorafs_council_signature_threshold=sorafs_council_signature_threshold,
-        ),
+        shared=shared,
     )
 
 
@@ -403,6 +525,11 @@ def load_roster(
         raise ValueError(
             f"roster must define at least {MIN_VALIDATORS} validators for Taira"
         )
+    if len(validators_raw) > MAX_VALIDATORS:
+        raise ValueError(
+            f"roster must define at most {MAX_VALIDATORS} validators for the "
+            "Sumeragi v2 protocol"
+        )
     if secrets is None and secrets_path is not None:
         secrets = load_secret_material(secrets_path)
     secrets_by_slug = secrets.validators if secrets is not None else {}
@@ -488,11 +615,16 @@ def render_validator_config(
     validator: ValidatorEntry,
     validators: list[ValidatorEntry],
     shared_secrets: SharedSecrets | None = None,
+    onboarding_private_key_file: Path | None = None,
+    onboarding_token_hash: str | None = None,
+    faucet_private_key_file: Path | None = None,
+    sumeragi_body_bytes: int | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
 
     current_section: str | None = None
     skipping_array: str | None = None
+    body_bytes_rewritten = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
@@ -532,6 +664,14 @@ def render_validator_config(
         if current_section == "[network]" and stripped.startswith("public_address = "):
             rendered.append(f'public_address = {_quote_toml(validator.public_address)}')
             continue
+        if (
+            current_section == "[sumeragi.queues]"
+            and stripped.partition("=")[0].strip() == "body_bytes"
+            and sumeragi_body_bytes is not None
+        ):
+            rendered.append(f"body_bytes = {sumeragi_body_bytes}")
+            body_bytes_rewritten = True
+            continue
         if current_section == "[torii]" and stripped.startswith("address = "):
             rendered.append(f'address = {_quote_toml(validator.torii_address)}')
             continue
@@ -541,22 +681,57 @@ def render_validator_config(
             )
             continue
         if (
-            current_section == "[torii.onboarding]"
+            current_section == "[torii.account_onboarding]"
             and stripped.startswith("authority = ")
-            and shared.torii_onboarding_authority is not None
+            and shared.account_onboarding_authority is not None
         ):
             rendered.append(
-                f'authority = {_quote_toml(shared.torii_onboarding_authority)}'
+                f'authority = {_quote_toml(shared.account_onboarding_authority)}'
             )
             continue
         if (
-            current_section == "[torii.onboarding]"
-            and stripped.startswith("private_key = ")
-            and shared.torii_onboarding_private_key is not None
+            current_section == "[torii.account_onboarding]"
+            and stripped.startswith("private_key_file = ")
+            and onboarding_private_key_file is not None
         ):
             rendered.append(
-                f'private_key = {_quote_toml(shared.torii_onboarding_private_key)}'
+                f'private_key_file = {_quote_toml(str(onboarding_private_key_file))}'
             )
+            continue
+        if (
+            current_section == "[[torii.account_onboarding.credentials]]"
+            and stripped.startswith("id = ")
+            and shared.account_onboarding_credential_id is not None
+        ):
+            rendered.append(
+                f'id = {_quote_toml(shared.account_onboarding_credential_id)}'
+            )
+            continue
+        if (
+            current_section == "[[torii.account_onboarding.credentials]]"
+            and stripped.startswith("scope = ")
+            and (
+                shared.account_onboarding_scope_domain is not None
+                or shared.account_onboarding_scope_dataspace is not None
+            )
+        ):
+            if shared.account_onboarding_scope_domain is not None:
+                rendered.append(
+                    "scope = { domain = "
+                    f"{_quote_toml(shared.account_onboarding_scope_domain)} }}"
+                )
+            else:
+                rendered.append(
+                    "scope = { dataspace = "
+                    f"{_quote_toml(shared.account_onboarding_scope_dataspace or '')} }}"
+                )
+            continue
+        if (
+            current_section == "[[torii.account_onboarding.credentials]]"
+            and stripped.startswith("token_hash = ")
+            and onboarding_token_hash is not None
+        ):
+            rendered.append(f'token_hash = {_quote_toml(onboarding_token_hash)}')
             continue
         if (
             current_section == "[torii.faucet]"
@@ -567,11 +742,11 @@ def render_validator_config(
             continue
         if (
             current_section == "[torii.faucet]"
-            and stripped.startswith("private_key = ")
-            and shared.torii_faucet_private_key is not None
+            and stripped.startswith("private_key_file = ")
+            and faucet_private_key_file is not None
         ):
             rendered.append(
-                f'private_key = {_quote_toml(shared.torii_faucet_private_key)}'
+                f'private_key_file = {_quote_toml(str(faucet_private_key_file))}'
             )
             continue
         if (
@@ -628,6 +803,11 @@ def render_validator_config(
     rendered_text = "\n".join(rendered)
     if not rendered_text.endswith("\n"):
         rendered_text += "\n"
+    if sumeragi_body_bytes is not None and not body_bytes_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` could not rewrite the "
+            "`[sumeragi.queues] body_bytes` assignment"
+        )
     if "REPLACE_WITH_" in rendered_text:
         raise ValueError(
             f"rendered config for `{validator.slug}` still contains template placeholder "
@@ -651,26 +831,68 @@ def render_bundle(
         load_secret_material(secrets_path) if secrets_path is not None else None
     )
     validators = load_roster(roster_path, secrets=secret_material)
+    template = _load_toml(base_config_path)
+    sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    output_dir.chmod(0o700)
+    _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
 
     written: list[Path] = []
     for validator in validators:
         if only is not None and validator.slug != only:
             continue
         target_dir = output_dir / validator.slug
-        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target_dir.chmod(0o700)
+        runtime_dir = target_dir / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        runtime_dir.chmod(0o700)
         manifest_dir = target_dir / "manifests"
-        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        manifest_dir.chmod(0o700)
+
+        onboarding_private_key_file: Path | None = None
+        onboarding_token_hash: str | None = None
+        faucet_private_key_file: Path | None = None
+        if secret_material is not None:
+            shared = secret_material.shared
+            if shared.account_onboarding_private_key is not None:
+                onboarding_private_key_file = (
+                    runtime_dir / "onboarding-signer.key"
+                ).resolve()
+                _write_private_text(
+                    onboarding_private_key_file,
+                    shared.account_onboarding_private_key,
+                )
+            if shared.account_onboarding_api_token is not None:
+                _write_private_text(
+                    runtime_dir / "onboarding-token",
+                    shared.account_onboarding_api_token,
+                )
+                onboarding_token_hash = _blake3_token_hash(
+                    shared.account_onboarding_api_token
+                )
+            if shared.torii_faucet_private_key is not None:
+                faucet_private_key_file = (runtime_dir / "faucet-signer.key").resolve()
+                _write_private_text(
+                    faucet_private_key_file,
+                    shared.torii_faucet_private_key,
+                )
+
         target_path = target_dir / "config.toml"
-        target_path.write_text(
+        _write_private_text(
+            target_path,
             render_validator_config(
                 template_text,
                 validator,
                 validators,
                 shared_secrets=secret_material.shared if secret_material else None,
+                onboarding_private_key_file=onboarding_private_key_file,
+                onboarding_token_hash=onboarding_token_hash,
+                faucet_private_key_file=faucet_private_key_file,
+                sumeragi_body_bytes=sumeragi_body_bytes,
             ),
-            encoding="utf-8",
         )
         (manifest_dir / "governance.manifest.json").write_text(
             _render_governance_manifest(validators),
@@ -730,7 +952,16 @@ def main(argv: list[str] | None = None) -> int:
         base_genesis_path=Path(args.base_genesis),
     )
     for path in written:
-        print(path)
+        print(f"config: {path}")
+        runtime_dir = path.parent / "runtime"
+        for filename in (
+            "onboarding-signer.key",
+            "onboarding-token",
+            "faucet-signer.key",
+        ):
+            sidecar = runtime_dir / filename
+            if sidecar.exists():
+                print(f"sidecar: {sidecar}")
     return 0
 
 

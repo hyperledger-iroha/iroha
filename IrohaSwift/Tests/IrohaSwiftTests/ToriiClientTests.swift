@@ -14,6 +14,16 @@ private func testFeePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {
     return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
 }
 
+/// Deterministic stand-in for the exact Norito body encoder supplied by an app.
+/// Receipt-verifier tests separately pin the protocol domain and hash marker.
+private func encodeTestCanonicalOnboardingBody(
+    _ body: ToriiAccountOnboardingPlanBody
+) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return try encoder.encode(body)
+}
+
 private final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
 
@@ -1421,9 +1431,24 @@ fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
 
 final class ToriiClientTests: XCTestCase {
     private static let pipelineHash = String(repeating: "d", count: 64)
+    private let canonicalSigningSeed = Data(repeating: 0x41, count: 32)
     private let onboardingToken = String(repeating: "T", count: 32)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+
+    private var authority: String {
+        try! Keypair(privateKeyBytes: canonicalSigningSeed)
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+    }
+
+    private var canonicalReadAuth: ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(
+            accountId: authority,
+            privateKey: canonicalSigningSeed,
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-read-test"
+        )
+    }
 
     private var currentKagemushaReadinessFields: String {
         """
@@ -1622,7 +1647,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, Data())
         }
 
-        let resolved = try await client.resolveAccountAlias("missing")
+        let resolved = try await client.resolveAccountAlias("missing@universal")
         XCTAssertNil(resolved)
     }
 
@@ -2232,14 +2257,14 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "alice")
+            XCTAssertEqual(payload["alias"] as? String, "alice@universal")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-              "alias":"alice",
+              "alias":"alice@universal",
               "accountId":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "index":7,
               "source":"world_state"
@@ -2248,12 +2273,308 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let resolved = try await makeClient().resolveAccountAlias("alice")
-        XCTAssertEqual(resolved?.alias, "alice")
+        let resolved = try await makeClient().resolveAccountAlias("alice@universal")
+        XCTAssertEqual(resolved?.alias, "alice@universal")
         XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
         XCTAssertEqual(resolved?.accountIds, ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"])
         XCTAssertEqual(resolved?.index, 7)
         XCTAssertEqual(resolved?.source, "world_state")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveRestrictedAccountAliasUsesCanonicalAuthentication() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs),
+                "4102444801000"
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce),
+                "canonical-read-test"
+            )
+            XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            XCTAssertEqual(self.bodyJSON(from: request)["alias"] as? String, "merchant@private")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {
+              "alias":"merchant@private",
+              "account_id":"\(self.authority)",
+              "source":"world_state"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let resolved = try await makeClient().resolveAccountAlias(
+            "merchant@private",
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(resolved?.accountId, authority)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testPlanAliasSetupUsesCanonicalAuthenticationWithoutMutation() async throws {
+        let resolved = try ResolvedAccountAliasV1(
+            canonicalName: "merchant@private",
+            dataspaceId: 7
+        )
+        let guardValue = try AliasQuoteGuardV1(
+            expectedPolicyVersion: 1,
+            expectedPaymentAsset: "4rPeAP6jAjiLVZThZYwwPRBuQagt",
+            maxAmount: "5",
+            validUntilMs: 4_102_444_802_000
+        )
+        let setup = try AliasSetupPlanRequestV1(
+            intents: [
+                EnsureAlias(
+                    intent: .accountAlias(
+                        try AliasAccountIntentV1(
+                            alias: resolved,
+                            targetAccount: authority,
+                            provision: .existing,
+                            role: .primary
+                        )
+                    ),
+                    acquisition: try AliasLeaseAcquisitionV1(termYears: 1),
+                    quoteGuard: guardValue
+                )
+            ]
+        )
+        let responsePlan = try AliasTransactionPlanV1(
+            body: try AliasTransactionPlanBodyV1(
+                authority: authority,
+                chainId: "test-chain",
+                anchor: try AliasPlanAnchorV1(
+                    blockHeight: 9,
+                    blockHash: String(repeating: "01", count: 32)
+                ),
+                resources: [],
+                instructions: [],
+                totalsByAsset: [],
+                warnings: [],
+                blockers: [],
+                validUntilMs: 4_102_444_802_000
+            ),
+            planHash: String(repeating: "02", count: 32)
+        )
+        let responseBody = try JSONEncoder().encode(responsePlan)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/setup/plan")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            XCTAssertEqual(self.bodyJSON(from: request)["schema_version"] as? Int, 1)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseBody)
+        }
+
+        let plan = try await makeClient().planAliasSetup(setup, canonicalAuth: canonicalReadAuth)
+        XCTAssertEqual(plan, responsePlan)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAliasLifecyclePlannersUseCanonicalAuthenticationAndExactOperation() async throws {
+        let resolved = try ResolvedAccountAliasV1(
+            canonicalName: "merchant@private",
+            dataspaceId: 7
+        )
+        let guardValue = try AliasQuoteGuardV1(
+            expectedPolicyVersion: 1,
+            expectedPaymentAsset: "4rPeAP6jAjiLVZThZYwwPRBuQagt",
+            maxAmount: "5",
+            validUntilMs: 4_102_444_802_000
+        )
+        let renewal = try RenewAliasLease(
+            target: .accountAlias(resolved),
+            expectedCurrentExpiryMs: 1_000,
+            targetExpiryMs: 2_000,
+            quoteGuard: guardValue
+        )
+        let renewalRequest = AliasLeaseRenewPlanRequestV1(renewal: renewal)
+        let quote = try AliasLeaseQuoteV1(
+            target: renewal.target,
+            pricingClass: 1,
+            exactAmount: "1",
+            quoteGuard: guardValue,
+            expiresAtMs: renewal.targetExpiryMs,
+            graceExpiresAtMs: 3_000,
+            redemptionExpiresAtMs: 4_000
+        )
+        let renewalPlan = try AliasLifecycleTransactionPlanV1(
+            body: try AliasLifecycleTransactionPlanBodyV1(
+                authority: authority,
+                chainId: "test-chain",
+                anchor: try AliasPlanAnchorV1(
+                    blockHeight: 9,
+                    blockHash: String(repeating: "01", count: 32)
+                ),
+                operation: .renewLease(renewal),
+                disposition: .apply,
+                instruction: try AliasFramedInstructionV1(
+                    wireId: RenewAliasLease.wireId,
+                    framedPayload: Data([1, 2, 3])
+                ),
+                quote: quote,
+                totalsByAsset: [try AliasAssetTotalV1(
+                    paymentAsset: guardValue.expectedPaymentAsset,
+                    amount: quote.exactAmount
+                )],
+                warnings: [],
+                blockers: [],
+                validUntilMs: guardValue.validUntilMs
+            ),
+            planHash: String(repeating: "02", count: 32)
+        )
+        let renewalResponse = try JSONEncoder().encode(renewalPlan)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/lease/renew/plan")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertEqual(self.bodyJSON(from: request)["schema_version"] as? Int, 1)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, renewalResponse)
+        }
+        let returnedRenewalPlan = try await makeClient().planAliasLeaseRenewal(
+            renewalRequest,
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(returnedRenewalPlan, renewalPlan)
+
+        let configuration = ConfigureAliasAutoRenew(
+            target: .accountAlias(resolved),
+            expectedRevision: 4,
+            config: nil
+        )
+        let autoRequest = AliasAutoRenewPlanRequestV1(configuration: configuration)
+        let autoPlan = try AliasLifecycleTransactionPlanV1(
+            body: try AliasLifecycleTransactionPlanBodyV1(
+                authority: authority,
+                chainId: "test-chain",
+                anchor: renewalPlan.body.anchor,
+                operation: .configureAutoRenew(configuration),
+                disposition: .noOp,
+                instruction: nil,
+                quote: nil,
+                totalsByAsset: [],
+                warnings: [],
+                blockers: [],
+                validUntilMs: 4_102_444_802_000
+            ),
+            planHash: String(repeating: "03", count: 32)
+        )
+        let autoResponse = try JSONEncoder().encode(autoPlan)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/auto-renew/plan")
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, autoResponse)
+        }
+        let returnedAutoRenewPlan = try await makeClient().planAliasAutoRenew(
+            autoRequest,
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(returnedAutoRenewPlan, autoPlan)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testTypedAliasIndexAndByAccountReadsUseVisibilityAwareRoutes() async throws {
+        XCTAssertThrowsError(
+            try ToriiAliasesByAccountRequest(
+                accountId: authority,
+                domain: "banka"
+            )
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve-index")
+            XCTAssertNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("""
+                {"index":7,"alias":"merchant@paynet","account_id":"\(self.authority)","source":"active_sns"}
+                """.utf8)
+            )
+        }
+        let indexed = try await makeClient().resolveAccountAliasIndex(7)
+        XCTAssertEqual(indexed?.alias, "merchant@paynet")
+        XCTAssertEqual(indexed?.accountId, authority)
+
+        let lookup = try ToriiAliasesByAccountRequest(
+            accountId: authority,
+            dataspace: "paynet"
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/by-account")
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
+            let requestBody = self.bodyJSON(from: request)
+            XCTAssertEqual(requestBody["account_id"] as? String, self.authority)
+            XCTAssertEqual(requestBody["dataspace"] as? String, "paynet")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("""
+                {"account_id":"\(self.authority)","total":1,"items":[{"alias":"merchant@paynet","dataspace":"paynet","is_primary":true}],"source":"fanout"}
+                """.utf8)
+            )
+        }
+        let aliases = try await makeClient().aliasesByAccount(
+            lookup,
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(aliases?.total, 1)
+        XCTAssertEqual(aliases?.items.first?.alias, "merchant@paynet")
+
+        let unsorted = Data("""
+        {"account_id":"\(authority)","total":2,"items":[{"alias":"z@paynet","dataspace":"paynet","is_primary":false},{"alias":"a@paynet","dataspace":"paynet","is_primary":true}]}
+        """.utf8)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiAliasesByAccountResponse.self, from: unsorted)
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2262,14 +2583,14 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "alice")
+            XCTAssertEqual(payload["alias"] as? String, "alice@universal")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-              "alias":"alice",
+              "alias":"alice@universal",
               "account_ids":[
                 "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                 "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB"
@@ -2280,8 +2601,8 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let resolved = try await makeClient().resolveAccountAlias("alice")
-        XCTAssertEqual(resolved?.alias, "alice")
+        let resolved = try await makeClient().resolveAccountAlias("alice@universal")
+        XCTAssertEqual(resolved?.alias, "alice@universal")
         XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
         XCTAssertEqual(
             resolved?.accountIds,
@@ -2298,7 +2619,7 @@ final class ToriiClientTests: XCTestCase {
         let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let canonical = """
         {
-          "alias":"alice",
+          "alias":"alice@universal",
           "account_id":"\(accountId)",
           "account_ids":["\(accountId)"],
           "index":7,
@@ -2308,8 +2629,8 @@ final class ToriiClientTests: XCTestCase {
         let cases = [
             (
                 "account alias resolution.alias",
-                "\"alias\":\"alice\"",
-                "\"alias\":\" alice\""
+                "\"alias\":\"alice@universal\"",
+                "\"alias\":\" alice@universal\""
             ),
             (
                 "account alias resolution.account_id",
@@ -2343,7 +2664,7 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().resolveAccountAlias("alice")
+                _ = try await makeClient().resolveAccountAlias("alice@universal")
                 XCTFail("expected \(field) exactness failure")
             } catch let ToriiClientError.decoding(underlying) {
                 guard case let DecodingError.dataCorrupted(context) = underlying else {
@@ -2370,7 +2691,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, Data())
         }
 
-        let resolved = try await makeClient().resolveAccountAlias("missing-alias")
+        let resolved = try await makeClient().resolveAccountAlias("missing-alias@universal")
         XCTAssertNil(resolved)
     }
 
@@ -10097,25 +10418,6 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testCreateSubscriptionPlanRejectsRemovedServerSideSigningFlow() async {
-        let plan: ToriiSubscriptionPlan = [
-            "provider": .string("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-            "billing": .object(["kind": .string("monthly")]),
-            "pricing": .object(["kind": .string("fixed"), "amount": .string("120")])
-        ]
-        let requestBody = ToriiSubscriptionPlanCreateRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                             planId: "plan#subs",
-                                                             plan: plan)
-        await XCTAssertThrowsErrorAsync(try await makeClient().createSubscriptionPlan(requestBody)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/subscriptions/plans"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testListSubscriptionsEncodesParams() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/subscriptions")
@@ -10165,24 +10467,6 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testCreateSubscriptionRejectsRemovedServerSideSigningFlow() async {
-        let requestBody = ToriiSubscriptionCreateRequest(authority: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                         subscriptionId: "sub-1$subscriptions",
-                                                         planId: "plan#subs",
-                                                         billingTriggerId: "sub-bill",
-                                                         usageTriggerId: "sub-usage",
-                                                         firstChargeMs: 1_704_067_200_000,
-                                                         grantUsageToProvider: true)
-        await XCTAssertThrowsErrorAsync(try await makeClient().createSubscription(requestBody)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/subscriptions"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetSubscriptionDecodesRecord() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/subscriptions/sub-1$subscriptions")
@@ -10218,39 +10502,6 @@ final class ToriiClientTests: XCTestCase {
         }
         let record = try await makeClient().getSubscription(subscriptionId: "sub-404$subscriptions")
         XCTAssertNil(record)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testSubscriptionActionsRejectRemovedServerSideSigningFlow() async {
-        let subscriptionId = "sub-1$subscriptions"
-        let client = makeClient()
-        let action = ToriiSubscriptionActionRequest(authority: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
-        let chargeAction = ToriiSubscriptionActionRequest(authority: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                          chargeAtMs: 1_704_067_200_000)
-        let cancelAction = ToriiSubscriptionActionRequest(authority: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                          cancelMode: .periodEnd)
-        let usage = ToriiSubscriptionUsageRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                  unitKey: "compute_ms",
-                                                  delta: "3600000",
-                                                  usageTriggerId: "sub-usage")
-        let cases: [(String, @Sendable () async throws -> Void)] = [
-            ("/v1/subscriptions/{subscription_id}/pause", { _ = try await client.pauseSubscription(subscriptionId: subscriptionId, requestBody: action) }),
-            ("/v1/subscriptions/{subscription_id}/resume", { _ = try await client.resumeSubscription(subscriptionId: subscriptionId, requestBody: chargeAction) }),
-            ("/v1/subscriptions/{subscription_id}/cancel", { _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: cancelAction) }),
-            ("/v1/subscriptions/{subscription_id}/keep", { _ = try await client.keepSubscription(subscriptionId: subscriptionId, requestBody: action) }),
-            ("/v1/subscriptions/{subscription_id}/charge-now", { _ = try await client.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: chargeAction) }),
-            ("/v1/subscriptions/{subscription_id}/usage", { _ = try await client.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: usage) })
-        ]
-
-        for (endpoint, operation) in cases {
-            await XCTAssertThrowsErrorAsync(try await operation()) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload, got \(error)")
-                }
-                XCTAssertTrue(reason.contains(endpoint))
-                XCTAssertTrue(reason.contains("locally signed transaction"))
-            }
-        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10348,51 +10599,241 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    private func onboardingResponseBody(accountId: String,
-                                        uaid: String,
-                                        alias: String = "alice@universal",
-                                        status: String = "QUEUED") -> Data {
-        """
-        {
-          "account_id":"\(accountId)",
-          "uaid":"\(uaid)",
-          "tx_hash_hex":"\(String(repeating: "22", count: 31))23",
-          "status":"\(status)",
-          "lease":{
-            "alias":"\(alias)",
-            "dataspace":"universal",
-            "domain":"wonderland.universal",
-            "is_primary":true,
-            "lease_status":"active",
-            "expires_at_ms":1000,
-            "grace_expires_at_ms":2000,
-            "redemption_expires_at_ms":3000,
-            "auto_renew_enabled":true,
-            "subscription_status":"active",
-            "next_charge_ms":900,
-            "last_invoice_status":"paid",
-            "max_charge_amount":"2500"
-          }
-        }
-        """.data(using: .utf8)!
+    private func onboardingPlanReceipt(
+        request: ToriiAccountOnboardingPlanRequest,
+        disposition: AliasPlanDispositionV1 = .create
+    ) throws -> ToriiAccountOnboardingPlanReceipt {
+        let authorityKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x51, count: 32))
+        let authority = try AccountId.makeI105(publicKey: authorityKey.publicKey())
+        let alias = try ResolvedAccountAliasV1(
+            canonicalName: request.alias,
+            dataspaceId: 0
+        )
+        let intent = AliasIntentV1.accountAlias(
+            try AliasAccountIntentV1(
+                alias: alias,
+                targetAccount: request.accountId,
+                provision: .create,
+                role: .primary
+            )
+        )
+        let acquisition = try AliasLeaseAcquisitionV1(termYears: 1)
+        let quoteGuard = try AliasQuoteGuardV1(
+            expectedPolicyVersion: 1,
+            expectedPaymentAsset: "4rPeAP6jAjiLVZThZYwwPRBuQagt",
+            maxAmount: "0",
+            validUntilMs: UInt64.max
+        )
+        let instructions = disposition == .noOp
+            ? []
+            : [try AliasFramedInstructionV1(
+                wireId: EnsureAlias.wireId,
+                framedPayload: Data([1, 2, 3])
+            )]
+        let body = ToriiAccountOnboardingPlanBody(
+            version: ToriiAccountOnboardingPlanBody.version,
+            request: request,
+            authority: authority,
+            chainId: "00000000-0000-0000-0000-000000000000",
+            anchor: try AliasPlanAnchorV1(
+                blockHeight: 1,
+                blockHash: String(repeating: "11", count: 32)
+            ),
+            resource: AliasPlanResourceV1(
+                intent: intent,
+                disposition: disposition,
+                quote: nil,
+                instructionIndex: instructions.isEmpty ? nil : 0
+            ),
+            acquisition: acquisition,
+            quoteGuard: quoteGuard,
+            instructions: instructions,
+            ownerAutoRenewInstruction: nil,
+            validUntilMs: UInt64.max
+        )
+        let bodyBytes = try encodeTestCanonicalOnboardingBody(body)
+        let planHash = try ToriiAccountOnboardingReceiptVerifier.canonicalHash(
+            canonicalBodyNorito: bodyBytes
+        )
+        return ToriiAccountOnboardingPlanReceipt(
+            body: body,
+            planHash: try ToriiAccountOnboardingReceiptVerifier.canonicalHashLiteral(
+                canonicalBodyNorito: bodyBytes
+            ),
+            signature: .string(try authorityKey.sign(planHash).hexUppercased())
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountCanonicalizesUaidAndIdentityCommitment() async throws {
-        let uaidHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        let commitmentHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        let accountId = try canonicalOwnerLiteral()
-        let responseBody = onboardingResponseBody(
-            accountId: accountId,
-            uaid: "uaid:\(uaidHex)"
+    func testAccountOnboardingReceiptVerifiesDomainHashAndAuthoritySignature() throws {
+        let request = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: canonicalOwnerLiteral()
+        )
+        let receipt = try onboardingPlanReceipt(request: request)
+        let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
+
+        XCTAssertNoThrow(
+            try ToriiAccountOnboardingReceiptVerifier.verify(
+                receipt,
+                for: request,
+                canonicalBodyNorito: canonicalBody,
+                expectedAuthority: receipt.body.authority,
+                expectedChainId: receipt.body.chainId
+            )
         )
 
+        var expectedHash = Blake2b.hash256(
+            Data("iroha:account-onboarding-plan-receipt:v1\0".utf8) + canonicalBody
+        )
+        expectedHash[expectedHash.index(before: expectedHash.endIndex)] |= 1
+        XCTAssertEqual(
+            receipt.planHash,
+            try ToriiAccountOnboardingReceiptVerifier.canonicalHashLiteral(
+                canonicalBodyNorito: canonicalBody
+            )
+        )
+
+        var tamperedBody = canonicalBody
+        tamperedBody.append(0)
+        XCTAssertThrowsError(
+            try ToriiAccountOnboardingReceiptVerifier.verify(
+                receipt,
+                for: request,
+                canonicalBodyNorito: tamperedBody,
+                expectedAuthority: receipt.body.authority,
+                expectedChainId: receipt.body.chainId
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .planHashMismatch
+            )
+        }
+
+        guard case let .string(signatureHex) = receipt.signature,
+              var signature = Data(hexString: signatureHex) else {
+            return XCTFail("expected canonical signature hex")
+        }
+        signature[signature.startIndex] ^= 1
+        let badSignature = ToriiAccountOnboardingPlanReceipt(
+            body: receipt.body,
+            planHash: receipt.planHash,
+            signature: .string(signature.hexUppercased())
+        )
+        XCTAssertThrowsError(
+            try ToriiAccountOnboardingReceiptVerifier.verify(
+                badSignature,
+                for: request,
+                canonicalBodyNorito: canonicalBody,
+                expectedAuthority: receipt.body.authority,
+                expectedChainId: receipt.body.chainId
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .signatureMismatch
+            )
+        }
+
+        let wrongAuthority = try AccountId.makeI105(
+            publicKey: SigningKey.ed25519(privateKey: Data(repeating: 0x52, count: 32)).publicKey()
+        )
+        XCTAssertThrowsError(
+            try ToriiAccountOnboardingReceiptVerifier.verify(
+                receipt,
+                for: request,
+                canonicalBodyNorito: canonicalBody,
+                expectedAuthority: wrongAuthority,
+                expectedChainId: receipt.body.chainId
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .authorityMismatch
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountOnboardingReceiptRequiresExactPinnedChainId() throws {
+        let request = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: canonicalOwnerLiteral()
+        )
+        let receipt = try onboardingPlanReceipt(request: request)
+        let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
+
+        XCTAssertThrowsError(
+            try ToriiAccountOnboardingReceiptVerifier.verify(
+                receipt,
+                for: request,
+                canonicalBodyNorito: canonicalBody,
+                expectedAuthority: receipt.body.authority,
+                expectedChainId: "other-chain"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .chainIdMismatch
+            )
+        }
+
+        for invalidChainId in ["", " chain", "chain ", "chain\n"] {
+            XCTAssertThrowsError(
+                try ToriiAccountOnboardingReceiptVerifier.verify(
+                    receipt,
+                    for: request,
+                    canonicalBodyNorito: canonicalBody,
+                    expectedAuthority: receipt.body.authority,
+                    expectedChainId: invalidChainId
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? ToriiAccountOnboardingReceiptVerificationError,
+                    .invalidChainId
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testProductionOnboardingBodyEncoderUsesNoritoOrFailsClosed() throws {
+        let request = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: canonicalOwnerLiteral()
+        )
+        let receipt = try onboardingPlanReceipt(request: request)
+        let transportJSON = try encodeTestCanonicalOnboardingBody(receipt.body)
+        do {
+            let encoded = try ToriiAccountOnboardingPlanBodyNorito.encode(receipt.body)
+            XCTAssertFalse(encoded.isEmpty)
+            XCTAssertNotEqual(encoded, transportJSON)
+        } catch {
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .canonicalBodyEncodingUnavailable
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountOnboardingPlansThenAppliesExactReceipt() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: accountId,
+            permissions: [" CanFoo ", "CanBar", "CanFoo"]
+        )
+        let receipt = try onboardingPlanReceipt(request: intent)
+        let receiptBody = try JSONEncoder().encode(receipt)
+        var requestCount = 0
+
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/accounts/onboard")
+            requestCount += 1
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiAPITokenHeader), "global-api-token")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiAccountOnboardingTokenHeader),
                 self.onboardingToken
@@ -10403,88 +10844,209 @@ final class ToriiClientTests: XCTestCase {
                 }.count,
                 1
             )
-            let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "alice@universal")
-            XCTAssertEqual(payload["account_id"] as? String, accountId)
-            XCTAssertNil(payload["public_key_hex"])
-            XCTAssertEqual(payload["uaid"] as? String, "uaid:\(uaidHex)")
-            XCTAssertEqual(payload["identity_commitment_hex"] as? String, commitmentHex)
-            XCTAssertEqual(payload["permissions"] as? [String], ["CanFoo", "CanBar"])
-            XCTAssertNil(payload["identity"])
-            XCTAssertFalse(String(data: self.bodyData(from: request)!, encoding: .utf8)!.contains(self.onboardingToken))
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
+            let rawBody = try XCTUnwrap(self.bodyData(from: request))
+            let rawText = String(decoding: rawBody, as: UTF8.self)
+            XCTAssertFalse(rawText.contains(self.onboardingToken))
+            XCTAssertFalse(rawText.contains("private_key"))
+            XCTAssertFalse(rawText.contains("public_key_hex"))
+            XCTAssertFalse(rawText.contains("uaid"))
+
+            if request.url?.path == "/v1/accounts/onboard/plan" {
+                let decoded = try JSONDecoder().decode(
+                    ToriiAccountOnboardingPlanRequest.self,
+                    from: rawBody
+                )
+                XCTAssertEqual(decoded, intent)
+                let payload = self.bodyJSON(from: request)
+                XCTAssertEqual(
+                    Set(payload.keys),
+                    Set(["version", "alias", "account_id", "permissions"])
+                )
+                XCTAssertEqual(payload["permissions"] as? [String], ["CanBar", "CanFoo"])
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, receiptBody)
+            }
+
+            XCTAssertEqual(request.url?.path, "/v1/accounts/onboard")
+            let decoded = try JSONDecoder().decode(
+                ToriiAccountOnboardingApplyRequest.self,
+                from: rawBody
+            )
+            XCTAssertEqual(decoded.receipt, receipt)
+            let responseBody = """
+            {
+              "account_id":"\(accountId)",
+              "alias":"alice@universal",
+              "tx_hash_hex":"\(String(repeating: "ab", count: 32))",
+              "status":"Queued",
+              "disposition":{"kind":"create","value":null}
+            }
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
             return (response, responseBody)
         }
 
-        let response = try await makeClient(defaultHeaders: [
+        let client = makeClient(defaultHeaders: [
             ToriiAPITokenHeader: "global-api-token",
             ToriiAccountOnboardingTokenHeader.lowercased(): "retired-default-token-must-not-be-used"
-        ]).registerAccount(
-            ToriiAccountOnboardingRequest(
-                alias: "alice@universal",
-                accountId: accountId,
-                uaid: "UAID:\(uaidHex.uppercased())",
-                identityCommitmentHex: "  \(commitmentHex.uppercased())  ",
-                permissions: [" CanFoo ", "", "CanFoo", "CanBar"]
-            ),
-            onboardingToken: onboardingToken
+        ])
+        let planned = try await client.planAccountOnboarding(
+            intent,
+            onboardingToken: onboardingToken,
+            expectedAuthority: receipt.body.authority,
+            expectedChainId: receipt.body.chainId,
+            bodyEncoder: encodeTestCanonicalOnboardingBody
         )
-        XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
-        XCTAssertEqual(response.status, .queued)
-        XCTAssertEqual(response.lease.alias, "alice@universal")
-        XCTAssertEqual(response.lease.dataspace, "universal")
-        XCTAssertEqual(response.lease.domain, "wonderland.universal")
-        XCTAssertTrue(response.lease.isPrimary)
-        XCTAssertEqual(response.lease.leaseStatus, "active")
-        XCTAssertEqual(response.lease.expiresAtMs, 1000)
-        XCTAssertEqual(response.lease.graceExpiresAtMs, 2000)
-        XCTAssertEqual(response.lease.redemptionExpiresAtMs, 3000)
-        XCTAssertTrue(response.lease.autoRenewEnabled)
-        XCTAssertEqual(response.lease.subscriptionStatus, "active")
-        XCTAssertEqual(response.lease.nextChargeMs, 900)
-        XCTAssertEqual(response.lease.lastInvoiceStatus, "paid")
-        XCTAssertEqual(response.lease.maxChargeAmount, "2500")
+        XCTAssertEqual(planned, receipt)
+        let applied = try await client.applyAccountOnboarding(
+            planned,
+            onboardingToken: onboardingToken,
+            expectedAuthority: receipt.body.authority,
+            expectedChainId: receipt.body.chainId,
+            bodyEncoder: encodeTestCanonicalOnboardingBody
+        )
+        XCTAssertEqual(applied.status, .queued)
+        XCTAssertEqual(applied.disposition, .create)
+        XCTAssertEqual(applied.txHashHex, String(repeating: "ab", count: 32))
+        XCTAssertEqual(requestCount, 2)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsMalformedOnboardingTokenBeforeNetwork() async {
+    func testAccountOnboardingExactReplayReturnsUnchanged() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: accountId
+        )
+        let receipt = try onboardingPlanReceipt(request: intent, disposition: .noOp)
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/accounts/onboard")
+            let responseBody = """
+            {
+              "account_id":"\(accountId)",
+              "alias":"alice@universal",
+              "status":"Unchanged",
+              "disposition":{"kind":"no_op","value":null}
+            }
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseBody)
+        }
+
+        let result = try await makeClient().applyAccountOnboarding(
+            receipt,
+            onboardingToken: onboardingToken,
+            expectedAuthority: receipt.body.authority,
+            expectedChainId: receipt.body.chainId,
+            bodyEncoder: encodeTestCanonicalOnboardingBody
+        )
+        XCTAssertEqual(result.status, .unchanged)
+        XCTAssertNil(result.txHashHex)
+        XCTAssertEqual(result.disposition, .noOp)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountOnboardingRejectsMalformedTokenBeforeNetwork() async throws {
         StubURLProtocol.handler = { _ in
             XCTFail("malformed onboarding token reached HTTP dispatch")
             throw URLError(.badURL)
         }
-        let request = ToriiAccountOnboardingRequest(
+        let intent = try ToriiAccountOnboardingPlanRequest(
             alias: "alice@universal",
-            publicKeyHex: String(repeating: "11", count: 32),
-            uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            accountId: canonicalOwnerLiteral()
         )
-        let malformed = [
+        let expectedAuthority = try canonicalOwnerLiteral()
+        let expectedChainId = "00000000-0000-0000-0000-000000000000"
+        for token in [
             "",
             String(repeating: "T", count: 31),
             String(repeating: "T", count: 257),
             String(repeating: "T", count: 31) + " ",
             String(repeating: "T", count: 31) + "é"
-        ]
-
-        for token in malformed {
+        ] {
             do {
-                _ = try await makeClient().registerAccount(request, onboardingToken: token)
+                _ = try await makeClient().planAccountOnboarding(
+                    intent,
+                    onboardingToken: token,
+                    expectedAuthority: expectedAuthority,
+                    expectedChainId: expectedChainId,
+                    bodyEncoder: encodeTestCanonicalOnboardingBody
+                )
                 XCTFail("Expected malformed onboarding token to fail")
             } catch {
                 guard case let ToriiClientError.invalidPayload(message) = error else {
                     return XCTFail("Expected invalidPayload error, got \(error)")
                 }
                 if !token.isEmpty {
-                    XCTAssertFalse(message.contains(token), "credential must not appear in validation errors")
+                    XCTAssertFalse(message.contains(token))
                 }
             }
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountDoesNotFollowRedirects() async {
+    func testAccountOnboardingRejectsInvalidTrustPinsBeforeNetwork() async throws {
+        StubURLProtocol.handler = { _ in
+            XCTFail("invalid onboarding trust pin reached HTTP dispatch")
+            throw URLError(.badURL)
+        }
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: canonicalOwnerLiteral()
+        )
+        let expectedAuthority = try canonicalOwnerLiteral()
+
+        do {
+            _ = try await makeClient().planAccountOnboarding(
+                intent,
+                onboardingToken: onboardingToken,
+                expectedAuthority: expectedAuthority,
+                expectedChainId: " chain",
+                bodyEncoder: encodeTestCanonicalOnboardingBody
+            )
+            XCTFail("Expected invalid chain pin to fail")
+        } catch {
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .invalidChainId
+            )
+        }
+
+        do {
+            _ = try await makeClient().planAccountOnboarding(
+                intent,
+                onboardingToken: onboardingToken,
+                expectedAuthority: "not-an-account-id",
+                expectedChainId: "chain",
+                bodyEncoder: encodeTestCanonicalOnboardingBody
+            )
+            XCTFail("Expected invalid authority pin to fail")
+        } catch {
+            XCTAssertEqual(
+                error as? ToriiAccountOnboardingReceiptVerificationError,
+                .invalidAuthority
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountOnboardingPlanDoesNotFollowRedirectsAndRedactsToken() async throws {
         var requestCount = 0
         StubURLProtocol.handler = { request in
             requestCount += 1
@@ -10493,7 +11055,7 @@ final class ToriiClientTests: XCTestCase {
                 statusCode: 307,
                 httpVersion: nil,
                 headerFields: [
-                    "Location": "https://redirect.example/v1/accounts/onboard",
+                    "Location": "https://redirect.example/v1/accounts/onboard/plan",
                     "x-iroha-reject-code": self.onboardingToken
                 ]
             )!
@@ -10502,15 +11064,20 @@ final class ToriiClientTests: XCTestCase {
                 Data("{\"message\":\"server echoed \(self.onboardingToken)\"}".utf8)
             )
         }
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: canonicalOwnerLiteral()
+        )
+        let expectedAuthority = try canonicalOwnerLiteral()
+        let expectedChainId = "00000000-0000-0000-0000-000000000000"
 
         do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-                ),
-                onboardingToken: onboardingToken
+            _ = try await makeClient().planAccountOnboarding(
+                intent,
+                onboardingToken: onboardingToken,
+                expectedAuthority: expectedAuthority,
+                expectedChainId: expectedChainId,
+                bodyEncoder: encodeTestCanonicalOnboardingBody
             )
             XCTFail("Expected redirect response to fail closed")
         } catch {
@@ -10524,257 +11091,6 @@ final class ToriiClientTests: XCTestCase {
         }
         XCTAssertEqual(requestCount, 1)
     }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRedactsCredentialBeforeDecodingSuccessResponse() async {
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 202,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (
-                response,
-                Data("{\"\(self.onboardingToken)\":null}".utf8)
-            )
-        }
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected malformed success response to fail")
-        } catch {
-            XCTAssertFalse(error.localizedDescription.contains(onboardingToken))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRedactsJsonEscapedCredentialBeforeDecoding() async throws {
-        let escapedToken = String(repeating: "\"", count: 32)
-        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        let accountId = try canonicalOwnerLiteral()
-        let baseResponse = onboardingResponseBody(accountId: accountId, uaid: uaid)
-        var responseObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: baseResponse) as? [String: Any]
-        )
-        responseObject["status"] = escapedToken
-        let encodedResponse = try JSONSerialization.data(withJSONObject: responseObject)
-        XCTAssertFalse(String(decoding: encodedResponse, as: UTF8.self).contains(escapedToken))
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 202,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, encodedResponse)
-        }
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: uaid
-                ),
-                onboardingToken: escapedToken
-            )
-            XCTFail("Expected invalid onboarding status to fail")
-        } catch {
-            XCTAssertFalse(error.localizedDescription.contains(escapedToken))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountSupportsPublicKeyWithoutAccountId() async throws {
-        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        let publicKeyHex = String(repeating: "AB", count: 32)
-        let responseBody = onboardingResponseBody(
-            accountId: try canonicalOwnerLiteral(),
-            uaid: uaid,
-            alias: "bob@universal"
-        )
-
-        StubURLProtocol.handler = { request in
-            let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "bob@universal")
-            XCTAssertNil(payload["account_id"])
-            XCTAssertEqual(payload["public_key_hex"] as? String, publicKeyHex.lowercased())
-            XCTAssertEqual(payload["uaid"] as? String, uaid)
-            XCTAssertNil(payload["permissions"])
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, responseBody)
-        }
-
-        let response = try await makeClient().registerAccount(
-            ToriiAccountOnboardingRequest(
-                alias: "bob@universal",
-                publicKeyHex: publicKeyHex,
-                uaid: uaid
-            ),
-            onboardingToken: onboardingToken
-        )
-        XCTAssertEqual(response.status, .queued)
-        XCTAssertEqual(response.lease.alias, "bob@universal")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsInvalidUaidBeforeNetwork() async {
-        StubURLProtocol.handler = { _ in
-            XCTFail("registerAccount should validate UAID before dispatch")
-            throw URLError(.badURL)
-        }
-        let invalidUaid = "uaid:\(String(repeating: "10", count: 32))"
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: invalidUaid
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected invalid UAID error")
-        } catch {
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsInvalidIdentityCommitmentBeforeNetwork() async {
-        StubURLProtocol.handler = { _ in
-            XCTFail("registerAccount should validate identity commitment before dispatch")
-            throw URLError(.badURL)
-        }
-        let uaidHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: "uaid:\(uaidHex)",
-                    identityCommitmentHex: "abcd"
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected invalid identity commitment error")
-        } catch {
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsInvalidPublicKeyBeforeNetwork() async {
-        StubURLProtocol.handler = { _ in
-            XCTFail("registerAccount should validate public_key_hex before dispatch")
-            throw URLError(.badURL)
-        }
-        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: "abcd",
-                    uaid: uaid
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected invalid public key error")
-        } catch {
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsNonQueuedResponse() async throws {
-        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        let responseBody = onboardingResponseBody(
-            accountId: try canonicalOwnerLiteral(),
-            uaid: uaid,
-            status: "Applied"
-        )
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, responseBody)
-        }
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: uaid
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected non-QUEUED response to fail decoding")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected decoding error, got \(error)")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterAccountRejectsResponseWithoutLease() async throws {
-        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        let responseBody = """
-        {
-          "account_id":"\(try canonicalOwnerLiteral())",
-          "uaid":"\(uaid)",
-          "tx_hash_hex":"\(String(repeating: "22", count: 32))",
-          "status":"QUEUED"
-        }
-        """.data(using: .utf8)!
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, responseBody)
-        }
-
-        do {
-            _ = try await makeClient().registerAccount(
-                ToriiAccountOnboardingRequest(
-                    alias: "alice@universal",
-                    publicKeyHex: String(repeating: "11", count: 32),
-                    uaid: uaid
-                ),
-                onboardingToken: onboardingToken
-            )
-            XCTFail("Expected missing lease to fail decoding")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected decoding error, got \(error)")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetUaidBindingsReturnsDataspaces() async throws {
         let uaidHex = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
         let payload = """

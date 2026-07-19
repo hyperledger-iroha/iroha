@@ -1,20 +1,44 @@
-//! Alias resolution helpers.
+//! Alias resolution and declarative setup helpers.
 //!
-//! These commands validate inputs and call the canonical first-release alias
-//! lookup resources.
+//! Setup planning is a canonical-account-signed read. Apply verifies the exact
+//! plan frames locally and submits one ordinary transaction; neither command
+//! accepts inline tokens or private keys.
 
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
-use eyre::{Result, eyre};
-use iroha::data_model::alias::AliasIndex;
+use eyre::{Result, WrapErr, eyre};
+use iroha::data_model::{
+    alias::AliasIndex,
+    alias_setup::{
+        AliasAutoRenewPlanRequestV1, AliasLeaseRenewPlanRequestV1, AliasLifecycleOperationV1,
+        AliasLifecycleTransactionPlanV1, AliasSetupPlanRequestV1, AliasSetupStatusV1,
+        AliasTransactionPlanV1,
+    },
+};
 use iroha::{client::Client, http::Response, http::StatusCode};
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    fs,
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 
 #[cfg(test)]
 use iroha_i18n::{Bundle, Language, Localizer};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Inspect authenticated account-onboarding readiness.
+    Doctor(DoctorArgs),
+    /// Plan or apply one atomic declarative alias setup transaction.
+    #[command(subcommand)]
+    Setup(SetupCommand),
+    /// Manage explicit alias lease lifecycle operations.
+    #[command(subcommand)]
+    Lease(LeaseCommand),
+    /// Configure deterministic native alias auto-renew.
+    #[command(subcommand)]
+    AutoRenew(AutoRenewCommand),
     /// Resolve an alias by its canonical name.
     Resolve(ResolveArgs),
     /// Resolve an alias by deterministic index.
@@ -26,11 +50,494 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Command::Doctor(args) => args.run(context),
+            Command::Setup(command) => command.run(context),
+            Command::Lease(command) => command.run(context),
+            Command::AutoRenew(command) => command.run(context),
             Command::Resolve(args) => args.run(context),
             Command::ResolveIndex(args) => args.run(context),
             Command::ByAccount(args) => args.run(context),
         }
     }
+}
+
+/// Explicit alias lease lifecycle commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum LeaseCommand {
+    /// Plan or apply an absolute-expiry lease renewal CAS.
+    #[command(subcommand)]
+    Renew(LeaseRenewCommand),
+}
+
+impl Run for LeaseCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Renew(command) => command.run(context),
+        }
+    }
+}
+
+/// Guarded alias lease renewal workflow.
+#[derive(clap::Subcommand, Debug)]
+pub enum LeaseRenewCommand {
+    /// Plan a renewal against live state without mutating it.
+    Plan(LeaseRenewPlanArgs),
+    /// Verify, locally sign, and submit one exact renewal plan.
+    Apply(LeaseRenewApplyArgs),
+}
+
+impl Run for LeaseRenewCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Plan(args) => args.run(context),
+            Self::Apply(args) => args.run(context),
+        }
+    }
+}
+
+/// Owner-only alias auto-renew configuration workflow.
+#[derive(clap::Subcommand, Debug)]
+pub enum AutoRenewCommand {
+    /// Plan a configuration CAS against live state without mutating it.
+    Plan(AutoRenewPlanArgs),
+    /// Verify, locally sign, and submit one exact configuration plan.
+    Apply(AutoRenewApplyArgs),
+}
+
+impl Run for AutoRenewCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Plan(args) => args.run(context),
+            Self::Apply(args) => args.run(context),
+        }
+    }
+}
+
+/// Declarative alias setup workflow.
+#[derive(clap::Subcommand, Debug)]
+pub enum SetupCommand {
+    /// Plan an intent against live state without mutating it.
+    Plan(SetupPlanArgs),
+    /// Verify, locally sign, and submit one exact plan as a normal transaction.
+    Apply(SetupApplyArgs),
+}
+
+impl Run for SetupCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Plan(args) => args.run(context),
+            Self::Apply(args) => args.run(context),
+        }
+    }
+}
+
+/// Arguments for `iroha app alias setup plan`.
+#[derive(clap::Args, Debug)]
+pub struct SetupPlanArgs {
+    /// Secret-free JSON file containing `AliasSetupPlanRequestV1`.
+    #[arg(long, value_name = "PATH")]
+    pub intent_file: PathBuf,
+    /// Optional path at which to write the verified, secret-free plan JSON.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: Option<PathBuf>,
+}
+
+impl Run for SetupPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request: AliasSetupPlanRequestV1 =
+            read_secret_free_json_file(&self.intent_file, "alias setup intent")?;
+        if request.intents.is_empty() {
+            return Err(eyre!(
+                "alias setup intent must contain at least one resource"
+            ));
+        }
+
+        let client = context.client_from_config();
+        let plan = client.plan_alias_setup(&request)?;
+        if let Some(path) = &self.plan_file {
+            write_secret_free_plan_file(path, &plan)?;
+        }
+        let text = render_alias_setup_plan_text(&plan, self.plan_file.as_deref());
+        print_with_optional_text(context, Some(text), &plan)
+    }
+}
+
+/// Arguments for `iroha app alias setup apply`.
+#[derive(clap::Args, Debug)]
+pub struct SetupApplyArgs {
+    /// Secret-free JSON plan returned by `setup plan`.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: PathBuf,
+}
+
+impl Run for SetupApplyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if context.input_instructions() || context.output_instructions() {
+            return Err(eyre!(
+                "alias setup apply cannot be combined with global instruction input/output flags"
+            ));
+        }
+        let plan: AliasTransactionPlanV1 =
+            read_secret_free_json_file(&self.plan_file, "alias setup plan")?;
+        let client = context.client_from_config();
+        let instructions = client.verify_alias_setup_plan(&plan)?;
+
+        // `finish` constructs exactly one ordinary transaction from this full
+        // ordered vector, quotes only its normal transaction fee, signs with the
+        // configured client key, and submits through the existing transaction
+        // endpoint. The verified plan authority and chain match that same client.
+        context.finish(instructions)
+    }
+}
+
+/// Arguments for `iroha app alias lease renew plan`.
+#[derive(clap::Args, Debug)]
+pub struct LeaseRenewPlanArgs {
+    /// Secret-free JSON file containing `AliasLeaseRenewPlanRequestV1`.
+    #[arg(long, value_name = "PATH")]
+    pub intent_file: PathBuf,
+    /// Optional path at which to write the verified, secret-free plan JSON.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: Option<PathBuf>,
+}
+
+impl Run for LeaseRenewPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request: AliasLeaseRenewPlanRequestV1 =
+            read_secret_free_json_file(&self.intent_file, "alias lease renewal intent")?;
+        let client = context.client_from_config();
+        let plan = client.plan_alias_lease_renewal(&request)?;
+        if let Some(path) = &self.plan_file {
+            write_secret_free_plan_file(path, &plan)?;
+        }
+        let text = render_alias_lifecycle_plan_text(
+            "alias lease renewal",
+            &plan,
+            self.plan_file.as_deref(),
+        );
+        print_with_optional_text(context, Some(text), &plan)
+    }
+}
+
+/// Arguments for `iroha app alias lease renew apply`.
+#[derive(clap::Args, Debug)]
+pub struct LeaseRenewApplyArgs {
+    /// Secret-free JSON plan returned by `lease renew plan`.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: PathBuf,
+}
+
+impl Run for LeaseRenewApplyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        ensure_standalone_alias_apply(context, "alias lease renew apply")?;
+        let plan: AliasLifecycleTransactionPlanV1 =
+            read_secret_free_json_file(&self.plan_file, "alias lease renewal plan")?;
+        if !matches!(
+            &plan.body.operation,
+            AliasLifecycleOperationV1::RenewLease(_)
+        ) {
+            return Err(eyre!(
+                "alias lease renew apply requires a RenewAliasLease plan"
+            ));
+        }
+        let instruction = context
+            .client_from_config()
+            .verify_alias_lifecycle_plan(&plan)?
+            .ok_or_else(|| eyre!("alias lease renewal plan cannot be a no-op"))?;
+        context.finish([instruction])
+    }
+}
+
+/// Arguments for `iroha app alias auto-renew plan`.
+#[derive(clap::Args, Debug)]
+pub struct AutoRenewPlanArgs {
+    /// Secret-free JSON file containing `AliasAutoRenewPlanRequestV1`.
+    #[arg(long, value_name = "PATH")]
+    pub intent_file: PathBuf,
+    /// Optional path at which to write the verified, secret-free plan JSON.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: Option<PathBuf>,
+}
+
+impl Run for AutoRenewPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request: AliasAutoRenewPlanRequestV1 =
+            read_secret_free_json_file(&self.intent_file, "alias auto-renew intent")?;
+        let client = context.client_from_config();
+        let plan = client.plan_alias_auto_renew(&request)?;
+        if let Some(path) = &self.plan_file {
+            write_secret_free_plan_file(path, &plan)?;
+        }
+        let text =
+            render_alias_lifecycle_plan_text("alias auto-renew", &plan, self.plan_file.as_deref());
+        print_with_optional_text(context, Some(text), &plan)
+    }
+}
+
+/// Arguments for `iroha app alias auto-renew apply`.
+#[derive(clap::Args, Debug)]
+pub struct AutoRenewApplyArgs {
+    /// Secret-free JSON plan returned by `auto-renew plan`.
+    #[arg(long, value_name = "PATH")]
+    pub plan_file: PathBuf,
+}
+
+impl Run for AutoRenewApplyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        ensure_standalone_alias_apply(context, "alias auto-renew apply")?;
+        let plan: AliasLifecycleTransactionPlanV1 =
+            read_secret_free_json_file(&self.plan_file, "alias auto-renew plan")?;
+        if !matches!(
+            &plan.body.operation,
+            AliasLifecycleOperationV1::ConfigureAutoRenew(_)
+        ) {
+            return Err(eyre!(
+                "alias auto-renew apply requires a ConfigureAliasAutoRenew plan"
+            ));
+        }
+        let client = context.client_from_config();
+        let Some(instruction) = client.verify_alias_lifecycle_plan(&plan)? else {
+            let text = render_alias_lifecycle_plan_text("alias auto-renew", &plan, None);
+            return print_with_optional_text(context, Some(text), &plan);
+        };
+        context.finish([instruction])
+    }
+}
+
+/// Arguments for `iroha app alias doctor`.
+#[derive(clap::Args, Debug)]
+pub struct DoctorArgs {
+    /// File containing the dedicated onboarding API token.
+    #[arg(long, value_name = "PATH")]
+    pub token_file: PathBuf,
+}
+
+impl Run for DoctorArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let token = read_onboarding_token_file(&self.token_file)?;
+        let report = context
+            .client_from_config()
+            .get_account_onboarding_readiness(&token)?;
+        let text = render_alias_doctor_text(&report);
+        print_with_optional_text(context, Some(text), &report)?;
+        match report.status {
+            AliasSetupStatusV1::Blocked => Err(eyre!(
+                "alias onboarding readiness is blocked; follow the reported remediation"
+            )),
+            AliasSetupStatusV1::Pending | AliasSetupStatusV1::Ready => Ok(()),
+        }
+    }
+}
+
+const MAX_ALIAS_SETUP_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+fn ensure_standalone_alias_apply<C: RunContext>(context: &C, label: &str) -> Result<()> {
+    if context.input_instructions() || context.output_instructions() {
+        return Err(eyre!(
+            "{label} cannot be combined with global instruction input/output flags"
+        ));
+    }
+    Ok(())
+}
+
+fn read_secret_free_json_file<T>(path: &Path, label: &str) -> Result<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} file `{}`", path.display()))?;
+    if !metadata.is_file() {
+        return Err(eyre!("{label} path `{}` is not a file", path.display()));
+    }
+    if metadata.len() > MAX_ALIAS_SETUP_FILE_BYTES {
+        return Err(eyre!(
+            "{label} file `{}` exceeds the {} byte limit",
+            path.display(),
+            MAX_ALIAS_SETUP_FILE_BYTES,
+        ));
+    }
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read {label} file `{}`", path.display()))?;
+    let value: norito::json::Value = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("failed to parse {label} JSON `{}`", path.display()))?;
+    reject_secret_fields(&value, label)?;
+    norito::json::from_value(value)
+        .wrap_err_with(|| format!("failed to decode typed {label} `{}`", path.display()))
+}
+
+fn reject_secret_fields(value: &norito::json::Value, label: &str) -> Result<()> {
+    match value {
+        norito::json::Value::Array(values) => {
+            for value in values {
+                reject_secret_fields(value, label)?;
+            }
+        }
+        norito::json::Value::Object(fields) => {
+            for (key, value) in fields {
+                let normalized: String = key
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                let forbidden = normalized.contains("privatekey")
+                    || normalized == "keypair"
+                    || normalized == "token"
+                    || normalized.starts_with("rawtoken")
+                    || normalized == "tokenfile"
+                    || normalized.contains("secret")
+                    || normalized.contains("paymentproof")
+                    || normalized == "signature"
+                    || normalized == "authorization";
+                if forbidden {
+                    return Err(eyre!(
+                        "{label} must be secret-free; forbidden field `{key}` was present"
+                    ));
+                }
+                reject_secret_fields(value, label)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn write_secret_free_plan_file<T>(path: &Path, plan: &T) -> Result<()>
+where
+    T: norito::json::JsonSerialize,
+{
+    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(eyre!(
+            "alias setup plan output `{}` must not be a symbolic link",
+            path.display()
+        ));
+    }
+    let mut bytes =
+        norito::json::to_vec_pretty(plan).wrap_err("failed to encode alias setup plan JSON")?;
+    bytes.push(b'\n');
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open alias setup plan `{}`", path.display()))?;
+    file.write_all(&bytes)
+        .wrap_err_with(|| format!("failed to write alias setup plan `{}`", path.display()))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("failed to sync alias setup plan `{}`", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .wrap_err_with(|| format!("failed to protect alias setup plan `{}`", path.display()))?;
+    }
+    Ok(())
+}
+
+fn render_alias_setup_plan_text(plan: &AliasTransactionPlanV1, output: Option<&Path>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "alias setup plan verified: {}", plan.plan_hash);
+    let _ = writeln!(out, "authority: {}", plan.body.authority);
+    let _ = writeln!(out, "chain: {}", plan.body.chain_id);
+    let _ = writeln!(out, "resources: {}", plan.body.resources.len());
+    let _ = writeln!(out, "instructions: {}", plan.body.instructions.len());
+    let _ = writeln!(out, "valid_until_ms: {}", plan.body.valid_until_ms);
+    if let Some(path) = output {
+        let _ = writeln!(out, "plan_file: {}", path.display());
+    }
+    out
+}
+
+fn render_alias_lifecycle_plan_text(
+    label: &str,
+    plan: &AliasLifecycleTransactionPlanV1,
+    output: Option<&Path>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{label} plan verified: {}", plan.plan_hash);
+    let _ = writeln!(out, "authority: {}", plan.body.authority);
+    let _ = writeln!(out, "chain: {}", plan.body.chain_id);
+    let _ = writeln!(out, "resource: {}", plan.body.operation.target());
+    let disposition = match plan.body.disposition {
+        iroha::data_model::alias_setup::AliasLifecyclePlanDispositionV1::NoOp => "no_op",
+        iroha::data_model::alias_setup::AliasLifecyclePlanDispositionV1::Apply => "apply",
+    };
+    let _ = writeln!(out, "disposition: {disposition}");
+    let _ = writeln!(
+        out,
+        "instruction: {}",
+        if plan.body.instruction.is_some() {
+            "1"
+        } else {
+            "0"
+        }
+    );
+    let _ = writeln!(out, "valid_until_ms: {}", plan.body.valid_until_ms);
+    if let Some(path) = output {
+        let _ = writeln!(out, "plan_file: {}", path.display());
+    }
+    out
+}
+
+fn read_onboarding_token_file(path: &Path) -> Result<String> {
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect onboarding token file `{}`",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "onboarding token path `{}` must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    if metadata.len() > 64 * 1024 {
+        return Err(eyre!(
+            "onboarding token file `{}` exceeds the 65536 byte limit",
+            path.display()
+        ));
+    }
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read onboarding token file `{}`", path.display()))?;
+    let raw = String::from_utf8(bytes).wrap_err("onboarding token file must contain UTF-8")?;
+    let token = raw.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+    if token.is_empty() {
+        return Err(eyre!("onboarding token file must not be empty"));
+    }
+    if token.trim() != token || token.chars().any(char::is_control) {
+        return Err(eyre!(
+            "onboarding token file must contain one token without whitespace or control characters"
+        ));
+    }
+    Ok(token.to_owned())
+}
+
+fn render_alias_doctor_text(report: &iroha::data_model::alias_setup::AliasSetupReportV1) -> String {
+    let mut out = String::new();
+    let status = match report.status {
+        AliasSetupStatusV1::Ready => "Ready",
+        AliasSetupStatusV1::Pending => "Pending",
+        AliasSetupStatusV1::Blocked => "Blocked",
+    };
+    let _ = writeln!(out, "alias onboarding readiness: {status}");
+    for diagnostic in &report.diagnostics {
+        let resource = diagnostic.resource.as_deref().unwrap_or("-");
+        let _ = writeln!(
+            out,
+            "{:?} {:?} {} resource={} remediation={}",
+            diagnostic.severity,
+            diagnostic.phase,
+            diagnostic.code,
+            resource,
+            diagnostic.remediation,
+        );
+    }
+    out
 }
 
 #[derive(clap::Args, Debug)]
@@ -49,7 +556,7 @@ impl Run for ResolveArgs {
             context,
             &self.alias,
             self.dry_run,
-            Client::post_alias_resolve,
+            Client::post_alias_resolve_authenticated,
         )
     }
 }
@@ -63,7 +570,11 @@ pub struct ResolveIndexArgs {
 
 impl Run for ResolveIndexArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        alias_resolve_index_with(context, self.index, Client::post_alias_resolve_index)
+        alias_resolve_index_with(
+            context,
+            self.index,
+            Client::post_alias_resolve_index_authenticated,
+        )
     }
 }
 
@@ -87,7 +598,7 @@ impl Run for ByAccountArgs {
             &self.account_id,
             self.dataspace.as_deref(),
             self.domain.as_deref(),
-            Client::post_alias_lookup_by_account,
+            Client::post_alias_lookup_by_account_authenticated,
         )
     }
 }
@@ -428,6 +939,167 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parse_alias_setup_plan_and_apply_files() {
+        let wrapper = Wrapper::parse_from([
+            "iroha",
+            "setup",
+            "plan",
+            "--intent-file",
+            "intent.json",
+            "--plan-file",
+            "plan.json",
+        ]);
+        match wrapper.command {
+            Command::Setup(SetupCommand::Plan(args)) => {
+                assert_eq!(args.intent_file, PathBuf::from("intent.json"));
+                assert_eq!(args.plan_file, Some(PathBuf::from("plan.json")));
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        let wrapper = Wrapper::parse_from(["iroha", "setup", "apply", "--plan-file", "plan.json"]);
+        match wrapper.command {
+            Command::Setup(SetupCommand::Apply(args)) => {
+                assert_eq!(args.plan_file, PathBuf::from("plan.json"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_alias_lifecycle_and_doctor_files() {
+        let wrapper = Wrapper::parse_from([
+            "iroha",
+            "lease",
+            "renew",
+            "plan",
+            "--intent-file",
+            "renew.json",
+            "--plan-file",
+            "renew-plan.json",
+        ]);
+        match wrapper.command {
+            Command::Lease(LeaseCommand::Renew(LeaseRenewCommand::Plan(args))) => {
+                assert_eq!(args.intent_file, PathBuf::from("renew.json"));
+                assert_eq!(args.plan_file, Some(PathBuf::from("renew-plan.json")));
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        let wrapper = Wrapper::parse_from([
+            "iroha",
+            "auto-renew",
+            "apply",
+            "--plan-file",
+            "auto-plan.json",
+        ]);
+        match wrapper.command {
+            Command::AutoRenew(AutoRenewCommand::Apply(args)) => {
+                assert_eq!(args.plan_file, PathBuf::from("auto-plan.json"));
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        let wrapper = Wrapper::parse_from(["iroha", "doctor", "--token-file", "onboarding.token"]);
+        match wrapper.command {
+            Command::Doctor(args) => {
+                assert_eq!(args.token_file, PathBuf::from("onboarding.token"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn alias_setup_commands_do_not_accept_inline_keys_or_tokens() {
+        assert!(
+            Wrapper::try_parse_from([
+                "iroha",
+                "setup",
+                "plan",
+                "--intent-file",
+                "intent.json",
+                "--private-key",
+                "secret",
+            ])
+            .is_err()
+        );
+        assert!(
+            Wrapper::try_parse_from([
+                "iroha",
+                "setup",
+                "apply",
+                "--plan-file",
+                "plan.json",
+                "--token",
+                "secret",
+            ])
+            .is_err()
+        );
+        assert!(
+            Wrapper::try_parse_from([
+                "iroha",
+                "lease",
+                "renew",
+                "plan",
+                "--intent-file",
+                "renew.json",
+                "--private-key",
+                "secret",
+            ])
+            .is_err()
+        );
+        assert!(
+            Wrapper::try_parse_from([
+                "iroha",
+                "auto-renew",
+                "apply",
+                "--plan-file",
+                "auto.json",
+                "--token",
+                "secret",
+            ])
+            .is_err()
+        );
+        assert!(Wrapper::try_parse_from(["iroha", "doctor", "--token", "secret",]).is_err());
+    }
+
+    #[test]
+    fn doctor_token_file_accepts_one_line_and_rejects_control_characters() {
+        let directory = tempfile::tempdir().expect("temporary token directory");
+        let token_path = directory.path().join("onboarding.token");
+        fs::write(&token_path, "runtime-only-token\n").expect("write token fixture");
+        assert_eq!(
+            read_onboarding_token_file(&token_path).expect("read one-line token"),
+            "runtime-only-token"
+        );
+
+        fs::write(&token_path, "two\nlines\n").expect("write invalid token fixture");
+        assert!(read_onboarding_token_file(&token_path).is_err());
+    }
+
+    #[test]
+    fn alias_setup_file_guard_rejects_secret_fields_but_allows_digests() {
+        let error = reject_secret_fields(
+            &norito::json!({
+                "intent": {
+                    "private_key": "must-not-cross-the-file-boundary"
+                }
+            }),
+            "alias setup intent",
+        )
+        .expect_err("private key field must fail");
+        assert!(error.to_string().contains("forbidden field `private_key`"));
+
+        reject_secret_fields(
+            &norito::json!({
+                "token_hash": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }),
+            "alias setup intent",
+        )
+        .expect("digests are not secret token values");
     }
 
     struct TestContext {

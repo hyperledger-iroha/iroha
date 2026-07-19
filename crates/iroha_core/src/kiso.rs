@@ -706,6 +706,7 @@ mod tests {
                 deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
                 deferred_send_max_bytes_per_peer:
                     defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+                deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1000,7 +1001,7 @@ mod tests {
                     },
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
-                onboarding: None,
+                account_onboarding: None,
                 faucet: None,
                 kagemusha_commands: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {

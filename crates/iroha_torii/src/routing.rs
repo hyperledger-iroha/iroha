@@ -2683,13 +2683,15 @@ pub struct AccountAliasLeaseDto {
     pub redemption_expires_at_ms: u64,
     pub auto_renew_enabled: bool,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub subscription_status: Option<String>,
+    pub auto_renew_revision: Option<u64>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub next_charge_ms: Option<u64>,
+    pub next_retry_at_ms: Option<u64>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub last_invoice_status: Option<String>,
+    pub auto_renew_failure_count: Option<u32>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub max_charge_amount: Option<Quantity>,
+    pub auto_renew_suspended_reason: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub max_renewal_amount: Option<Quantity>,
 }
 
 #[cfg(feature = "app_api")]
@@ -2698,49 +2700,6 @@ pub struct AccountAliasLeaseListResponseDto {
     pub account_id: String,
     pub total: u64,
     pub items: Vec<AccountAliasLeaseDto>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
-pub struct AccountAliasRenewRequestDto {
-    pub authority: String,
-    pub private_key: ExposedPrivateKey,
-    #[norito(default)]
-    pub term_years: Option<u8>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-pub struct AccountAliasRenewResponseDto {
-    pub account_id: String,
-    pub alias: String,
-    pub tx_hash_hex: String,
-    pub status: &'static str,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
-pub struct AccountAliasAutoRenewRequestDto {
-    pub authority: String,
-    pub private_key: ExposedPrivateKey,
-    pub enabled: bool,
-    #[norito(default)]
-    pub term_years: Option<u8>,
-    #[norito(default)]
-    pub max_charge_amount: Option<Quantity>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-pub struct AccountAliasAutoRenewResponseDto {
-    pub account_id: String,
-    pub alias: String,
-    pub auto_renew_enabled: bool,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub subscription_id: Option<String>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub tx_hash_hex: Option<String>,
-    pub status: &'static str,
 }
 
 #[derive(
@@ -41717,17 +41676,13 @@ static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
         .expect("subscription trigger reference metadata key is valid")
 });
 #[cfg(feature = "app_api")]
-static ACCOUNT_ALIAS_AUTO_RENEW_KEY: LazyLock<Name> = LazyLock::new(|| {
-    Name::from_str(iroha_data_model::subscription::ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY)
-        .expect("account alias auto-renew metadata key is valid")
-});
-
-#[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_GET: &str = "/v1/accounts/{account_id}";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_ONBOARD_PLAN: &str = "/v1/accounts/onboard/plan";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
@@ -41735,14 +41690,7 @@ pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
-#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
-#[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNT_ALIAS_RENEW: &str = "/v1/accounts/{account_id}/aliases/{literal}/renew";
-#[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW: &str =
-    "/v1/accounts/{account_id}/aliases/{literal}/auto-renew";
 #[cfg(feature = "app_api")]
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
 #[cfg(feature = "app_api")]
@@ -65018,22 +64966,6 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     Ok(UniversalAccountId::from_hash(hash))
 }
 
-#[cfg(feature = "app_api")]
-fn canonicalize_identity_commitment_hex(raw: &str) -> Result<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != Hash::LENGTH * 2 {
-        return Err(onboarding_invalid_request(
-            "identity_commitment_hex must be a 64-character hex digest",
-        ));
-    }
-    if !trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-        return Err(onboarding_invalid_request(
-            "identity_commitment_hex must contain only hex characters",
-        ));
-    }
-    Ok(trimmed.to_ascii_lowercase())
-}
-
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
     use core::str::FromStr;
@@ -65079,46 +65011,260 @@ mod uaid_parsing_tests {
         assert!(parse_uaid_literal(&invalid_hex).is_err());
         assert!(parse_uaid_literal(&"0".repeat(64)).is_err());
     }
-
-    #[test]
-    fn identity_commitment_hex_is_digest_only_and_canonical() {
-        let canonical = canonicalize_identity_commitment_hex(
-            "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  ",
-        )
-        .expect("canonical identity commitment");
-        assert_eq!(canonical, "a".repeat(64));
-        assert!(canonicalize_identity_commitment_hex("abcd").is_err());
-        let invalid_hex = format!("{}g", "0".repeat(63));
-        assert!(canonicalize_identity_commitment_hex(&invalid_hex).is_err());
-    }
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
-pub struct AccountOnboardingRequestDto {
+const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
+    b"iroha:account-onboarding-plan-receipt:v1\0";
+
+/// Secret-free intent accepted by the sponsored onboarding planner.
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanRequestDto {
+    /// Request layout version. The only accepted value is `1`.
+    pub version: u8,
+    /// Catalog-free textual account alias.
     pub alias: String,
-    #[norito(default)]
-    pub account_id: Option<String>,
-    #[norito(default)]
-    pub public_key_hex: Option<String>,
-    #[norito(default)]
-    pub identity: Option<Map>,
-    #[norito(default)]
-    pub identity_commitment_hex: Option<String>,
-    #[norito(default)]
-    pub uaid: Option<String>,
+    /// Canonical domainless account identifier to create or repair.
+    pub account_id: String,
+    /// Optional permission names selected from the configured allowlist.
     #[norito(default)]
     pub permissions: Vec<String>,
 }
 
 #[cfg(feature = "app_api")]
+impl AccountOnboardingPlanRequestDto {
+    /// Current request layout version.
+    pub const VERSION: u8 = 1;
+}
+
+/// Canonical body committed and signed by a stateless onboarding receipt.
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanBodyDto {
+    /// Receipt layout version. The only accepted value is `1`.
+    pub version: u8,
+    /// Canonical normalized request embedded for stateless revalidation.
+    pub request: AccountOnboardingPlanRequestDto,
+    /// Configured Torii authority and transaction payer.
+    pub authority: AccountId,
+    /// Chain to which the receipt is bound.
+    pub chain_id: ChainId,
+    /// Committed state anchor used by planning.
+    pub anchor: iroha_data_model::alias_setup::AliasPlanAnchorV1,
+    /// Canonical account-alias resource and its live-state disposition.
+    pub resource: iroha_data_model::alias_setup::AliasPlanResourceV1,
+    /// Lease terms used only if the resource remains absent at apply time.
+    pub acquisition: iroha_data_model::alias_setup::AliasLeaseAcquisitionV1,
+    /// Policy, asset, cap, and deadline bounds revalidated before submission.
+    pub quote_guard: iroha_data_model::alias_setup::AliasQuoteGuardV1,
+    /// Exact framed instructions planned for the server-signed transaction.
+    pub instructions: Vec<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
+    /// Optional native auto-renew follow-up that the resource owner must sign.
+    #[norito(default)]
+    pub owner_auto_renew_instruction:
+        Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
+    /// Last block timestamp at which this receipt may be applied.
+    pub valid_until_ms: u64,
+}
+
+#[cfg(feature = "app_api")]
+impl AccountOnboardingPlanBodyDto {
+    /// Current canonical receipt body layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Compute the domain-separated canonical receipt hash.
+    #[must_use]
+    pub fn canonical_hash(&self) -> Hash {
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[
+            ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1,
+            encoded.as_slice(),
+        ])
+    }
+}
+
+/// Stateless, signer-authenticated onboarding plan receipt.
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPlanReceiptDto {
+    /// Canonical plan body.
+    pub body: AccountOnboardingPlanBodyDto,
+    /// Domain-separated hash of `body`.
+    pub plan_hash: Hash,
+    /// Onboarding-authority signature over `plan_hash`.
+    pub signature: Signature,
+}
+
+#[cfg(feature = "app_api")]
+impl AccountOnboardingPlanReceiptDto {
+    /// Create and sign a receipt without retaining any server-side plan state.
+    fn try_new(
+        body: AccountOnboardingPlanBodyDto,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> Result<Self> {
+        let plan_hash = body.canonical_hash();
+        let signature = Signature::try_new(private_key, plan_hash.as_ref()).map_err(|error| {
+            Error::SerializationFailure {
+                context: "account onboarding plan receipt signature",
+                source: Box::new(error),
+            }
+        })?;
+        Ok(Self {
+            body,
+            plan_hash,
+            signature,
+        })
+    }
+
+    /// Verify the canonical body hash and onboarding-authority signature.
+    #[must_use]
+    pub fn verify(&self) -> bool {
+        self.plan_hash == self.body.canonical_hash()
+            && self
+                .signature
+                .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
+                .is_ok()
+    }
+}
+
+/// Apply request containing only a previously issued stateless receipt.
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingApplyRequestDto {
+    /// Receipt returned by `POST /v1/accounts/onboard/plan`.
+    pub receipt: AccountOnboardingPlanReceiptDto,
+}
+
+/// Sponsored onboarding apply result.
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountOnboardingResponseDto {
+    /// Canonical target account.
     pub account_id: String,
-    pub uaid: String,
-    pub tx_hash_hex: String,
+    /// Canonical resolved alias.
+    pub alias: String,
+    /// Queued transaction hash, absent for an exact unchanged replay.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    /// `Queued`, `Repaired`, or `Unchanged`.
     pub status: &'static str,
-    pub lease: AccountAliasLeaseDto,
+    /// Live disposition observed immediately before apply.
+    pub disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sponsored_onboarding_dto_tests {
+    use iroha_data_model::alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1};
+
+    use super::{
+        AccountOnboardingPlanRequestDto, onboarding_disposition_transition_allowed,
+        onboarding_frames_are_ordered_subset,
+    };
+
+    #[test]
+    fn plan_request_is_secret_free_and_rejects_legacy_fields() {
+        let request = AccountOnboardingPlanRequestDto {
+            version: AccountOnboardingPlanRequestDto::VERSION,
+            alias: "merchant@banka.paynet".to_owned(),
+            account_id: iroha_test_samples::ALICE_ID.to_string(),
+            permissions: Vec::new(),
+        };
+        let encoded = norito::json::to_json(&request).expect("serialize onboarding plan request");
+        for forbidden in ["private_key", "token", "uaid", "identity_commitment"] {
+            assert!(!encoded.contains(forbidden));
+        }
+
+        for forbidden in ["private_key", "token", "uaid", "public_key_hex"] {
+            let encoded = format!(
+                r#"{{"version":1,"alias":"merchant@banka.paynet","account_id":"{}","{forbidden}":"forbidden"}}"#,
+                iroha_test_samples::ALICE_ID
+            );
+            assert!(
+                norito::json::from_str::<AccountOnboardingPlanRequestDto>(&encoded).is_err(),
+                "legacy or secret-bearing field must be rejected: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_disposition_transitions_only_allow_idempotent_progress() {
+        use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
+
+        for live in [Create, Repair, NoOp] {
+            assert!(onboarding_disposition_transition_allowed(Create, live));
+        }
+        assert!(onboarding_disposition_transition_allowed(Repair, Repair));
+        assert!(onboarding_disposition_transition_allowed(Repair, NoOp));
+        assert!(onboarding_disposition_transition_allowed(NoOp, NoOp));
+
+        for (planned, live) in [
+            (NoOp, Repair),
+            (NoOp, Create),
+            (Repair, Create),
+            (Conflict, NoOp),
+            (Create, Conflict),
+        ] {
+            assert!(!onboarding_disposition_transition_allowed(planned, live));
+        }
+    }
+
+    #[test]
+    fn live_receipt_frames_may_only_remove_already_completed_work() {
+        let frame = |wire_id: &str, byte| AliasFramedInstructionV1 {
+            wire_id: wire_id.to_owned(),
+            framed_payload: vec![byte],
+        };
+        let ensure = frame("iroha.alias.ensure", 1);
+        let grant_a = frame("iroha.grant", 2);
+        let grant_b = frame("iroha.grant", 3);
+        let planned = vec![ensure.clone(), grant_a, grant_b.clone()];
+
+        assert!(onboarding_frames_are_ordered_subset(
+            &[ensure.clone(), grant_b.clone()],
+            &planned,
+        ));
+        assert!(onboarding_frames_are_ordered_subset(&[], &planned));
+        assert!(!onboarding_frames_are_ordered_subset(
+            &[ensure, frame("nexus::EnrollFeeSponsorBeneficiary", 4)],
+            &planned,
+        ));
+        assert!(!onboarding_frames_are_ordered_subset(
+            &[grant_b, frame("iroha.alias.ensure", 1)],
+            &planned,
+        ));
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -65209,101 +65355,6 @@ pub struct ConfidentialRelaySubmitResponseDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
-pub struct MultisigAccountOnboardingRequestDto {
-    pub alias: String,
-    pub required_signers: u8,
-    pub member_account_ids: Vec<String>,
-    #[norito(default)]
-    pub member_weights: Vec<u8>,
-    #[norito(default)]
-    pub transaction_ttl_ms: Option<u64>,
-}
-
-#[cfg(feature = "app_api")]
-const MAX_ONBOARDING_MULTISIG_MEMBERS: usize = 255;
-#[cfg(feature = "app_api")]
-const DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS: u64 = 86_400_000;
-#[cfg(feature = "app_api")]
-const MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS: u64 = 86_400_000;
-
-#[cfg(feature = "app_api")]
-fn onboarding_multisig_transaction_ttl_ms(requested: Option<u64>) -> Result<NonZeroU64> {
-    let ttl_ms = requested.unwrap_or(DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS);
-    if !(1..=MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS).contains(&ttl_ms) {
-        return Err(onboarding_invalid_request(
-            "transaction_ttl_ms must be between 1 and 86400000",
-        ));
-    }
-    Ok(NonZeroU64::new(ttl_ms).expect("validated onboarding multisig TTL is non-zero"))
-}
-
-#[cfg(all(feature = "app_api", test))]
-mod onboarding_multisig_validation_tests {
-    use super::*;
-
-    #[test]
-    fn transaction_ttl_is_positive_bounded_and_defaults_to_one_day() {
-        assert_eq!(
-            onboarding_multisig_transaction_ttl_ms(None)
-                .expect("default TTL")
-                .get(),
-            DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
-        );
-        assert_eq!(
-            onboarding_multisig_transaction_ttl_ms(Some(1))
-                .expect("minimum TTL")
-                .get(),
-            1
-        );
-        assert_eq!(
-            onboarding_multisig_transaction_ttl_ms(Some(
-                MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
-            ))
-            .expect("maximum TTL")
-            .get(),
-            MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
-        );
-        for invalid in [0, MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS + 1, u64::MAX] {
-            let error = onboarding_multisig_transaction_ttl_ms(Some(invalid))
-                .expect_err("out-of-range TTL must fail closed");
-            assert!(matches!(
-                error,
-                crate::Error::AccountOnboardingValidation {
-                    code: "multisig_ttl_out_of_range",
-                    ..
-                }
-            ));
-        }
-    }
-
-    #[test]
-    fn existing_multisig_alias_mismatch_has_a_stable_public_code() {
-        let error = onboarding_invalid_request(
-            "existing multisig account is not bound to the requested alias",
-        );
-        assert!(matches!(
-            error,
-            crate::Error::AccountOnboardingValidation {
-                code: "existing_multisig_alias_mismatch",
-                hint: Some(_),
-                ..
-            }
-        ));
-    }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-pub struct MultisigAccountOnboardingResponseDto {
-    pub account_id: String,
-    pub tx_hash_hex: String,
-    pub status: &'static str,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub lease: Option<AccountAliasLeaseDto>,
-}
-
-#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
@@ -65322,26 +65373,8 @@ impl crate::utils::extractors::SupportsNoritoDecode for ConfidentialRelaySubmitR
 }
 
 #[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasRenewRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!("invalid AccountAliasRenewRequestDto: {err}"))
-        })
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasAutoRenewRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!("invalid AccountAliasAutoRenewRequestDto: {err}"))
-        })
-    }
-}
-
-#[cfg(feature = "app_api")]
 fn onboarding_invalid_request(reason: &str) -> Error {
-    iroha_logger::warn!(target: "torii.onboard", reason, "UAID onboarding request rejected");
+    iroha_logger::warn!(target: "torii.onboard", reason, "Sponsored onboarding request rejected");
     let (code, hint) = onboarding_error_metadata(reason);
     Error::AccountOnboardingValidation {
         code,
@@ -65360,17 +65393,18 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
                 "Enable Torii account onboarding in node configuration before exposing this route.",
             ),
         )
-    } else if normalized.contains("existing multisig account is not bound") {
+    } else if normalized.contains("unsupported account onboarding request version") {
         (
-            "existing_multisig_alias_mismatch",
-            Some(
-                "Use the alias already bound to this exact multisig policy or choose a new policy.",
-            ),
+            "unsupported_onboarding_version",
+            Some("Set the secret-free onboarding request version to 1."),
         )
-    } else if normalized.contains("transaction_ttl_ms") {
+    } else if normalized.contains("mapping_conflict")
+        || normalized.contains("mapping conflict")
+        || normalized.contains("conflicting static")
+    {
         (
-            "multisig_ttl_out_of_range",
-            Some("Use a multisig transaction TTL between 1 millisecond and 24 hours."),
+            "alias_catalog_mapping_conflict",
+            Some("Repair the conflicting static and active SNS dataspace mappings."),
         )
     } else if normalized.contains("alias must not be empty")
         || normalized.contains("account alias")
@@ -65387,76 +65421,39 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
             "onboarding_authority_lacks_alias_permission",
             Some("Grant the configured onboarding authority permission to manage account aliases."),
         )
-    } else if normalized.contains("dataspace is not registered") {
+    } else if normalized.contains("dataspace")
+        && (normalized.contains("not registered")
+            || normalized.contains("not found")
+            || normalized.contains("unknown"))
+    {
         (
             "alias_dataspace_not_registered",
-            Some("Register the alias dataspace before accepting public onboarding requests."),
+            Some("Register the alias dataspace in the static catalog or active SNS state."),
         )
-    } else if normalized.contains("uaid is required") {
-        (
-            "missing_uaid",
-            Some("Provide an explicit canonical UAID literal (`uaid:<hex>` or raw 64-hex)."),
-        )
-    } else if normalized.contains("invalid uaid") || normalized.contains("uaid literal") {
-        (
-            "invalid_uaid",
-            Some(
-                "Provide a 64-hex UAID digest with the canonical low bit set, optionally prefixed by `uaid:`.",
-            ),
-        )
-    } else if normalized.contains("raw identity metadata") {
-        (
-            "raw_identity_not_allowed",
-            Some(
-                "Do not submit raw identity metadata; submit only `identity_commitment_hex` when an audit commitment is needed.",
-            ),
-        )
-    } else if normalized.contains("identity_commitment_hex") {
-        (
-            "invalid_identity_commitment",
-            Some("Provide `identity_commitment_hex` as a plain 64-character hex digest."),
-        )
-    } else if normalized.contains("exactly one of account_id or public_key_hex") {
-        (
-            "ambiguous_account_material",
-            Some("Provide exactly one of `account_id` or `public_key_hex`."),
-        )
-    } else if normalized.contains("public key hex") {
-        (
-            "invalid_public_key_hex",
-            Some("Provide raw 32-byte Ed25519 public key bytes as lowercase or uppercase hex."),
-        )
-    } else if normalized.contains("account id literal") {
+    } else if normalized.contains("invalid canonical account_id") {
         (
             "invalid_account_id",
-            Some("Provide a canonical I105 account id or omit it and use `public_key_hex`."),
+            Some("Provide a canonical domainless I105 account identifier."),
         )
-    } else if normalized.contains("either account_id or public_key_hex") {
+    } else if normalized.contains("canonical domainless representation") {
         (
-            "missing_account_material",
-            Some("Provide either `account_id` or raw Ed25519 `public_key_hex`."),
+            "noncanonical_account_id",
+            Some("Re-encode the account as its canonical domainless I105 representation."),
         )
-    } else if normalized.contains("account already exists") {
-        (
-            "account_already_exists",
-            Some(
-                "Resolve the alias/account first or use the existing account instead of onboarding.",
-            ),
-        )
-    } else if normalized.contains("requested permission is not allowed") {
+    } else if normalized.contains("requested permission is not in") {
         (
             "requested_permission_not_allowed",
-            Some("Request only permissions listed in the onboarding allowlist."),
+            Some("Request only names listed in account_onboarding.additional_permissions."),
         )
-    } else if normalized.contains("auto-renew") || normalized.contains("subscription domain") {
+    } else if normalized.contains("scoped permissions cannot be requested") {
         (
-            "alias_auto_renew_misconfigured",
-            Some("Fix the onboarding alias auto-renew subscription-domain configuration."),
+            "scoped_permission_not_allowed",
+            Some("Let EnsureAlias grant its exact manage/delegate/resolve capability bundle."),
         )
-    } else if normalized.contains("quote") || normalized.contains("lease") {
+    } else if normalized.contains("invalid permission name") {
         (
-            "alias_quote_failed",
-            Some("Check alias lease policy, payment asset availability, and registrar state."),
+            "invalid_permission_name",
+            Some("Use canonical permission names from account_onboarding.additional_permissions."),
         )
     } else {
         ("onboarding_invalid_request", None)
@@ -65842,26 +65839,29 @@ mod faucet_pow_tests {
     }
 
     #[test]
-    fn onboarding_error_metadata_classifies_public_key_hex() {
-        let (code, hint) = super::onboarding_error_metadata("invalid public key hex");
-        assert_eq!(code, "invalid_public_key_hex");
+    fn onboarding_error_metadata_classifies_noncanonical_account_id() {
+        let (code, hint) = super::onboarding_error_metadata(
+            "account_id must use the canonical domainless representation",
+        );
+        assert_eq!(code, "noncanonical_account_id");
         assert!(hint.is_some());
     }
 
     #[test]
-    fn onboarding_error_metadata_classifies_ambiguous_account_material() {
-        let (code, hint) =
-            super::onboarding_error_metadata("provide exactly one of account_id or public_key_hex");
-        assert_eq!(code, "ambiguous_account_material");
+    fn onboarding_error_metadata_classifies_disallowed_permission() {
+        let (code, hint) = super::onboarding_error_metadata(
+            "requested permission is not in account_onboarding.additional_permissions",
+        );
+        assert_eq!(code, "requested_permission_not_allowed");
         assert!(hint.is_some());
     }
 
     #[test]
     fn onboarding_invalid_request_preserves_structured_code() {
-        let err = super::onboarding_invalid_request("account already exists");
+        let err = super::onboarding_invalid_request("invalid canonical account_id");
         match err {
             crate::Error::AccountOnboardingValidation { code, hint, .. } => {
-                assert_eq!(code, "account_already_exists");
+                assert_eq!(code, "invalid_account_id");
                 assert!(hint.is_some());
             }
             other => panic!("unexpected error variant: {other:?}"),
@@ -66150,7 +66150,7 @@ pub async fn handle_v1_confidential_relay_submit(
     }
     let tx = sign_app_api_transaction(
         builder,
-        &signer.private_key.0,
+        signer.signer.private_key(),
         ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -66192,511 +66192,815 @@ mod confidential_notes_tests {
         assert_eq!(confidential_notes_cursor(Some("")).unwrap(), None);
     }
 }
-
-#[cfg(feature = "app_api")]
-fn onboarding_manifest_issued_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+struct NormalizedAccountOnboarding {
+    request: AccountOnboardingPlanRequestDto,
+    account_id: AccountId,
+    intent: iroha_data_model::alias_setup::AliasIntentV1,
+    permissions: Vec<Permission>,
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) fn ensure_onboarding_signer_can_manage_alias(
+fn onboarding_committed_anchor(
     state: &CoreState,
-    authority: &AccountId,
-    alias: &account::rekey::AccountAlias,
-) -> Result<()> {
-    let world = state.world_view();
-    if authority_can_manage_account_alias(&world, authority, alias) {
-        return Ok(());
-    }
-
-    Err(onboarding_invalid_request(
-        "onboarding signer lacks account-alias manage permission",
+) -> Result<(iroha_data_model::alias_setup::AliasPlanAnchorV1, u64)> {
+    let view = state.view();
+    let block = view.latest_block().ok_or(Error::AppServiceUnavailable {
+        code: "alias.onboarding.anchor_pending",
+        message: "account onboarding requires a committed block anchor".to_owned(),
+    })?;
+    let block_hash = view
+        .latest_block_hash()
+        .ok_or(Error::AppServiceUnavailable {
+            code: "alias.onboarding.anchor_pending",
+            message: "the committed block hash is unavailable".to_owned(),
+        })?;
+    let now_ms = u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+    Ok((
+        iroha_data_model::alias_setup::AliasPlanAnchorV1 {
+            block_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
+            block_hash: Hash::from(block_hash),
+        },
+        now_ms,
     ))
 }
 
 #[cfg(feature = "app_api")]
-fn alias_domain_to_domain_id(
-    alias: &account::rekey::AccountAlias,
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> Result<Option<iroha_data_model::domain::DomainId>> {
-    alias.domain_id(catalog).map_err(|err| {
-        let message = format!("invalid account alias domain scope: {err}");
-        onboarding_invalid_request(&message)
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn ensure_authenticated_onboarding_domain(
-    alias: &account::rekey::AccountAlias,
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    authenticated_domain: &iroha_data_model::domain::DomainId,
+fn ensure_authenticated_onboarding_name(
+    alias: &iroha_data_model::alias_setup::ResolvedAccountAliasV1,
+    authenticated_scope: &crate::AuthenticatedOnboardingScope,
 ) -> Result<()> {
-    let requested_domain = alias_domain_to_domain_id(alias, catalog)?;
-    if requested_domain.as_ref() == Some(authenticated_domain) {
+    let authorized = match authenticated_scope {
+        crate::AuthenticatedOnboardingScope::Domain(domain) => {
+            alias.canonical_name.domain_id().as_ref() == Some(domain)
+        }
+        crate::AuthenticatedOnboardingScope::Dataspace(dataspace) => {
+            &alias.canonical_name.dataspace == dataspace
+        }
+    };
+    if authorized {
         return Ok(());
     }
-
-    iroha_logger::warn!(
-        target: "torii.onboard",
-        authenticated_domain = %authenticated_domain,
-        requested_domain = ?requested_domain,
-        "domain-scoped onboarding credential rejected"
-    );
     Err(Error::AppForbidden {
-        code: "onboarding_domain_forbidden",
-        message: "The authenticated onboarding credential is not authorized for the requested fully-qualified alias domain."
+        code: "onboarding_scope_forbidden",
+        message: "the onboarding credential is not authorized for the requested alias scope"
             .to_owned(),
     })
 }
 
 #[cfg(feature = "app_api")]
-fn onboarding_fee_sponsor_enrollment(
-    program_id: Option<&iroha_data_model::nexus::FeeSponsorProgramId>,
-    beneficiary: &AccountId,
-) -> Option<InstructionBox> {
-    program_id.map(|program_id| {
-        InstructionBox::from(iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
-            program_id: program_id.clone(),
-            beneficiary: beneficiary.clone(),
-        })
-    })
-}
-
-#[cfg(all(feature = "app_api", test))]
-mod onboarding_domain_scope_tests {
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-
-    use super::*;
-
-    fn sbp_catalog() -> iroha_data_model::nexus::DataSpaceCatalog {
-        iroha_data_model::nexus::DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: iroha_data_model::nexus::DataSpaceId::new(20),
-                alias: "sbp".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("SBP dataspace catalog")
-    }
-
-    #[test]
-    fn onboarding_alias_authenticated_domain_is_exact() {
-        let catalog = sbp_catalog();
-        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        let ubl = iroha_data_model::domain::DomainId::try_new("ubl", "sbp").expect("UBL domain");
-        let alias = account::rekey::AccountAlias::from_literal("alice@hbl.sbp", &catalog)
-            .expect("HBL alias");
-
-        ensure_authenticated_onboarding_domain(&alias, &catalog, &hbl)
-            .expect("HBL credential must authorize HBL alias");
-        assert!(matches!(
-            ensure_authenticated_onboarding_domain(&alias, &catalog, &ubl),
-            Err(Error::AppForbidden {
-                code: "onboarding_domain_forbidden",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn onboarding_alias_authenticated_domain_rejects_domainless_alias() {
-        let catalog = sbp_catalog();
-        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        let alias = account::rekey::AccountAlias::from_literal("alice@sbp", &catalog)
-            .expect("domainless SBP alias");
-
-        assert!(matches!(
-            ensure_authenticated_onboarding_domain(&alias, &catalog, &hbl),
-            Err(Error::AppForbidden {
-                code: "onboarding_domain_forbidden",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn onboarding_alias_fee_sponsor_enrollment_is_exact_to_program_and_beneficiary() {
-        let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
-            ALICE_ID.clone(),
-            "retail".parse().expect("retail program"),
-        );
-
-        let instruction = onboarding_fee_sponsor_enrollment(Some(&program_id), &BOB_ID)
-            .expect("configured sponsor must emit one exact enrollment");
-        let decoded = instruction
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary>()
-            .expect("exact fee sponsor enrollment instruction");
-        assert_eq!(decoded.program_id(), &program_id);
-        assert_eq!(decoded.beneficiary(), &*BOB_ID);
-    }
-
-    #[test]
-    fn onboarding_alias_absent_fee_sponsor_emits_no_permission() {
-        assert!(onboarding_fee_sponsor_enrollment(None, &BOB_ID).is_none());
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn account_alias_scope_strings(
-    alias: &account::rekey::AccountAlias,
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> Result<(String, Option<String>)> {
-    let dataspace = catalog
-        .by_id(alias.dataspace)
-        .map(|entry| entry.alias.clone())
-        .ok_or_else(|| onboarding_invalid_request("alias dataspace is not registered"))?;
-    let domain = alias
-        .domain
-        .as_ref()
-        .map(ToString::to_string)
-        .map(|domain| format!("{domain}.{dataspace}"));
-    Ok((dataspace, domain))
-}
-
-#[cfg(feature = "app_api")]
-fn build_onboarding_alias_auto_renew_instructions(
-    onboarding_authority: &AccountId,
-    subscriber: &AccountId,
-    subscription_domain: &DomainId,
-    alias_literal: &str,
-    lease_quote: &LeaseQuote,
-    term_years: u8,
-    retry_backoff_ms: u64,
-    max_failures: u32,
-    max_charge_amount: Quantity,
-    max_cycles: NonZeroU64,
-) -> Result<(Vec<InstructionBox>, NftId)> {
-    use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
-    use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
-
-    let subscription_id =
-        account_alias_auto_renew_subscription_id(subscription_domain, subscriber, alias_literal)?;
-    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
-    let settings = build_account_alias_auto_renew_settings(
-        alias_literal.to_owned(),
-        term_years,
-        max_charge_amount,
-        retry_backoff_ms,
-        max_failures,
-    );
-    let subscription_state = build_account_alias_auto_renew_state(
-        subscriber.clone(),
-        lease_quote.payment_asset_definition_id.clone(),
-        billing_trigger_id.clone(),
-        network_time_ms()?,
-        lease_quote.expires_at_ms,
-    );
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        (*SUBSCRIPTION_KEY).clone(),
-        IrohaJson::new(subscription_state),
-    );
-    metadata.insert(
-        (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
-        IrohaJson::new(settings),
-    );
-    let register_trigger_permission: Permission = CanRegisterTrigger {
-        authority: subscriber.clone(),
-    }
-    .into();
-    let modify_subscription_permission: Permission = CanModifyNftMetadata {
-        nft: subscription_id.clone(),
-    }
-    .into();
-    Ok((
-        vec![
-            InstructionBox::from(Grant::account_permission(
-                register_trigger_permission.clone(),
-                onboarding_authority.clone(),
-            )),
-            InstructionBox::from(Register::nft(Nft::new(subscription_id.clone(), metadata))),
-            InstructionBox::from(Grant::account_permission(
-                modify_subscription_permission,
-                subscriber.clone(),
-            )),
-            InstructionBox::from(Register::trigger(build_billing_trigger(
-                billing_trigger_id,
-                subscriber.clone(),
-                subscription_id.clone(),
-                lease_quote.expires_at_ms,
-                max_cycles,
-            ))),
-            InstructionBox::from(Transfer::nft(
-                onboarding_authority.clone(),
-                subscription_id.clone(),
-                subscriber.clone(),
-            )),
-            InstructionBox::from(Revoke::account_permission(
-                register_trigger_permission,
-                onboarding_authority.clone(),
-            )),
-        ],
-        subscription_id,
-    ))
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_v1_accounts_onboard(
-    app: crate::SharedAppState,
-    authenticated_domain: iroha_data_model::domain::DomainId,
-    crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<AccountOnboardingRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let Some(signer) = app.uaid_onboarding.as_ref() else {
-        return Err(onboarding_invalid_request("UAID onboarding disabled"));
+fn normalize_account_onboarding_request(
+    app: &crate::SharedAppState,
+    authenticated_scope: &crate::AuthenticatedOnboardingScope,
+    mut request: AccountOnboardingPlanRequestDto,
+    now_ms: u64,
+) -> Result<NormalizedAccountOnboarding> {
+    use iroha_data_model::alias_setup::{
+        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+        AliasIntentV1, ResolvedAccountAliasV1,
     };
 
-    let AccountOnboardingRequestDto {
-        alias,
-        account_id,
-        public_key_hex,
-        identity,
-        identity_commitment_hex,
-        uaid,
-        permissions,
-    } = req;
-
-    let trimmed_alias = alias.trim();
-    if trimmed_alias.is_empty() {
-        return Err(onboarding_invalid_request("alias must not be empty"));
-    }
-    let nexus = app.state.nexus_snapshot();
-    let alias_label =
-        account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
-            .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
-    ensure_authenticated_onboarding_domain(
-        &alias_label,
-        &nexus.dataspace_catalog,
-        &authenticated_domain,
-    )?;
-    ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
-    let canonical_alias = alias_label
-        .to_literal(&nexus.dataspace_catalog)
-        .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
-    let (alias_dataspace, alias_domain) =
-        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
-    let account_id_literal = account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let public_key_hex_literal = public_key_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if account_id_literal.is_some() && public_key_hex_literal.is_some() {
+    if request.version != AccountOnboardingPlanRequestDto::VERSION {
         return Err(onboarding_invalid_request(
-            "provide exactly one of account_id or public_key_hex",
+            "unsupported account onboarding request version",
         ));
     }
-
-    let account_id = if let Some(account_literal) = account_id_literal {
-        AccountId::parse_encoded(account_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|_| onboarding_invalid_request("invalid account id literal"))?
-    } else if let Some(public_key_hex) = public_key_hex_literal {
-        let bytes = hex::decode(public_key_hex)
-            .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
-        let public_key =
-            iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &bytes)
-                .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
-        AccountId::new(public_key)
-    } else {
-        return Err(onboarding_invalid_request(
-            "either account_id or public_key_hex is required",
-        ));
-    };
-
-    if identity.is_some() {
-        return Err(onboarding_invalid_request(
-            "raw identity metadata is not allowed; provide identity_commitment_hex",
-        ));
-    }
-    let identity_commitment_hex = identity_commitment_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(canonicalize_identity_commitment_hex)
-        .transpose()?;
-    let uaid_literal = uaid
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| onboarding_invalid_request("uaid is required"))?;
-    let uaid = parse_uaid_literal(uaid_literal)
-        .map_err(|_| onboarding_invalid_request("invalid uaid literal"))?;
-
-    if app.state.world_view().account(&account_id).is_ok() {
-        return Err(onboarding_invalid_request("account already exists"));
-    }
-
-    let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration_with_configured_fee_asset(
-        &app.state.world_view(),
-        &nexus.dataspace_catalog,
-        &alias_label,
-        &account_id,
-        lease_term_years,
-        None,
-        network_time_ms()?,
-        &nexus.fees.fee_asset_id,
+    let alias_name = request
+        .alias
+        .parse::<AccountAliasName>()
+        .map_err(|error| onboarding_invalid_request(&error.to_string()))?;
+    let world = app.state.world_view();
+    let catalog = &app.state.nexus_snapshot().dataspace_catalog;
+    let dataspace_id = iroha_core::sns::resolve_active_dataspace_id_by_alias(
+        &world,
+        catalog,
+        alias_name.dataspace.as_ref(),
+        now_ms,
     )
-    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    .map_err(|error| onboarding_invalid_request(&error.to_string()))?;
+    let alias = ResolvedAccountAliasV1::new(alias_name, dataspace_id);
+    ensure_authenticated_onboarding_name(&alias, authenticated_scope)?;
 
-    let dataspace = alias_label.dataspace;
-    let should_publish_manifest = {
-        let world = app.state.world_view();
-        !world
-            .uaid_dataspaces()
-            .get(&uaid)
-            .is_some_and(|bindings| bindings.is_bound_to(dataspace, &account_id))
+    let account_literal = request.account_id.trim();
+    let account_id = AccountId::parse_encoded(account_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| onboarding_invalid_request("invalid canonical account_id"))?;
+    if account_id.to_string() != account_literal {
+        return Err(onboarding_invalid_request(
+            "account_id must use the canonical domainless representation",
+        ));
+    }
+
+    let Some(signer) = app.account_onboarding.as_ref() else {
+        return Err(onboarding_invalid_request("account onboarding is disabled"));
     };
-
-    let mut metadata = Metadata::default();
-    let alias_key = Name::from_str("display_name").expect("static metadata key");
-    metadata.insert(alias_key, IrohaJson::new(canonical_alias.clone()));
-    if let Some(commitment_hex) = identity_commitment_hex {
-        let identity_key = Name::from_str("identity_commitment_hex").expect("static metadata key");
-        metadata.insert(identity_key, IrohaJson::new(commitment_hex));
+    if !iroha_core::alias::authority_can_manage_resolved_account_alias(
+        &world,
+        &signer.authority,
+        &alias,
+    ) {
+        return Err(onboarding_invalid_request(
+            "onboarding signer lacks exact account-alias manage permission",
+        ));
     }
 
-    let register_builder = dm::Account::new(account_id.clone());
-    let register = Register::account(
-        register_builder
-            .with_label(Some(alias_label.clone()))
-            .with_metadata(metadata)
-            .with_uaid(Some(uaid)),
-    );
-
-    let mut permission_instructions = Vec::new();
-    for permission in onboarding_alias_resolve_permissions(signer) {
-        permission_instructions.push(InstructionBox::from(Grant::account_permission(
-            permission,
-            account_id.clone(),
-        )));
-    }
-    let mut requested_permissions = std::collections::BTreeSet::new();
-    for permission_name in permissions {
-        let normalized = permission_name.trim().to_owned();
-        if normalized.is_empty() || !requested_permissions.insert(normalized.clone()) {
+    let mut names = BTreeSet::new();
+    for raw in request.permissions {
+        let name = raw.trim();
+        if name.is_empty() {
+            return Err(onboarding_invalid_request("invalid permission name"));
+        }
+        if !names.insert(name.to_owned()) {
             continue;
         }
-        if !signer.allowed_permissions.contains(&normalized) {
+        if !signer.allowed_permissions.contains(name) {
             return Err(onboarding_invalid_request(
-                "requested permission is not allowed",
+                "requested permission is not in torii.account_onboarding.additional_permissions",
             ));
         }
         if matches!(
-            normalized.as_str(),
+            name,
             "CanResolveAccountAlias"
                 | "CanManageAccountAlias"
+                | "CanDelegateAccountAliasResolution"
                 | "CanManageFeeSponsorProgram"
                 | "CanEnrollFeeSponsorProgram"
                 | "CanWithdrawFeeSponsorProgram"
         ) {
             return Err(onboarding_invalid_request(
-                "scoped onboarding permissions must use the configured typed scopes",
+                "scoped permissions cannot be requested as unscoped onboarding additions",
             ));
         }
-        let permission = iroha_data_model::permission::Permission::new(
-            normalized
-                .parse()
-                .map_err(|_| onboarding_invalid_request("invalid permission literal"))?,
-            IrohaJson::new(()),
-        );
-        permission_instructions.push(InstructionBox::from(Grant::account_permission(
-            permission,
-            account_id.clone(),
+    }
+    let permissions = names
+        .iter()
+        .map(|name| {
+            name.parse::<Name>()
+                .map(|name| Permission::new(name.to_string(), IrohaJson::new(())))
+                .map_err(|_| onboarding_invalid_request("invalid permission name"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    request.alias = alias.canonical_text();
+    request.account_id = account_id.to_string();
+    request.permissions = names.into_iter().collect();
+
+    Ok(NormalizedAccountOnboarding {
+        request,
+        account_id: account_id.clone(),
+        intent: AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias,
+            target_account: account_id,
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        }),
+        permissions,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_frame(
+    instruction: &InstructionBox,
+) -> Result<iroha_data_model::alias_setup::AliasFramedInstructionV1> {
+    let (wire_id, framed_payload) = iroha_data_model::isi::framed_instruction_payload(instruction)
+        .ok_or_else(|| Error::SerializationFailure {
+            context: "account onboarding instruction",
+            source: Box::new(std::io::Error::other(
+                "instruction is absent from the registry",
+            )),
+        })?;
+    Ok(iroha_data_model::alias_setup::AliasFramedInstructionV1 {
+        wire_id: wire_id.to_owned(),
+        framed_payload,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_receipt_plan_mismatch(message: impl Into<String>) -> Error {
+    Error::AppConflict {
+        code: "alias.onboarding.receipt_plan_mismatch",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_canonical_onboarding_frames(
+    frames: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
+) -> Result<Vec<InstructionBox>> {
+    let mut instructions = Vec::with_capacity(frames.len());
+    for (index, frame) in frames.iter().enumerate() {
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .map_err(|error| {
+            onboarding_receipt_plan_mismatch(format!(
+                "receipt instruction {index} does not decode: {error}"
+            ))
+        })?;
+        let canonical = onboarding_frame(&instruction)?;
+        if canonical != *frame {
+            return Err(onboarding_receipt_plan_mismatch(format!(
+                "receipt instruction {index} is not canonically framed"
+            )));
+        }
+        instructions.push(instruction);
+    }
+    Ok(instructions)
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_disposition_transition_allowed(
+    planned: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+    live: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+) -> bool {
+    use iroha_data_model::alias_setup::AliasPlanDispositionV1::{Create, NoOp, Repair};
+
+    matches!(
+        (planned, live),
+        (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_frames_are_ordered_subset(
+    live: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
+    planned: &[iroha_data_model::alias_setup::AliasFramedInstructionV1],
+) -> bool {
+    let mut planned = planned.iter();
+    live.iter().all(|live_frame| {
+        planned
+            .by_ref()
+            .any(|planned_frame| planned_frame == live_frame)
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn validate_onboarding_receipt_plan_shape(
+    body: &AccountOnboardingPlanBodyDto,
+    normalized: &NormalizedAccountOnboarding,
+    signer: &crate::AccountOnboardingSigner,
+) -> Result<()> {
+    use iroha_data_model::{
+        alias_setup::AliasPlanDispositionV1,
+        isi::{GrantBox, alias_setup::EnsureAlias},
+    };
+
+    let planned_instructions = decode_canonical_onboarding_frames(&body.instructions)?;
+    if body.valid_until_ms != body.quote_guard.valid_until_ms {
+        return Err(onboarding_receipt_plan_mismatch(
+            "receipt expiry does not match its quote-guard deadline",
+        ));
+    }
+    if body.resource.instruction_index != (!body.instructions.is_empty()).then_some(0) {
+        return Err(onboarding_receipt_plan_mismatch(
+            "receipt instruction index does not match its executable frame vector",
+        ));
+    }
+
+    match (&body.resource.disposition, &body.resource.quote) {
+        (AliasPlanDispositionV1::Create, Some(quote))
+            if quote.target == body.resource.intent.target()
+                && quote.guard == body.quote_guard
+                && quote.exact_amount == body.quote_guard.max_amount => {}
+        (AliasPlanDispositionV1::NoOp | AliasPlanDispositionV1::Repair, None) => {}
+        (AliasPlanDispositionV1::Conflict, _) => {
+            return Err(onboarding_receipt_plan_mismatch(
+                "conflict dispositions are never executable onboarding receipts",
+            ));
+        }
+        _ => {
+            return Err(onboarding_receipt_plan_mismatch(
+                "receipt quote does not match its planned disposition, target, or guard",
+            ));
+        }
+    }
+
+    if matches!(
+        body.resource.disposition,
+        AliasPlanDispositionV1::Create | AliasPlanDispositionV1::Repair
+    ) && planned_instructions.is_empty()
+    {
+        return Err(onboarding_receipt_plan_mismatch(
+            "create and repair receipts must contain an EnsureAlias frame",
+        ));
+    }
+
+    if let Some(first) = planned_instructions.first() {
+        let Some(ensure) = first.as_any().downcast_ref::<EnsureAlias>() else {
+            return Err(onboarding_receipt_plan_mismatch(
+                "the first executable receipt frame must be EnsureAlias",
+            ));
+        };
+        if ensure.intent != body.resource.intent
+            || ensure.acquisition != body.acquisition
+            || ensure.quote_guard != body.quote_guard
+        {
+            return Err(onboarding_receipt_plan_mismatch(
+                "the planned EnsureAlias frame does not match the signed receipt body",
+            ));
+        }
+    }
+
+    let mut seen_permissions = Vec::new();
+    let mut seen_sponsor = false;
+    for (index, instruction) in planned_instructions.iter().enumerate().skip(1) {
+        if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
+            let GrantBox::Permission(grant) = grant else {
+                return Err(onboarding_receipt_plan_mismatch(format!(
+                    "receipt ancillary instruction {index} is not an account-permission grant"
+                )));
+            };
+            if grant.destination() != &normalized.account_id
+                || !normalized.permissions.contains(grant.object())
+                || seen_permissions.contains(grant.object())
+            {
+                return Err(onboarding_receipt_plan_mismatch(format!(
+                    "receipt ancillary permission grant {index} is not uniquely authorized by the normalized request"
+                )));
+            }
+            seen_permissions.push(grant.object().clone());
+            continue;
+        }
+
+        if let Some(enrollment) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary>(
+        ) {
+            if seen_sponsor
+                || enrollment.beneficiary != normalized.account_id
+                || signer.fee_sponsor_program_id.as_ref() != Some(&enrollment.program_id)
+            {
+                return Err(onboarding_receipt_plan_mismatch(format!(
+                    "receipt ancillary sponsor enrollment {index} does not match active onboarding configuration"
+                )));
+            }
+            seen_sponsor = true;
+            continue;
+        }
+
+        return Err(onboarding_receipt_plan_mismatch(format!(
+            "receipt ancillary instruction {index} is not allowed for sponsored onboarding"
         )));
     }
 
-    let fee_sponsor_enrollment =
-        onboarding_fee_sponsor_enrollment(signer.fee_sponsor_program_id.as_ref(), &account_id);
+    if let Some(owner_auto_renew) = body.owner_auto_renew_instruction.as_ref() {
+        decode_canonical_onboarding_frames(std::slice::from_ref(owner_auto_renew))?;
+    }
+    Ok(())
+}
 
-    let auto_renew_enabled = signer.alias_auto_renew_enabled;
-    let mut auto_renew_instructions = Vec::new();
-    let mut auto_renew_cap = None;
-    if auto_renew_enabled {
-        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
-            return Err(onboarding_invalid_request(
-                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
-            ));
+#[cfg(feature = "app_api")]
+fn onboarding_missing_ancillary_instructions(
+    world: &impl WorldReadOnly,
+    signer: &crate::AccountOnboardingSigner,
+    account_id: &AccountId,
+    permissions: &[Permission],
+) -> Result<Vec<InstructionBox>> {
+    let mut instructions = Vec::new();
+    for permission in permissions {
+        if !world.account_contains_inherent_permission(account_id, permission) {
+            instructions.push(InstructionBox::from(Grant::account_permission(
+                permission.clone(),
+                account_id.clone(),
+            )));
+        }
+    }
+    if let Some(program_id) = signer.fee_sponsor_program_id.as_ref() {
+        if world.fee_sponsor_programs().get(program_id).is_none() {
+            return Err(Error::AppConflict {
+                code: "alias.onboarding.sponsor_missing",
+                message: format!("configured fee sponsor program `{program_id}` is missing"),
+            });
+        }
+        let key = iroha_data_model::nexus::FeeSponsorEnrollmentKey {
+            program_id: program_id.clone(),
+            beneficiary: account_id.clone(),
         };
-        if app.state.world_view().domain(subscription_domain).is_err() {
-            return Err(onboarding_invalid_request(
-                "configured alias auto-renew subscription domain is not registered",
+        if world.fee_sponsor_enrollments().get(&key).is_none() {
+            instructions.push(InstructionBox::from(
+                iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
+                    program_id: program_id.clone(),
+                    beneficiary: account_id.clone(),
+                },
             ));
         }
-        auto_renew_cap = Some(lease_quote.charge_amount.clone());
-        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
-            &signer.authority,
-            &account_id,
-            subscription_domain,
-            &canonical_alias,
-            &lease_quote,
-            lease_term_years,
-            signer.alias_auto_renew_retry_backoff_ms,
-            signer.alias_auto_renew_max_failures,
-            lease_quote.charge_amount.clone(),
-            app.state.ivm_admission_cycle_limit(),
+    }
+    Ok(instructions)
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_owner_auto_renew_follow_up(
+    app: &crate::SharedAppState,
+    signer: &crate::AccountOnboardingSigner,
+    intent: &iroha_data_model::alias_setup::AliasIntentV1,
+    now_ms: u64,
+) -> Result<Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>> {
+    use iroha_data_model::{
+        alias_setup::{AliasAutoRenewConfigV1, AliasTargetV1},
+        isi::alias_setup::ConfigureAliasAutoRenew,
+    };
+
+    let Some(defaults) = signer.owner_auto_renew.as_ref() else {
+        return Ok(None);
+    };
+    let target = intent.target();
+    let AliasTargetV1::AccountAlias(_) = target else {
+        return Ok(None);
+    };
+    let world = app.state.world_view();
+    let configured_fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
+    iroha_core::alias_setup::validate_configured_alias_payment_asset(
+        &world,
+        &target,
+        &configured_fee_asset_selector,
+    )
+    .map_err(|error| Error::AppConflict {
+        code: error.code(),
+        message: error.message().to_owned(),
+    })?;
+    let configured_fee_asset =
+        resolve_asset_definition_selector(&world, &configured_fee_asset_selector, now_ms).map_err(
+            |error| Error::AppConflict {
+                code: "alias.onboarding.payment_asset_invalid",
+                message: format!("configured onboarding payment asset is unavailable: {error}"),
+            },
         )?;
-        auto_renew_instructions = instructions;
+    let policy =
+        iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID)
+            .ok_or(Error::AppConflict {
+                code: "alias.onboarding.policy_missing",
+                message: "the account-alias SNS policy is missing".to_owned(),
+            })?;
+    let max_amount =
+        Quantity::from_canonical_numeric(defaults.max_amount.clone()).map_err(|error| {
+            Error::AppConflict {
+                code: "alias.onboarding.auto_renew_cap_invalid",
+                message: format!("configured auto-renew cap is not a quantity: {error}"),
+            }
+        })?;
+    let desired = AliasAutoRenewConfigV1 {
+        term_years: defaults.term_years,
+        policy_version: policy.policy_version,
+        payment_asset: configured_fee_asset,
+        max_amount,
+        renew_before_expiry_ms: defaults.renew_before_expiry_ms,
+        retry_backoff_ms: defaults.retry_backoff_ms,
+        max_failures: defaults.max_failures,
+    };
+    let existing = iroha_core::sns::alias_auto_renew_state(&world, &target)
+        .map_err(|error| conversion_error(error.to_string()))?;
+    if existing.as_ref().and_then(|state| state.config.as_ref()) == Some(&desired) {
+        return Ok(None);
     }
+    let expected_revision = existing.as_ref().map_or(0, |state| state.revision);
+    onboarding_frame(&ConfigureAliasAutoRenew::new(target, expected_revision, Some(desired)).into())
+        .map(Some)
+}
 
-    let mut instructions = Vec::with_capacity(
-        2 + permission_instructions.len()
-            + auto_renew_instructions.len()
-            + usize::from(should_publish_manifest),
+#[cfg(feature = "app_api")]
+fn build_account_onboarding_plan(
+    app: &crate::SharedAppState,
+    authenticated_scope: &crate::AuthenticatedOnboardingScope,
+    request: AccountOnboardingPlanRequestDto,
+) -> Result<AccountOnboardingPlanReceiptDto> {
+    use iroha_data_model::{
+        alias_setup::{
+            AliasLeaseAcquisitionV1, AliasLeaseQuoteV1, AliasPlanDispositionV1,
+            AliasPlanResourceV1, AliasQuoteGuardV1,
+        },
+        isi::alias_setup::EnsureAlias,
+    };
+
+    let Some(signer) = app.account_onboarding.as_ref() else {
+        return Err(onboarding_invalid_request("account onboarding is disabled"));
+    };
+    let (anchor, now_ms) = onboarding_committed_anchor(app.state.as_ref())?;
+    let normalized =
+        normalize_account_onboarding_request(app, authenticated_scope, request, now_ms)?;
+    let world = app.state.world_view();
+    let catalog = app.state.nexus_snapshot().dataspace_catalog;
+    let disposition = iroha_core::alias_setup::classify_alias_intent(
+        &world,
+        &catalog,
+        &normalized.intent,
+        now_ms,
+    )
+    .map_err(|error| Error::AppConflict {
+        code: error.code(),
+        message: error.message().to_owned(),
+    })?;
+    let target = normalized.intent.target();
+    let acquisition = AliasLeaseAcquisitionV1::new(signer.alias_lease_term_years, None);
+    let valid_until_ms = now_ms.saturating_add(APP_API_TRANSACTION_TTL_SECS.saturating_mul(1_000));
+    let configured_fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
+    let configured_fee_asset =
+        resolve_asset_definition_selector(&world, &configured_fee_asset_selector, now_ms).map_err(
+            |error| Error::AppConflict {
+                code: "alias.onboarding.payment_asset_invalid",
+                message: format!("configured onboarding payment asset is unavailable: {error}"),
+            },
+        )?;
+    let mut guard = AliasQuoteGuardV1 {
+        expected_policy_version: 0,
+        expected_payment_asset: configured_fee_asset,
+        max_amount: Quantity::zero(),
+        valid_until_ms,
+    };
+    let quote = if disposition == AliasPlanDispositionV1::Create {
+        iroha_core::alias_setup::validate_configured_alias_payment_asset(
+            &world,
+            &target,
+            &configured_fee_asset_selector,
+        )
+        .map_err(|error| Error::AppConflict {
+            code: error.code(),
+            message: error.message().to_owned(),
+        })?;
+        let policy =
+            iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID)
+                .ok_or(Error::AppConflict {
+                code: "alias.onboarding.policy_missing",
+                message: "the account-alias SNS policy is missing".to_owned(),
+            })?;
+        guard.expected_policy_version = policy.policy_version;
+        let selector = iroha_core::alias_setup::selector_for_resolved_alias_target(&target)
+            .map_err(|error| Error::AppConflict {
+                code: error.code(),
+                message: error.message().to_owned(),
+            })?;
+        let quote = iroha_core::sns::quote_resolved_name_registration(
+            &world,
+            selector,
+            iroha_core::alias_setup::alias_intent_owner(&normalized.intent),
+            acquisition.term_years,
+            acquisition.pricing_class_hint,
+            now_ms,
+        )
+        .map_err(|error| Error::AppConflict {
+            code: "alias.onboarding.quote_unavailable",
+            message: error.to_string(),
+        })?;
+        guard.expected_payment_asset = quote.payment_asset_definition_id.clone();
+        guard.max_amount = quote.charge_amount.clone();
+        iroha_core::alias_setup::validate_alias_quote_guard(&world, &quote, &guard, now_ms)
+            .map_err(|error| Error::AppConflict {
+                code: error.code(),
+                message: error.message().to_owned(),
+            })?;
+        Some(AliasLeaseQuoteV1 {
+            target: target.clone(),
+            pricing_class: quote.pricing_class,
+            exact_amount: quote.charge_amount,
+            guard: guard.clone(),
+            expires_at_ms: quote.expires_at_ms,
+            grace_expires_at_ms: quote.grace_expires_at_ms,
+            redemption_expires_at_ms: quote.redemption_expires_at_ms,
+        })
+    } else {
+        None
+    };
+    let ensure: InstructionBox =
+        EnsureAlias::new(normalized.intent.clone(), acquisition, guard.clone()).into();
+    let mut ancillary = onboarding_missing_ancillary_instructions(
+        &world,
+        signer,
+        &normalized.account_id,
+        &normalized.permissions,
+    )?;
+    let executable = disposition != AliasPlanDispositionV1::NoOp || !ancillary.is_empty();
+    let mut instruction_boxes = Vec::new();
+    if executable {
+        instruction_boxes.push(ensure);
+        instruction_boxes.append(&mut ancillary);
+    }
+    let instructions = instruction_boxes
+        .iter()
+        .map(onboarding_frame)
+        .collect::<Result<Vec<_>>>()?;
+    let owner_auto_renew_instruction =
+        onboarding_owner_auto_renew_follow_up(app, signer, &normalized.intent, now_ms)?;
+    let body = AccountOnboardingPlanBodyDto {
+        version: AccountOnboardingPlanBodyDto::VERSION,
+        request: normalized.request,
+        authority: signer.authority.clone(),
+        chain_id: app.chain_id.as_ref().clone(),
+        anchor,
+        resource: AliasPlanResourceV1 {
+            intent: normalized.intent,
+            disposition,
+            quote,
+            instruction_index: executable.then_some(0),
+        },
+        acquisition,
+        quote_guard: guard,
+        instructions,
+        owner_auto_renew_instruction,
+        valid_until_ms,
+    };
+    AccountOnboardingPlanReceiptDto::try_new(body, &signer.private_key.0)
+}
+
+/// Plan sponsored account onboarding without mutating world state.
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_onboard_plan(
+    app: crate::SharedAppState,
+    authenticated_scope: crate::AuthenticatedOnboardingScope,
+    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingPlanRequestDto>,
+) -> Result<impl IntoResponse> {
+    let receipt = build_account_onboarding_plan(&app, &authenticated_scope, request)?;
+    let body =
+        norito::json::to_json_pretty(&receipt).map_err(|error| Error::SerializationFailure {
+            context: "account onboarding plan receipt",
+            source: Box::new(error),
+        })?;
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
     );
-    instructions.push(InstructionBox::from(
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
-            alias_label.clone(),
-            account_id.clone(),
-            signer.authority.clone(),
-            lease_term_years,
-            None,
-        ),
-    ));
-    instructions.push(InstructionBox::from(register));
-    instructions.extend(permission_instructions);
-    instructions.extend(fee_sponsor_enrollment);
-    instructions.extend(auto_renew_instructions);
-    if should_publish_manifest {
-        let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
-        let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
-            uaid,
-            dataspace,
-            issued_ms: onboarding_manifest_issued_ms(),
-            activation_epoch,
-            expiry_epoch: None,
-            entries: vec![ManifestEntry {
-                scope: CapabilityScope {
-                    dataspace: Some(dataspace),
-                    program: None,
-                    method: None,
-                    asset: None,
-                    role: None,
-                },
-                effect: ManifestEffect::Allow(Allowance {
-                    max_amount: None,
-                    window: AllowanceWindow::PerDay,
-                }),
-                notes: None,
-            }],
-        };
-        let publish = dm::isi::space_directory::PublishSpaceDirectoryManifest { manifest };
-        instructions.push(InstructionBox::from(publish));
-    }
+    Ok(response)
+}
 
+/// Revalidate and atomically submit a stateless sponsored onboarding receipt.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_onboard_apply(
+    app: crate::SharedAppState,
+    authenticated_scope: crate::AuthenticatedOnboardingScope,
+    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingApplyRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    use iroha_data_model::{alias_setup::AliasPlanDispositionV1, isi::alias_setup::EnsureAlias};
+
+    let receipt = request.receipt;
+    if !receipt.verify() {
+        return Err(Error::AppConflict {
+            code: "alias.onboarding.receipt_invalid",
+            message: "onboarding receipt hash or signature is invalid".to_owned(),
+        });
+    }
+    let Some(signer) = app.account_onboarding.as_ref() else {
+        return Err(onboarding_invalid_request("account onboarding is disabled"));
+    };
+    if receipt.body.version != AccountOnboardingPlanBodyDto::VERSION
+        || receipt.body.request.version != AccountOnboardingPlanRequestDto::VERSION
+        || receipt.body.authority != signer.authority
+        || receipt.body.chain_id != *app.chain_id
+    {
+        return Err(Error::AppConflict {
+            code: "alias.onboarding.receipt_context_mismatch",
+            message: "onboarding receipt does not match the active chain, signer, or layout"
+                .to_owned(),
+        });
+    }
+    let (_, now_ms) = onboarding_committed_anchor(app.state.as_ref())?;
+    if now_ms > receipt.body.valid_until_ms {
+        return Err(Error::AppConflict {
+            code: "alias.onboarding.receipt_expired",
+            message: "onboarding receipt has expired".to_owned(),
+        });
+    }
+    let normalized = normalize_account_onboarding_request(
+        &app,
+        &authenticated_scope,
+        receipt.body.request.clone(),
+        now_ms,
+    )?;
+    if normalized.request != receipt.body.request
+        || normalized.intent != receipt.body.resource.intent
+        || receipt.body.acquisition
+            != iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(
+                signer.alias_lease_term_years,
+                None,
+            )
+    {
+        return Err(Error::AppConflict {
+            code: "alias.onboarding.receipt_intent_mismatch",
+            message: "receipt intent no longer matches canonical request or onboarding config"
+                .to_owned(),
+        });
+    }
+    validate_onboarding_receipt_plan_shape(&receipt.body, &normalized, signer)?;
+    let (disposition, executable, instructions) = {
+        let world = app.state.world_view();
+        let catalog = app.state.nexus_snapshot().dataspace_catalog;
+        let disposition = iroha_core::alias_setup::classify_alias_intent(
+            &world,
+            &catalog,
+            &normalized.intent,
+            now_ms,
+        )
+        .map_err(|error| Error::AppConflict {
+            code: error.code(),
+            message: error.message().to_owned(),
+        })?;
+        if !onboarding_disposition_transition_allowed(
+            receipt.body.resource.disposition,
+            disposition,
+        ) {
+            return Err(onboarding_receipt_plan_mismatch(format!(
+                "live onboarding disposition `{disposition:?}` is not an allowed transition from planned disposition `{:?}`",
+                receipt.body.resource.disposition
+            )));
+        }
+        if disposition == AliasPlanDispositionV1::Create {
+            let configured_fee_asset = app.state.nexus_snapshot().fees.fee_asset_id;
+            iroha_core::alias_setup::validate_configured_alias_payment_asset(
+                &world,
+                &normalized.intent.target(),
+                &configured_fee_asset,
+            )
+            .map_err(|error| Error::AppConflict {
+                code: error.code(),
+                message: error.message().to_owned(),
+            })?;
+            let selector = iroha_core::alias_setup::selector_for_resolved_alias_target(
+                &normalized.intent.target(),
+            )
+            .map_err(|error| Error::AppConflict {
+                code: error.code(),
+                message: error.message().to_owned(),
+            })?;
+            let quote = iroha_core::sns::quote_resolved_name_registration(
+                &world,
+                selector,
+                iroha_core::alias_setup::alias_intent_owner(&normalized.intent),
+                receipt.body.acquisition.term_years,
+                receipt.body.acquisition.pricing_class_hint,
+                now_ms,
+            )
+            .map_err(|error| Error::AppConflict {
+                code: "alias.onboarding.quote_unavailable",
+                message: error.to_string(),
+            })?;
+            iroha_core::alias_setup::validate_alias_quote_guard(
+                &world,
+                &quote,
+                &receipt.body.quote_guard,
+                now_ms,
+            )
+            .map_err(|error| Error::AppConflict {
+                code: error.code(),
+                message: error.message().to_owned(),
+            })?;
+            let planned_quote = receipt.body.resource.quote.as_ref().ok_or_else(|| {
+                onboarding_receipt_plan_mismatch(
+                    "create receipt is missing its exact planned quote",
+                )
+            })?;
+            if quote.pricing_class != planned_quote.pricing_class
+                || quote.charge_amount != planned_quote.exact_amount
+            {
+                return Err(onboarding_receipt_plan_mismatch(
+                    "live onboarding quote no longer matches the receipt's exact amount or pricing class",
+                ));
+            }
+        }
+        let mut ancillary = onboarding_missing_ancillary_instructions(
+            &world,
+            signer,
+            &normalized.account_id,
+            &normalized.permissions,
+        )?;
+        let executable = disposition != AliasPlanDispositionV1::NoOp || !ancillary.is_empty();
+        let mut instructions = Vec::new();
+        if executable {
+            instructions.push(InstructionBox::from(EnsureAlias::new(
+                normalized.intent.clone(),
+                receipt.body.acquisition,
+                receipt.body.quote_guard.clone(),
+            )));
+            instructions.append(&mut ancillary);
+        }
+        let live_frames = instructions
+            .iter()
+            .map(onboarding_frame)
+            .collect::<Result<Vec<_>>>()?;
+        if !onboarding_frames_are_ordered_subset(&live_frames, &receipt.body.instructions) {
+            return Err(onboarding_receipt_plan_mismatch(
+                "live onboarding instructions introduce work not committed by the signed receipt",
+            ));
+        }
+        (disposition, executable, instructions)
+    };
+
+    if !executable {
+        let payload = AccountOnboardingResponseDto {
+            account_id: normalized.account_id.to_string(),
+            alias: normalized.request.alias.clone(),
+            tx_hash_hex: None,
+            status: "Unchanged",
+            disposition,
+        };
+        let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+        let mut response = Response::new(Body::from(body));
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return Ok((StatusCode::OK, response));
+    }
     let mut builder = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        app.chain_id.as_ref().clone(),
         signer.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -66710,7 +67014,6 @@ pub async fn handle_v1_accounts_onboard(
         ENDPOINT_ACCOUNTS_ONBOARD,
     )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
-
     handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -66720,32 +67023,24 @@ pub async fn handle_v1_accounts_onboard(
         ENDPOINT_ACCOUNTS_ONBOARD,
     )
     .await?;
-
-    let response = AccountOnboardingResponseDto {
-        account_id: account_id.to_string(),
-        uaid: uaid.to_string(),
-        tx_hash_hex,
-        status: "QUEUED",
-        lease: account_alias_lease_dto_from_quote(
-            canonical_alias,
-            alias_dataspace,
-            alias_domain,
-            true,
-            &lease_quote,
-            auto_renew_enabled,
-            auto_renew_cap,
-            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
-        ),
+    let payload = AccountOnboardingResponseDto {
+        account_id: normalized.account_id.to_string(),
+        alias: normalized.request.alias,
+        tx_hash_hex: Some(tx_hash_hex),
+        status: if disposition == AliasPlanDispositionV1::Create {
+            "Queued"
+        } else {
+            "Repaired"
+        },
+        disposition,
     };
-
-    let mut resp = Response::new(Body::from(
-        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
-    ));
-    resp.headers_mut().insert(
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
     );
-    Ok((StatusCode::ACCEPTED, resp))
+    Ok((StatusCode::ACCEPTED, response))
 }
 
 #[iroha_futures::telemetry_future]
@@ -66874,7 +67169,7 @@ pub async fn handle_v1_accounts_faucet(
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = quote_and_sign_app_api_transaction(
         builder,
-        &faucet.private_key.0,
+        faucet.signer.private_key(),
         app.queue.as_ref(),
         app.state.as_ref(),
         ENDPOINT_ACCOUNTS_FAUCET,
@@ -66910,278 +67205,6 @@ pub async fn handle_v1_accounts_faucet(
     Ok((StatusCode::ACCEPTED, resp))
 }
 
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_v1_accounts_onboard_multisig(
-    app: crate::SharedAppState,
-    authenticated_domain: iroha_data_model::domain::DomainId,
-    crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<MultisigAccountOnboardingRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::account::{MultisigMember, MultisigPolicy};
-    use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
-    use std::num::{NonZeroU16, NonZeroU64};
-
-    let Some(signer) = app.uaid_onboarding.as_ref() else {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("UAID onboarding disabled".into()),
-        ));
-    };
-
-    let MultisigAccountOnboardingRequestDto {
-        alias,
-        required_signers,
-        member_account_ids,
-        member_weights,
-        transaction_ttl_ms,
-    } = req;
-
-    let trimmed_alias = alias.trim();
-    if trimmed_alias.is_empty() {
-        return Err(onboarding_invalid_request("alias must not be empty"));
-    }
-    let nexus = app.state.nexus_snapshot();
-    let alias_label =
-        account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
-            .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
-    ensure_authenticated_onboarding_domain(
-        &alias_label,
-        &nexus.dataspace_catalog,
-        &authenticated_domain,
-    )?;
-    ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
-    let canonical_alias = alias_label
-        .to_literal(&nexus.dataspace_catalog)
-        .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
-    let (alias_dataspace, alias_domain_text) =
-        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
-    if !(2..=MAX_ONBOARDING_MULTISIG_MEMBERS).contains(&member_account_ids.len()) {
-        return Err(onboarding_invalid_request(
-            "multisig onboarding requires between 2 and 255 member accounts",
-        ));
-    }
-
-    let mut parsed_members = Vec::with_capacity(member_account_ids.len());
-    for literal in member_account_ids {
-        let parsed = AccountId::parse_encoded(literal.trim())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|_| onboarding_invalid_request("invalid member account id literal"))?;
-        parsed_members.push(parsed);
-    }
-
-    let weights = if member_weights.is_empty() {
-        vec![1u8; parsed_members.len()]
-    } else {
-        if member_weights.len() != parsed_members.len() {
-            return Err(onboarding_invalid_request(
-                "member_weights must match member_account_ids length",
-            ));
-        }
-        member_weights
-    };
-    if weights.iter().any(|weight| *weight == 0) {
-        return Err(onboarding_invalid_request(
-            "member weights must be non-zero",
-        ));
-    }
-
-    if required_signers == 0 {
-        return Err(onboarding_invalid_request(
-            "required_signers must be positive",
-        ));
-    }
-    let threshold = u16::from(required_signers);
-    let total_weight: u32 = weights.iter().map(|weight| u32::from(*weight)).sum();
-    if u32::from(threshold) > total_weight {
-        return Err(onboarding_invalid_request(
-            "required_signers exceeds total member weight",
-        ));
-    }
-
-    let mut policy_members = Vec::with_capacity(parsed_members.len());
-    let mut signatories_with_weights = BTreeMap::new();
-    for (account_id, weight) in parsed_members.iter().zip(weights.iter()) {
-        let signatory = account_id
-            .try_signatory()
-            .cloned()
-            .ok_or_else(|| onboarding_invalid_request("member account must be single-signature"))?;
-        policy_members.push(
-            MultisigMember::new(signatory, u16::from(*weight))
-                .map_err(|_| onboarding_invalid_request("invalid multisig member definition"))?,
-        );
-        if signatories_with_weights
-            .insert(account_id.clone(), *weight)
-            .is_some()
-        {
-            return Err(onboarding_invalid_request(
-                "duplicate member account ids are not allowed",
-            ));
-        }
-    }
-
-    let policy = MultisigPolicy::new(threshold, policy_members)
-        .map_err(|_| onboarding_invalid_request("invalid multisig policy"))?;
-    let multisig_account = AccountId::new_multisig(policy);
-    if app.state.world_view().account(&multisig_account).is_ok() {
-        let bound_aliases = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-            multisig_account.clone(),
-            None,
-            None,
-        )
-        .execute(&app.state.view())
-        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
-        if !bound_aliases
-            .iter()
-            .any(|binding| binding.alias == canonical_alias)
-        {
-            return Err(onboarding_invalid_request(
-                "existing multisig account is not bound to the requested alias",
-            ));
-        }
-        let response = MultisigAccountOnboardingResponseDto {
-            account_id: multisig_account.to_string(),
-            tx_hash_hex: String::new(),
-            status: "EXISTS",
-            lease: None,
-        };
-        let mut resp = Response::new(Body::from(
-            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
-        ));
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static("application/json"),
-        );
-        return Ok((StatusCode::OK, resp));
-    }
-
-    let quorum = NonZeroU16::new(threshold)
-        .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
-    let transaction_ttl_ms = onboarding_multisig_transaction_ttl_ms(transaction_ttl_ms)?;
-    let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration_with_configured_fee_asset(
-        &app.state.world_view(),
-        &nexus.dataspace_catalog,
-        &alias_label,
-        &multisig_account,
-        lease_term_years,
-        None,
-        network_time_ms()?,
-        &nexus.fees.fee_asset_id,
-    )
-    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
-    let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let alias_domain = alias_domain_to_domain_id(&alias_label, &nexus.dataspace_catalog)?;
-    let register = MultisigRegister::with_account(multisig_account.clone(), alias_domain, spec);
-    let bind_alias = SetPrimaryAccountAlias {
-        account: multisig_account.clone(),
-        alias: Some(alias_label.clone()),
-        lease_expiry_ms: None,
-    };
-
-    let auto_renew_enabled = signer.alias_auto_renew_enabled;
-    let mut auto_renew_instructions = Vec::new();
-    let mut auto_renew_cap = None;
-    if auto_renew_enabled {
-        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
-            return Err(onboarding_invalid_request(
-                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
-            ));
-        };
-        if app.state.world_view().domain(subscription_domain).is_err() {
-            return Err(onboarding_invalid_request(
-                "configured alias auto-renew subscription domain is not registered",
-            ));
-        }
-        auto_renew_cap = Some(lease_quote.charge_amount.clone());
-        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
-            &signer.authority,
-            &multisig_account,
-            subscription_domain,
-            &canonical_alias,
-            &lease_quote,
-            lease_term_years,
-            signer.alias_auto_renew_retry_backoff_ms,
-            signer.alias_auto_renew_max_failures,
-            lease_quote.charge_amount.clone(),
-            app.state.ivm_admission_cycle_limit(),
-        )?;
-        auto_renew_instructions = instructions;
-    }
-
-    let fee_sponsor_enrollment = onboarding_fee_sponsor_enrollment(
-        signer.fee_sponsor_program_id.as_ref(),
-        &multisig_account,
-    );
-    let mut builder = TransactionBuilder::new(
-        (*app.chain_id).clone(),
-        signer.authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions({
-        let mut instructions = vec![
-            InstructionBox::from(
-                iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
-                    alias_label,
-                    multisig_account.clone(),
-                    signer.authority.clone(),
-                    lease_term_years,
-                    None,
-                ),
-            ),
-            InstructionBox::from(register),
-            InstructionBox::from(bind_alias),
-        ];
-        instructions.extend(fee_sponsor_enrollment);
-        instructions.extend(auto_renew_instructions);
-        instructions
-    });
-    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = quote_and_sign_app_api_transaction(
-        builder,
-        &signer.private_key.0,
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-
-    handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        telemetry,
-        ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG,
-    )
-    .await?;
-
-    let response = MultisigAccountOnboardingResponseDto {
-        account_id: multisig_account.to_string(),
-        tx_hash_hex,
-        status: "QUEUED",
-        lease: Some(account_alias_lease_dto_from_quote(
-            canonical_alias,
-            alias_dataspace,
-            alias_domain_text,
-            true,
-            &lease_quote,
-            auto_renew_enabled,
-            auto_renew_cap,
-            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
-        )),
-    };
-
-    let mut resp = Response::new(Body::from(
-        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
-    ));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok((StatusCode::ACCEPTED, resp))
-}
-
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,
@@ -67208,33 +67231,49 @@ pub async fn handle_v1_account_aliases(
     let had_bindings = !bindings.is_empty();
     let mut items = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let alias = account::rekey::AccountAlias::from_literal(&binding.alias, &catalog)
-            .map_err(|err| conversion_error(format!("invalid account alias binding: {err}")))?;
-        if !authority_can_resolve_account_alias(&world, &caller, &alias) {
-            continue;
+        let canonical_name = binding
+            .alias
+            .parse::<iroha_data_model::alias_setup::AccountAliasName>()
+            .map_err(|error| {
+                conversion_error(format!("invalid canonical account alias: {error}"))
+            })?;
+        if canonical_name.canonical_text() != binding.alias {
+            return Err(conversion_error(
+                "account alias binding text is not canonical".to_owned(),
+            ));
         }
-        let record = get_name_record(
+        let dataspace_id = iroha_core::sns::resolve_active_dataspace_id_by_alias(
             &world,
             &catalog,
-            SnsNamespace::AccountAlias,
-            &binding.alias,
+            canonical_name.dataspace.as_ref(),
             now_ms,
         )
-        .map_err(|err| conversion_error(err.to_string()))?;
-        let auto_renew = lookup_account_alias_auto_renew(&app, &account_id, &binding.alias)?;
+        .map_err(|error| conversion_error(error.to_string()))?;
+        let resolved_alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+            canonical_name,
+            dataspace_id,
+        );
+        if !iroha_core::alias::authority_can_resolve_resolved_account_alias(
+            &world,
+            &caller,
+            &resolved_alias,
+        ) {
+            continue;
+        }
+        let target = iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(resolved_alias);
+        let selector = iroha_core::alias_setup::selector_for_resolved_alias_target(&target)
+            .map_err(|error| conversion_error(error.to_string()))?;
+        let record = iroha_core::sns::get_name_record_by_selector(&world, &selector, now_ms)
+            .map_err(|err| conversion_error(err.to_string()))?;
+        let auto_renew = iroha_core::sns::alias_auto_renew_state(&world, &target)
+            .map_err(|error| conversion_error(error.to_string()))?;
         items.push(account_alias_lease_dto_from_record(
             binding.alias,
             binding.dataspace,
             binding.domain,
             binding.is_primary,
             &record,
-            auto_renew
-                .as_ref()
-                .map(|(_, subscription, _, _)| subscription),
-            auto_renew
-                .as_ref()
-                .and_then(|(_, _, invoice, _)| invoice.as_ref()),
-            auto_renew.as_ref().map(|(_, _, _, settings)| settings),
+            auto_renew.as_ref(),
         ));
     }
     if had_bindings && items.is_empty() {
@@ -67258,360 +67297,6 @@ pub async fn handle_v1_account_aliases(
     Ok(resp)
 }
 
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_v1_account_alias_renew(
-    app: crate::SharedAppState,
-    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
-    crate::NoritoJson(req): crate::NoritoJson<AccountAliasRenewRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let (account_id, _) = parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &account_id_literal,
-        &telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_RENEW,
-    )?;
-    let (authority_id, _) = parse_account_literal_with_state(
-        app.state.as_ref(),
-        &req.authority,
-        &telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_RENEW,
-    )
-    .map_err(|err| {
-        conversion_error(format!(
-            "invalid authority `{}`: {}",
-            req.authority,
-            err.reason()
-        ))
-    })?;
-    if authority_id != account_id {
-        return Err(conversion_error(
-            "renew authority must match the account path".to_string(),
-        ));
-    }
-    let nexus = app.state.nexus_snapshot();
-    let alias =
-        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
-            .map_err(|err| conversion_error(err.to_string()))?;
-    let canonical_alias = alias
-        .to_literal(&nexus.dataspace_catalog)
-        .map_err(|err| conversion_error(err.to_string()))?;
-    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-        account_id.clone(),
-        None,
-        None,
-    )
-    .execute(&app.state.view())
-    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
-    if !bindings
-        .iter()
-        .any(|binding| binding.alias == canonical_alias)
-    {
-        return Err(conversion_error(
-            "alias is not bound to the requested account".to_string(),
-        ));
-    }
-    let term_years = req.term_years.unwrap_or_else(|| {
-        app.uaid_onboarding
-            .as_ref()
-            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
-    });
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*app.chain_id).clone(),
-            authority_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(
-            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
-                alias,
-                authority_id.clone(),
-                term_years,
-            ),
-        )]),
-        &req.private_key.0,
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        ENDPOINT_ACCOUNT_ALIAS_RENEW,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_RENEW,
-    )
-    .await?;
-    let payload = AccountAliasRenewResponseDto {
-        account_id: authority_id.to_string(),
-        alias: canonical_alias,
-        tx_hash_hex,
-        status: "QUEUED",
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok((StatusCode::ACCEPTED, resp))
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_v1_account_alias_auto_renew(
-    app: crate::SharedAppState,
-    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
-    crate::NoritoJson(req): crate::NoritoJson<AccountAliasAutoRenewRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let (account_id, _) = parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &account_id_literal,
-        &telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
-    )?;
-    let (authority_id, _) = parse_account_literal_with_state(
-        app.state.as_ref(),
-        &req.authority,
-        &telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
-    )
-    .map_err(|err| {
-        conversion_error(format!(
-            "invalid authority `{}`: {}",
-            req.authority,
-            err.reason()
-        ))
-    })?;
-    if authority_id != account_id {
-        return Err(conversion_error(
-            "auto-renew authority must match the account path".to_string(),
-        ));
-    }
-    let nexus = app.state.nexus_snapshot();
-    let alias =
-        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
-            .map_err(|err| conversion_error(err.to_string()))?;
-    let canonical_alias = alias
-        .to_literal(&nexus.dataspace_catalog)
-        .map_err(|err| conversion_error(err.to_string()))?;
-    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-        account_id.clone(),
-        None,
-        None,
-    )
-    .execute(&app.state.view())
-    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
-    if !bindings
-        .iter()
-        .any(|binding| binding.alias == canonical_alias)
-    {
-        return Err(conversion_error(
-            "alias is not bound to the requested account".to_string(),
-        ));
-    }
-
-    let existing = lookup_account_alias_auto_renew(&app, &account_id, &canonical_alias)?;
-    if !req.enabled && existing.is_none() {
-        let payload = AccountAliasAutoRenewResponseDto {
-            account_id: account_id.to_string(),
-            alias: canonical_alias,
-            auto_renew_enabled: false,
-            subscription_id: None,
-            tx_hash_hex: None,
-            status: "DISABLED",
-        };
-        let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-        let mut resp = Response::new(Body::from(body));
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static("application/json"),
-        );
-        return Ok((StatusCode::OK, resp));
-    }
-
-    let Some(subscription_domain) = app
-        .uaid_onboarding
-        .as_ref()
-        .and_then(|signer| signer.alias_auto_renew_subscription_domain.as_ref())
-    else {
-        return Err(conversion_error(
-            "alias auto-renew is not configured on this Torii".to_string(),
-        ));
-    };
-    if app.state.world_view().domain(subscription_domain).is_err() {
-        return Err(conversion_error(
-            "configured alias auto-renew subscription domain is not registered".to_string(),
-        ));
-    }
-
-    let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
-    let record = get_name_record(
-        &app.state.world_view(),
-        &nexus.dataspace_catalog,
-        SnsNamespace::AccountAlias,
-        &canonical_alias,
-        now_ms,
-    )
-    .map_err(|err| conversion_error(err.to_string()))?;
-    let term_years = req.term_years.unwrap_or_else(|| {
-        app.uaid_onboarding
-            .as_ref()
-            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
-    });
-    let quote = quote_account_alias_renewal_with_configured_fee_asset(
-        &app.state.world_view(),
-        &nexus.dataspace_catalog,
-        &alias,
-        term_years,
-        now_ms,
-        &nexus.fees.fee_asset_id,
-    )
-    .map_err(|err| conversion_error(err.to_string()))?;
-    let max_charge_amount = req
-        .max_charge_amount
-        .unwrap_or_else(|| quote.charge_amount.clone());
-    let subscription_id = account_alias_auto_renew_subscription_id(
-        subscription_domain,
-        &account_id,
-        &canonical_alias,
-    )?;
-    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
-    let billing_trigger_exists = app
-        .state
-        .world_view()
-        .triggers()
-        .time_triggers()
-        .get(&billing_trigger_id)
-        .is_some();
-    let settings = build_account_alias_auto_renew_settings(
-        canonical_alias.clone(),
-        term_years,
-        max_charge_amount,
-        app.uaid_onboarding.as_ref().map_or(86_400_000, |signer| {
-            signer.alias_auto_renew_retry_backoff_ms
-        }),
-        app.uaid_onboarding
-            .as_ref()
-            .map_or(5, |signer| signer.alias_auto_renew_max_failures),
-    );
-
-    let mut instructions = Vec::new();
-    if req.enabled {
-        let state = build_account_alias_auto_renew_state(
-            account_id.clone(),
-            quote.payment_asset_definition_id.clone(),
-            billing_trigger_id.clone(),
-            record.registered_at_ms,
-            record.expires_at_ms,
-        );
-        if existing.is_some() {
-            instructions.push(InstructionBox::from(SetKeyValue::nft(
-                subscription_id.clone(),
-                (*SUBSCRIPTION_KEY).clone(),
-                IrohaJson::new(state),
-            )));
-            instructions.push(InstructionBox::from(SetKeyValue::nft(
-                subscription_id.clone(),
-                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
-                IrohaJson::new(settings),
-            )));
-            if billing_trigger_exists {
-                instructions.push(InstructionBox::from(Unregister::trigger(
-                    billing_trigger_id.clone(),
-                )));
-            }
-            instructions.push(InstructionBox::from(Register::trigger(
-                build_billing_trigger(
-                    billing_trigger_id.clone(),
-                    account_id.clone(),
-                    subscription_id.clone(),
-                    record.expires_at_ms,
-                    app.state.ivm_admission_cycle_limit(),
-                ),
-            )));
-        } else {
-            let mut metadata = Metadata::default();
-            metadata.insert((*SUBSCRIPTION_KEY).clone(), IrohaJson::new(state));
-            metadata.insert(
-                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
-                IrohaJson::new(settings),
-            );
-            instructions.push(InstructionBox::from(Register::nft(Nft::new(
-                subscription_id.clone(),
-                metadata,
-            ))));
-            instructions.push(InstructionBox::from(Register::trigger(
-                build_billing_trigger(
-                    billing_trigger_id.clone(),
-                    account_id.clone(),
-                    subscription_id.clone(),
-                    record.expires_at_ms,
-                    app.state.ivm_admission_cycle_limit(),
-                ),
-            )));
-        }
-    } else if let Some((_, mut state, _, _)) = existing {
-        state.status = SubscriptionStatus::Canceled;
-        state.cancel_at_period_end = false;
-        state.cancel_at_ms = None;
-        instructions.push(InstructionBox::from(SetKeyValue::nft(
-            subscription_id.clone(),
-            (*SUBSCRIPTION_KEY).clone(),
-            IrohaJson::new(state),
-        )));
-        if billing_trigger_exists {
-            instructions.push(InstructionBox::from(Unregister::trigger(
-                billing_trigger_id.clone(),
-            )));
-        }
-    }
-
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*app.chain_id).clone(),
-            authority_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &req.private_key.0,
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        telemetry,
-        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
-    )
-    .await?;
-    let payload = AccountAliasAutoRenewResponseDto {
-        account_id: account_id.to_string(),
-        alias: canonical_alias,
-        auto_renew_enabled: req.enabled,
-        subscription_id: Some(subscription_id.to_string()),
-        tx_hash_hex: Some(tx_hash_hex),
-        status: "QUEUED",
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok((StatusCode::ACCEPTED, resp))
-}
-
-/// GET /v1/accounts — List accounts with basic pagination.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_get(
     state: Arc<CoreState>,
@@ -76563,21 +76248,6 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
 }
 
 #[cfg(feature = "app_api")]
-fn account_alias_auto_renew_from_metadata(
-    metadata: &Metadata,
-) -> Result<Option<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>> {
-    let Some(value) = metadata.get(&*ACCOUNT_ALIAS_AUTO_RENEW_KEY) else {
-        return Ok(None);
-    };
-    let settings = value
-        .try_into_any_norito::<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>()
-        .map_err(|err| {
-            conversion_error(format!("invalid account alias auto-renew metadata: {err}"))
-        })?;
-    Ok(Some(settings))
-}
-
-#[cfg(feature = "app_api")]
 fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
     match status {
         SubscriptionStatus::Active => "active",
@@ -76608,81 +76278,16 @@ fn name_status_label(status: &NameStatus) -> &'static str {
 }
 
 #[cfg(feature = "app_api")]
-fn account_alias_auto_renew_subscription_name(
-    account_id: &AccountId,
-    alias_literal: &str,
-) -> Result<Name> {
-    let digest = Hash::new(format!(
-        "account-alias-auto-renew:{}:{}",
-        account_id,
-        alias_literal.trim().to_ascii_lowercase()
-    ));
-    Name::from_str(&format!("aliasrenew_{}", hex::encode(digest.as_ref())))
-        .map_err(|err| conversion_error(format!("invalid auto-renew subscription name: {err}")))
-}
-
-#[cfg(feature = "app_api")]
-fn account_alias_auto_renew_subscription_id(
-    domain_id: &DomainId,
-    account_id: &AccountId,
-    alias_literal: &str,
-) -> Result<NftId> {
-    Ok(NftId::of(
-        domain_id.clone(),
-        account_alias_auto_renew_subscription_name(account_id, alias_literal)?,
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn lookup_account_alias_auto_renew(
-    app: &crate::SharedAppState,
-    account_id: &AccountId,
-    alias_literal: &str,
-) -> Result<
-    Option<(
-        NftId,
-        SubscriptionState,
-        Option<SubscriptionInvoice>,
-        iroha_data_model::subscription::AccountAliasAutoRenewMetadata,
-    )>,
-> {
-    let Some(signer) = app.uaid_onboarding.as_ref() else {
-        return Ok(None);
-    };
-    let Some(domain_id) = signer.alias_auto_renew_subscription_domain.as_ref() else {
-        return Ok(None);
-    };
-    let subscription_id =
-        account_alias_auto_renew_subscription_id(domain_id, account_id, alias_literal)?;
-    let world = app.state.world_view();
-    let nft = match world.nft(&subscription_id) {
-        Ok(nft) => nft,
-        Err(_) => return Ok(None),
-    };
-    let subscription = subscription_state_from_metadata(&nft.content)?
-        .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
-    let invoice = subscription_invoice_from_metadata(&nft.content)?;
-    let settings = account_alias_auto_renew_from_metadata(&nft.content)?
-        .ok_or_else(|| conversion_error("account alias auto-renew metadata missing".to_string()))?;
-    Ok(Some((subscription_id, subscription, invoice, settings)))
-}
-
-#[cfg(feature = "app_api")]
 fn account_alias_lease_dto_from_record(
     alias: String,
     dataspace: String,
     domain: Option<String>,
     is_primary: bool,
     record: &NameRecordV1,
-    subscription: Option<&SubscriptionState>,
-    invoice: Option<&SubscriptionInvoice>,
-    auto_renew: Option<&iroha_data_model::subscription::AccountAliasAutoRenewMetadata>,
+    auto_renew: Option<&iroha_data_model::alias_setup::AliasAutoRenewStateV1>,
 ) -> AccountAliasLeaseDto {
-    let subscription_status =
-        subscription.map(|state| subscription_status_label(state.status).to_owned());
-    let auto_renew_enabled = subscription
-        .map(|state| !matches!(state.status, SubscriptionStatus::Canceled))
-        .unwrap_or(false);
+    let auto_renew_enabled =
+        auto_renew.is_some_and(|state| state.config.is_some() && state.suspended_reason.is_none());
     AccountAliasLeaseDto {
         alias,
         dataspace,
@@ -76693,39 +76298,13 @@ fn account_alias_lease_dto_from_record(
         grace_expires_at_ms: record.grace_expires_at_ms,
         redemption_expires_at_ms: record.redemption_expires_at_ms,
         auto_renew_enabled,
-        subscription_status,
-        next_charge_ms: subscription.map(|state| state.next_charge_ms),
-        last_invoice_status: invoice
-            .map(|item| subscription_invoice_status_label(item.status).to_owned()),
-        max_charge_amount: auto_renew.map(|settings| settings.max_charge_amount.clone()),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn account_alias_lease_dto_from_quote(
-    alias: String,
-    dataspace: String,
-    domain: Option<String>,
-    is_primary: bool,
-    quote: &LeaseQuote,
-    auto_renew_enabled: bool,
-    max_charge_amount: Option<Quantity>,
-    next_charge_ms: Option<u64>,
-) -> AccountAliasLeaseDto {
-    AccountAliasLeaseDto {
-        alias,
-        dataspace,
-        domain,
-        is_primary,
-        lease_status: "active".to_owned(),
-        expires_at_ms: quote.expires_at_ms,
-        grace_expires_at_ms: quote.grace_expires_at_ms,
-        redemption_expires_at_ms: quote.redemption_expires_at_ms,
-        auto_renew_enabled,
-        subscription_status: auto_renew_enabled.then_some("active".to_owned()),
-        next_charge_ms,
-        last_invoice_status: None,
-        max_charge_amount,
+        auto_renew_revision: auto_renew.map(|state| state.revision),
+        next_retry_at_ms: auto_renew.and_then(|state| state.next_retry_at_ms),
+        auto_renew_failure_count: auto_renew.map(|state| state.failure_count),
+        auto_renew_suspended_reason: auto_renew.and_then(|state| state.suspended_reason.clone()),
+        max_renewal_amount: auto_renew
+            .and_then(|state| state.config.as_ref())
+            .map(|config| config.max_amount.clone()),
     }
 }
 
@@ -76781,16 +76360,6 @@ fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Re
     }
     let now_ms = network_time_ms()?;
     default_charge_ms(now_ms, billing)
-}
-
-#[cfg(feature = "app_api")]
-fn resolve_account_alias_auto_renew_resume_charge_ms(
-    subscription_state: &SubscriptionState,
-    requested: Option<u64>,
-) -> Result<u64> {
-    requested
-        .map(Ok)
-        .unwrap_or_else(|| Ok(network_time_ms()?.max(subscription_state.next_charge_ms)))
 }
 
 #[cfg(feature = "app_api")]
@@ -76906,47 +76475,6 @@ fn build_billing_trigger(
     )
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
-}
-
-#[cfg(feature = "app_api")]
-fn build_account_alias_auto_renew_settings(
-    alias_literal: String,
-    term_years: u8,
-    max_charge_amount: Quantity,
-    retry_backoff_ms: u64,
-    max_failures: u32,
-) -> iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
-    iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
-        alias: alias_literal,
-        term_years,
-        max_charge_amount,
-        retry_backoff_ms,
-        max_failures,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn build_account_alias_auto_renew_state(
-    subscriber: AccountId,
-    charge_asset_definition_id: AssetDefinitionId,
-    billing_trigger_id: TriggerId,
-    current_period_start_ms: u64,
-    current_period_end_ms: u64,
-) -> SubscriptionState {
-    SubscriptionState {
-        plan_id: charge_asset_definition_id,
-        provider: subscriber.clone(),
-        subscriber,
-        status: SubscriptionStatus::Active,
-        current_period_start_ms,
-        current_period_end_ms,
-        next_charge_ms: current_period_end_ms,
-        cancel_at_period_end: false,
-        cancel_at_ms: None,
-        failure_count: 0,
-        usage_accumulated: std::collections::BTreeMap::new(),
-        billing_trigger_id,
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -77549,12 +77077,7 @@ pub async fn handle_post_v1_subscription_resume(
     } = req;
     let authority: AccountId = authority.into();
 
-    enum ResumeBilling {
-        Generic(SubscriptionPlan),
-        AccountAliasAutoRenew,
-    }
-
-    let (mut subscription_state, owner, billing, billing_trigger_exists) = {
+    let (mut subscription_state, owner, plan, billing_trigger_exists) = {
         let world = state.world_view();
         let nft = world
             .nfts()
@@ -77563,23 +77086,18 @@ pub async fn handle_post_v1_subscription_resume(
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let billing = if account_alias_auto_renew_from_metadata(&nft.content)?.is_some() {
-            ResumeBilling::AccountAliasAutoRenew
-        } else {
-            let plan_def = world
-                .asset_definitions()
-                .get(&subscription_state.plan_id)
-                .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
-            let plan = subscription_plan_from_metadata(plan_def.metadata())?
-                .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
-            ResumeBilling::Generic(plan)
-        };
+        let plan_def = world
+            .asset_definitions()
+            .get(&subscription_state.plan_id)
+            .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
+        let plan = subscription_plan_from_metadata(plan_def.metadata())?
+            .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
         let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
             .is_some();
-        (subscription_state, owner, billing, billing_trigger_exists)
+        (subscription_state, owner, plan, billing_trigger_exists)
     };
     if owner != authority {
         return Err(conversion_error(
@@ -77590,19 +77108,10 @@ pub async fn handle_post_v1_subscription_resume(
         return Err(conversion_error("subscription is not paused".to_string()));
     }
 
-    let next_charge_ms = match billing {
-        ResumeBilling::Generic(plan) => {
-            let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
-            let (period_start, period_end) =
-                initial_period_for_charge(plan.billing, next_charge_ms)?;
-            subscription_state.current_period_start_ms = period_start;
-            subscription_state.current_period_end_ms = period_end;
-            next_charge_ms
-        }
-        ResumeBilling::AccountAliasAutoRenew => {
-            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, charge_at_ms)?
-        }
-    };
+    let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
+    let (period_start, period_end) = initial_period_for_charge(plan.billing, next_charge_ms)?;
+    subscription_state.current_period_start_ms = period_start;
+    subscription_state.current_period_end_ms = period_end;
     subscription_state.status = SubscriptionStatus::Active;
     subscription_state.failure_count = 0;
     subscription_state.next_charge_ms = next_charge_ms;
@@ -78063,284 +77572,6 @@ mod subscription_api_tests {
     }
 
     #[test]
-    fn onboarding_alias_auto_renew_grants_subscriber_metadata_mutation() {
-        let subscription_domain: DomainId =
-            DomainId::try_new("subscriptions", "universal").unwrap();
-        let lease_quote = LeaseQuote {
-            selector: iroha_data_model::sns::NameSelectorV1::new(
-                iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
-                "merchant",
-            )
-            .unwrap(),
-            pricing_class: 0,
-            payment_asset_id: "xor#wonderland.universal#alice".into(),
-            payment_asset_definition_id: test_asset_definition_id_from_hex(
-                "550e8400e29b41d4a7164466554400f1",
-            ),
-            collector_account: ALICE_ID.clone(),
-            charge_amount: 7_u64.into(),
-            expires_at_ms: 100_000,
-            grace_expires_at_ms: 110_000,
-            redemption_expires_at_ms: 120_000,
-        };
-        let (instructions, subscription_id) = build_onboarding_alias_auto_renew_instructions(
-            &ALICE_ID,
-            &BOB_ID,
-            &subscription_domain,
-            "merchant@wonderland",
-            &lease_quote,
-            1,
-            1_000,
-            3,
-            7_u64.into(),
-            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-        )
-        .expect("build auto-renew instructions");
-        let expected_permission: Permission =
-            iroha_executor_data_model::permission::nft::CanModifyNftMetadata {
-                nft: subscription_id,
-            }
-            .into();
-
-        let grants_subscriber_nft_mutation = instructions.iter().any(|instruction| {
-            let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
-                return false;
-            };
-            matches!(
-                grant,
-                GrantBox::Permission(permission)
-                    if permission.destination == BOB_ID.clone()
-                        && permission.object == expected_permission
-            )
-        });
-
-        assert!(grants_subscriber_nft_mutation);
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_account_alias_auto_renew_disable_mutates_onboarding_subscription_nft() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let alias_literal = "member@universal";
-        let subscription_domain: DomainId =
-            DomainId::try_new("subscriptions", "universal").unwrap();
-        let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
-            .parse()
-            .expect("default nexus fee asset definition id");
-        let billing_trigger_id = {
-            let subscription_id = account_alias_auto_renew_subscription_id(
-                &subscription_domain,
-                &subscriber,
-                alias_literal,
-            )
-            .expect("subscription id");
-            derive_trigger_id("sub_bill_", &subscription_id).expect("billing trigger id")
-        };
-        let now_ms = network_time_ms().expect("network time");
-        let registered_at_ms = now_ms.saturating_sub(1_000);
-        let expires_at_ms = now_ms.saturating_add(60_000);
-        let grace_expires_at_ms = expires_at_ms.saturating_add(60_000);
-        let redemption_expires_at_ms = grace_expires_at_ms.saturating_add(60_000);
-        let dataspace_catalog = DataSpaceCatalog::default();
-        let alias = account::rekey::AccountAlias::from_literal(alias_literal, &dataspace_catalog)
-            .expect("valid account alias");
-        let selector = iroha_core::sns::selector_for_account_alias(&alias, &dataspace_catalog)
-            .expect("account alias selector");
-        let account_address =
-            iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
-                .expect("account address");
-        let record = iroha_data_model::sns::NameRecordV1::new(
-            selector.clone(),
-            subscriber.clone(),
-            vec![iroha_data_model::sns::NameControllerV1::account(
-                &account_address,
-            )],
-            0,
-            1,
-            registered_at_ms,
-            expires_at_ms,
-            grace_expires_at_ms,
-            Metadata::default(),
-        );
-        let fee_asset_definition =
-            AssetDefinition::new(fee_asset_definition_id.clone(), NumericSpec::integer())
-                .build(&provider);
-        let domains = vec![
-            Domain::new(DomainId::try_new("universal", "universal").unwrap()).build(&provider),
-            Domain::new(subscription_domain.clone()).build(&provider),
-        ];
-        let accounts = vec![
-            Account::new(provider.account().clone()).build(&provider),
-            Account::new(subscriber.account().clone()).build(&subscriber),
-        ];
-        let mut world = World::with_assets(domains, accounts, [fee_asset_definition], [], []);
-        iroha_core::sns::seed_default_namespace_policies(&mut world);
-        world.smart_contract_state_mut_for_testing().insert(
-            iroha_core::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&record),
-        );
-        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
-        {
-            let app_state = Arc::get_mut(&mut app).expect("unique app state");
-            app_state.uaid_onboarding = Some(crate::AccountOnboardingSigner {
-                authority: provider.clone(),
-                private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
-                api_token_hashes_by_domain: std::collections::BTreeMap::new(),
-                allowed_permissions: std::collections::BTreeSet::new(),
-                alias_resolve_dataspaces: std::collections::BTreeSet::new(),
-                alias_resolve_domains: std::collections::BTreeSet::new(),
-                fee_sponsor_program_id: None,
-                alias_lease_term_years: 1,
-                alias_auto_renew_enabled: true,
-                alias_auto_renew_retry_backoff_ms: 500,
-                alias_auto_renew_max_failures: 3,
-                alias_auto_renew_subscription_domain: Some(subscription_domain.clone()),
-            });
-        }
-        bind_account_alias_for_test(&app.state, &subscriber, alias_literal);
-
-        let lease_quote = LeaseQuote {
-            selector,
-            pricing_class: 0,
-            payment_asset_id: AssetId::of(fee_asset_definition_id.clone(), provider.clone())
-                .to_string(),
-            payment_asset_definition_id: fee_asset_definition_id,
-            collector_account: provider.clone(),
-            charge_amount: 200_u64.into(),
-            expires_at_ms,
-            grace_expires_at_ms,
-            redemption_expires_at_ms,
-        };
-        let (onboarding_instructions, subscription_id) =
-            build_onboarding_alias_auto_renew_instructions(
-                &provider,
-                &subscriber,
-                &subscription_domain,
-                alias_literal,
-                &lease_quote,
-                1,
-                500,
-                3,
-                200_u64.into(),
-                defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-            )
-            .expect("onboarding auto-renew instructions");
-        let onboarding_tx = sign_app_api_transaction(
-            TransactionBuilder::new(
-                (*app.chain_id).clone(),
-                provider.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions(onboarding_instructions),
-            ALICE_KEYPAIR.private_key(),
-            ENDPOINT_ACCOUNTS_ONBOARD,
-        )
-        .expect("sign onboarding auto-renew setup transaction");
-        handle_transaction_with_metrics(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            onboarding_tx,
-            MaybeTelemetry::disabled(),
-            ENDPOINT_ACCOUNTS_ONBOARD,
-        )
-        .await
-        .expect("enqueue onboarding auto-renew setup transaction");
-        let setup_height = u64::try_from(app.state.view().height())
-            .unwrap_or(0)
-            .saturating_add(1);
-        let applied = crate::test_utils::apply_queued_in_one_block(
-            &app.state,
-            &app.queue,
-            &app.chain_id,
-            setup_height,
-        );
-        assert_eq!(applied, 1, "onboarding setup transaction should apply");
-
-        {
-            let view = app.state.view();
-            let nft = view
-                .world()
-                .nft(&subscription_id)
-                .expect("subscription nft should exist after onboarding setup");
-            assert_eq!(nft.owned_by, subscriber);
-            assert!(
-                view.world()
-                    .triggers()
-                    .time_triggers()
-                    .get(&billing_trigger_id)
-                    .is_some(),
-                "onboarding setup should register billing trigger"
-            );
-        }
-
-        let req = AccountAliasAutoRenewRequestDto {
-            authority: subscriber.to_string(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
-            enabled: false,
-            term_years: None,
-            max_charge_amount: None,
-        };
-        let resp = handle_post_v1_account_alias_auto_renew(
-            app.clone(),
-            axum::extract::Path((subscriber.to_string(), alias_literal.to_owned())),
-            NoritoJson(req),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect("disable auto-renew ok")
-        .into_response();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
-        assert_eq!(app.queue.queued_len(), 1);
-        let json = response_json(resp).await;
-        assert_eq!(json["auto_renew_enabled"].as_bool(), Some(false));
-        assert_eq!(json["status"].as_str(), Some("QUEUED"));
-        let subscription_id_str = subscription_id.to_string();
-        assert_eq!(
-            json["subscription_id"].as_str(),
-            Some(subscription_id_str.as_str())
-        );
-
-        let disable_height = u64::try_from(app.state.view().height())
-            .unwrap_or(0)
-            .saturating_add(1);
-        let applied = crate::test_utils::apply_queued_in_one_block(
-            &app.state,
-            &app.queue,
-            &app.chain_id,
-            disable_height,
-        );
-        assert_eq!(applied, 1, "disable auto-renew transaction should apply");
-
-        let view = app.state.view();
-        let nft = view
-            .world()
-            .nft(&subscription_id)
-            .expect("subscription nft should still exist");
-        let updated_state = subscription_state_from_metadata(&nft.content)
-            .unwrap()
-            .expect("subscription metadata present");
-        assert_eq!(updated_state.status, SubscriptionStatus::Canceled);
-        assert!(!updated_state.cancel_at_period_end);
-        assert_eq!(updated_state.cancel_at_ms, None);
-        assert_eq!(updated_state.subscriber, subscriber);
-        assert!(
-            account_alias_auto_renew_from_metadata(&nft.content)
-                .unwrap()
-                .is_some(),
-            "disable should preserve account-alias auto-renew settings metadata"
-        );
-        assert!(
-            view.world()
-                .triggers()
-                .time_triggers()
-                .get(&billing_trigger_id)
-                .is_none(),
-            "disable should unregister the billing trigger"
-        );
-    }
-
-    #[test]
     fn default_charge_ms_fixed_period_respects_bill_for() {
         let billing = SubscriptionBilling {
             cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
@@ -78486,50 +77717,6 @@ mod subscription_api_tests {
             grace_ms: 0,
         };
         assert_eq!(resolve_charge_ms(billing, Some(42_000)).unwrap(), 42_000);
-    }
-
-    #[test]
-    fn resolve_account_alias_auto_renew_resume_charge_ms_preserves_future_schedule() {
-        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
-        let subscription_state = sample_subscription_state(
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f1"),
-            ALICE_ID.clone(),
-            BOB_ID.clone(),
-            SubscriptionStatus::Paused,
-            "bill_alias_future".parse().unwrap(),
-        );
-        let subscription_state = SubscriptionState {
-            next_charge_ms: future_charge_ms,
-            ..subscription_state
-        };
-
-        let resolved =
-            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
-        assert_eq!(resolved, future_charge_ms);
-    }
-
-    #[test]
-    fn resolve_account_alias_auto_renew_resume_charge_ms_clamps_stale_schedule_to_now() {
-        let subscription_state = sample_subscription_state(
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f2"),
-            ALICE_ID.clone(),
-            BOB_ID.clone(),
-            SubscriptionStatus::Paused,
-            "bill_alias_stale".parse().unwrap(),
-        );
-        let subscription_state = SubscriptionState {
-            next_charge_ms: 1,
-            ..subscription_state
-        };
-
-        let before = network_time_ms().unwrap();
-        let resolved =
-            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
-        let after = network_time_ms().unwrap();
-        assert!(
-            (before..=after).contains(&resolved),
-            "resolved charge {resolved} should be clamped to current time between {before} and {after}",
-        );
     }
 
     #[test]
@@ -79411,188 +78598,6 @@ mod subscription_api_tests {
         assert_eq!(updated_state.status, SubscriptionStatus::Active);
         assert!(updated_state.cancel_at_period_end);
         assert_eq!(updated_state.cancel_at_ms, Some(expected_cancel_at_ms));
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_resume_supports_alias_auto_renew_nfts() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let charge_asset_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554402fa");
-        let subscription_id: NftId = "sub-alias-resume$wonderland.universal".parse().unwrap();
-        let billing_trigger_id: TriggerId = "bill_alias_resume".parse().unwrap();
-        let mut subscription_state = build_account_alias_auto_renew_state(
-            subscriber.clone(),
-            charge_asset_id.clone(),
-            billing_trigger_id.clone(),
-            1_000,
-            2_000,
-        );
-        subscription_state.status = SubscriptionStatus::Paused;
-        subscription_state.next_charge_ms = 3_000;
-        subscription_state.failure_count = 2;
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            (*SUBSCRIPTION_KEY).clone(),
-            IrohaJson::new(subscription_state),
-        );
-        metadata.insert(
-            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
-            IrohaJson::new(build_account_alias_auto_renew_settings(
-                "member@universal".to_owned(),
-                1,
-                200_u64.into(),
-                500,
-                3,
-            )),
-        );
-
-        let asset_definitions =
-            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
-        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
-        let state = state_with_asset_definitions_and_nfts(
-            provider,
-            subscriber.clone(),
-            asset_definitions,
-            nfts,
-        );
-        let (queue, chain_id, telemetry) = test_queue_components();
-
-        let req = SubscriptionActionDto {
-            authority: subscriber,
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
-            charge_at_ms: Some(5_000),
-            cancel_mode: None,
-        };
-        let resp = handle_post_v1_subscription_resume(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry,
-            subscription_id.clone(),
-            NoritoJson(req),
-        )
-        .await
-        .expect("resume ok")
-        .into_response();
-        assert_eq!(queue.queued_len(), 1);
-        assert_action_ok(resp, &subscription_id).await;
-
-        let applied =
-            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
-        assert_eq!(applied, 1, "resume transaction should apply");
-
-        let view = state.view();
-        let nft = view
-            .world()
-            .nft(&subscription_id)
-            .expect("subscription nft should exist");
-        let resumed_state = subscription_state_from_metadata(&nft.content)
-            .unwrap()
-            .expect("subscription metadata present");
-        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
-        assert_eq!(resumed_state.failure_count, 0);
-        assert_eq!(resumed_state.next_charge_ms, 5_000);
-        assert_eq!(resumed_state.current_period_start_ms, 1_000);
-        assert_eq!(resumed_state.current_period_end_ms, 2_000);
-        assert!(
-            view.world()
-                .triggers()
-                .time_triggers()
-                .get(&billing_trigger_id)
-                .is_some(),
-            "resume should register a new billing trigger"
-        );
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_resume_alias_auto_renew_without_charge_at_preserves_future_schedule()
-     {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let charge_asset_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fb");
-        let subscription_id: NftId = "sub-alias-resume-default$wonderland.universal"
-            .parse()
-            .unwrap();
-        let billing_trigger_id: TriggerId = "bill_alias_resume_default".parse().unwrap();
-        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
-        let mut subscription_state = build_account_alias_auto_renew_state(
-            subscriber.clone(),
-            charge_asset_id.clone(),
-            billing_trigger_id.clone(),
-            1_000,
-            2_000,
-        );
-        subscription_state.status = SubscriptionStatus::Paused;
-        subscription_state.next_charge_ms = future_charge_ms;
-        subscription_state.failure_count = 2;
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            (*SUBSCRIPTION_KEY).clone(),
-            IrohaJson::new(subscription_state),
-        );
-        metadata.insert(
-            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
-            IrohaJson::new(build_account_alias_auto_renew_settings(
-                "member@universal".to_owned(),
-                1,
-                200_u64.into(),
-                500,
-                3,
-            )),
-        );
-
-        let asset_definitions =
-            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
-        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
-        let state = state_with_asset_definitions_and_nfts(
-            provider,
-            subscriber.clone(),
-            asset_definitions,
-            nfts,
-        );
-        let (queue, chain_id, telemetry) = test_queue_components();
-
-        let req = SubscriptionActionDto {
-            authority: subscriber,
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
-            charge_at_ms: None,
-            cancel_mode: None,
-        };
-        let resp = handle_post_v1_subscription_resume(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry,
-            subscription_id.clone(),
-            NoritoJson(req),
-        )
-        .await
-        .expect("resume ok")
-        .into_response();
-        assert_eq!(queue.queued_len(), 1);
-        assert_action_ok(resp, &subscription_id).await;
-
-        let applied =
-            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
-        assert_eq!(applied, 1, "resume transaction should apply");
-
-        let view = state.view();
-        let nft = view
-            .world()
-            .nft(&subscription_id)
-            .expect("subscription nft should exist");
-        let resumed_state = subscription_state_from_metadata(&nft.content)
-            .unwrap()
-            .expect("subscription metadata present");
-        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
-        assert_eq!(resumed_state.failure_count, 0);
-        assert_eq!(resumed_state.next_charge_ms, future_charge_ms);
-        assert_eq!(resumed_state.current_period_start_ms, 1_000);
-        assert_eq!(resumed_state.current_period_end_ms, 2_000);
     }
 }
 

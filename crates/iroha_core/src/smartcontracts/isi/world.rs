@@ -8,9 +8,10 @@ use crate::{
     prelude::*,
     state::{
         SmartContractCodeUploadChunkKey, SmartContractCodeUploadDescriptor,
-        SmartContractCodeUploadKey, WorldTransaction, nexus_active_lane_dataspace,
-        nexus_active_lane_dataspace_at_height, nexus_catalog_geometry_lane_dataspace,
-        public_lane_reward_record_matches_key, public_lane_validator_record_matches_key,
+        SmartContractCodeUploadKey, WorldTransaction, fee_sponsor_revision_safe_activation_height,
+        nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
+        nexus_catalog_geometry_lane_dataspace, public_lane_reward_record_matches_key,
+        public_lane_validator_record_matches_key,
     },
 };
 
@@ -715,6 +716,19 @@ pub mod isi {
             .map_err(|err| format!("verified fee sponsor vault JSON decode failed: {err}"))?;
         norito::json::from_slice(json.get().as_bytes())
             .map_err(|err| format!("verified fee sponsor vault JSON materialization failed: {err}"))
+    }
+
+    fn fee_sponsor_vault_allocation_conflicts_on_live_route(
+        existing: &VerifiedFeeSponsorVaultAllocation,
+        candidate: &VerifiedFeeSponsorVaultAllocation,
+        at_height: u64,
+    ) -> bool {
+        existing != candidate
+            && existing.program_id == candidate.program_id
+            && existing.program_revision == candidate.program_revision
+            && existing.asset_definition_id == candidate.asset_definition_id
+            && existing.source_dataspace_id == candidate.source_dataspace_id
+            && existing.expires_at_height >= at_height
     }
 
     fn fee_sponsor_vault_allocation_usage(
@@ -17003,7 +17017,7 @@ pub mod isi {
         #[metrics(+"register_verified_fee_sponsor_vault_allocation")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             if !state_transaction.nexus.enabled {
@@ -17023,11 +17037,13 @@ pub mod isi {
                 .world
                 .fee_sponsor_programs
                 .get(&program_id)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_fee_sponsor_program(
                         "verified fee sponsor vault allocation references an unknown program",
                     )
                 })?;
+            ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
             if program.lifecycle != iroha_data_model::nexus::FeeSponsorProgramLifecycle::Active
                 || program.active_revision != Some(*self.program_revision())
                 || state_transaction
@@ -17068,7 +17084,9 @@ pub mod isi {
                         "verified fee sponsor vault allocation references an unfunded vault",
                     )
                 })?;
+            let verified_at_height = state_transaction.block_height();
             if *self.source_height() == 0
+                || *self.source_height() > verified_at_height
                 || self
                     .source_state_root()
                     .as_ref()
@@ -17093,7 +17111,6 @@ pub mod isi {
                     "verified fee sponsor vault allocation source snapshot does not match the authoritative vault",
                 ));
             }
-            let verified_at_height = state_transaction.block_height();
             if *self.expires_at_height() < verified_at_height {
                 return Err(invalid_fee_sponsor_program(format!(
                     "verified fee sponsor vault allocation expired at height {}",
@@ -17237,6 +17254,16 @@ pub mod isi {
                     )
                     .into());
                 }
+                if fee_sponsor_vault_allocation_conflicts_on_live_route(
+                    &existing,
+                    &record,
+                    verified_at_height,
+                ) {
+                    return Err(invalid_fee_sponsor_program(format!(
+                        "fee sponsor vault route already has an unexpired spend lease through height {}",
+                        existing.expires_at_height
+                    )));
+                }
             }
             if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
                 let existing = decode_verified_fee_sponsor_vault_allocation_state(existing)
@@ -17248,6 +17275,14 @@ pub mod isi {
                     "conflicting verified fee sponsor vault allocation already exists".into(),
                 )
                 .into());
+            }
+            if let Some(activation) = program.scheduled_activation
+                && record.expires_at_height >= activation.activate_at_height
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "fee sponsor vault spend lease must expire before scheduled revision activation height {}",
+                    activation.activate_at_height
+                )));
             }
             let locked = locked_fee_sponsor_vault_capacity(
                 &state_transaction.world,
@@ -17776,7 +17811,15 @@ pub mod isi {
                     "fee sponsor program has no eligible beneficiary or exact route-default binding",
                 ));
             }
-            if *self.activate_at_height() == state_transaction.block_height() {
+            let safe_activation_height = fee_sponsor_revision_safe_activation_height(
+                &state_transaction.world,
+                &program_id,
+                revision.revision,
+                state_transaction.block_height(),
+                *self.activate_at_height(),
+            )
+            .map_err(invalid_fee_sponsor_program)?;
+            if safe_activation_height == state_transaction.block_height() {
                 program.active_revision = Some(revision.revision);
                 program.staged_revision = None;
                 program.scheduled_activation = None;
@@ -17784,7 +17827,7 @@ pub mod isi {
             } else {
                 program.scheduled_activation = Some(FeeSponsorProgramActivation {
                     revision: revision.revision,
-                    activate_at_height: *self.activate_at_height(),
+                    activate_at_height: safe_activation_height,
                 });
             }
             state_transaction
@@ -19265,6 +19308,184 @@ pub mod isi {
         }
 
         #[test]
+        fn fee_sponsor_vault_allocation_requires_program_management_authority() {
+            use iroha_data_model::{
+                isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
+                nexus::{
+                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
+                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, ProofBlob,
+                },
+                permission::Permissions,
+            };
+            use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.nexus.enabled = true;
+
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "allocation_auth".parse().expect("program name"),
+            );
+            stx.world.fee_sponsor_program_revisions.insert(
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
+            );
+            let mut program = FeeSponsorProgram::new(program_id.clone());
+            program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            program.active_revision = Some(1);
+            stx.world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+
+            let error = RegisterVerifiedFeeSponsorVaultAllocation {
+                program_id: program_id.clone(),
+                program_revision: 1,
+                asset_definition_id: asset_definition_id.clone(),
+                verified_allocation: Quantity::from(1_u32),
+                source_dataspace_id: DataSpaceId::UNIVERSAL,
+                source_height: 1,
+                source_state_root: Hash::new(b"allocation-auth-source"),
+                expires_at_height: 2,
+                lease_id: Hash::new(b"allocation-auth-lease"),
+                manifest_root: [1; 32],
+                proof_blob: ProofBlob {
+                    payload: vec![1],
+                    expiry_slot: None,
+                },
+            }
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("ordinary accounts must not reserve a sponsor vault");
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot manage fee sponsor program")
+            );
+
+            let mut permissions = Permissions::new();
+            permissions.insert(
+                CanManageFeeSponsorProgram {
+                    sponsor: ALICE_ID.clone(),
+                }
+                .into(),
+            );
+            stx.world
+                .account_permissions
+                .insert(BOB_ID.clone(), permissions);
+            ensure_fee_sponsor_program_owner(&BOB_ID, &program_id, &stx)
+                .expect("delegated manager must be authorized to register allocations");
+        }
+
+        #[test]
+        fn fee_sponsor_vault_allocation_rejects_future_source_height() {
+            use iroha_data_model::{
+                isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
+                nexus::{
+                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
+                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, FeeSponsorVault,
+                    FeeSponsorVaultKey, ProofBlob,
+                },
+            };
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.nexus.enabled = true;
+
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            stx.world.asset_definitions.insert(
+                asset_definition_id.clone(),
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("global fee asset".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&ALICE_ID),
+            );
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "future_source".parse().expect("program name"),
+            );
+            stx.world.fee_sponsor_program_revisions.insert(
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
+            );
+            let mut program = FeeSponsorProgram::new(program_id.clone());
+            program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            program.active_revision = Some(1);
+            stx.world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+            let vault_key = FeeSponsorVaultKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+            };
+            stx.world.fee_sponsor_vaults.insert(
+                vault_key.clone(),
+                FeeSponsorVault {
+                    key: vault_key,
+                    balance: Quantity::from(10_u32),
+                },
+            );
+
+            let error = RegisterVerifiedFeeSponsorVaultAllocation {
+                program_id,
+                program_revision: 1,
+                asset_definition_id,
+                verified_allocation: Quantity::from(10_u32),
+                source_dataspace_id: DataSpaceId::UNIVERSAL,
+                source_height: 2,
+                source_state_root: Hash::new(b"future-source-state"),
+                expires_at_height: u64::MAX,
+                lease_id: Hash::new(b"future-source-lease"),
+                manifest_root: [1; 32],
+                proof_blob: ProofBlob {
+                    payload: vec![1],
+                    expiry_slot: None,
+                },
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a source snapshot cannot come from a future height");
+            match error {
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) => assert!(
+                    message.contains("invalid source height"),
+                    "unexpected error: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
         fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
             use iroha_data_model::{
                 isi::nexus::{
@@ -19543,6 +19764,56 @@ pub mod isi {
                 key,
                 norito::to_bytes(&json).expect("fee sponsor allocation state"),
             );
+        }
+
+        #[test]
+        fn fee_sponsor_relay_allocation_allows_only_one_live_lease_per_route() {
+            let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+                AccountId::new(checked_keypair().public_key().clone()),
+                "relay-route".parse().expect("program name"),
+            );
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let existing = fee_sponsor_relay_allocation_fixture(
+                program_id.clone(),
+                asset_definition_id.clone(),
+                Quantity::from(5_u32),
+                DataSpaceId::new(1),
+                Hash::new(b"fee-sponsor-existing-route"),
+                10,
+            );
+            let candidate = fee_sponsor_relay_allocation_fixture(
+                program_id.clone(),
+                asset_definition_id.clone(),
+                Quantity::from(5_u32),
+                DataSpaceId::new(1),
+                Hash::new(b"fee-sponsor-conflicting-route"),
+                12,
+            );
+            assert!(fee_sponsor_vault_allocation_conflicts_on_live_route(
+                &existing, &candidate, 5
+            ));
+            assert!(!fee_sponsor_vault_allocation_conflicts_on_live_route(
+                &existing, &candidate, 11
+            ));
+            assert!(!fee_sponsor_vault_allocation_conflicts_on_live_route(
+                &existing, &existing, 5
+            ));
+
+            let other_route = fee_sponsor_relay_allocation_fixture(
+                program_id,
+                asset_definition_id,
+                Quantity::from(5_u32),
+                DataSpaceId::new(2),
+                Hash::new(b"fee-sponsor-other-route"),
+                12,
+            );
+            assert!(!fee_sponsor_vault_allocation_conflicts_on_live_route(
+                &existing,
+                &other_route,
+                5
+            ));
         }
 
         #[test]
@@ -20328,7 +20599,7 @@ pub mod isi {
         };
         #[allow(unused_imports)]
         use iroha_schema::Ident;
-        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
 
         use super::*;
         use crate::{

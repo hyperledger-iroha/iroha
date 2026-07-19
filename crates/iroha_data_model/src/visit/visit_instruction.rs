@@ -61,41 +61,29 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_execute_trigger(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
+        .downcast_ref::<crate::isi::alias_setup::EnsureAlias>()
     {
-        visitor.visit_acquire_account_alias_lease(v);
+        visitor.visit_ensure_alias(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::account_alias_lease::RenewAccountAliasLease>()
+        .downcast_ref::<crate::isi::alias_setup::RenewAliasLease>()
     {
-        visitor.visit_renew_account_alias_lease(v);
+        visitor.visit_renew_alias_lease(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::RegisterSnsName>()
+        .downcast_ref::<crate::isi::alias_setup::ConfigureAliasAutoRenew>()
     {
-        visitor.visit_register_sns_name(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<crate::isi::sns::RenewSnsName>() {
-        visitor.visit_renew_sns_name(v);
+        visitor.visit_configure_alias_auto_renew(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::TransferSnsName>()
+        .downcast_ref::<crate::isi::alias_setup::RebindAccountAlias>()
     {
-        visitor.visit_transfer_sns_name(v);
+        visitor.visit_rebind_account_alias(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::UpdateSnsNameControllers>()
+        .downcast_ref::<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        visitor.visit_update_sns_name_controllers(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::sns::FreezeSnsName>()
-    {
-        visitor.visit_freeze_sns_name(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::sns::UnfreezeSnsName>()
-    {
-        visitor.visit_unfreeze_sns_name(v);
+        visitor.visit_compare_and_set_primary_account_alias(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -540,14 +528,11 @@ macro_rules! instruction_visitors {
             visit_upgrade(&Upgrade),
             visit_set_parameter(&SetParameter),
             visit_execute_trigger(&ExecuteTrigger),
-            visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
-            visit_renew_account_alias_lease(&$crate::isi::account_alias_lease::RenewAccountAliasLease),
-            visit_register_sns_name(&$crate::isi::sns::RegisterSnsName),
-            visit_renew_sns_name(&$crate::isi::sns::RenewSnsName),
-            visit_transfer_sns_name(&$crate::isi::sns::TransferSnsName),
-            visit_update_sns_name_controllers(&$crate::isi::sns::UpdateSnsNameControllers),
-            visit_freeze_sns_name(&$crate::isi::sns::FreezeSnsName),
-            visit_unfreeze_sns_name(&$crate::isi::sns::UnfreezeSnsName),
+            visit_ensure_alias(&$crate::isi::alias_setup::EnsureAlias),
+            visit_renew_alias_lease(&$crate::isi::alias_setup::RenewAliasLease),
+            visit_configure_alias_auto_renew(&$crate::isi::alias_setup::ConfigureAliasAutoRenew),
+            visit_rebind_account_alias(&$crate::isi::alias_setup::RebindAccountAlias),
+            visit_compare_and_set_primary_account_alias(&$crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_publish_pedersen_params(&PublishPedersenParams),

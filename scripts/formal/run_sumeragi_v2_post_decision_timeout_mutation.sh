@@ -83,42 +83,48 @@ run_case() {
 run_case fixed-post-decision-boundary post_decision_timeout_fixed.cfg 0 \
   "TLC2 Version 2.19" \
   "Model checking completed. No error has been found." \
+  "<AttemptResumeTimeout" \
   "<AttemptBeginTimeout" \
   "<AttemptFormTC" \
   "<AttemptBeginInstallTC" \
   "<DeliverTimeout" \
   "<DeliverTC"
 
+run_case missing-resume-timeout-guard \
+  post_decision_resume_timeout_guard_bug.cfg 12 \
+  "Invariant NoTimeoutSignatureAfterDecision is violated." \
+  "State 3: <AttemptResumeTimeout"
+
 run_case missing-begin-timeout-guard \
   post_decision_begin_timeout_guard_bug.cfg 12 \
   "Invariant NoTimeoutIntentAfterDecision is violated." \
-  "State 3: <AttemptBeginTimeout"
+  "State 4: <AttemptBeginTimeout"
 
 run_case missing-form-tc-guard post_decision_form_tc_guard_bug.cfg 12 \
   "Invariant NoTCFormationAfterDecision is violated." \
-  "State 4: <AttemptFormTC"
+  "State 5: <AttemptFormTC"
 
 run_case missing-begin-install-tc-guard \
   post_decision_begin_install_tc_guard_bug.cfg 12 \
   "Invariant NoTCInstallAfterDecision is violated." \
-  "State 5: <AttemptBeginInstallTC"
+  "State 6: <AttemptBeginInstallTC"
 
 run_case timeout-admitted-after-decision post_decision_timeout_receive_bug.cfg 12 \
   "Invariant TimeoutDeliveryConsumesWithoutAdmission is violated." \
-  "State 7: <DeliverTimeout"
+  "State 8: <DeliverTimeout"
 
 run_case tc-admitted-after-decision post_decision_tc_receive_bug.cfg 12 \
   "Invariant TCDeliveryConsumesWithoutAdmission is violated." \
-  "State 10: <DeliverTC"
+  "State 11: <DeliverTC"
 
 run_case timeout-successor-after-decision \
   post_decision_timeout_successor_bug.cfg 12 \
   "Invariant TimeoutDeliveryHasNoCausalSuccessor is violated." \
-  "State 7: <DeliverTimeout"
+  "State 8: <DeliverTimeout"
 
 run_case tc-successor-after-decision post_decision_tc_successor_bug.cfg 12 \
   "Invariant TCDeliveryHasNoCausalSuccessor is violated." \
-  "State 10: <DeliverTC"
+  "State 11: <DeliverTC"
 
-echo "[tlc] post-Decision BeginTimeout, FormTC, and BeginInstallTC guards reject all new work"
+echo "[tlc] post-Decision replay, BeginTimeout, FormTC, and BeginInstallTC guards reject all new work"
 echo "[tlc] authenticated TimeoutVote and TC envelopes are consumed without receive-pool admission or causal successors"

@@ -536,13 +536,16 @@ bash ./run.sh
 
 :grey_exclamation: All examples below are Unix-oriented. If you're working on Windows, we would highly encourage you to consider using WSL, as most documentation assumes a POSIX-like shell running on your system. Please be advised that the differences in the syntax may go beyond executing `iroha.exe` instead of `iroha`.
 
-### Create new Domain
+### Create a domain and alias lease
 
-To create a domain, you need to specify the entity type first (`domain` in our case) and then the command (`register`) with a list of required parameters. For the `domain` entity, you only need to provide the `id` argument as a string that doesn't contain the `@`, `#` or `$` symbols.
+Ordinary transactions create domains through the declarative alias planner so the SNS lease, owner capabilities, and domain state are checked and applied atomically. Put the secret-free setup request in a JSON file, plan it against live state, then verify and submit that exact plan locally:
 
 ```bash
-iroha ledger domain register --id "Soramitsu"
+iroha app alias setup plan --intent-file alias-setup.json --plan-file alias-plan.json
+iroha app alias setup apply --plan-file alias-plan.json
 ```
+
+Raw `ledger domain register` is reserved for genesis/bootstrap and is not exposed as an ordinary CLI mutation.
 
 ### Create new Account
 

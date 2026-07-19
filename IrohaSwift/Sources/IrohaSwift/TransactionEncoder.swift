@@ -445,49 +445,7 @@ private func encodeNativeClaimIdentifierReceiptJSON(
     )
 }
 
-private enum SingleInstructionSwiftNoritoEncoder {
-    private static let instructionWireName = "identity::SetPrimaryAccountAlias"
-    private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias"
-
-    static func encode(chainId: String,
-                       authority: String,
-                       creationTimeMs: UInt64,
-                       ttlMs: UInt64?,
-                       accountId: String,
-                       aliasDomain: String?,
-                       aliasDataspaceId: UInt64,
-                       alias: String,
-                       feePayment: FeePaymentIntent,
-                       signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let instructionPayload = try encodeInstruction(
-            accountId: accountId,
-            aliasDomain: aliasDomain,
-            aliasDataspaceId: aliasDataspaceId,
-            alias: alias
-        )
-        let transactionPayload = try encodeTransactionPayload(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            feePayment: feePayment,
-            instructionPayload: instructionPayload
-        )
-        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signedTransaction = encodeSignedTransaction(
-            signature: signature,
-            transactionPayload: transactionPayload
-        )
-        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
-        let norito = encodeVersionedSignedTransaction(signedTransaction)
-        return SignedTransactionEnvelope(
-            norito: norito,
-            signedTransaction: signedTransaction,
-            payload: nil,
-            transactionHash: transactionHash
-        )
-    }
-
+enum SingleInstructionSwiftNoritoEncoder {
     static func encodeCommitContractDeployment(
         chainId: String, authority: String, creationTimeMs: UInt64, ttlMs: UInt64?,
         expectedDeployNonce: UInt64, contractAddress: String, codeHash: Data,
@@ -519,37 +477,102 @@ private enum SingleInstructionSwiftNoritoEncoder {
         )
     }
 
-    private static func encodeInstruction(
-        accountId: String,
-        aliasDomain: String?,
-        aliasDataspaceId: UInt64,
-        alias: String
-    ) throws -> Data {
-        let accountPayload = try CanonicalNorito.encodeAccountId(accountId)
-        let accountAliasPayload = try encodeAccountAlias(
-            aliasDomain: aliasDomain,
-            aliasDataspaceId: aliasDataspaceId,
-            alias: alias
+    static func encodeAliasSetupPlan(
+        request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        feePayment: FeePaymentIntent,
+        signingKey: SigningKey,
+        decodeAndReencode: (String, Data) throws -> DecodedEnsureAliasFrame
+    ) throws -> SignedTransactionEnvelope {
+        let canonicalBodyNorito = try bodyEncoder(plan.body)
+        guard !canonicalBodyNorito.isEmpty else {
+            throw AliasSetupModelError.planValidation(["alias.plan.body_encoding_empty"])
+        }
+        try AliasPlanVerifier.requireExecutableForRequest(
+            request,
+            plan: plan,
+            canonicalBodyNorito: canonicalBodyNorito,
+            decodeAndReencode: decodeAndReencode
         )
-
-        var instructionPayload = CanonicalNoritoWriter()
-        instructionPayload.writeField(accountPayload)
-        instructionPayload.writeField(try CanonicalNorito.encodeOption(accountAliasPayload, encode: { $0 }))
-        instructionPayload.writeField(encodeNoneOption())
-
-        let framedInstruction = noritoEncode(typeName: instructionTypeName, payload: instructionPayload.data, flags: 0)
-        var wireInstruction = CanonicalNoritoWriter()
-        wireInstruction.writeField(CanonicalNorito.encodeString(instructionWireName))
-        wireInstruction.writeField(CanonicalNorito.encodeBytesVec(framedInstruction))
-        return wireInstruction.data
+        guard creationTimeMs <= plan.body.validUntilMs else {
+            throw AliasSetupModelError.planValidation(["alias.plan.expired"])
+        }
+        let instructionPayloads = plan.body.instructions.map { instruction -> Data in
+            var wire = CanonicalNoritoWriter()
+            wire.writeField(CanonicalNorito.encodeString(instruction.wireId))
+            wire.writeField(CanonicalNorito.encodeBytesVec(instruction.framedPayload))
+            return wire.data
+        }
+        let transactionPayload = try encodeTransactionPayload(
+            chainId: plan.body.chainId,
+            authority: plan.body.authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            instructionPayloads: instructionPayloads
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        return SignedTransactionEnvelope(
+            norito: encodeVersionedSignedTransaction(signedTransaction),
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        )
     }
 
-    private static func encodeAccountAlias(aliasDomain: String?, aliasDataspaceId: UInt64, alias: String) throws -> Data {
-        var payload = CanonicalNoritoWriter()
-        payload.writeField(CanonicalNorito.encodeString(alias))
-        payload.writeField(try CanonicalNorito.encodeOption(aliasDomain, encode: CanonicalNorito.encodeString))
-        payload.writeField(CanonicalNorito.encodeUInt64(aliasDataspaceId))
-        return payload.data
+    static func encodeAliasLifecyclePlan(
+        request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        feePayment: FeePaymentIntent,
+        signingKey: SigningKey,
+        decodeAndReencode: (String, Data) throws -> DecodedAliasLifecycleFrame
+    ) throws -> SignedTransactionEnvelope? {
+        let canonicalBodyNorito = try bodyEncoder(plan.body)
+        guard !canonicalBodyNorito.isEmpty else {
+            throw AliasSetupModelError.planValidation(["alias.lifecycle.plan.body_encoding_empty"])
+        }
+        try AliasPlanVerifier.requireExecutableForRequest(
+            request,
+            plan: plan,
+            canonicalBodyNorito: canonicalBodyNorito,
+            decodeAndReencode: decodeAndReencode
+        )
+        guard creationTimeMs <= plan.body.validUntilMs else {
+            throw AliasSetupModelError.planValidation(["alias.lifecycle.plan.expired"])
+        }
+        guard let instruction = plan.body.instruction else { return nil }
+        var wire = CanonicalNoritoWriter()
+        wire.writeField(CanonicalNorito.encodeString(instruction.wireId))
+        wire.writeField(CanonicalNorito.encodeBytesVec(instruction.framedPayload))
+        let transactionPayload = try encodeTransactionPayload(
+            chainId: plan.body.chainId,
+            authority: plan.body.authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            instructionPayload: wire.data
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        return SignedTransactionEnvelope(
+            norito: encodeVersionedSignedTransaction(signedTransaction),
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        )
     }
 
     private static func encodeTransactionPayload(chainId: String,
@@ -558,7 +581,23 @@ private enum SingleInstructionSwiftNoritoEncoder {
                                                  ttlMs: UInt64?,
                                                  feePayment: FeePaymentIntent,
                                                  instructionPayload: Data) throws -> Data {
-        let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
+        try encodeTransactionPayload(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            instructionPayloads: [instructionPayload]
+        )
+    }
+
+    private static func encodeTransactionPayload(chainId: String,
+                                                 authority: String,
+                                                 creationTimeMs: UInt64,
+                                                 ttlMs: UInt64?,
+                                                 feePayment: FeePaymentIntent,
+                                                 instructionPayloads: [Data]) throws -> Data {
+        let executablePayload = encodeExecutable(instructionPayloads: instructionPayloads)
         var transactionPayload = CanonicalNoritoWriter()
         transactionPayload.writeField(CanonicalNorito.encodeString(chainId))
         transactionPayload.writeField(CanonicalNorito.encodeString(authority))
@@ -571,10 +610,12 @@ private enum SingleInstructionSwiftNoritoEncoder {
         return transactionPayload.data
     }
 
-    private static func encodeExecutable(instructionPayload: Data) -> Data {
+    private static func encodeExecutable(instructionPayloads: [Data]) -> Data {
         var instructions = CanonicalNoritoWriter()
-        instructions.writeLength(1)
-        instructions.writeField(instructionPayload)
+        instructions.writeLength(UInt64(instructionPayloads.count))
+        for instructionPayload in instructionPayloads {
+            instructions.writeField(instructionPayload)
+        }
 
         var executable = CanonicalNoritoWriter()
         executable.writeUInt32LE(0)
@@ -979,42 +1020,6 @@ struct SwiftTransactionEncoder {
             )
         }
         return try wrap(native: native)
-    }
-
-    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                             keypair: Keypair,
-                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeSetPrimaryAccountAlias(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                             signingKey: SigningKey,
-                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(
-            chainId: request.chainId,
-            authorityId: request.authority,
-            accountIds: [
-                TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
-            ]
-        )
-        let accountId = ids.accountIds["account"] ?? request.accountId
-        let alias = try TransactionInputValidator.sanitizeLabel(request.alias, field: "alias")
-        let aliasDomain = try request.aliasDomain.map {
-            try TransactionInputValidator.sanitizeLabel($0, field: "alias_domain")
-        }
-        return try SingleInstructionSwiftNoritoEncoder.encode(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            accountId: accountId,
-            aliasDomain: aliasDomain,
-            aliasDataspaceId: request.aliasDataspaceId,
-            alias: alias,
-            feePayment: request.feePayment,
-            signingKey: signingKey
-        )
     }
 
     static func encodeCommitContractDeployment(

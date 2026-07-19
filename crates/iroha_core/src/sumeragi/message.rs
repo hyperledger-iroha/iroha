@@ -80,11 +80,9 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    /// Complete Kura-backed lane certificate returned for exact proposal recovery.
+    LaneBlockCertificate(#[skip_try_from] Box<super::consensus::LaneBlockCertificateV1>),
     /// Explicitly versioned global Sumeragi v2 message.
-    ///
-    /// This variant is appended so legacy v1 discriminants remain stable for
-    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
-    /// Proposal/QC/RBC variants above.
     V2(#[skip_try_from] ConsensusMessageV2),
 }
 
@@ -111,6 +109,7 @@ impl BlockMessage {
                 | Self::LaneBlockNewViewCertificate(_)
                 | Self::LaneBlockVote(_)
                 | Self::LaneBlockQc(_)
+                | Self::LaneBlockCertificate(_)
         )
     }
 
@@ -2341,20 +2340,37 @@ mod tests {
     #[test]
     fn block_message_wire_network_roundtrip_cached_lane_block_messages() {
         let (proposal, vote, qc) = sample_lane_block_messages(0x71);
+        let certificate = consensus::LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: qc.clone(),
+            commit_qc: qc.clone(),
+        };
         let cases = vec![
             ("lane proposal", BlockMessage::LaneBlockProposal(proposal)),
             ("lane vote", BlockMessage::LaneBlockVote(vote)),
             ("lane QC", BlockMessage::LaneBlockQc(qc)),
+            (
+                "lane certificate",
+                BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+            ),
         ];
 
         for (label, message) in cases {
+            let framed = norito_core::to_bytes(&message).expect("encode raw lane-topic fixture");
+            assert_eq!(
+                crate::inbound_sumeragi_topic(&framed)
+                    .expect("classify an actual encoded lane message"),
+                iroha_p2p::network::message::Topic::Consensus,
+                "{label} must reach the reliable raw inbound corridor"
+            );
             let decoded = roundtrip_live_block_message_over_network_message(message);
             match decoded {
                 crate::NetworkMessage::SumeragiBlock(wire) => {
                     let matches_variant = match (label, wire.as_ref().as_message()) {
                         ("lane proposal", BlockMessage::LaneBlockProposal(_))
                         | ("lane vote", BlockMessage::LaneBlockVote(_))
-                        | ("lane QC", BlockMessage::LaneBlockQc(_)) => true,
+                        | ("lane QC", BlockMessage::LaneBlockQc(_))
+                        | ("lane certificate", BlockMessage::LaneBlockCertificate(_)) => true,
                         _ => false,
                     };
                     assert!(matches_variant, "{label} roundtrip changed variant");

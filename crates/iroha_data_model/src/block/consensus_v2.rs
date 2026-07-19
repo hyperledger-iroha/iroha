@@ -2817,6 +2817,7 @@ impl SumeragiV2Status {
                 || summary.signer_count < summary.min_signers
                 || summary.signer_count > summary.validator_count
                 || summary.total_power < u64::from(summary.validator_count)
+                || summary.signed_power < u64::from(summary.signer_count)
                 || summary.signed_power > summary.total_power
                 || u128::from(summary.signed_power) * 3 <= u128::from(summary.total_power) * 2
             {
@@ -4964,7 +4965,7 @@ mod tests {
             Err(Error::InvalidHeightContextQuorum)
         );
 
-        let mut invalid_commit_summary = pending_apply;
+        let mut invalid_commit_summary = pending_apply.clone();
         invalid_commit_summary
             .last_commit_qc
             .as_mut()
@@ -4973,6 +4974,19 @@ mod tests {
         assert_eq!(
             invalid_commit_summary.validate(),
             Err(Error::InvalidCommitSummaryQuorum)
+        );
+
+        let mut impossible_signer_power = pending_apply;
+        let impossible_summary = impossible_signer_power
+            .last_commit_qc
+            .as_mut()
+            .expect("commit summary");
+        impossible_summary.signer_count = 4;
+        impossible_summary.signed_power = 3;
+        assert_eq!(
+            impossible_signer_power.validate(),
+            Err(Error::InvalidCommitSummaryQuorum),
+            "each authenticated signer must contribute at least one unit of voting power"
         );
 
         let mut one_sided_commit = status(&context);

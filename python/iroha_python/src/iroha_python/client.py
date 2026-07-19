@@ -16615,22 +16615,6 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("SNS policy endpoint returned non-object payload")
         return payload
 
-    def submit_sns_name_registration(self, request: Mapping[str, Any]) -> requests.Response:
-        """Submit an SNS registration request and return the raw response."""
-
-        return self._request(
-            "POST",
-            "/v1/sns/names",
-            json_body=dict(_json_safe_value(dict(request))),
-        )
-
-    def register_sns_name(self, request: Mapping[str, Any]) -> Optional[Any]:
-        """Submit an SNS registration request and decode a successful response."""
-
-        response = self.submit_sns_name_registration(request)
-        self._expect_status(response, {200, 201, 202})
-        return self._maybe_json(response)
-
     def request_zk_verifying_key(self, backend: str, name: str) -> requests.Response:
         """Fetch a ZK verifying-key registry entry and return the raw response."""
 

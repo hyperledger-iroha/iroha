@@ -202,7 +202,7 @@ fn wait_for_account_metadata_value(
 
 fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
     let register_domain =
-        || submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()));
+        || submit_ensure_domain_for_network(network, client, Domain::new(domain.clone()));
     match register_domain() {
         Ok(()) => Ok(()),
         Err(err) if is_inconclusive_domain_registration_error(&err) => {
@@ -210,10 +210,7 @@ fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId
                 return Ok(());
             }
 
-            let retry = client.submit_blocking(
-                Register::domain(Domain::new(domain.clone())),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
+            let retry = register_domain();
             match retry {
                 Ok(_) => Ok(()),
                 Err(retry_err)

@@ -1034,16 +1034,25 @@ pub mod aliases {
     }
 
     /// Resolve an account alias.
-    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve")
-        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve");
+    /// Plan one atomic declarative alias setup transaction.
+    pub const SETUP_PLAN: RouteDescriptor =
+        public_lookup("aliases.setup_plan", "/v1/aliases/setup/plan")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    /// Plan one guarded absolute-expiry alias lease renewal.
+    pub const LEASE_RENEW_PLAN: RouteDescriptor =
+        public_lookup("aliases.lease_renew_plan", "/v1/aliases/lease/renew/plan")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    /// Plan one owner-only alias auto-renew configuration CAS.
+    pub const AUTO_RENEW_PLAN: RouteDescriptor =
+        public_lookup("aliases.auto_renew_plan", "/v1/aliases/auto-renew/plan")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
-        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
     /// List aliases bound to an account.
     pub const BY_ACCOUNT: RouteDescriptor =
-        public_lookup("aliases.by_account", "/v1/aliases/by-account")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+        public_lookup("aliases.by_account", "/v1/aliases/by-account");
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
         public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup")
@@ -1058,6 +1067,9 @@ pub mod aliases {
 
     /// Alias routes registered when `app_api` is compiled.
     pub const ROUTES: &[RouteDescriptor] = &[
+        SETUP_PLAN,
+        LEASE_RENEW_PLAN,
+        AUTO_RENEW_PLAN,
         RESOLVE,
         RESOLVE_INDEX,
         BY_ACCOUNT,
@@ -3482,8 +3494,8 @@ pub mod application_api {
         app_post(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
     }
 
-    const fn onboarding_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        onboarding_post(id, path).with_projections(RouteProjections::SDK)
+    const fn onboarding_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
     }
 
     const fn app_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3610,13 +3622,12 @@ pub mod application_api {
         ACCOUNTS_QUERY_POST => app_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => app_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => app_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
+        ACCOUNTS_ONBOARD_PLAN_POST => onboarding_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");
+        ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get("application.accounts_onboarding_readiness_get", "/v1/accounts/onboarding/readiness");
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
         ACCOUNTS_FAUCET_POST => app_post("application.accounts_faucet_post", "/v1/accounts/faucet");
-        ACCOUNTS_ONBOARD_MULTISIG_POST => onboarding_sdk_post("application.accounts_onboard_multisig_post", "/v1/accounts/onboard/multisig");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => app_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
-        ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/renew");
-        ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_AUTO_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_auto_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/auto-renew");
         ACCOUNTS_BY_UAID_PORTFOLIO_GET => app_get("application.accounts_by_uaid_portfolio_get", "/v1/accounts/{uaid}/portfolio");
         NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET => app_get("application.nexus_public_lanes_by_lane_id_validators_get", "/v1/nexus/public-lanes/{lane_id}/validators");
         NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET => app_get("application.nexus_public_lanes_by_lane_id_stake_get", "/v1/nexus/public-lanes/{lane_id}/stake");
@@ -3637,13 +3648,7 @@ pub mod application_api {
         REPO_AGREEMENTS_QUERY_POST => app_post("application.repo_agreements_query_post", "/v1/repo/agreements/query");
         NOTIFY_DEVICES_POST => push_post("application.notify_devices_post", "/v1/notify/devices");
         NOTIFY_DEVICES_DELETE => push_delete("application.notify_devices_delete", "/v1/notify/devices");
-        SNS_NAMES_POST => app_post("application.sns_names_post", "/v1/sns/names");
         SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET => app_get("application.sns_names_by_namespace_by_literal_get", "/v1/sns/names/{namespace}/{literal}");
-        SNS_NAMES_BY_NAMESPACE_BY_LITERAL_RENEW_POST => app_post("application.sns_names_by_namespace_by_literal_renew_post", "/v1/sns/names/{namespace}/{literal}/renew");
-        SNS_NAMES_BY_NAMESPACE_BY_LITERAL_TRANSFER_POST => app_post("application.sns_names_by_namespace_by_literal_transfer_post", "/v1/sns/names/{namespace}/{literal}/transfer");
-        SNS_NAMES_BY_NAMESPACE_BY_LITERAL_CONTROLLERS_POST => app_post("application.sns_names_by_namespace_by_literal_controllers_post", "/v1/sns/names/{namespace}/{literal}/controllers");
-        SNS_NAMES_BY_NAMESPACE_BY_LITERAL_FREEZE_POST => app_post("application.sns_names_by_namespace_by_literal_freeze_post", "/v1/sns/names/{namespace}/{literal}/freeze");
-        SNS_NAMES_BY_NAMESPACE_BY_LITERAL_FREEZE_DELETE => app_delete("application.sns_names_by_namespace_by_literal_freeze_delete", "/v1/sns/names/{namespace}/{literal}/freeze");
         SNS_POLICIES_BY_SUFFIX_ID_GET => app_get("application.sns_policies_by_suffix_id_get", "/v1/sns/policies/{suffix_id}");
         SORACLOUD_STATUS_GET => app_get("application.soracloud_status_get", "/v1/soracloud/status");
         SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET => app_sdk_get("application.soracloud_services_by_service_name_public_discovery_get", "/v1/soracloud/services/{service_name}/public-discovery");
@@ -4120,6 +4125,9 @@ pub mod content_directory {
 /// Router assembly fails when any enabled descriptor is missing or when a
 /// registration does not match this catalog exactly.
 pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
+    aliases::SETUP_PLAN,
+    aliases::LEASE_RENEW_PLAN,
+    aliases::AUTO_RENEW_PLAN,
     aliases::RESOLVE,
     aliases::RESOLVE_INDEX,
     aliases::BY_ACCOUNT,
@@ -4431,13 +4439,12 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::ACCOUNTS_QUERY_POST,
     application_api::TRANSACTIONS_QUERY_POST,
     application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
+    application_api::ACCOUNTS_ONBOARD_PLAN_POST,
     application_api::ACCOUNTS_ONBOARD_POST,
+    application_api::ACCOUNTS_ONBOARDING_READINESS_GET,
     application_api::ACCOUNTS_FAUCET_PUZZLE_GET,
     application_api::ACCOUNTS_FAUCET_POST,
-    application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
     application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET,
-    application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_RENEW_POST,
-    application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_AUTO_RENEW_POST,
     application_api::ACCOUNTS_BY_UAID_PORTFOLIO_GET,
     application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET,
     application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET,
@@ -4458,13 +4465,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::REPO_AGREEMENTS_QUERY_POST,
     application_api::NOTIFY_DEVICES_POST,
     application_api::NOTIFY_DEVICES_DELETE,
-    application_api::SNS_NAMES_POST,
     application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET,
-    application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_RENEW_POST,
-    application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_TRANSFER_POST,
-    application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_CONTROLLERS_POST,
-    application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_FREEZE_POST,
-    application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_FREEZE_DELETE,
     application_api::SNS_POLICIES_BY_SUFFIX_ID_GET,
     application_api::SORACLOUD_STATUS_GET,
     application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
@@ -4946,8 +4947,9 @@ mod tests {
     #[test]
     fn dedicated_onboarding_authentication_is_exactly_scoped() {
         for route in [
+            application_api::ACCOUNTS_ONBOARD_PLAN_POST,
             application_api::ACCOUNTS_ONBOARD_POST,
-            application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
+            application_api::ACCOUNTS_ONBOARDING_READINESS_GET,
         ] {
             assert_eq!(
                 route.authentication(),
@@ -4961,7 +4963,7 @@ mod tests {
                 .iter()
                 .filter(|route| { route.authentication() == AuthenticationPolicy::OnboardingToken })
                 .count(),
-            2,
+            3,
             "no unrelated route may inherit the onboarding credential policy"
         );
     }
@@ -4990,11 +4992,24 @@ mod tests {
     }
 
     #[test]
-    fn account_alias_recipient_and_fee_reads_declare_canonical_account_authentication() {
+    fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
         for route in [
             aliases::RESOLVE,
             aliases::RESOLVE_INDEX,
             aliases::BY_ACCOUNT,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ToriiDefault,
+                "{} conditionally authenticates restricted dataspace reads in its handler",
+                route.stable_route_id()
+            );
+        }
+
+        for route in [
+            aliases::SETUP_PLAN,
+            aliases::LEASE_RENEW_PLAN,
+            aliases::AUTO_RENEW_PLAN,
             aliases::RETAIL_RECIPIENT_LOOKUP,
             aliases::RETAIL_RECIPIENT_ROUTE,
             fees::QUOTE,
@@ -5003,7 +5018,7 @@ mod tests {
             assert_eq!(
                 route.authentication(),
                 AuthenticationPolicy::CanonicalAccountSignature,
-                "{} must not advertise permissionless alias or recipient data",
+                "{} must require canonical account authentication",
                 route.stable_route_id()
             );
         }

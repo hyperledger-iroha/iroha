@@ -4484,54 +4484,6 @@ export interface SnsSuffixPolicy {
   metadata: Record<string, unknown>;
 }
 
-export interface SnsGovernanceHook {
-  proposal_id: string;
-  council_vote_hash: string;
-  dao_vote_hash: string;
-  steward_ack: string;
-  guardian_clearance?: string | null;
-}
-
-export interface SnsPaymentProof {
-  asset_id: string;
-  gross_amount: string;
-  net_amount?: string;
-  settlement_tx: unknown;
-  payer: string;
-  signature: unknown;
-}
-
-export interface SnsRegisterNameRequest {
-  selector: {
-    version?: number;
-    suffix_id: number;
-    label: string;
-  };
-  owner: string;
-  controllers?: ReadonlyArray<SnsNameController>;
-  term_years?: number;
-  pricing_class_hint?: number;
-  payment: SnsPaymentProof;
-  governance?: SnsGovernanceHook | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface SnsRenewNameRequest {
-  term_years: number;
-  payment: SnsPaymentProof;
-}
-
-export interface SnsTransferNameRequest {
-  new_owner: string;
-  governance: SnsGovernanceHook;
-}
-
-export interface SnsFreezeNameRequest {
-  reason: string;
-  until_ms: number;
-  guardian_ticket: unknown;
-}
-
 export interface SnsNameRecord {
   selector: SnsNameSelector;
   nameHash: string;
@@ -4554,10 +4506,6 @@ export interface SnsAuction {
   floorPrice: SnsTokenValue;
   highestCommitment: string | null;
   settlementTx: unknown;
-}
-
-export interface SnsRegisterNameResponse {
-  nameRecord: SnsNameRecord;
 }
 
 export interface ToriiPipelineTransactionEvent {
@@ -8401,36 +8349,6 @@ export type SccpRouteGovernanceActionInput =
 export interface ApplySccpRouteGovernanceTransactionInput
   extends Omit<TransactionAssemblyInput, "instructions"> {
   action: SccpRouteGovernanceActionInput;
-}
-
-export interface RegisterSnsNameTransactionInput {
-  chainId: string;
-  authority: string;
-  request: object;
-  feePayment: BrowserFeePayment;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface RegisterSnsNameViaConsensusInput
-  extends RegisterSnsNameTransactionInput {
-  client?: ToriiClient;
-  toriiUrl?: string;
-  waitForCommit?: boolean;
-  pollIntervalMs?: number;
-  timeoutMs?: number;
-  scope?: "local" | "auto" | "global" | string | null;
-}
-
-export interface RegisterSnsNameViaConsensusResult {
-  hash: string;
-  submittedHash: string | null;
-  submission: unknown;
-  status?: unknown;
 }
 
 export interface IvmProvedTransactionAssemblyInput {
@@ -12721,30 +12639,6 @@ export declare class ToriiClient {
     selector: string,
     options?: { signal?: AbortSignal },
   ): Promise<SnsNameRecord>;
-  registerSnsName(
-    request: SnsRegisterNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsRegisterNameResponse>;
-  renewSnsRegistration(
-    selector: string,
-    request: SnsRenewNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  transferSnsRegistration(
-    selector: string,
-    request: SnsTransferNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  freezeSnsRegistration(
-    selector: string,
-    request: SnsFreezeNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  unfreezeSnsRegistration(
-    selector: string,
-    request: SnsGovernanceHook,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
   getGovernanceProposal(
     proposalId: string,
     options?: { signal?: AbortSignal },
@@ -14023,10 +13917,6 @@ export function buildSubmitBallotTransaction(
 export function buildFinalizeElectionTransaction(
   input: FinalizeElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildRegisterSnsNameTransaction(
-  input: RegisterSnsNameTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-
 export function submitSignedTransaction(
   client: ToriiClient,
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
@@ -14038,10 +13928,6 @@ export function submitSignedTransaction(
     scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
-
-export function registerSnsNameViaConsensus(
-  input: RegisterSnsNameViaConsensusInput,
-): Promise<RegisterSnsNameViaConsensusResult>;
 
 export function submitTransactionEntrypoint(
   client: ToriiClient,

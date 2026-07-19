@@ -107,10 +107,18 @@ readonly ledger_copy="${invocation_dir}/proof_coverage.json"
 readonly evidence_copy="${invocation_dir}/proof_evidence.json"
 readonly verus_evidence_copy="${invocation_dir}/verus_evidence.json"
 readonly verus_log_copy="${invocation_dir}/verus.log"
+readonly cross_tool_evidence_copy="${invocation_dir}/cross_tool_evidence.json"
 readonly harness_lock_copy="${invocation_dir}/harness-Cargo.lock"
 readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
-readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler mutations, bounded TLC, trace replay, and production Verus"
+readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"
+readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
+cross_tool_obligations="$(
+  python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    --ledger "$source_ledger" \
+    --print-cross-tool-obligations
+)"
+readonly cross_tool_obligations
 
 verify_identity "before execution"
 set +e
@@ -130,15 +138,24 @@ if [[ "$marker_count" != 1 || "$last_line" != "$final_marker" ]]; then
   exit 1
 fi
 
-readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
 readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
 readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
 readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
+readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
 if [[ ! -f "$source_ledger" || -L "$source_ledger" \
   || ! -f "$source_evidence" || -L "$source_evidence" \
   || ! -f "$source_verus_evidence" || -L "$source_verus_evidence" \
   || ! -f "$source_verus_log" || -L "$source_verus_log" ]]; then
   echo "strict formal release gate did not produce regular TLAPS/Verus evidence files" >&2
+  exit 1
+fi
+if [[ -n "$cross_tool_obligations" ]]; then
+  if [[ ! -f "$source_cross_tool_evidence" || -L "$source_cross_tool_evidence" ]]; then
+    echo "strict formal release gate did not produce required cross-tool evidence" >&2
+    exit 1
+  fi
+elif [[ -e "$source_cross_tool_evidence" || -L "$source_cross_tool_evidence" ]]; then
+  echo "strict formal release gate produced forbidden dormant cross-tool evidence" >&2
   exit 1
 fi
 cp -- "$source_ledger" "${ledger_copy}.partial"
@@ -149,6 +166,10 @@ cp -- "$source_verus_evidence" "${verus_evidence_copy}.partial"
 mv -- "${verus_evidence_copy}.partial" "$verus_evidence_copy"
 cp -- "$source_verus_log" "${verus_log_copy}.partial"
 mv -- "${verus_log_copy}.partial" "$verus_log_copy"
+if [[ -n "$cross_tool_obligations" ]]; then
+  cp -- "$source_cross_tool_evidence" "${cross_tool_evidence_copy}.partial"
+  mv -- "${cross_tool_evidence_copy}.partial" "$cross_tool_evidence_copy"
+fi
 readonly source_harness_lock="scripts/formal/sumeragi_v2_harness.lock"
 if [[ ! -f "$source_harness_lock" || -L "$source_harness_lock" ]]; then
   echo "strict formal release gate lacks its regular pinned harness lock" >&2
@@ -182,14 +203,21 @@ mv -- "$toolchain_tmp" "$toolchain_copy"
 
 # Revalidate the exact archived pair after every formal leg, not merely the
 # TLAPS evidence generated near the beginning of the CI script.
-python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
-  --ledger "$ledger_copy" \
-  --release \
-  --evidence "$evidence_copy"
 python3 scripts/formal/sumeragi_v2_verus_evidence.py validate \
   --root "$repo_root" \
   --evidence "$verus_evidence_copy" \
   --log "$verus_log_copy"
+archived_release_args=(
+  --ledger "$ledger_copy"
+  --release
+  --evidence "$evidence_copy"
+  --verus-evidence "$verus_evidence_copy"
+  --verus-log "$verus_log_copy"
+)
+if [[ -n "$cross_tool_obligations" ]]; then
+  archived_release_args+=(--cross-tool-evidence "$cross_tool_evidence_copy")
+fi
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py "${archived_release_args[@]}"
 verify_identity "after archived proof validation"
 
 gate_log_sha256="$(hash_file "$gate_log")"
@@ -214,6 +242,11 @@ printf '%s\t%s\n' \
   harness_cargo_lock_sha256 "$harness_cargo_lock_sha256" \
   formal_toolchain_sha256 "$formal_toolchain_sha256" \
   >"$completion_tmp"
+if [[ -n "$cross_tool_obligations" ]]; then
+  printf '%s\t%s\n' \
+    cross_tool_evidence_sha256 "$(hash_file "$cross_tool_evidence_copy")" \
+    >>"$completion_tmp"
+fi
 mv -- "$completion_tmp" "$completion_attestation"
 if ! verify_identity "after completion attestation"; then
   rm -f -- "$completion_attestation"

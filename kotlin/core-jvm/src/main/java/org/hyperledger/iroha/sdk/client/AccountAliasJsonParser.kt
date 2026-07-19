@@ -11,7 +11,7 @@ object AccountAliasJsonParser {
         return AccountAliasResolution(
             requiredExactString(root["alias"], "account alias resolution.alias"),
             requiredExactString(root["account_id"], "account alias resolution.account_id"),
-            if (root.containsKey("index")) asOptionalLong(root["index"], "account alias resolution.index") else null,
+            if (root.containsKey("index")) aliasOptionalU64(root["index"], "account alias resolution.index") else null,
             optionalExactString(root["source"], "account alias resolution.source"),
         )
     }
@@ -52,8 +52,4 @@ object AccountAliasJsonParser {
         return if (value is String) value else value.toString()
     }
 
-    private fun asOptionalLong(value: Any?, path: String): Long? {
-        if (value == null) return null
-        return JsonNumbers.asLong(value, path)
-    }
 }

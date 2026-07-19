@@ -115,6 +115,9 @@ the affected effect or write.
 - Torii does not expose server-side deployment or deployment-receipt routes.
   Clients verify artifacts, sign manifests, and submit native deployment
   instructions locally through the standard transaction pipeline.
+- The local submission result uses `DeployContractBundleReceiptDto`, with one
+  exact per-contract result in `contracts[]`; it is not a flattened
+  single-contract server response.
 - `CommitContractDeployment` atomically validates the expected authority nonce,
   derived address, registered artifact, and previous alias target before
   activation and alias rotation. The reserved nonce cannot be written through

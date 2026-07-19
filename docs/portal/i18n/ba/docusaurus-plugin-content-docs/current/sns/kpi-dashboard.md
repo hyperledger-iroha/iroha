@@ -1,64 +1,18 @@
+<!-- Auto-generated stub for Bashkir (ba) translation. Replace this content with the full translation. -->
+
 ---
 lang: ba
 direction: ltr
 source: docs/portal/docs/sns/kpi-dashboard.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
-title: SNS KPI dashboard
-description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+source_hash: 7c53fdda3c7a758055ad60eea6328cc0c28aae4e1d236c67a81e0a88fb162d72
+source_last_modified: "2026-07-18T23:03:42.072Z"
+translation_last_reviewed: null
 ---
 
-# Сора Исем хеҙмәте KPI приборҙар таҡтаһы
+# Translation In Progress
 
-KPI приборҙар таҡтаһы стюардтар, опекундар һәм көйләүселәргә бер урын бирә.
-ҡабул итеү, хата, һәм килем сигналдары алдынан айлыҡ ҡушымта каденция
-(СН-8а). I18NT0000000000000000000-гә тиклем һаҡлағыстағы.
-I18NI000000004X һәм портал шул уҡ көҙгө
-панелдәр аша встроенный firame шулай тәжрибә тура килә эске I18NT0000000001X .
-осраҡ.
+This file is a placeholder for the Bashkir translation of the English document. Once the translation is complete, update the `status` metadata above.
 
-## Фильтрҙар & Мәғлүмәт сығанаҡтары
-
-- **Суффикс фильтр** – I18NI0000000005X һорауҙарын йөрөтә.
-  `.sora`, `.nexus`, һәм `.dao` үҙ аллы тикшерергә мөмкин.
-- **Күпләп сығарыу фильтр** – I18NI000000009X метрикаһы өлкәлә шулай
-  финанс аныҡ регистратор манифестын яраштырырға мөмкин.
-- **Метрика** – I18NT000000003X-тан тарта (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), опекун CLI (`guardian_freeze_active`), .
-  `sns_governance_activation_total`, һәм күпләп-онборт ярҙамсы метрикаһы.
-
-## панелдәр
-
-1. **Исемләүҙәр (24h һуңғы)** – уңышлы регистратор ваҡиғалар һаны өсөн
-   һайланған ялғау.
-2. **Идар менән идара итеү активацияһы (30d)** – устав/өҫтәмә хәрәкәттәр теркәлгән
-   CLI.
-3. **Беренселек үткәреү** – уңышлы регистратор ғәмәлдәре ставкаһы буйынса.
-4. **Хата режимдары теркәү** – 5 минутлыҡ хата-маркировка ставкаһы
-   `sns_registrar_status_total` иҫәпләүселәр.
-5. **Гардиан туңдырыу тәҙрәләр** – йәшәй селекторҙар, унда `guardian_freeze_active`
-   асыҡ туңдырыу билеты тураһында хәбәр итә.
-6. **Төп түләү берәмектәре актив** – дөйөм алғанда, хәбәр итеү
-   `sns_bulk_release_payment_net_units` бер актив.
-7. **Күпме запростар ялғау ** – id ялғауына тиклем томдар id.
-8. **Таҙа берәмектәр өсөн үтенес** – АРПУ-стиль иҫәпләү алынған сығарыуҙан алынған
-   метрикаһы.
-
-## Айлыҡ KPI тикшерелгән тикшерелгән исемлек
-
-Финанс лидеры һәр айҙағы тәүге шишәмбе көнө ҡабатланған тикшерелеүгә этәрә:
-
-1. порталдың **Аналитика → SNS KPI** бит (йәки I18NT000000002X приборҙар таҡтаһы `sns-kpis`).
-2. PDF/CSV экспортын төшөрөү һәм килем таблицалары регистратор үткәреүсәнлеге.
-3. SLA боҙоуҙар өсөн ялғауҙарҙы сағыштырырға (хаталар тиҙлеге шпицтары, туңдырылған селекторҙар >72h,
-   АРПУ дельталары >10%).
-4. Журнал резюмелары + тейешле ҡушымта яҙмаһындағы ғәмәл пункттары буйынса
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Экспортланған приборҙар таҡтаһы артефакттарын ҡушымтаға беркетергә һәм уларҙы 1990 йылда бәйләйбеҙ.
-   совет көн тәртибе.
-
-Әгәр тикшерелгән асыу SLA боҙоуҙар, файл PagerDuty өсөн зыян күргән .
-хужаһы (регистратор дежур менеджеры, опекунда шылтыратыу, йәки идара итеү программаһы етәксеһе) һәм
-аннексия журналында тергеҙеүҙе күҙәтеп бара.
+Replace this stub with the completed Bashkir translation and update `translation_last_reviewed` after verification against the English source.

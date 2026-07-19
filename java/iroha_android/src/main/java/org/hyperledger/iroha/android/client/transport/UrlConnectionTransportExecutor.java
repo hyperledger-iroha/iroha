@@ -121,6 +121,9 @@ public final class UrlConnectionTransportExecutor
     final URL url = request.uri().toURL();
     final HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     connection.setRequestMethod(request.method());
+    // Canonical signatures bind the original URI, and onboarding tokens must never be forwarded
+    // to a redirect target by the platform HTTP stack.
+    connection.setInstanceFollowRedirects(false);
     connection.setDoInput(true);
     final Duration timeout = request.timeout();
     final int connectMs =

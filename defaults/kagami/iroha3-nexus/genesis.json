@@ -229,16 +229,6 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanRegisterDomain"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": {
                 "name": "CanRegisterAccount"
               }
             }

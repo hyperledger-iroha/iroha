@@ -18,12 +18,11 @@ use iroha::{
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
-        nexus::UniversalAccountId,
         prelude::{FindTransactions, HashOf, QueryBuilderExt, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_primitives::json::Json as IrohaJson;
 use norito::json::{self, Map, Value};
 use reqwest::blocking::Client as HttpClient;
@@ -173,7 +172,6 @@ struct HttpJson {
 struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
-    public_key_raw_hex: String,
     generated: bool,
 }
 
@@ -334,7 +332,6 @@ fn run_write_canary(
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let http = http_client()?;
     let signer = resolve_canary_signer(config, args.use_config_signer)?;
-    let uaid = derive_canary_uaid(&signer.public_key_raw_hex);
     let alias = build_alias(
         &args.alias_prefix,
         signer.key_pair.public_key(),
@@ -344,27 +341,26 @@ fn run_write_canary(
     let mut checks = Vec::new();
     let mut failures = Vec::new();
 
-    let onboarding = onboard_canary(
+    let onboarding_plan = plan_canary_onboarding(
         &http,
         &public_root,
         &alias,
-        &signer.public_key_raw_hex,
-        &uaid,
+        &signer.account_id,
         &onboarding_token,
     )?;
-    let onboarding_contract =
-        validate_onboarding_response(onboarding.body.as_ref(), &signer.account_id, &uaid, &alias);
+    let onboarding_receipt =
+        validate_onboarding_plan_receipt(onboarding_plan.body.as_ref(), &signer.account_id, &alias);
     push_check(
         &mut checks,
-        "accounts_onboard",
-        onboarding.status,
-        onboarding.status == 202 && onboarding_contract.is_ok(),
-        onboarding.body.as_ref().map(compact_json),
+        "accounts_onboard_plan",
+        onboarding_plan.status,
+        onboarding_plan.status == 200 && onboarding_receipt.is_ok(),
+        onboarding_plan.body.as_ref().map(compact_json),
     );
-    if onboarding.status != 202 {
+    if onboarding_plan.status != 200 {
         failures.push(format!(
-            "account onboarding failed with HTTP {}; faucet funding was not attempted",
-            onboarding.status
+            "account onboarding planning failed with HTTP {}; apply and faucet funding were not attempted",
+            onboarding_plan.status
         ));
         let mut extra = Map::new();
         insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
@@ -378,11 +374,11 @@ fn run_write_canary(
             extra,
         );
     }
-    let onboarding_tx_hash = match onboarding_contract {
-        Ok(hash) => hash,
+    let onboarding_receipt = match onboarding_receipt {
+        Ok(receipt) => receipt,
         Err(error) => {
             failures.push(format!(
-                "account onboarding response was invalid: {error:#}"
+                "account onboarding plan receipt was invalid: {error:#}"
             ));
             let mut extra = Map::new();
             insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
@@ -397,30 +393,98 @@ fn run_write_canary(
             );
         }
     };
-    let onboarding_final = wait_for_pipeline_terminal_status(
-        &http,
-        &public_root,
-        &onboarding_tx_hash,
-        Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
-    )?;
-    let onboarding_terminal = pipeline_status_kind(onboarding_final.body.as_ref());
-    let onboarding_applied = onboarding_final.status == 200
-        && matches!(
-            onboarding_terminal.as_deref(),
-            Some("Applied" | "Committed")
-        );
+    let onboarding_apply =
+        apply_canary_onboarding(&http, &public_root, &onboarding_receipt, &onboarding_token)?;
+    let onboarding_contract = validate_onboarding_apply_response(
+        onboarding_apply.body.as_ref(),
+        &signer.account_id,
+        &alias,
+    );
+    let onboarding_apply_ok = onboarding_contract.as_ref().is_ok_and(|result| {
+        (result.unchanged && onboarding_apply.status == 200)
+            || (!result.unchanged && onboarding_apply.status == 202)
+    });
     push_check(
         &mut checks,
-        "accounts_onboard_finality",
-        onboarding_final.status,
-        onboarding_applied,
-        onboarding_final.body.as_ref().map(compact_json),
+        "accounts_onboard",
+        onboarding_apply.status,
+        onboarding_apply_ok,
+        onboarding_apply.body.as_ref().map(compact_json),
     );
-    if !onboarding_applied {
-        failures.push(format!(
-            "account onboarding transaction {onboarding_tx_hash} did not reach Applied finality; last status was {}",
-            onboarding_terminal.as_deref().unwrap_or("not_observed")
-        ));
+    let onboarding_contract = match onboarding_contract {
+        Ok(result) if onboarding_apply_ok => result,
+        Ok(_) => {
+            failures.push(format!(
+                "account onboarding apply returned incompatible HTTP {}",
+                onboarding_apply.status
+            ));
+            let mut extra = Map::new();
+            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
+            return report_value(
+                "taira_write_canary",
+                "fail",
+                &public_root,
+                checks,
+                warnings,
+                failures,
+                extra,
+            );
+        }
+        Err(error) => {
+            failures.push(format!(
+                "account onboarding apply response was invalid: {error:#}"
+            ));
+            let mut extra = Map::new();
+            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
+            return report_value(
+                "taira_write_canary",
+                "fail",
+                &public_root,
+                checks,
+                warnings,
+                failures,
+                extra,
+            );
+        }
+    };
+    if let Some(onboarding_tx_hash) = onboarding_contract.tx_hash_hex.as_deref() {
+        let onboarding_final = wait_for_pipeline_terminal_status(
+            &http,
+            &public_root,
+            onboarding_tx_hash,
+            Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+        )?;
+        let onboarding_terminal = pipeline_status_kind(onboarding_final.body.as_ref());
+        let onboarding_applied = onboarding_final.status == 200
+            && matches!(
+                onboarding_terminal.as_deref(),
+                Some("Applied" | "Committed")
+            );
+        push_check(
+            &mut checks,
+            "accounts_onboard_finality",
+            onboarding_final.status,
+            onboarding_applied,
+            onboarding_final.body.as_ref().map(compact_json),
+        );
+        if onboarding_applied {
+            // Continue to faucet funding.
+        } else {
+            failures.push(format!(
+                "account onboarding transaction {onboarding_tx_hash} did not reach Applied finality; last status was {}",
+                onboarding_terminal.as_deref().unwrap_or("not_observed")
+            ));
+        }
+    } else {
+        push_check(
+            &mut checks,
+            "accounts_onboard_finality",
+            200,
+            true,
+            Some("Unchanged: no transaction submitted".to_owned()),
+        );
+    }
+    if !failures.is_empty() {
         let mut extra = Map::new();
         insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
         return report_value(
@@ -435,12 +499,11 @@ fn run_write_canary(
     }
 
     let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
-    let faucet_contract =
-        validate_faucet_response(
-            faucet.body.as_ref(),
-            &signer.account_id,
-            &args.faucet_asset_id,
-        );
+    let faucet_contract = validate_faucet_response(
+        faucet.body.as_ref(),
+        &signer.account_id,
+        &args.faucet_asset_id,
+    );
     push_check(
         &mut checks,
         "accounts_faucet",
@@ -1017,7 +1080,7 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .wrap_err("failed to generate Taira canary Ed25519 signer")?
     };
-    let (algorithm, public_key_bytes) = key_pair
+    let (algorithm, _) = key_pair
         .public_key()
         .try_to_bytes()
         .wrap_err("Taira canary signer public key is malformed")?;
@@ -1026,7 +1089,6 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
     }
     let account_id = AccountId::new(key_pair.public_key().clone());
     Ok(CanarySigner {
-        public_key_raw_hex: hex::encode(public_key_bytes),
         account_id,
         key_pair,
         generated: !use_config_signer,
@@ -1081,24 +1143,15 @@ fn sanitize_alias_part(raw: &str) -> Option<String> {
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-fn onboard_canary(
+fn post_sponsored_onboarding_json(
     http: &HttpClient,
     public_root: &str,
-    alias: &str,
-    public_key_raw_hex: &str,
-    uaid: &UniversalAccountId,
+    path: &str,
+    body: &Value,
     onboarding_token: &str,
 ) -> Result<HttpJson> {
-    let url = join_url(public_root, "/v1/accounts/onboard")?;
-    let mut body = Map::new();
-    body.insert("alias".into(), Value::String(alias.to_owned()));
-    body.insert(
-        "public_key_hex".into(),
-        Value::String(public_key_raw_hex.to_owned()),
-    );
-    body.insert("uaid".into(), Value::String(uaid.to_string()));
-    let bytes = json::to_vec(&Value::Object(body))
-        .map_err(|err| eyre!("encode JSON request body: {err}"))?;
+    let url = join_url(public_root, path)?;
+    let bytes = json::to_vec(body).map_err(|err| eyre!("encode JSON request body: {err}"))?;
     let mut header_value =
         reqwest::header::HeaderValue::from_str(validate_onboarding_token(onboarding_token)?)
             .map_err(|_| {
@@ -1118,86 +1171,153 @@ fn onboard_canary(
     Ok(response)
 }
 
-fn derive_canary_uaid(public_key_raw_hex: &str) -> UniversalAccountId {
-    let normalized = public_key_raw_hex.trim().to_ascii_lowercase();
-    UniversalAccountId::from_hash(Hash::new(
-        format!("taira-canary-account:{normalized}").as_bytes(),
-    ))
+fn plan_canary_onboarding(
+    http: &HttpClient,
+    public_root: &str,
+    alias: &str,
+    account_id: &AccountId,
+    onboarding_token: &str,
+) -> Result<HttpJson> {
+    post_sponsored_onboarding_json(
+        http,
+        public_root,
+        "/v1/accounts/onboard/plan",
+        &norito::json!({
+            "version": 1,
+            "alias": alias,
+            "account_id": (account_id.to_string()),
+            "permissions": []
+        }),
+        onboarding_token,
+    )
 }
 
-fn validate_onboarding_response(
+fn apply_canary_onboarding(
+    http: &HttpClient,
+    public_root: &str,
+    receipt: &Value,
+    onboarding_token: &str,
+) -> Result<HttpJson> {
+    post_sponsored_onboarding_json(
+        http,
+        public_root,
+        "/v1/accounts/onboard",
+        &norito::json!({ "receipt": (receipt.clone()) }),
+        onboarding_token,
+    )
+}
+
+fn validate_onboarding_plan_receipt(
     response: Option<&Value>,
     expected_account: &AccountId,
-    expected_uaid: &UniversalAccountId,
     expected_alias: &str,
-) -> Result<String> {
+) -> Result<Value> {
     let object = response
         .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("response must be a JSON object"))?;
-    let required_string = |key: &str| -> Result<&str> {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| eyre!("missing non-empty `{key}`"))
-    };
-    let account_id = required_string("account_id")?;
-    if account_id != expected_account.to_string() {
-        return Err(eyre!(
-            "unexpected account_id; expected {expected_account}, actual {account_id}"
-        ));
-    }
-    let uaid = required_string("uaid")?;
-    if uaid != expected_uaid.to_string() {
-        return Err(eyre!(
-            "unexpected uaid; expected {expected_uaid}, actual {uaid}"
-        ));
-    }
-    let status = required_string("status")?;
-    if status != "QUEUED" {
-        return Err(eyre!(
-            "unexpected onboarding status `{status}`; expected QUEUED"
-        ));
-    }
-    let tx_hash = required_string("tx_hash_hex")?;
-    let decoded = hex::decode(tx_hash).wrap_err("onboarding tx_hash_hex is not hex")?;
-    if decoded.len() != 32 {
-        return Err(eyre!(
-            "onboarding tx_hash_hex must encode 32 bytes, got {}",
-            decoded.len()
-        ));
-    }
-    let lease = object
-        .get("lease")
+        .ok_or_else(|| eyre!("onboarding plan receipt must be a JSON object"))?;
+    let body = object
+        .get("body")
         .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("missing onboarding lease object"))?;
-    if lease.get("alias").and_then(Value::as_str) != Some(expected_alias) {
-        return Err(eyre!("onboarding lease alias does not match the request"));
+        .ok_or_else(|| eyre!("onboarding plan receipt is missing `body`"))?;
+    if body.get("version").and_then(Value::as_u64) != Some(1) {
+        return Err(eyre!("onboarding plan receipt has an unsupported version"));
     }
-    for key in ["dataspace", "lease_status"] {
-        if !lease
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            return Err(eyre!("onboarding lease is missing non-empty `{key}`"));
-        }
+    let request = body
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("onboarding plan receipt is missing its canonical request"))?;
+    let expected_account = expected_account.to_string();
+    if request.get("version").and_then(Value::as_u64) != Some(1)
+        || request.get("alias").and_then(Value::as_str) != Some(expected_alias)
+        || request.get("account_id").and_then(Value::as_str) != Some(expected_account.as_str())
+        || !request
+            .get("permissions")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    {
+        return Err(eyre!(
+            "onboarding plan receipt canonical request differs from the canary intent"
+        ));
     }
     for key in [
-        "expires_at_ms",
-        "grace_expires_at_ms",
-        "redemption_expires_at_ms",
+        "authority",
+        "chain_id",
+        "anchor",
+        "resource",
+        "acquisition",
+        "quote_guard",
+        "instructions",
+        "valid_until_ms",
     ] {
-        if lease.get(key).and_then(Value::as_u64).is_none() {
-            return Err(eyre!("onboarding lease is missing integer `{key}`"));
+        if !body.contains_key(key) {
+            return Err(eyre!("onboarding plan receipt body is missing `{key}`"));
         }
     }
-    for key in ["is_primary", "auto_renew_enabled"] {
-        if lease.get(key).and_then(Value::as_bool).is_none() {
-            return Err(eyre!("onboarding lease is missing boolean `{key}`"));
+    for key in ["plan_hash", "signature"] {
+        if !object.contains_key(key) {
+            return Err(eyre!("onboarding plan receipt is missing `{key}`"));
         }
     }
-    Ok(tx_hash.to_owned())
+    Ok(response.expect("validated receipt response").clone())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OnboardingApplyResult {
+    tx_hash_hex: Option<String>,
+    unchanged: bool,
+}
+
+fn validate_onboarding_apply_response(
+    response: Option<&Value>,
+    expected_account: &AccountId,
+    expected_alias: &str,
+) -> Result<OnboardingApplyResult> {
+    let object = response
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("onboarding apply response must be a JSON object"))?;
+    let expected_account = expected_account.to_string();
+    if object.get("account_id").and_then(Value::as_str) != Some(expected_account.as_str())
+        || object.get("alias").and_then(Value::as_str) != Some(expected_alias)
+    {
+        return Err(eyre!(
+            "onboarding apply response account or alias differs from the canary intent"
+        ));
+    }
+    if !object.contains_key("disposition") {
+        return Err(eyre!("onboarding apply response is missing `disposition`"));
+    }
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("onboarding apply response is missing `status`"))?;
+    let tx_hash_hex = object
+        .get("tx_hash_hex")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    match status {
+        "Unchanged" if tx_hash_hex.is_none() => Ok(OnboardingApplyResult {
+            tx_hash_hex: None,
+            unchanged: true,
+        }),
+        "Queued" | "Repaired" => {
+            let tx_hash = tx_hash_hex
+                .as_deref()
+                .ok_or_else(|| eyre!("queued onboarding apply response is missing tx_hash_hex"))?;
+            let decoded = hex::decode(tx_hash).wrap_err("onboarding tx_hash_hex is not hex")?;
+            if decoded.len() != 32 || tx_hash != tx_hash.to_ascii_lowercase() {
+                return Err(eyre!(
+                    "onboarding tx_hash_hex must be canonical lowercase 32-byte hex"
+                ));
+            }
+            Ok(OnboardingApplyResult {
+                tx_hash_hex,
+                unchanged: false,
+            })
+        }
+        _ => Err(eyre!(
+            "unexpected onboarding apply status `{status}` or transaction hash shape"
+        )),
+    }
 }
 
 fn validate_faucet_response(
@@ -1538,11 +1658,10 @@ fn error_value(code: &str, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha::data_model::{DataSpaceId, nexus::FeeDebitSource};
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha::data_model::nexus::FeeDebitSource;
     use iroha_torii_shared::{
-        FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
-        uri as torii_uri,
+        FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse, uri as torii_uri,
     };
     use std::{
         io::Write as _,
@@ -1898,7 +2017,7 @@ mod tests {
         // canary client before deriving the response account identifier.
         let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         match (request.method.as_str(), path_only(&request.path)) {
-            ("POST", "/v1/accounts/onboard") => {
+            ("POST", "/v1/accounts/onboard/plan") => {
                 if onboarding_status == 400 {
                     MockResponse::json(
                         400,
@@ -1915,38 +2034,70 @@ mod tests {
                     let alias = request_object
                         .get("alias")
                         .and_then(Value::as_str)
-                        .expect("onboarding alias");
-                    let public_key_hex = request_object
-                        .get("public_key_hex")
+                        .expect("onboarding alias")
+                        .to_owned();
+                    let account_id = request_object
+                        .get("account_id")
                         .and_then(Value::as_str)
-                        .expect("onboarding public key");
-                    let public_key_bytes = hex::decode(public_key_hex).expect("public key hex");
-                    let public_key =
-                        iroha_crypto::PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
-                            .expect("Ed25519 public key");
-                    let account_id = AccountId::new(public_key).to_string();
-                    let uaid = derive_canary_uaid(public_key_hex).to_string();
+                        .expect("onboarding account id")
+                        .to_owned();
                     MockResponse::json(
-                        202,
+                        200,
                         norito::json!({
-                            "account_id": (account_id),
-                            "uaid": (uaid),
-                            "tx_hash_hex": ("ab".repeat(32)),
-                            "status": "QUEUED",
-                            "lease": {
-                                "alias": (alias),
-                                "dataspace": "universal",
-                                "domain": "wonderland.universal",
-                                "is_primary": true,
-                                "lease_status": "active",
-                                "expires_at_ms": 1000,
-                                "grace_expires_at_ms": 2000,
-                                "redemption_expires_at_ms": 3000,
-                                "auto_renew_enabled": false
-                            }
+                            "body": {
+                                "version": 1,
+                                "request": request_body,
+                                "authority": (account_id),
+                                "chain_id": (DEFAULT_CHAIN_ID),
+                                "anchor": { "block_height": 1, "block_hash": ("11".repeat(32)) },
+                                "resource": { "intent": { "alias": (alias) }, "disposition": { "kind": "create" } },
+                                "acquisition": { "term_years": 1, "pricing_class_hint": null },
+                                "quote_guard": {
+                                    "expected_policy_version": 1,
+                                    "expected_payment_asset": (DEFAULT_GAS_ASSET_ID),
+                                    "max_amount": "1",
+                                    "valid_until_ms": (u64::MAX)
+                                },
+                                "instructions": [],
+                                "owner_auto_renew_instruction": null,
+                                "valid_until_ms": (u64::MAX)
+                            },
+                            "plan_hash": ("22".repeat(32)),
+                            "signature": ("33".repeat(64))
                         }),
                     )
                 }
+            }
+            ("POST", "/v1/accounts/onboard") => {
+                let apply_body =
+                    json::from_str::<Value>(&request.body).expect("decode onboarding apply");
+                let canonical_request = apply_body
+                    .as_object()
+                    .and_then(|object| object.get("receipt"))
+                    .and_then(Value::as_object)
+                    .and_then(|receipt| receipt.get("body"))
+                    .and_then(Value::as_object)
+                    .and_then(|body| body.get("request"))
+                    .and_then(Value::as_object)
+                    .expect("receipt canonical request");
+                let alias = canonical_request
+                    .get("alias")
+                    .and_then(Value::as_str)
+                    .expect("receipt alias");
+                let account_id = canonical_request
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .expect("receipt account id");
+                MockResponse::json(
+                    202,
+                    norito::json!({
+                        "account_id": (account_id),
+                        "alias": (alias),
+                        "tx_hash_hex": ("ab".repeat(32)),
+                        "status": "Queued",
+                        "disposition": { "kind": "create" }
+                    }),
+                )
             }
             ("GET", "/v1/accounts/faucet/puzzle") => {
                 MockResponse::json(200, norito::json!({ "difficulty_bits": 0 }))
@@ -1980,7 +2131,7 @@ mod tests {
                     observation: FeeQuoteObservation {
                         ledger_time_ms: 1,
                         next_block_height: 42,
-                        route_dataspace_id: None,
+                        route_dataspace_id: DataSpaceId::UNIVERSAL,
                     },
                     components: Vec::new(),
                     capacities: Vec::new(),
@@ -2190,11 +2341,11 @@ mod tests {
     }
 
     #[test]
-    fn onboard_canary_refuses_redirect_without_forwarding_token() {
+    fn onboarding_plan_refuses_redirect_without_forwarding_token() {
         let destination = spawn_mock_http(1, |_request| {
             MockResponse::json(200, norito::json!({"unexpected": "redirect followed"}))
         });
-        let destination_url = format!("{}/v1/accounts/onboard", destination.base_url);
+        let destination_url = format!("{}/v1/accounts/onboard/plan", destination.base_url);
         let redirect = spawn_mock_http(1, move |_request| MockResponse {
             status: 307,
             content_type: "text/plain",
@@ -2202,15 +2353,14 @@ mod tests {
             body: format!("server echoed {TEST_ONBOARDING_TOKEN}"),
         });
         let http = http_client().expect("HTTP client");
-        let public_key_hex = "ab".repeat(32);
-        let uaid = derive_canary_uaid(&public_key_hex);
+        let key_pair = fixture_key_pair(12);
+        let account_id = AccountId::new(key_pair.public_key().clone());
 
-        let response = onboard_canary(
+        let response = plan_canary_onboarding(
             &http,
             &redirect.base_url,
             "canary@universal",
-            &public_key_hex,
-            &uaid,
+            &account_id,
             TEST_ONBOARDING_TOKEN,
         )
         .expect("redirect remains an HTTP response");
@@ -2262,7 +2412,7 @@ mod tests {
     #[test]
     fn write_canary_mock_success_returns_redacted_receipt() {
         let onboarding_token_file = test_onboarding_token_file();
-        let server = spawn_mock_http(10, |request| write_canary_mock_response(request, 202));
+        let server = spawn_mock_http(11, |request| write_canary_mock_response(request, 202));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
@@ -2288,52 +2438,78 @@ mod tests {
         assert!(!rendered.contains("private_key"));
         assert!(requests.iter().any(|request| request.method == "POST"
             && path_only(&request.path) == torii_uri::TRANSACTION));
-        assert!(requests.iter().any(|request| request.method == "POST"
-            && path_only(&request.path) == torii_uri::FEES_QUOTE));
-        let onboarding = requests
+        assert!(
+            requests.iter().any(|request| request.method == "POST"
+                && path_only(&request.path) == torii_uri::FEES_QUOTE)
+        );
+        let onboarding_plan = requests
+            .iter()
+            .find(|request| {
+                request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard/plan"
+            })
+            .expect("onboarding plan request");
+        let onboarding_apply = requests
             .iter()
             .find(|request| {
                 request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard"
             })
-            .expect("onboarding request");
+            .expect("onboarding apply request");
+        for onboarding in [onboarding_plan, onboarding_apply] {
+            assert_eq!(
+                onboarding
+                    .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                    .len(),
+                1
+            );
+            assert!(
+                onboarding
+                    .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                    .first()
+                    .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN),
+                "onboarding credential header did not match the exact token-file bytes"
+            );
+            assert_eq!(
+                onboarding.header_values("content-type"),
+                vec!["application/json"]
+            );
+            assert!(!onboarding.body.contains(TEST_ONBOARDING_TOKEN));
+            assert!(!onboarding.body.contains("private_key"));
+            assert!(!onboarding.body.contains("public_key_hex"));
+            assert!(!onboarding.body.contains("uaid"));
+        }
+        let plan_body =
+            json::from_str::<Value>(&onboarding_plan.body).expect("decode onboarding plan request");
+        let plan_object = plan_body.as_object().expect("onboarding plan object");
         assert_eq!(
-            onboarding
-                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                .len(),
-            1
-        );
-        assert!(
-            onboarding
-                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                .first()
-                .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN),
-            "onboarding credential header did not match the exact token-file bytes"
-        );
-        assert_eq!(
-            onboarding.header_values("content-type"),
-            vec!["application/json"]
-        );
-        assert!(!onboarding.body.contains(TEST_ONBOARDING_TOKEN));
-        let onboarding_body =
-            json::from_str::<Value>(&onboarding.body).expect("decode onboarding request");
-        let onboarding_object = onboarding_body.as_object().expect("onboarding object");
-        assert_eq!(
-            onboarding_object
+            plan_object
                 .keys()
                 .map(String::as_str)
                 .collect::<std::collections::BTreeSet<_>>(),
-            ["alias", "public_key_hex", "uaid"].into_iter().collect()
+            ["account_id", "alias", "permissions", "version"]
+                .into_iter()
+                .collect()
         );
-        assert!(!onboarding_object.contains_key("identity"));
-        let public_key_hex = onboarding_object
-            .get("public_key_hex")
-            .and_then(Value::as_str)
-            .expect("public key hex");
-        let expected_uaid = derive_canary_uaid(public_key_hex).to_string();
+        assert_eq!(plan_object.get("version").and_then(Value::as_u64), Some(1));
+        assert!(
+            plan_object
+                .get("permissions")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
+        let apply_body = json::from_str::<Value>(&onboarding_apply.body)
+            .expect("decode onboarding apply request");
+        let apply_object = apply_body.as_object().expect("onboarding apply object");
         assert_eq!(
-            onboarding_object.get("uaid").and_then(Value::as_str),
-            Some(expected_uaid.as_str())
+            apply_object.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["receipt"]
         );
+        let receipt_request = apply_object
+            .get("receipt")
+            .and_then(Value::as_object)
+            .and_then(|receipt| receipt.get("body"))
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("request"));
+        assert_eq!(receipt_request, Some(&plan_body));
         assert!(requests.iter().any(|request| {
             request.method == "GET"
                 && path_only(&request.path) == "/v1/pipeline/transactions/status"
@@ -2512,22 +2688,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_canary_signer_derives_account_and_raw_public_key_hex() {
+    fn resolve_canary_signer_derives_account() {
         let key_pair = fixture_key_pair(3);
         let mut config = crate::fallback_config();
         config.key_pair = key_pair.clone();
         let signer = resolve_canary_signer(&config, true).expect("config signer");
-        let (_, public_key_bytes) = key_pair
-            .public_key()
-            .try_to_bytes()
-            .expect("fixture public key must be valid");
 
         assert!(!signer.generated);
         assert_eq!(
             signer.account_id,
             AccountId::new(key_pair.public_key().clone())
         );
-        assert_eq!(signer.public_key_raw_hex, hex::encode(public_key_bytes));
     }
 
     #[test]
@@ -2541,38 +2712,28 @@ mod tests {
             signer.account_id,
             AccountId::new(signer.key_pair.public_key().clone())
         );
-        assert_eq!(signer.public_key_raw_hex.len(), 64);
     }
 
     #[test]
-    fn canary_uaid_uses_current_universal_account_hash_contract() {
-        let public_key_hex = "AABBCC";
-        let expected = UniversalAccountId::from_hash(Hash::new(b"taira-canary-account:aabbcc"));
-        assert_eq!(derive_canary_uaid(public_key_hex), expected);
-        assert_eq!(derive_canary_uaid(" aabbcc "), expected);
-        assert_eq!(
-            expected.to_string(),
-            "uaid:54b79979e70601aa2d9573b9c37778809a62ff3096ed05f940b964752f45cd69"
-        );
-    }
-
-    #[test]
-    fn onboarding_response_rejects_the_retired_synchronous_shape() {
+    fn onboarding_apply_rejects_the_retired_synchronous_shape() {
         let key_pair = fixture_key_pair(11);
         let account_id = AccountId::new(key_pair.public_key().clone());
-        let uaid = derive_canary_uaid("11");
         let stale = norito::json!({
             "account_id": (account_id.to_string()),
-            "uaid": (uaid.to_string()),
+            "alias": "canary@universal",
             "tx_hash_hex": ("ab".repeat(32)),
             "status": "Applied",
-            "lease": {}
+            "disposition": { "kind": "create" }
         });
 
         let error =
-            validate_onboarding_response(Some(&stale), &account_id, &uaid, "canary@universal")
-                .expect_err("the current endpoint queues onboarding");
-        assert!(error.to_string().contains("expected QUEUED"));
+            validate_onboarding_apply_response(Some(&stale), &account_id, "canary@universal")
+                .expect_err("retired apply response must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected onboarding apply status")
+        );
     }
 
     #[test]
@@ -2580,7 +2741,6 @@ mod tests {
         let key_pair = fixture_key_pair(5);
         let signer = CanarySigner {
             account_id: AccountId::new(key_pair.public_key().clone()),
-            public_key_raw_hex: "11".repeat(32),
             key_pair,
             generated: true,
         };

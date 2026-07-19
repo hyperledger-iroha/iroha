@@ -52,7 +52,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
-    domain::{CanRegisterDomain, CanUnregisterDomain},
+    domain::CanUnregisterDomain,
     executor::CanUpgradeExecutor,
     governance::CanManageParliament,
     parameter::CanSetParameters,
@@ -620,10 +620,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     );
 
     let grant_instructions = [
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterDomain,
-            alice_id.clone(),
-        )),
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: test_domain_id.clone(),

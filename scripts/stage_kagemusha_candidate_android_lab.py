@@ -877,8 +877,8 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
         raise StageError("candidate reports a dirty source repository")
     if not isinstance(report["generation"], str) or not PORTABLE_ID_RE.fullmatch(report["generation"]):
         raise StageError("candidate generation is not portable")
-    if report["bridge_abi_version"] != 20 or report["artifact_count"] != len(ARTIFACTS):
-        raise StageError("candidate is not the exact ABI-20 eight-artifact profile")
+    if report["bridge_abi_version"] != 21 or report["artifact_count"] != len(ARTIFACTS):
+        raise StageError("candidate is not the exact ABI-21 eight-artifact profile")
     artifacts = report["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != len(ARTIFACTS):
         raise StageError("candidate validation report has the wrong artifact count")
@@ -1479,7 +1479,7 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate and stage one source-sealed ABI-20 Android candidate lab"
+        description="Validate and stage one source-sealed ABI-21 Android candidate lab"
     )
     parser.add_argument("--candidate-dir", type=Path, required=True)
     parser.add_argument("--scenario-seed-dir", type=Path, required=True)

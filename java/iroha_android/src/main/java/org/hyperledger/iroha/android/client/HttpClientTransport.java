@@ -25,6 +25,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
+import org.hyperledger.iroha.android.alias.AccountAliasName;
+import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasAutoRenewPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLeaseRenewPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLifecyclePlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanJsonParser;
+import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanV1;
+import org.hyperledger.iroha.android.alias.AliasSetupModels;
+import org.hyperledger.iroha.android.alias.AccountOnboardingApplyRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingJsonParser;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
+import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
@@ -63,6 +79,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  * outbound calls.
  */
 public final class HttpClientTransport implements IrohaClient {
+  private static final String ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token";
 
   private static final String RETRY_SIGNAL_ID = "android.torii.http.retry";
   private static final String PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status";
@@ -852,11 +869,239 @@ public final class HttpClientTransport implements IrohaClient {
   @Override
   public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
       final String alias) {
-    final String normalizedAlias = normalizeNonBlank(alias, "alias");
+    final String normalizedAlias = AccountAliasName.parse(alias).canonicalText();
     final byte[] body = encodeJsonBody(objectMapOf("alias", normalizedAlias));
     final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
     return fetchJsonAllowingNotFound(
-        request, AccountAliasJsonParser::parseResolution, "account alias resolve");
+        request,
+        response -> parsePinnedAliasResolution(response, normalizedAlias),
+        "account alias resolve");
+  }
+
+  /** Plans one atomic alias setup transaction without invoking a mutation route. */
+  @Override
+  public CompletableFuture<AliasTransactionPlanV1> planAliasSetup(
+      final AliasSetupPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final byte[] body = encodeJsonBody(requestBody.toJsonMap());
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/aliases/setup/plan", body, canonicalAuth);
+    return fetchJson(
+        request,
+        response -> {
+          final AliasTransactionPlanV1 plan = AliasTransactionPlanJsonParser.parse(response);
+          if (!plan.body().authority().equals(canonicalAuth.accountId())) {
+            throw new IllegalArgumentException(
+                "alias setup plan authority does not match the canonical request signer");
+          }
+          return plan;
+        },
+        "alias setup plan",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasLeaseRenewal(
+      final AliasLeaseRenewPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return planAliasLifecycle(
+        "/v1/aliases/lease/renew/plan",
+        requestBody,
+        canonicalAuth,
+        "alias lease renewal plan");
+  }
+
+  @Override
+  public CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasAutoRenew(
+      final AliasAutoRenewPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return planAliasLifecycle(
+        "/v1/aliases/auto-renew/plan",
+        requestBody,
+        canonicalAuth,
+        "alias auto-renew plan");
+  }
+
+  private CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasLifecycle(
+      final String path,
+      final AliasLifecyclePlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final String context) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildVpnRequest("POST", path, body, canonicalAuth);
+    return fetchJson(
+        request,
+        response -> {
+          final AliasLifecycleTransactionPlanV1 plan =
+              AliasLifecycleTransactionPlanJsonParser.parse(response);
+          if (!plan.body().authority().equals(canonicalAuth.accountId())) {
+            throw new IllegalArgumentException(
+                context + " authority does not match the canonical request signer");
+          }
+          return plan;
+        },
+        context,
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody, final String onboardingToken) {
+    return planSponsoredAccountOnboarding(requestBody, onboardingToken, null);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody,
+      final String onboardingToken,
+      final String expectedAuthority) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildOnboardingRequest("POST", "/v1/accounts/onboard/plan", body, onboardingToken),
+        response ->
+            AccountOnboardingReceiptVerifier.requireValidForRequest(
+                requestBody,
+                AccountOnboardingJsonParser.parseReceipt(response),
+                expectedAuthority),
+        "sponsored account onboarding plan",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+      final AccountOnboardingPlanReceiptV1 receipt, final String onboardingToken) {
+    return applySponsoredAccountOnboarding(receipt, onboardingToken, null);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final String onboardingToken,
+      final String expectedAuthority) {
+    AccountOnboardingReceiptVerifier.requireValid(receipt, expectedAuthority);
+    final byte[] body =
+        JsonEncoder.encode(new AccountOnboardingApplyRequestV1(receipt).toJsonMap())
+            .getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
+        AccountOnboardingJsonParser::parseResponse,
+        "sponsored account onboarding apply");
+  }
+
+  @Override
+  public CompletableFuture<AliasSetupModels.AliasSetupReportV1> getAccountOnboardingReadiness(
+      final String onboardingToken) {
+    return fetchJson(
+        buildOnboardingRequest(
+            "GET", "/v1/accounts/onboarding/readiness", null, onboardingToken),
+        AccountOnboardingJsonParser::parseReadiness,
+        "account onboarding readiness",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasIndexResolution>> resolveAccountAliasIndex(
+      final BigInteger index) {
+    AccountAliasUInt64.require(index, "index");
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("index", index);
+    final byte[] body = JsonEncoder.encode(payload).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildJsonPostRequest("/v1/aliases/resolve-index", body),
+        response -> parsePinnedAliasIndexResolution(response, index),
+        "account alias index resolve");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasIndexResolution>> resolveAccountAliasIndex(
+      final BigInteger index, final ToriiCanonicalRequestAuth canonicalAuth) {
+    AccountAliasUInt64.require(index, "index");
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("index", index);
+    final byte[] body = JsonEncoder.encode(payload).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildVpnRequest("POST", "/v1/aliases/resolve-index", body, canonicalAuth),
+        response -> parsePinnedAliasIndexResolution(response, index),
+        "account alias index resolve");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasesByAccount>> listAccountAliases(
+      final AccountAliasesByAccountRequest requestBody) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildJsonPostRequest("/v1/aliases/by-account", body),
+        response -> parsePinnedAliasesByAccount(response, requestBody),
+        "account aliases lookup");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasesByAccount>> listAccountAliases(
+      final AccountAliasesByAccountRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildVpnRequest("POST", "/v1/aliases/by-account", body, canonicalAuth),
+        response -> parsePinnedAliasesByAccount(response, requestBody),
+        "account aliases lookup");
+  }
+
+  /** Resolves a restricted account alias with canonical Iroha request headers. */
+  @Override
+  public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
+      final String alias, final ToriiCanonicalRequestAuth canonicalAuth) {
+    final String normalizedAlias = AccountAliasName.parse(alias).canonicalText();
+    final byte[] body = encodeJsonBody(objectMapOf("alias", normalizedAlias));
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/aliases/resolve", body, canonicalAuth);
+    return fetchJsonAllowingNotFound(
+        request,
+        response -> parsePinnedAliasResolution(response, normalizedAlias),
+        "account alias resolve");
+  }
+
+  private static AccountAliasResolution parsePinnedAliasResolution(
+      final byte[] response, final String requestedAlias) {
+    final AccountAliasResolution resolution = AccountAliasJsonParser.parseResolution(response);
+    if (!AccountAliasName.parse(resolution.alias()).canonicalText().equals(requestedAlias)) {
+      throw new IllegalArgumentException(
+          "account alias response does not match the requested alias");
+    }
+    return resolution;
+  }
+
+  private static AccountAliasIndexResolution parsePinnedAliasIndexResolution(
+      final byte[] response, final BigInteger requestedIndex) {
+    final AccountAliasIndexResolution resolution =
+        AccountAliasReadJsonParser.parseIndexResolution(response);
+    if (!resolution.index().equals(requestedIndex)) {
+      throw new IllegalArgumentException(
+          "account alias index response does not match the requested index");
+    }
+    return resolution;
+  }
+
+  private static AccountAliasesByAccount parsePinnedAliasesByAccount(
+      final byte[] response, final AccountAliasesByAccountRequest request) {
+    final AccountAliasesByAccount aliases = AccountAliasReadJsonParser.parseByAccount(response);
+    if (!aliases.accountId().equals(request.accountId())) {
+      throw new IllegalArgumentException(
+          "account aliases response does not match the requested account");
+    }
+    for (final AccountAliasListItem item : aliases.items()) {
+      if ((request.dataspace() != null && !request.dataspace().equals(item.dataspace()))
+          || (request.domain() != null && !request.domain().equals(item.domain()))) {
+        throw new IllegalArgumentException(
+            "account aliases response contains entries outside the requested scope");
+      }
+    }
+    return aliases;
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -1617,6 +1862,50 @@ public final class HttpClientTransport implements IrohaClient {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
     return builder.build();
+  }
+
+  private TransportRequest buildOnboardingRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final String onboardingToken) {
+    final String token = requireOnboardingCredential(onboardingToken);
+    for (final String key : config.defaultHeaders().keySet()) {
+      if (ONBOARDING_TOKEN_HEADER.equalsIgnoreCase(key)) {
+        throw new IllegalArgumentException(
+            ONBOARDING_TOKEN_HEADER
+                + " must be supplied only through the sponsored onboarding API");
+      }
+    }
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod(method)
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    if (body != null) {
+      builder.setBody(body).addHeader("Content-Type", "application/json");
+    }
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    builder.addHeader(ONBOARDING_TOKEN_HEADER, token);
+    return builder.build();
+  }
+
+  private static String requireOnboardingCredential(final String value) {
+    if (value == null || value.length() < 32 || value.length() > 256) {
+      throw new IllegalArgumentException(
+          "onboarding token must contain 32..256 printable non-whitespace ASCII bytes");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (character < '!' || character > '~') {
+        throw new IllegalArgumentException(
+            "onboarding token must contain 32..256 printable non-whitespace ASCII bytes");
+      }
+    }
+    return value;
   }
 
   private static Map<String, String> buildCanonicalHeaders(

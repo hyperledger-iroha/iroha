@@ -17,7 +17,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::{
-    account::CanRegisterAccount, domain::CanRegisterDomain, parameter::CanSetParameters,
+    account::CanRegisterAccount, parameter::CanSetParameters,
 };
 use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
 use iroha_primitives::json::Json;
@@ -677,8 +677,6 @@ pub fn generate_default(
     );
     let grant_permission_to_set_parameters =
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
-    let grant_permission_to_register_domains =
-        Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
     let grant_permission_to_manage_soracloud = Grant::account_permission(
         Permission::new("CanManageSoracloud".into(), Json::new(())),
         ALICE_ID.clone(),
@@ -732,7 +730,6 @@ pub fn generate_default(
         .append_instruction(mint_cabbage)
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
-        .append_instruction(grant_permission_to_register_domains)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
 

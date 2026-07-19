@@ -1048,29 +1048,23 @@ def test_solve_account_faucet_pow_accepts_zero_difficulty_puzzle() -> None:
     assert nonce_hex == "0000000000000000"
 
 
-def test_sns_helpers_read_policy_and_submit_registration() -> None:
+def test_sns_helpers_read_policy_and_name() -> None:
     session = FakeSession(
         [
             response(200, {"payment_asset_id": "fee", "pricing": []}),
-            response(202, {"ok": True}),
+            response(200, {"literal": "merchant@paynet"}),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     assert client.get_sns_policy(2)["payment_asset_id"] == "fee"
-    registration = client.submit_sns_name_registration(
-        {
-            "selector": {"suffix_id": 2, "label": "is"},
-            "owner": "owner@is",
-        }
-    )
+    registration = client.get_sns_name("account-alias", "merchant@paynet")
 
-    assert registration.status_code == 202
+    assert registration == {"literal": "merchant@paynet"}
     assert [call["path"] for call in session.calls] == [
         "/v1/sns/policies/2",
-        "/v1/sns/names",
+        "/v1/sns/names/account-alias/merchant%40paynet",
     ]
-    assert b'"owner": "owner@is"' in session.calls[-1]["data"]
 
 
 def test_zk_verifying_key_helpers_detect_active_status() -> None:

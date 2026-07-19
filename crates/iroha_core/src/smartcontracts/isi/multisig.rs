@@ -3119,12 +3119,16 @@ mod tests {
             Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
             rekey::{AccountAlias, AccountAliasDomain, AccountRekeyTransitionProvenance},
         },
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        },
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
-            account_alias_lease::AcquireAccountAliasLease, domain_link::SetAccountAliasBinding,
+            alias_setup::EnsureAlias,
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
@@ -3146,7 +3150,10 @@ mod tests {
         executor::Executor,
         kura::Kura,
         query::store::LiveQueryStore,
-        sns::{SnsNamespace, get_name_record, seed_default_namespace_policies},
+        sns::{
+            SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
+            seed_default_namespace_policies,
+        },
         state::{State, World},
     };
 
@@ -3763,19 +3770,47 @@ mod tests {
         } else {
             Account::new(retail_account.clone())
         };
+        let resolved_alias = ResolvedAccountAliasV1::new(
+            "clear-orbit-3941@hbl.sbp"
+                .parse()
+                .expect("resolved FI account alias"),
+            sbp,
+        );
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(
+            &iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(resolved_alias.clone()),
+        )
+        .expect("FI account alias selector");
+        let quote = quote_resolved_name_registration(
+            state_transaction.world(),
+            selector,
+            &retail_account,
+            1,
+            None,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .expect("FI account alias quote");
+        let policy_version = policy_by_id(
+            state_transaction.world(),
+            iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+        )
+        .expect("account alias policy")
+        .policy_version;
         let instructions = vec![
             InstructionBox::from(Register::account(registration_account)),
-            InstructionBox::from(AcquireAccountAliasLease::new(
-                alias.clone(),
-                retail_account.clone(),
-                multisig_id.clone(),
-                1,
-                None,
-            )),
-            InstructionBox::from(SetAccountAliasBinding::bind(
-                retail_account.clone(),
-                alias.clone(),
-                None,
+            InstructionBox::from(EnsureAlias::new(
+                AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                    alias: resolved_alias,
+                    target_account: retail_account.clone(),
+                    provision: AccountProvisionV1::Existing,
+                    role: AccountAliasRoleV1::Additional,
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: policy_version,
+                    expected_payment_asset: payment_asset_definition_id.clone(),
+                    max_amount: quote.charge_amount,
+                    valid_until_ms: u64::MAX,
+                },
             )),
         ];
         let instructions_hash = HashOf::new(&instructions);

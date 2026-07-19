@@ -1995,6 +1995,56 @@ pub mod isi {
         Ok(())
     }
 
+    /// Apply a native owner-authorized numeric transfer without a transaction transcript.
+    ///
+    /// Deterministic block maintenance has no signed-transaction `call_hash`, so it cannot
+    /// produce a FASTPQ transaction transcript. The balance move still goes through the same
+    /// account, routing, transfer-control, asset-policy, and exact-delta validation as a user
+    /// transfer and emits the same asset events.
+    pub(crate) fn execute_native_authorized_numeric_asset_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Numeric,
+    ) -> Result<(), Error> {
+        if source_id.account() != authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native authorized transfer source must belong to its authority".into(),
+            )
+            .into());
+        }
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let plan = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            authority,
+            source_id,
+            destination_id,
+            amount,
+        )?;
+        let applied = plan.apply(state_transaction)?;
+
+        #[allow(clippy::float_arithmetic)]
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
+
+        let amount = Quantity::from_canonical_numeric(applied.amount)
+            .map_err(|_| MathError::NegativeValue)?;
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: applied.source_id,
+                amount: amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: applied.destination_id,
+                amount,
+            }),
+        ]);
+        Ok(())
+    }
+
     /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
     ///
     /// This capability is intentionally neither [`Clone`] nor [`Copy`]: proof admission creates

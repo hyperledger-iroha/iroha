@@ -9,7 +9,7 @@ use iroha::{
     client::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
-use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_registration_lease};
+use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tokio::{
@@ -106,33 +106,18 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    let mut lease_clients: Vec<_> = network.peers().iter().map(NetworkPeer::client).collect();
-    lease_clients.push(new_peer_client.clone());
-    run_blocking_with_timeout(
-        {
-            let domain_id = domain_id.clone();
-            move || {
-                for client in lease_clients {
-                    ensure_domain_registration_lease(&client, &domain_id)?;
-                }
-                Ok(())
-            }
-        },
-        tx_timeout,
-        "network_stable_after_add_and_after_remove_peer register bootstrap lease",
-    )
-    .await?;
+    let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
     run_blocking_with_timeout(
         {
             let client = client.clone();
             let account = account.clone();
             let asset_def = asset_def.clone();
-            let domain_id = domain_id.clone();
+            let setup_domain = setup_domain.clone();
             move || {
                 client
                     .submit_all::<InstructionBox>(
                         [
-                            Register::domain(Domain::new(domain_id.clone())).into(),
+                            setup_domain,
                             Register::account(Account::new(account.clone())).into(),
                             Register::asset_definition({
                                 let __asset_definition_id = asset_def;

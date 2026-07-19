@@ -84,7 +84,7 @@ impl StateValidateBlocks {
             BENCH_ACCOUNTS_PER_DOMAIN,
             BENCH_ASSETS_PER_DOMAIN,
         );
-        seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
         let instructions = instruction_batches().to_vec();
 
         Self {

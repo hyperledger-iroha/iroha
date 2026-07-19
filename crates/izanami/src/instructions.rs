@@ -62,7 +62,7 @@ use iroha_executor_data_model::permission::{
     account::{CanModifyAccountMetadata, CanRegisterAccount},
     asset::{CanMintAssetWithDefinition, CanModifyAssetMetadataWithDefinition},
     asset_definition::CanModifyAssetDefinitionMetadata,
-    domain::{CanModifyDomainMetadata, CanRegisterDomain},
+    domain::CanModifyDomainMetadata,
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
     role::CanManageRoles,
@@ -572,10 +572,6 @@ pub fn prepare_state(
             )));
         }
     }
-    genesis_tx.push(InstructionBox::from(Grant::account_permission(
-        CanRegisterDomain,
-        treasury.id.clone(),
-    )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanModifyDomainMetadata {
             domain: base_domain.clone(),

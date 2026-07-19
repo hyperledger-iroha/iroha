@@ -493,7 +493,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testABI20InventoryRequiresExplicitFailClosedV4Capabilities() {
+    func testABI21InventoryRequiresExplicitFailClosedV4Capabilities() {
         XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 21)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestSchemaV4,
@@ -552,7 +552,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailableV4())
     }
 
-    func testNativeCapabilitiesV4RequireExactABI20EightRoleContract() throws {
+    func testNativeCapabilitiesV4RequireExactABI21EightRoleContract() throws {
         let gates = [
             "authenticated-v4-artifact-installation",
             "independent-cryptographic-review",
@@ -580,14 +580,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         let capabilities = try KagemushaRecursiveSpendCodecs
             .decodeNativeCapabilitiesV4(archive)
-        XCTAssertEqual(capabilities.bridgeABIVersion, 20)
+        XCTAssertEqual(capabilities.bridgeABIVersion, 21)
         XCTAssertEqual(capabilities.artifactRoles, KagemushaRecursiveSpend.artifactRolesV4)
         XCTAssertEqual(capabilities.maxProofBytes, maximumProofBytes)
         XCTAssertEqual(capabilities.missingGates, gates)
         XCTAssertFalse(capabilities.proofBackendAvailable)
 
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
-            bridgeABIVersion: 19,
+            bridgeABIVersion: 20,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
@@ -603,7 +603,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         var missingRole = KagemushaRecursiveSpend.artifactRolesV4
         missingRole.removeLast()
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
-            bridgeABIVersion: 20,
+            bridgeABIVersion: 21,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
@@ -617,7 +617,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
 
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
-            bridgeABIVersion: 20,
+            bridgeABIVersion: 21,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,

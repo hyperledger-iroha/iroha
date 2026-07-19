@@ -1463,7 +1463,7 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         {
             "version": 1,
             "source_profile": "sora-taira",
-            "protocol_version": 2,
+            "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
             "checkpoint_height": 5,
             "checkpoint_block_hash_hex": "73" * 32,
@@ -1472,17 +1472,23 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         }
     )
     assert anchor_hash.hex() == (
-        "690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b"
+        "94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727"
     )
 
 
 @pytest.mark.parametrize(
     "mutation",
     (
-        lambda anchor: anchor.update(protocol_version=1),
-        lambda anchor: anchor.update(protocol_version=3),
+        lambda anchor: anchor.update(
+            protocol_version=common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION - 1
+        ),
+        lambda anchor: anchor.update(
+            protocol_version=common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION + 1
+        ),
         lambda anchor: anchor.update(protocol_version=True),
-        lambda anchor: anchor.update(protocol_version="2"),
+        lambda anchor: anchor.update(
+            protocol_version=str(common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION)
+        ),
         lambda anchor: anchor.update(checkpoint_height=True),
         lambda anchor: anchor.update(checkpoint_context_id_hex="00" * 32),
         lambda anchor: anchor.update(
@@ -1529,7 +1535,7 @@ def test_sumeragi_v2_anchor_hash_rejects_protocol_role_and_schema_drift(
     anchor = {
         "version": 1,
         "source_profile": "sora-taira",
-        "protocol_version": 2,
+        "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
         "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
         "checkpoint_height": 5,
         "checkpoint_block_hash_hex": "73" * 32,
@@ -1737,7 +1743,7 @@ def synthetic_production_semantic_inventory() -> tuple[
         anchor = {
             "version": 1,
             "source_profile": "sora-taira",
-            "protocol_version": 2,
+            "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
             "checkpoint_height": 100 + profile_index,
             "checkpoint_block_hash_hex": _semantic_hash(

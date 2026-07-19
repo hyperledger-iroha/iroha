@@ -1215,9 +1215,7 @@ mod tests {
 
     #[test]
     fn normalized_codec_summary_renders_solana_pubkey_bytes() {
-        let value = iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 {
-            bytes: [0x13; 32],
-        };
+        let value = iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x13; 32] };
         assert_eq!(
             render_sccp_normalized_codec_value(&value),
             format!("solana_pubkey32:0x{}", "13".repeat(32))

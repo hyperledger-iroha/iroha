@@ -9002,11 +9002,14 @@ impl Actor {
         self.metrics
             .p2p_scion_outbound_total
             .set(iroha_p2p::network::scion_outbound_total());
-        // Safety/high/low bounded-queue depth (network actor queues)
+        // Safety/progress/high/low bounded-queue depth (network actor queues)
         let queue_depth = &self.metrics.p2p_queue_depth;
         queue_depth
             .with_label_values(&["Safety"])
             .set(iroha_p2p::network::network_queue_depth_safety());
+        queue_depth
+            .with_label_values(&["Progress"])
+            .set(iroha_p2p::network::network_queue_depth_progress());
         queue_depth
             .with_label_values(&["High"])
             .set(iroha_p2p::network::network_queue_depth_high());
@@ -13905,6 +13908,7 @@ mod tests {
     async fn p2p_queue_depth_metric_tracks_updates() {
         let sut = SystemUnderTest::new();
         iroha_p2p::network::set_network_safety_queue_depth_for_test(3);
+        iroha_p2p::network::set_network_progress_queue_depth_for_test(5);
         iroha_p2p::network::set_network_queue_depth_for_test(true, 12);
         iroha_p2p::network::set_network_queue_depth_for_test(false, 7);
 
@@ -13912,6 +13916,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         let depth = &metrics.p2p_queue_depth;
         assert_eq!(depth.with_label_values(&["Safety"]).get(), 3);
+        assert_eq!(depth.with_label_values(&["Progress"]).get(), 5);
         assert_eq!(depth.with_label_values(&["High"]).get(), 12);
         assert_eq!(depth.with_label_values(&["Low"]).get(), 7);
     }

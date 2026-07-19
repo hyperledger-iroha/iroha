@@ -20,12 +20,7 @@ use iroha_data_model::{
     isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
     metadata::Metadata,
     name::Name,
-    sns::{
-        FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
-        NameStatus, PaymentProofV1, RegisterNameRequestV1, RegisterNameResponseV1,
-        RenewNameRequestV1, ReservedAssignmentRequestV1, SuffixPolicyV1, TransferNameRequestV1,
-        UpdateControllersRequestV1,
-    },
+    sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
         Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
         signed::TransactionPayload,
@@ -201,20 +196,11 @@ fn schema_targets() -> Vec<SchemaTarget> {
     let mut targets = vec![
         SchemaTarget::of::<SignedTransaction>(),
         SchemaTarget::of::<TransactionPayload>(),
-        SchemaTarget::of::<RegisterNameRequestV1>(),
-        SchemaTarget::of::<RegisterNameResponseV1>(),
-        SchemaTarget::of::<RenewNameRequestV1>(),
-        SchemaTarget::of::<TransferNameRequestV1>(),
-        SchemaTarget::of::<UpdateControllersRequestV1>(),
-        SchemaTarget::of::<FreezeNameRequestV1>(),
-        SchemaTarget::of::<ReservedAssignmentRequestV1>(),
         SchemaTarget::of::<NameRecordV1>(),
         SchemaTarget::of::<NameControllerV1>(),
         SchemaTarget::of::<NameSelectorV1>(),
         SchemaTarget::of::<NameStatus>(),
         SchemaTarget::of::<SuffixPolicyV1>(),
-        SchemaTarget::of::<PaymentProofV1>(),
-        SchemaTarget::of::<GovernanceHookV1>(),
     ];
     targets.sort_by(|a, b| a.alias.cmp(b.alias));
     targets
@@ -1664,6 +1650,30 @@ mod tests {
                 seen.insert(target.type_name),
                 "duplicate schema target `{}` detected",
                 target.type_name
+            );
+        }
+    }
+
+    #[test]
+    fn schema_targets_exclude_retired_sns_mutation_requests() {
+        let aliases = schema_targets()
+            .into_iter()
+            .map(|target| target.alias)
+            .collect::<HashSet<_>>();
+        for retired in [
+            "FreezeNameRequestV1",
+            "GovernanceHookV1",
+            "PaymentProofV1",
+            "RegisterNameRequestV1",
+            "RegisterNameResponseV1",
+            "RenewNameRequestV1",
+            "ReservedAssignmentRequestV1",
+            "TransferNameRequestV1",
+            "UpdateControllersRequestV1",
+        ] {
+            assert!(
+                !aliases.contains(retired),
+                "retired SNS mutation schema `{retired}` must not be advertised"
             );
         }
     }

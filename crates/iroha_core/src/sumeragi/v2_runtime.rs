@@ -924,15 +924,18 @@ impl BoundedIngress<AdapterCommand> {
     /// Check the reducer handoff performed after authenticating one block-sync
     /// response. The transport wrapper itself bypasses this ingress, but its
     /// embedded CommitQC must either claim Progress capacity or exactly
-    /// coalesce with an authenticated QC already owned by the queue.
+    /// coalesce with an authenticated QC already owned by this queue or the
+    /// adapter's Busy-deferred progress lane.
     fn check_embedded_quorum_certificate_capacity(
         &self,
         certificate: &wire::QuorumCertificate,
+        deferred_owner: Option<EventTag>,
     ) -> Result<(), EnqueueError> {
-        if self
-            .commands
-            .iter()
-            .any(|queued| queued.command.matches_quorum_certificate(certificate))
+        if deferred_owner.is_some()
+            || self
+                .commands
+                .iter()
+                .any(|queued| queued.command.matches_quorum_certificate(certificate))
         {
             return Ok(());
         }
@@ -1259,6 +1262,11 @@ pub(crate) trait RuntimeDriver {
     fn timeout_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error>;
     /// Deliver one derived retransmission tick.
     fn retransmit_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error>;
+    /// Return whether older adapter-owned Busy-deferred work can cross the
+    /// reducer boundary without spinning behind a persistence/signing fence.
+    fn deferred_work_is_serviceable(&self) -> bool;
+    /// Deliver exactly one serviceable adapter-owned deferred transition.
+    fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error>;
     /// Identify only the effect which authorizes timer restart.
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
     /// Return whether the unauthenticated wire shape could match a protected
@@ -1322,6 +1330,14 @@ impl RuntimeDriver for SumeragiV2Adapter {
 
     fn retransmit_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error> {
         SumeragiV2Adapter::retransmit_elapsed(self, tag).map(|outcome| outcome.into_effects())
+    }
+
+    fn deferred_work_is_serviceable(&self) -> bool {
+        SumeragiV2Adapter::deferred_work_is_serviceable(self)
+    }
+
+    fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error> {
+        SumeragiV2Adapter::drain_deferred(self)
     }
 
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
@@ -1419,9 +1435,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         })
     }
 
-    /// Run at most one timer or admitted command.
+    /// Run at most one adapter-deferred transition, timer, or admitted command.
     ///
-    /// Timeout wins when both clocks are due, and is emitted at most once for
+    /// Older serviceable adapter debt runs first. Once that debt is empty,
+    /// timeout wins when both clocks are due and is emitted at most once for
     /// the installed view. A non-timeout timer may precede queued work once;
     /// the pure scheduler then owes admitted work the next slot. Retransmission
     /// runs at most once per call and advances from the actual service time,
@@ -1437,6 +1454,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
+        }
+
+        // Work which already crossed runtime ingress and acquired the
+        // adapter's Busy-deferred ownership predates every still-queued
+        // command. Once its WAL/signing fence opens, give exactly one such
+        // transition a serialized turn. The finite queue rank decreases on
+        // every call, and each returned effect batch still represents only one
+        // reducer macro-step.
+        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {
+            return Ok(step);
         }
 
         let round_timeout = round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
@@ -1480,7 +1507,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(RuntimeStep::Advanced(effects))
     }
 
-    /// Drain at most one startup-recovery command without running live timers.
+    /// Drain at most one adapter-deferred transition or startup-recovery
+    /// command without running live timers.
     ///
     /// An interrupted canonical Kura tip is already decided and can require a
     /// slow local WSV/checkpoint/fsync replay before the height is retired. It
@@ -1498,6 +1526,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.clocks_armed {
             return Err(RuntimeError::RecoveryAfterClocksArmed);
         }
+        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {
+            return Ok(step);
+        }
         let Some(command) = self.ingress.pop_next() else {
             return Ok(RuntimeStep::Idle);
         };
@@ -1507,6 +1538,27 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         self.observe_effects(now, &effects);
         Ok(RuntimeStep::Advanced(effects))
+    }
+
+    /// Dispatch one older adapter-owned transition without concatenating it
+    /// with a timer or runtime-ingress command.
+    ///
+    /// Returning `None` means either no adapter debt exists or its reducer
+    /// persistence/signature fence still needs an ordinary completion command.
+    /// Returning `Some` always represents exactly one reducer macro-step.
+    fn dispatch_one_adapter_deferred(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if !self.driver.deferred_work_is_serviceable() {
+            return Ok(None);
+        }
+        let effects = match self.driver.dispatch_deferred() {
+            Ok(effects) => effects,
+            Err(error) => return Err(self.close(error)),
+        };
+        self.observe_effects(now, &effects);
+        Ok(Some(RuntimeStep::Advanced(effects)))
     }
 
     /// Number of admitted commands awaiting serialized delivery.
@@ -1763,26 +1815,40 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Authenticate and enqueue one reducer-directed network message.
     ///
-    /// Traffic which passes the bounded capacity check, or exactly matches an
-    /// already-owned authenticated envelope, is cryptographically
-    /// authenticated and then checked against canonical manifest authority.
-    /// Rejections do not poison the runtime. Once admitted, any adapter
-    /// transition failure is fatal when the serialized command is executed.
+    /// Traffic which passes the bounded capacity check, exactly matches an
+    /// already-owned authenticated envelope, or exactly matches a
+    /// Busy-deferred QC is cryptographically authenticated and then checked
+    /// against canonical authority. Rejections do not poison the runtime.
+    /// Once admitted, any adapter transition failure is fatal when the
+    /// serialized command is executed.
     pub(crate) fn enqueue_network(
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<EventTag, NetworkIngressError> {
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
+        let deferred_qc_owner = match &message.payload {
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self
+                .driver
+                .deferred_quorum_certificate_owner_tag(certificate),
+            _ => None,
+        };
         // An exact queued retransmission may always spend authentication work
-        // so it can release its ingress occurrence. Otherwise, only the
-        // adapter's exact active-lock match may proceed after the normal prefix
-        // fills. The authenticated predicate below remains the authority for
-        // assigning the Progress class and for queue coalescing.
+        // so it can release its ingress occurrence. An exact Busy-deferred QC
+        // may likewise spend authentication work without claiming a second
+        // queue slot. Otherwise, only the adapter's exact active-lock match
+        // may proceed after the normal prefix fills. Authentication below
+        // remains mandatory before either form of coalescing.
         let may_be_exact_locked_commit =
             self.driver.wire_ingress_may_use_progress(&message.payload);
-        self.ingress
-            .check_authenticated_wire_capacity(&message, default_class, may_be_exact_locked_commit)
-            .map_err(NetworkIngressError::Backpressure)?;
+        if deferred_qc_owner.is_none() {
+            self.ingress
+                .check_authenticated_wire_capacity(
+                    &message,
+                    default_class,
+                    may_be_exact_locked_commit,
+                )
+                .map_err(NetworkIngressError::Backpressure)?;
+        }
         let authenticated = match self.driver.authenticate(message) {
             Ok(authenticated) => authenticated,
             Err(AdapterError::FailClosed | AdapterError::ReplayNotComplete) => {
@@ -1791,6 +1857,22 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
+        let authenticated_deferred_qc_owner = match authenticated.payload() {
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self
+                .driver
+                .deferred_quorum_certificate_owner_tag(certificate),
+            _ => None,
+        };
+        if authenticated_deferred_qc_owner != deferred_qc_owner {
+            // Authentication does not mutate the adapter or envelope. Any
+            // disagreement would invalidate the raw-capacity hint rather than
+            // authorizing an unchecked queue insertion.
+            self.fail_closed = true;
+            return Err(NetworkIngressError::FailClosed);
+        }
+        if let Some(owner_tag) = authenticated_deferred_qc_owner {
+            return Ok(owner_tag);
+        }
         let class = if self
             .driver
             .authenticated_ingress_is_progress(&authenticated)
@@ -1820,10 +1902,16 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
             &message.payload
         {
+            let deferred_owner = self
+                .driver
+                .deferred_quorum_certificate_owner_tag(&response.certificate);
             return !self.fail_closed
                 && self
                     .ingress
-                    .check_embedded_quorum_certificate_capacity(&response.certificate)
+                    .check_embedded_quorum_certificate_capacity(
+                        &response.certificate,
+                        deferred_owner,
+                    )
                     .is_ok();
         }
         let Some(default_class) = network_command_class(&message.payload) else {
@@ -2361,7 +2449,7 @@ mod tests {
 
     use super::*;
     use crate::sumeragi::v2::{
-        AdapterFingerprints, DeferredBodyPipelineStageForTest, VerifiedHeightContext,
+        AdapterFingerprints, DeferredBodyPipelineStageForTest, SignRequest, VerifiedHeightContext,
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2431,6 +2519,8 @@ mod tests {
         timeouts: Vec<EventTag>,
         retransmits: Vec<EventTag>,
         timer_effects: VecDeque<Vec<FakeEffect>>,
+        deferred_effects: VecDeque<Vec<FakeEffect>>,
+        deferred_dispatches: usize,
         protected_commit: Option<(
             wire::ConsensusRound,
             wire::BlockSubject,
@@ -2446,6 +2536,8 @@ mod tests {
                 timeouts: Vec::new(),
                 retransmits: Vec::new(),
                 timer_effects: VecDeque::new(),
+                deferred_effects: VecDeque::new(),
+                deferred_dispatches: 0,
                 protected_commit: None,
             }
         }
@@ -2484,6 +2576,15 @@ mod tests {
         fn retransmit_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error> {
             self.retransmits.push(tag);
             Ok(self.timer_effects.pop_front().unwrap_or_default())
+        }
+
+        fn deferred_work_is_serviceable(&self) -> bool {
+            !self.deferred_effects.is_empty()
+        }
+
+        fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error> {
+            self.deferred_dispatches = self.deferred_dispatches.saturating_add(1);
+            Ok(self.deferred_effects.pop_front().unwrap_or_default())
         }
 
         fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
@@ -2608,6 +2709,60 @@ mod tests {
         .payload()
         .to_vec();
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
+    }
+
+    fn signed_runtime_quorum_certificate(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        marker: u8,
+    ) -> wire::QuorumCertificate {
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 5])),
+            payload_hash: Hash::new([marker, 6]),
+        };
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new([marker, 7]),
+            Hash::new([marker, 8]),
+            Hash::new([marker, 9]),
+            Hash::new([marker, 10]),
+        );
+        let signers = vec![0, 1, 2];
+        let preimage = wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate runtime fixture certificate"),
+        }
     }
 
     fn runtime_manifest(context: &wire::HeightContext, marker: u8) -> wire::PayloadManifest {
@@ -2815,6 +2970,269 @@ mod tests {
         let _ = runtime.step(start + Duration::from_secs(10));
         let _ = runtime.step(start + Duration::from_secs(20));
         assert_eq!(runtime.driver.timeouts, vec![initial]);
+    }
+
+    #[test]
+    fn serviceable_adapter_debt_drains_one_macro_step_before_new_work() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut driver = FakeDriver::new(initial);
+        driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other(), FakeEffect::other()]);
+        driver.deferred_effects.push_back(vec![FakeEffect::other()]);
+        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(8, 2, 2));
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Completion,
+            FakeCommand::record(9),
+        )
+        .expect("enqueue newer runtime work");
+
+        let due = start + Duration::from_secs(10);
+        assert!(matches!(
+            runtime.step(due),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 2
+        ));
+        assert_eq!(runtime.driver.deferred_dispatches, 1);
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(runtime.driver.timeouts.is_empty());
+
+        assert!(matches!(
+            runtime.step(due),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
+        ));
+        assert_eq!(runtime.driver.deferred_dispatches, 2);
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(runtime.driver.timeouts.is_empty());
+
+        // The finite debt is now empty. The already-due absolute timeout keeps
+        // its normal precedence, proving deferred service delays but cannot
+        // erase the timer or overtake more than its decreasing queue rank.
+        assert!(matches!(
+            runtime.step(due),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        assert_eq!(runtime.driver.timeouts, vec![initial]);
+        assert_eq!(runtime.queued_commands(), 1);
+    }
+
+    #[test]
+    fn serviceable_adapter_debt_runs_without_runtime_ingress() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut driver = FakeDriver::new(initial);
+        driver.deferred_effects.push_back(vec![FakeEffect::other()]);
+        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(8, 2, 2));
+
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(matches!(
+            runtime.step(start),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
+        ));
+        assert_eq!(runtime.driver.deferred_dispatches, 1);
+        assert!(matches!(runtime.step(start), Ok(RuntimeStep::Idle)));
+    }
+
+    #[test]
+    fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress() {
+        let directory = TempDir::new().expect("temporary real-adapter ordering directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let start = Instant::now();
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm runtime after adapter startup");
+
+        // Refresh the derived clock before the signer becomes busy. This keeps
+        // the absolute deadline and retransmission deadline independent in the
+        // ordering trace below.
+        let before_timeout = start + Duration::from_secs(9);
+        assert!(matches!(
+            runtime
+                .step(before_timeout)
+                .expect("service pre-fence retransmission"),
+            RuntimeStep::Advanced(_)
+        ));
+
+        let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
+        runtime
+            .enqueue_network(proposal.clone())
+            .expect("enqueue authenticated proposal");
+        let proposal_effects = match runtime
+            .step(before_timeout)
+            .expect("dispatch authenticated proposal")
+        {
+            RuntimeStep::Advanced(effects) => effects,
+            RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
+        };
+        let (tag, manifest) = match proposal_effects.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+
+        runtime
+            .enqueue_body_available(tag, manifest.clone())
+            .expect("enqueue reconstructed body");
+        assert!(matches!(
+            runtime
+                .step(before_timeout)
+                .expect("dispatch reconstructed body"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+        ));
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        runtime
+            .enqueue_body_stored(tag, manifest.round, manifest.subject, durable.clone())
+            .expect("enqueue durable-body completion");
+        assert!(matches!(
+            runtime
+                .step(before_timeout)
+                .expect("dispatch durable-body completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+        ));
+        runtime
+            .enqueue_validation_succeeded(
+                tag,
+                manifest.round,
+                manifest.subject,
+                ValidatedBodyReceipt::for_test(durable),
+            )
+            .expect("enqueue validated-body completion");
+        let (prepare_sign_tag, prepare_signature_preimage) = match runtime
+            .step(before_timeout)
+            .expect("dispatch validated-body completion")
+        {
+            RuntimeStep::Advanced(effects) => match effects.as_slice() {
+                [
+                    AdapterEffect::Sign {
+                        tag,
+                        request: SignRequest::Vote(vote),
+                    },
+                ] if vote.phase == wire::GlobalPhase::Prepare
+                    && vote.round == manifest.round
+                    && vote.subject == manifest.subject =>
+                {
+                    (*tag, vote.signature_preimage())
+                }
+                effects => panic!("unexpected validation effects: {effects:?}"),
+            },
+            RuntimeStep::Idle => panic!("validation dispatch unexpectedly idle"),
+        };
+
+        // The body pipeline leaves the fair-ingress cursor at Progress. An
+        // exact authenticated retransmission is consumed below the reducer
+        // fence and advances that cursor normally, so Completion owns the
+        // first slot once the signature and newer ingress arrive together.
+        runtime
+            .enqueue_network(proposal)
+            .expect("enqueue exact authenticated retransmission");
+        assert!(matches!(
+            runtime
+                .step(before_timeout)
+                .expect("coalesce exact authenticated retransmission"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert_eq!(runtime.ingress.next_class, CommandClass::Completion);
+
+        let deadline = start + runtime.round_timeout();
+        assert!(matches!(
+            runtime
+                .step(deadline)
+                .expect("deliver absolute timeout through the real adapter"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert!(
+            !runtime.driver().deferred_work_is_serviceable(),
+            "the exact Prepare signature still fences the Busy-deferred timeout"
+        );
+
+        let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature(prepare_sign_tag, prepare_signature)
+            .expect("enqueue exact Prepare signature completion");
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xE2))
+            .expect("enqueue newer authenticated ingress");
+        assert_eq!(runtime.queued_commands(), 2);
+
+        let prepare_broadcast = runtime
+            .step(deadline)
+            .expect("signature completion owns the first serialized turn");
+        assert!(matches!(
+            prepare_broadcast,
+            RuntimeStep::Advanced(ref effects)
+                if matches!(
+                    effects.as_slice(),
+                    [AdapterEffect::Broadcast(message)]
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::Vote(vote)
+                                if vote.phase == wire::GlobalPhase::Prepare
+                                    && vote.round == manifest.round
+                                    && vote.subject == manifest.subject
+                        )
+                )
+        ));
+        assert_eq!(
+            runtime.queued_commands(),
+            1,
+            "newer ingress remains owned after signature completion"
+        );
+
+        let timeout_macro_step = runtime
+            .step(deadline)
+            .expect("service exactly one older Busy-deferred timeout transition");
+        assert!(matches!(
+            timeout_macro_step,
+            RuntimeStep::Advanced(ref effects)
+                if matches!(
+                    effects.as_slice(),
+                    [AdapterEffect::Sign {
+                        request: SignRequest::TimeoutVote(vote),
+                        ..
+                    }] if vote.round == manifest.round
+                )
+        ));
+        assert_eq!(
+            runtime.queued_commands(),
+            1,
+            "one deferred macro-step cannot concatenate newer ingress"
+        );
+
+        assert!(matches!(
+            runtime.step(deadline).expect("dispatch newer ingress"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::ReportEquivocation { .. }])
+        ));
+        assert_eq!(runtime.queued_commands(), 0);
+
+        let next_retransmission = before_timeout + runtime.retransmit_interval();
+        assert!(matches!(
+            runtime
+                .step(next_retransmission)
+                .expect("make the next periodic scheduling decision"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert_eq!(runtime.retransmit_started_at, next_retransmission);
     }
 
     #[test]
@@ -5399,6 +5817,119 @@ mod tests {
             runtime.can_admit_network_message(&distinct_response),
             "the retained response can drain after Progress capacity returns"
         );
+    }
+
+    #[test]
+    fn commit_certificate_response_coalesces_with_exact_busy_deferred_qc() {
+        let directory = TempDir::new().expect("temporary deferred-QC runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
+        );
+        let owner_tag = runtime.round_tag();
+        let exact_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE1);
+        let distinct_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE2);
+        let exact_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(exact_certificate.clone()),
+        );
+
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("open a signer fence before CommitQC dispatch");
+        assert!(
+            matches!(
+                timeout.effects(),
+                [AdapterEffect::Sign {
+                    request: SignRequest::TimeoutVote(_),
+                    ..
+                }]
+            ),
+            "unexpected timeout effects: {:?}",
+            timeout.effects()
+        );
+        runtime
+            .enqueue_network(exact_message.clone())
+            .expect("enqueue the authenticated CommitQC before the fence is observed");
+        assert!(matches!(
+            runtime
+                .step(Instant::now())
+                .expect("move the Busy CommitQC into adapter ownership"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_quorum_certificate_owner_tag(&exact_certificate),
+            Some(owner_tag)
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_quorum_certificate_owner_tag(&distinct_certificate),
+            None
+        );
+
+        for signature in [vec![3], vec![4], vec![5]] {
+            runtime
+                .enqueue_signature(owner_tag, signature)
+                .expect("completion traffic saturates the shared Progress prefix");
+        }
+        assert_eq!(runtime.queued_commands(), 3);
+
+        let response = |certificate| {
+            wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                    wire::CommitCertificateResponse {
+                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"deferred-QC coalescing request",
+                        )),
+                        certificate,
+                        responder: PeerId::new(keys[0].public_key().clone()),
+                        signature: vec![1],
+                    },
+                ),
+            )
+        };
+        assert!(
+            runtime.can_admit_network_message(&response(exact_certificate.clone())),
+            "an exact response can reach authentication through its Busy-deferred owner"
+        );
+        assert!(
+            !runtime.can_admit_network_message(&response(distinct_certificate.clone())),
+            "a distinct response remains blocked while the Progress prefix is saturated"
+        );
+
+        let queued_before = runtime.queued_commands();
+        assert_eq!(
+            runtime
+                .enqueue_network(exact_message)
+                .expect("an authenticated exact QC coalesces with adapter ownership"),
+            owner_tag
+        );
+        assert_eq!(
+            runtime.queued_commands(),
+            queued_before,
+            "authenticated coalescing must not create a runtime-queued duplicate"
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_quorum_certificate_owner_tag(&exact_certificate),
+            Some(owner_tag),
+            "request completion leaves the sole Busy-deferred owner intact"
+        );
+        assert!(matches!(
+            runtime.enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(distinct_certificate),
+            )),
+            Err(NetworkIngressError::Backpressure(
+                EnqueueError::ReservedCapacity
+            ))
+        ));
+        assert_eq!(runtime.queued_commands(), queued_before);
     }
 
     #[test]

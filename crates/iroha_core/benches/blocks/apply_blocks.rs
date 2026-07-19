@@ -37,7 +37,7 @@ impl StateApplyBlocks {
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
-        seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
 
         let nth = 10;
         let instructions = [
@@ -49,7 +49,7 @@ impl StateApplyBlocks {
         let blocks = {
             // Create empty state because it will be changed during creation of block
             let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
-            seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
+            seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
             instructions
                 .into_iter()
                 .map(|instructions| {

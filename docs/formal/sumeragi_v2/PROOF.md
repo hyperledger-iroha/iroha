@@ -257,17 +257,82 @@ Each recipient/source lane is bounded and the ready queue rotates every
 non-empty source. Within the selected source, ingress removes the oldest
 currently admissible entry; an auxiliary request waiting for I/O capacity
 therefore cannot hide later consensus or certified-body progress, and every
-earlier blocked entry remains in its original order. Exact authenticated
-envelopes coalesce while an equal occurrence remains owned anywhere in the
-scheduler, including deferred, causal, runtime, ready-completion, I/O, or
-outstanding-work ownership. Servicing that owner therefore cannot leave an
-equal replacement at the same logical rank. A pinned mutation demonstrates the
-old deferred-owner replacement lasso and the scheduler-wide coalescing repair.
+earlier blocked entry remains in its original order. In the abstract scheduler,
+exact authenticated envelopes coalesce while an equal occurrence remains owned
+anywhere in the scheduler, including deferred, causal, runtime,
+ready-completion, I/O, or outstanding-work ownership. Servicing that owner
+therefore cannot leave an equal replacement at the same logical rank. Production
+now performs the exact queued/Busy-deferred union for embedded CommitQCs and
+rechecks it after authentication; the wider causal/ready/I/O projection remains
+part of the separately unproved production-refinement seam. A pinned mutation
+demonstrates the old replacement lasso and the scheduler-wide coalescing repair.
 Transport packets and ingress entries retain occurrence-specific service
 arguments instead of being folded vacuously into that candidate rank. Timeout
 delivery also establishes membership in the full canonical envelope record set
 before consuming authorization fields, excluding augmented records that merely
 expose a well-typed selected view.
+
+The production capacity premise is instantiated with checked exact transport
+geometry, not an abstract payload-size allowance. If `F(x)` is canonical
+compact-length framing, a frozen layout with `C` chunk hashes has manifest
+ceiling `F(8 + C * F(32)) + 228`. The maximal proposal contains that manifest,
+one full-QC timeout group per validator, the separately carried highest QC, and
+maximum signatures; the recommended 128-validator value is 232,541 bare bytes.
+The maximum recommended `PayloadChunk`/`CertifiedBodyResponse` envelope is
+16,811,581 bare bytes. Recovery request and
+`CommitCertificateResponse` ceilings include maximum QCs, maximum signatures,
+the actual chain-id length where present, and an embedded `PeerId` derived from
+the protocol-wide 8,258-byte raw public-key payload ceiling. Thus the premise
+covers non-roster observers and rotated responders rather than assuming the
+active roster's key width.
+
+All live lane-local messages now cross the same fair ingress as V2 messages.
+Lane executable payloads and handoffs consume TransportCompletion ownership;
+lane votes, proposals, QCs, certificates, and new-view traffic consume Progress
+ownership. Production enforces four-MiB and one-MiB exact wire ceilings for
+those two groups. The byte-abstract model uses its existing completion and
+progress representatives, so the exact concrete class/byte correspondence is
+part of `ProgressWitnessProductionRefinementObligation`, not a proved premise.
+The concrete resource lane is keyed by the authenticated `via` hop, while
+semantic origin remains attached for validation, response routing, and
+coalescing. Its direct-origin projection in the model does not prove that split.
+
+That bare envelope is lifted through the exact `BlockMessage::V2`, framed
+`BlockMessageWire`, `NetworkMessage::SumeragiBlock`, direct P2P relay, and
+header-framed `Message::Data` layouts. The final inequalities require the
+plaintext frame to fit its topic cap and the global encrypted cap after the
+28-byte AEAD expansion; one queued frame additionally owns its four-byte length
+prefix. The wire body may be at most `u32::MAX`, while the deterministic
+runtime/configuration ceiling is 2,147,483,643 bytes so prefix plus body fits a
+contiguous `i32::MAX`-byte buffer on 32-bit and 64-bit hosts. Daemon validation
+rejects a larger cap before binding, and the sender uses checked geometry and
+checked conversion before encryption. Both context configuration and ingress
+open repeat the count, disjoint source-byte, aggregate-byte, three topic-frame,
+and outbound-high checks. Prefix-inclusive outbound charging returns a checked
+optional value, so arithmetic failure rejects activation unconditionally rather
+than relying on a `usize::MAX` sentinel comparison. These executable checks
+establish the finite-capacity premise used by this lemma; they do not prove
+post-GST delivery fairness or promote any proof-ledger entry.
+
+The model publishes one abstract packet atomically. Production instead retains
+a reliable occurrence through actor admission, encoding, frame and batch
+ownership, socket write, and flush; broadcasts also retain their remaining
+target cursor. Retirement is authorized only by the matching flush
+acknowledgement. That acknowledgement proves one local transport attempt, not
+relay-final-target receipt, subscriber consumption, or application. The exact
+actor-to-flush trace, later custody transitions, and decreasing service rank
+remain unassigned production-refinement propositions, so the abstract packet
+action cannot by itself discharge starvation freedom. Concretely, a reliable
+broadcast snapshots the actor-accepted relay-aware topology and acquires each
+target's ordinary `(target, class)` lane independently. An existing target
+child coalesces only a retry with the identical canonical request digest and
+the same membership tenure. A distinct payload or direct/broadcast cross-kind
+collision retains an exact per-target FIFO ticket with the caller, without a
+class-wide parent. Topology removal cancels only the old broadcast tenure, and
+remove/re-add creates a new generation; direct-post ownership is not cancelled.
+This removes the known local parent-residual obstruction, but no production
+refinement or theorem currently establishes remote receipt, downstream
+consumption, or broadcast starvation freedom.
 
 Local admission alternates a producer-completion source with the causal-work
 source. A producer selection while causal work waits records sticky causal
@@ -409,9 +474,11 @@ wrappers are TLAPS-proved. This includes the historical TC-lock authorization,
 the dependent direct-or-installed-authorization timeout wrapper, and the strict
 grouped-timeout kernel. The
 one-height asynchronous type-closure wrapper and generation-scoped delivery
-theorem have checked proof bodies. The type-closure wrapper nevertheless
-remains ledgered `specified_unproved` because its induction consumes the
-still-unproved concrete runner scheduler-preservation leaf. The timeout durability, signing,
+theorem are now ledgered `tlaps_proved`; the concrete runner scheduler-
+preservation prerequisite is proved as well. Fresh hash-guarded strict TLAPS
+slices exited 0 for transport/runner closure (186/186 and 204/204), the recovery
+execution hierarchy (305/305), its strong caller and bracket (63/63), the exact
+type obligation (16/16), and the named always-strong wrapper (10/10). The timeout durability, signing,
 view-frontier, and wire-authorization modules additionally prove that every
 honest pending, durable, signing, and transported timeout vote is roster-,
 context-, height-, and authenticated-high-reference bound with a high rank no
@@ -428,11 +495,11 @@ body matches those Rust expressions, nor a temporal theorem that the runtime or
 external body service is eventually invoked. The executable height-scoped
 acquisition owner now specifies immutable physical identity, mutable consumer
 rebind, exact completion classification, certified recovery, and retry. Its
-`EffectiveLockAcquisitionModelObligation` now has a complete source proof body
-which composes type closure, acquisition progress, and stable repeated
-delivery. It remains `specified_unproved` until a fresh pinned strict TLAPS run
-produces source-manifest-bound backend evidence; exhaustive bounded TLC and
-source inspection are not a deductive discharge.
+`EffectiveLockAcquisitionModelObligation` composes type closure, acquisition
+progress, and stable repeated delivery. A complete pinned strict TLAPS run
+proved all 1,258 module obligations, so the ledger records this abstract model
+obligation as `tlaps_proved`; exhaustive bounded TLC remains complementary
+regression evidence rather than the deductive discharge.
 Ordinary-Rust map/hash/service projection, worker/request ownership, and
 post-GST fairness remain separately in
 `EffectiveLockBodyAcquisitionProductionRefinementObligation`, also ledgered
@@ -442,10 +509,10 @@ current-height protocol evidence, strictly consumes a concrete deadline debt,
 or decreases/exits a protected candidate or Serve-occurrence rank. Repeated
 clock or view-change steps alone do not satisfy that productive obligation.
 Stage-2/3/6, packet-admission, and zero-deadline cases therefore remain explicit
-proof debt. Runner preservation has a source proof body but still needs a fresh
-pinned strict proof. Starvation has conditional precursor proof bodies, while
+proof debt. Runner preservation and the dependent async type closure are now
+proved. Starvation has conditional precursor proof bodies, while
 the release-facing theorem remains proofless and depends on the still-unproved
-service-rank theorem. Both remain `specified_unproved`. Durable witness,
+service-rank theorem. It remains `specified_unproved`. Durable witness,
 rank decrease, and the remaining stable-suffix liveness theorems are exact
 universally quantified declarations recorded as `specified_unproved`. The
 argument above does not upgrade any of those statuses. The concrete genesis
@@ -531,9 +598,24 @@ weakened claim or theorem, unreviewed helper theorem, duplicate TLC-only
 variable tuple, or alternate TLC fairness relation. The complete Core `Next`
 relation is not embedded in every `WF` target, because that redundant search
 causes TLC to test unrelated conflicting Core branches during `ENABLED`.
-This promotes only `async-fair-action-refinement` to `tlaps_proved`; the
-49-entry ledger still contains 18 `specified_unproved`, 6 `trusted_contract`,
-and 1 `out_of_scope` entries, so `machine_checked_completion` remains false.
+This promotes `async-fair-action-refinement` to `tlaps_proved`. Independently,
+the post-Decision timeout frontier and exact durable Commit-Decision recovery
+lifecycle described below are also `tlaps_proved`.
+The abstract protected-rank prerequisites are separately ledgered as
+`async-progress-ownership-invariant`,
+`protected-service-rank-stage4-ready-causal`,
+`protected-service-rank-serve-fifo`, and
+`protected-service-rank-stage5-consensus-fifo`. All four remain
+`specified_unproved`: progress ownership consumes the now-proved async type
+closure; Stage 4 and Serve FIFO also consume the proved exact fair-action
+refinement; and Stage-5 Consensus FIFO still depends on unproved progress
+ownership. The aggregate
+`protected-service-rank` obligation waits for every leaf, while production
+admission, runtime, ingress, and actor-to-flush ownership remain outside these
+abstract results. The 53-entry ledger contains 29 `tlaps_proved`, 17
+`specified_unproved`, 6
+`trusted_contract`, and 1 `out_of_scope` entries, so
+`machine_checked_completion` remains false.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs the original eight
@@ -567,39 +649,140 @@ post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
 The formal gate also seals and executes a dedicated effect-capacity ownership
-matrix consisting of four models and nineteen configurations. Its eight
-repaired cases complete, while all eleven mutants fail at their named invariant
-or temporal witness; together they generate 117 states and reach 116 distinct
-states. The matrix exercises persisted TimeoutVote-Sign ownership at capacity
-two, deterministic Fetch preemption and decided-owner exclusion, fair
+matrix consisting of 6 models and 28 configurations. Its 10 repaired cases
+complete, while all 18 mutants fail at their named invariant or temporal
+witness; together they generate 147 states and reach 146 distinct states. The
+matrix exercises persisted TimeoutVote-Sign ownership at capacity two,
+deterministic Fetch preemption and decided-owner exclusion, fair
 non-preemptible retirement, reconstructible full-capacity Fetch rejection, and
-bounded retained-effect FIFO behavior. Crash/restart authority is explicitly
-delegated to `SumeragiV2CrashReplayMutation`. These are finite TLC regression
-witnesses, not a deductive proof or promotion, and therefore do not alter any
-proof-coverage status or `machine_checked_completion`.
+bounded retained-effect FIFO behavior. Its certified-request seam separates a
+one-entry request bound from two general work slots. Only a `FetchBody` producer
+may retain and retry an independent request-capacity rejection, and that
+rejection leaves both work and request allocation unchanged. The exact
+authenticated `CertifiedBodyResponse` with a still-live matching logical
+request registration is transport-only, so it may cross the retained
+reducer-effect suffix and atomically retire the old Fetch/request pair. The
+durable producer then reconstructs and retransmits the Fetch so it acquires
+both owners without an observable partial state.
+`CommitCertificateResponse` remains reducer-ordered because its
+authenticated CommitQC is submitted to the reducer before discovery ownership
+retires. A sixth model selects either a certified response or payload chunk
+behind saturated generic outer-ingress count and bytes. Both kinds share one
+per-validator TransportCompletion count slot and full-envelope byte reserve;
+independent classification mutants reproduce the lasso for each kind. The
+model's weak-fairness result is conditional on a responsive certified source
+and terminating transport and body work; those are premises, not consequences
+of the finite state search. Crash/restart authority is
+explicitly delegated to `SumeragiV2CrashReplayMutation`. These are finite TLC
+regression witnesses, not a deductive proof or promotion, and therefore do not
+alter any proof-coverage status, promote a ledger obligation, or change
+`machine_checked_completion`.
 
 A separate source-sealed post-Decision timeout/TC matrix contains one model
-and eight configurations. The repaired deterministic trace completes with TLC
-status 0; seven single-seam mutants, covering all three constructors, both
-receive-pool branches, and both causal-successor branches, return status 12 at
-their exact named invariants. The source proof exposes
-`DecisionTimeoutFrontierInvariant` and exact node/generation-bound
-`DecisionRecoveryAuthority`, while the ledger records the full action
-induction and replay-to-current-`FetchBody` handoff as two independent
-`specified_unproved` obligations. A third independent sentinel keeps the
+and nine configurations. The repaired deterministic trace completes with TLC
+status 0; eight single-seam mutants cover `BeginTimeout`, `ResumeTimeout`,
+`FormTC`, `BeginInstallTC`, both receive-pool branches, and both
+causal-successor branches, returning status 12 at their exact named
+invariants. The source proof exposes `DecisionTimeoutFrontierInvariant` and
+exact node/generation-bound `DecisionRecoveryAuthority`. The full Core action
+induction, including crash and `ResumeTimeout`, brackets every Core-stuttering
+scheduler step and lifts through `AsyncNext` and the temporal specification;
+it is proved by strict TLAPS independently of `AsyncTypeInvariantObligation`.
+The ledger promotes the post-Decision timeout frontier. A separate 270-
+obligation strict proof establishes the same-node/same-context durable/
+pending frontier, Commit-only recovery authority, generation-free logical
+request registration across crash and restart, explicit Prepare rejection,
+and the replay reset's exact singleton current-generation `FetchBody` update.
+It derives the reachable Core type facts locally instead of consuming the
+still-unproved global async type obligation. An independent sentinel keeps the
 Rust/Verus-to-TLA durable-owner, scheduler, and application trace mapping
 `specified_unproved`; abstract TLAPS success cannot promote production
 progress without it. The matrix is regression evidence only.
 
-The current pre-network release inventory names 204 tests across seventeen Rust
-modules. It includes exact completion ownership, body-owner binding and
+A separate certified-response registration matrix contains one model and five
+configurations. The duplicate, authenticated-restart, and historical-catch-up
+repairs complete only when a signed response matches an exact currently live
+request registration. Two missing-guard mutants accept a second fan-out
+response after retirement or a delayed pre-replay response after restart has
+cleared the registration, and both fail their named invariants. This bounded
+matrix pins the executable authorization seam and complements, rather than
+substitutes for, the strict deductive crash/restart/replay authority proof.
+
+The source-sealed durable Decision lifecycle matrix adds one repaired trace and
+eight targeted mutations. It keeps Commit authority and the logical request
+registration generation-free while modeling the executor generation as a
+separate variable. The mutants independently violate durable Decision
+uniqueness, generation-free or recipient-independent registration, replay
+clearing, FetchBody reconstruction, current-generation execution, Commit-only
+authority, and singleton replay. The nine deterministic graphs total 42
+generated/distinct states: the repair completes, and every mutant fails its
+named invariant. These finite graphs guard the checked proof vocabulary but do
+not discharge the Rust/Verus-to-TLA refinement sentinel.
+
+The production applied-height output handoff is an atomic, source-sealed typed
+contract rather than a variant whitelist. It first rechecks every retained
+network-message hash. Historical CommitQC, certified-body, and lane-certificate
+claims are singleton target-bound identities and independently reread the exact
+Kura finality artifact, canonical body, or certified lane artifact at handoff.
+The applicable responder/signature, subject/body/manifest, proposal/QCs, and
+response hashes are revalidated; missing, wrong-identity, or substituted
+sources fail closed. Current-height global V2 claims bind protocol, Decision
+context/height, and the exact finality artifact. A winning lane claim requires
+the exact durable Kura certificate and application receipt, revalidates
+alternate vote/QC/certificate proof variants, and explicitly supersedes
+structurally valid same-height non-winning lane output. Native AMX claims bind
+creation scope, embedded round, and message hash; merge-share claims bind scope
+and share hash. Certified-sidecar request/chunk claims bind scope, target roles,
+transfer identity, and exact request/response hash. Finalized-sidecar pruning
+leaves winning data in the committed merge log and supersedes losing pending
+work before handoff. Manual or otherwise untyped `Exact` output remains owned
+and fails closed. These source contracts do not promote the application,
+reconstruction-refinement, or starvation obligations.
+
+The current pre-network release inventory names 298 tests across twenty-one Rust
+modules. Relative to the preceding 264-name inventory, 37 positive regressions
+comprise 10 per-target exact-output and historical/current typed-rollover tests,
+2 peer-writer flush/old-generation custody tests, 20 exact progress-ticket,
+topology, removal, replacement, and identical-retry tests plus
+distinct/cross-kind broadcast-residual and subscriber-backlog tests, and 1
+runtime/Busy-deferred exact CommitQC coalescing test, plus 4 Nexus lane-relay
+ownership/fairness tests. Removing the obsolete adapter cursor alias and two
+superseded network broadcast-residual tests yields the net delta of 34.
+They are local ownership and reconstruction
+contracts, not remote application acknowledgement, relay second-hop
+completion, or unbounded broadcast admission. The 264-name baseline added 32
+atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
+watchdog regressions. The 232-name baseline already included two exact locked-Commit
+progress-witness regressions
+and six outer TransportCompletion-corridor regressions. The current
+geometry inventories four owners per validator plus two aggregate-untrusted
+owners (`4N+2` total), including a roster-origin completion relayed through an
+untrusted authenticated hop, and retains the capacity-negative boundary. It
+also adds one four-validator exact PrepareQC count-and-power quorum regression.
+The four integration names share a module-filtered leg; the pre-network corridor
+now has 41 legs, including separate exact data-model status and atomic
+lane-certificate decode contracts. Its `iroha_p2p` legs use the crate's empty
+default feature set; feature-gated QUIC first-packet geometry tests are not
+claimed by the twenty-one-module, forty-one-leg corridor. It includes
+exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`4N+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
-post-decision timeout/TC quiescence, and watchdog classification. The preceding
-mutable-source discovery and direct execution evidence covered the earlier
-168-name inventory. Fresh 204-name
+post-decision timeout/TC quiescence, and watchdog classification. It also pins
+the adapter's maximum flattened persistence macro-step at five effects within
+the reducer's eight-effect bound, services at most one Busy-deferred adapter
+macro-step per serialized runtime turn, and forbids terminal readiness while
+any Completion, Progress, or Normal deferred queue remains nonempty. The
+production-default saturation regression fills all 256 certified-request
+owners, 640 Normal ingress slots, and the 128-slot reserved Progress increment
+while preserving the 256-slot Completion reserve, then proves that an exact
+authenticated `CertifiedBodyResponse` with a still-live matching logical
+request registration can retire the old request; durable reducer
+retransmission then reconstructs the blocked Fetch and lets it acquire both
+owners atomically. The
+preceding mutable-source discovery and direct execution evidence covered the
+earlier 168-name inventory. Fresh 298-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt
@@ -610,6 +793,7 @@ admission and post-WAL pruning. A recorded pre-current-edit strict run
 discharged all 7,826 induction obligations and all 565 downstream Core safety
 obligations, promoting only historical TC-lock authorization and timeout
 protection.
-The asynchronous liveness proof-premise repairs remain outstanding. Full
-strict proof completion, the release-profile 100,000-height chaos rerun, and
-the 24-hour Taira-profile soak remain pending.
+The asynchronous liveness proof-premise repairs remain outstanding. A fresh
+pinned strict whole-module aggregate release TLAPS run, the clean source-sealed
+release gate, the release-profile 100,000-height chaos rerun, and the 24-hour
+Taira-profile soak remain pending.

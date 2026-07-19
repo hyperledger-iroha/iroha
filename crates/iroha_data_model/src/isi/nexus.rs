@@ -63,6 +63,10 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
     /// Persist a proof-backed cross-lane sponsor-vault spend allocation.
+    ///
+    /// Execution requires the sponsor or its delegated program manager, rejects source heights
+    /// beyond the executing block, and permits at most one unexpired lease for each
+    /// program/revision/asset/source-dataspace route.
     pub struct RegisterVerifiedFeeSponsorVaultAllocation {
         /// Exact sponsor program authorized to spend the allocation.
         pub program_id: FeeSponsorProgramId,
@@ -127,7 +131,10 @@ iroha_data_model_derive::model_single! {
         pub program_id: FeeSponsorProgramId,
         /// Exact staged revision number.
         pub revision: u64,
-        /// Consensus height at which activation takes effect.
+        /// Earliest consensus height at which activation may take effect.
+        ///
+        /// The runtime postpones activation until every spend lease from an older revision has
+        /// expired.
         pub activate_at_height: u64,
     }
 }

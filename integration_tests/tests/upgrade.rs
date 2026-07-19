@@ -192,11 +192,7 @@ fn executor_upgrade_should_work() -> Result<()> {
     let client = network.client();
 
     // Register `admin` domain and account
-    submit_register_domain_with_network_lease(
-        &network,
-        &client,
-        Domain::new(admin_domain.clone()),
-    )?;
+    submit_ensure_domain_for_network(&network, &client, Domain::new(admin_domain.clone()))?;
 
     let admin_account = Account::new(admin_id.clone());
     let register_admin_account = Register::account(admin_account);
@@ -800,13 +796,12 @@ fn define_custom_parameter() -> Result<()> {
     let client = network.client();
 
     let long_domain_name = DomainId::try_new("0".repeat(2_usize.pow(5)), "universal")?;
-    submit_register_domain_with_network_lease(&network, &client, Domain::new(long_domain_name))?;
+    submit_ensure_domain_for_network(&network, &client, Domain::new(long_domain_name))?;
 
     upgrade_executor(&client, "executor_with_custom_parameter")?;
 
     let too_long_domain_name = DomainId::try_new("1".repeat(2_usize.pow(5)), "universal")?;
-    ensure_domain_registration_lease_for_network(&network, &too_long_domain_name)?;
-    let create_domain = Register::domain(Domain::new(too_long_domain_name));
+    let create_domain = domain_setup_instruction(&too_long_domain_name, &client.account)?;
     let _err = client
         .submit_blocking(
             create_domain.clone(),
@@ -820,7 +815,7 @@ fn define_custom_parameter() -> Result<()> {
     .into();
     let set_param_isi = SetParameter::new(parameter);
     client.submit_all_blocking::<InstructionBox>(
-        [set_param_isi.into(), create_domain.into()],
+        [set_param_isi.into(), create_domain],
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
 

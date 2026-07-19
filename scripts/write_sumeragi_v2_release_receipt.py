@@ -105,7 +105,8 @@ _IDENTITY_KEYS = {
     "cargo_lock_sha256",
 }
 _FORMAL_FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
 _CHAOS_MARKER = (
@@ -186,12 +187,12 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 204
+_PRODUCTION_TEST_COUNT = 298
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
-        "kura::tests::progress_witness_durability",
-        11,
+        "kura::tests",
+        12,
     ),
     (
         "production-kura-lane-geometry",
@@ -199,44 +200,64 @@ _PRODUCTION_MODULES = (
         8,
     ),
     (
+        "production-lane-relay-exact-ownership",
+        "nexus::lane_relay::tests",
+        4,
+    ),
+    (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        8,
+        22,
     ),
-    ("production-v2-core", "sumeragi::v2_core::tests", 14),
+    ("production-v2-core", "sumeragi::v2_core::tests", 15),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 24),
+    ("production-v2-adapter", "sumeragi::v2::tests", 31),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 46),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 15),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 20),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 52),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 20),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 24),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 11),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 19),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 12),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 27),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
-        16,
+        18,
     ),
     (
         "production-v2-integration-runner",
         "sumeragi_v2_runner",
+        4,
+    ),
+    (
+        "production-p2p-peer-reliable-flush",
+        "peer::run::tests",
+        9,
+    ),
+    (
+        "production-p2p-network-reliable-actor",
+        "network::tests",
+        28,
+    ),
+    (
+        "production-irohad-authenticated-via",
+        "tests::relay_fairness",
         1,
     ),
 )
-_PRODUCTION_INTEGRATION_TEST = (
-    "sumeragi_v2_runner::prepare_qc_split_tests::"
-    "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one"
-)
+_PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
 _DATA_STATUS_TEST = (
     "block::consensus_v2::tests::"
     "status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry"
+)
+_DATA_LANE_CERTIFICATE_TEST = (
+    "block::consensus::tests::lane_block_certificate_decodes_atomically_from_slice"
 )
 _TAIRA_CONTRACT_TESTS = (
     "taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile",
@@ -287,7 +308,17 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
         len(tests) != _PRODUCTION_TEST_COUNT
         or len(set(tests)) != _PRODUCTION_TEST_COUNT
         or any(
-            not test.startswith(("sumeragi::", "sumeragi_v2_runner::", "kura::"))
+            not test.startswith(
+                (
+                    "sumeragi::",
+                    "sumeragi_v2_runner::",
+                    "kura::",
+                    "nexus::",
+                    "peer::",
+                    "network::",
+                    "tests::relay_fairness::",
+                )
+            )
             for test in tests
         )
     ):
@@ -298,20 +329,30 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
     return tests
 
 
+def _production_module_command(module: str) -> str:
+    if module == "sumeragi_v2_runner":
+        return (
+            "cargo test --locked -p integration_tests --test "
+            "sumeragi_v2_runner_isolated "
+            f"{_PRODUCTION_INTEGRATION_MODULE} -- --test-threads=1"
+        )
+    if module in {"peer::run::tests", "network::tests"}:
+        return f"cargo test --locked -p iroha_p2p --lib {module} -- --test-threads=1"
+    if module == "tests::relay_fairness":
+        return (
+            "cargo test --locked -p irohad --bin irohad "
+            f"{module} -- --test-threads=1"
+        )
+    return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"
+
+
 def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs = [
         (
             leg_id,
-            "cargo-exact" if module == "sumeragi_v2_runner" else "cargo-module",
+            "cargo-module",
             count,
-            (
-                "cargo test --locked -p integration_tests --test "
-                "sumeragi_v2_runner_isolated "
-                f"{_PRODUCTION_INTEGRATION_TEST} -- --exact --test-threads=1"
-                if module == "sumeragi_v2_runner"
-                else f"cargo test --locked -p iroha_core --lib {module} "
-                "-- --test-threads=1"
-            ),
+            _production_module_command(module),
         )
         for leg_id, module, count in _PRODUCTION_MODULES
     ]
@@ -322,6 +363,15 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             1,
             "cargo test --locked -p iroha_data_model --lib "
             f"{_DATA_STATUS_TEST} -- --test-threads=1",
+        )
+    )
+    legs.append(
+        (
+            "lane-certificate-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked -p iroha_data_model --lib "
+            f"{_DATA_LANE_CERTIFICATE_TEST} -- --exact --test-threads=1",
         )
     )
     legs.extend(
@@ -429,14 +479,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                175,
+                182,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
             ),
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                477,
+                582,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -446,7 +496,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-formal-launcher",
                 "pytest",
-                12,
+                16,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
             ),
@@ -2992,21 +3042,50 @@ def _formal_artifacts(
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
-) -> tuple[Path, Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path | None, Path, Path]:
+    ledger = _regular_file(
+        completion_path.with_name("proof_coverage.json"), "formal proof ledger"
+    )
+    checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
+    cross_tool_result = subprocess.run(
+        [
+            sys.executable,
+            str(checker),
+            "--ledger",
+            str(ledger),
+            "--print-cross-tool-obligations",
+        ],
+        cwd=repo_root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=checker_environment,
+    )
+    if cross_tool_result.returncode != 0:
+        raise ReceiptError(
+            "archived formal ledger has an invalid cross-tool evidence requirement"
+        )
+    cross_tool_required = bool(cross_tool_result.stdout.strip())
+    expected_completion_fields = {
+        "schema_version",
+        "head_commit",
+        "head_tree",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "formal_gate_log_sha256",
+        "proof_coverage_sha256",
+        "proof_evidence_sha256",
+        "verus_evidence_sha256",
+        "verus_log_sha256",
+        "harness_cargo_lock_sha256",
+        "formal_toolchain_sha256",
+    }
+    if cross_tool_required:
+        expected_completion_fields.add("cross_tool_evidence_sha256")
     _require_fields(
         fields,
-        {
-            "schema_version",
-            "head_commit",
-            "head_tree",
-            "source_manifest_sha256",
-            "cargo_lock_sha256",
-            "formal_gate_log_sha256",
-            "proof_coverage_sha256",
-            "proof_evidence_sha256",
-            "harness_cargo_lock_sha256",
-            "formal_toolchain_sha256",
-        },
+        expected_completion_fields,
         "formal completion",
     )
     expected = {
@@ -3022,12 +3101,27 @@ def _formal_artifacts(
     gate_log = _regular_file(
         completion_path.with_name("formal-gate.log"), "formal gate log"
     )
-    ledger = _regular_file(
-        completion_path.with_name("proof_coverage.json"), "formal proof ledger"
-    )
     evidence = _regular_file(
         completion_path.with_name("proof_evidence.json"), "formal proof evidence"
     )
+    verus_evidence = _regular_file(
+        completion_path.with_name("verus_evidence.json"),
+        "formal Verus evidence",
+    )
+    verus_log = _regular_file(
+        completion_path.with_name("verus.log"), "formal Verus log"
+    )
+    cross_tool_candidate = completion_path.with_name("cross_tool_evidence.json")
+    if cross_tool_required:
+        cross_tool_evidence: Path | None = _regular_file(
+            cross_tool_candidate, "formal cross-tool evidence"
+        )
+    else:
+        if os.path.lexists(cross_tool_candidate):
+            raise ReceiptError(
+                "formal archive contains forbidden dormant cross-tool evidence"
+            )
+        cross_tool_evidence = None
     harness_lock = _regular_file(
         completion_path.with_name("harness-Cargo.lock"), "formal harness lock"
     )
@@ -3038,11 +3132,18 @@ def _formal_artifacts(
         (gate_log, "formal_gate_log_sha256", "formal gate log"),
         (ledger, "proof_coverage_sha256", "formal proof ledger"),
         (evidence, "proof_evidence_sha256", "formal proof evidence"),
+        (verus_evidence, "verus_evidence_sha256", "formal Verus evidence"),
+        (verus_log, "verus_log_sha256", "formal Verus log"),
         (harness_lock, "harness_cargo_lock_sha256", "formal harness lock"),
         (toolchain_path, "formal_toolchain_sha256", "formal toolchain"),
     ):
         if _sha256(artifact) != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
+    if (
+        cross_tool_evidence is not None
+        and _sha256(cross_tool_evidence) != fields["cross_tool_evidence_sha256"]
+    ):
+        raise ReceiptError("formal cross-tool evidence digest mismatch")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     toolchain_path, toolchain = _load_tsv(toolchain_path, "formal toolchain")
@@ -3090,17 +3191,49 @@ def _formal_artifacts(
     ):
         raise ReceiptError("formal gate log lacks its one exact final success marker")
 
-    checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
-    result = subprocess.run(
+    verus_checker = (
+        repo_root / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+    )
+    verus_result = subprocess.run(
         [
             sys.executable,
-            str(checker),
-            "--ledger",
-            str(ledger),
-            "--release",
+            str(verus_checker),
+            "validate",
+            "--root",
+            str(repo_root),
             "--evidence",
-            str(evidence),
+            str(verus_evidence),
+            "--log",
+            str(verus_log),
         ],
+        cwd=repo_root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=checker_environment,
+    )
+    if verus_result.returncode != 0:
+        raise ReceiptError("archived formal Verus evidence failed validation")
+    checker_args = [
+        sys.executable,
+        str(checker),
+        "--ledger",
+        str(ledger),
+        "--release",
+        "--evidence",
+        str(evidence),
+        "--verus-evidence",
+        str(verus_evidence),
+        "--verus-log",
+        str(verus_log),
+    ]
+    if cross_tool_evidence is not None:
+        checker_args.extend(
+            ["--cross-tool-evidence", str(cross_tool_evidence)]
+        )
+    result = subprocess.run(
+        checker_args,
         cwd=repo_root,
         check=False,
         stdout=subprocess.PIPE,
@@ -3110,7 +3243,16 @@ def _formal_artifacts(
     )
     if result.returncode != 0:
         raise ReceiptError("archived formal ledger/evidence failed release validation")
-    return gate_log, ledger, evidence, harness_lock, toolchain_path
+    return (
+        gate_log,
+        ledger,
+        evidence,
+        verus_evidence,
+        verus_log,
+        cross_tool_evidence,
+        harness_lock,
+        toolchain_path,
+    )
 
 
 def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
@@ -3309,8 +3451,8 @@ def _corridor_artifacts(
     logs: list[Path] = []
     module_for_leg = {leg_id: module for leg_id, module, _ in _PRODUCTION_MODULES}
     exact_cargo_tests: dict[str, tuple[str, ...]] = {
-        "production-v2-integration-runner": (_PRODUCTION_INTEGRATION_TEST,),
         "status-rust": (_DATA_STATUS_TEST,),
+        "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
     }
     exact_cargo_tests.update(
@@ -3579,7 +3721,16 @@ def build_receipt(
     formal_path, formal_completion = _load_tsv(
         formal_completion_path, "formal completion"
     )
-    formal_log, formal_ledger, formal_evidence, formal_harness_lock, formal_toolchain = _formal_artifacts(
+    (
+        formal_log,
+        formal_ledger,
+        formal_evidence,
+        formal_verus_evidence,
+        formal_verus_log,
+        formal_cross_tool_evidence,
+        formal_harness_lock,
+        formal_toolchain,
+    ) = _formal_artifacts(
         formal_path, formal_completion, sealed, checker_environment, repo_root
     )
     seed_path, seed = _load_tsv(seed_completion_path, "seed completion")
@@ -3742,6 +3893,15 @@ def build_receipt(
     if taira_result.returncode != 0:
         raise ReceiptError("archived Taira evidence failed release validation")
 
+    formal_cross_tool_receipt = (
+        {}
+        if formal_cross_tool_evidence is None
+        else {
+            "formal_cross_tool_evidence": _artifact(
+                formal_cross_tool_evidence
+            )
+        }
+    )
     return {
         "schema_version": 1,
         "protocol": "sumeragi-v2",
@@ -3783,6 +3943,9 @@ def build_receipt(
             "formal_gate_log": _artifact(formal_log),
             "formal_proof_coverage": _artifact(formal_ledger),
             "formal_proof_evidence": _artifact(formal_evidence),
+            "formal_verus_evidence": _artifact(formal_verus_evidence),
+            "formal_verus_log": _artifact(formal_verus_log),
+            **formal_cross_tool_receipt,
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
             "seed_matrix_completion": _artifact(seed_path),

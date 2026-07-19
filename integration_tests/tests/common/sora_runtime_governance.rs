@@ -32,7 +32,7 @@ use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
     CanSubmitGovernanceBallot,
 };
-use iroha_test_network::{NetworkBuilder, ensure_domain_registration_lease_for_network};
+use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
@@ -968,23 +968,8 @@ pub async fn setup_runtime_governance_fixture(
 
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
-    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
-        .wrap_err("seed governance domain registration lease")?;
-    let register_domain_tx_hash = alice
-        .submit(
-            Register::domain(Domain::new(gov_domain_id.clone())),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit governance domain registration")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(register_domain_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for runtime-governance fixture domain registration tx to be applied",
-    )
-    .await
-    .wrap_err("register governance domain")?;
+    ensure_domain_setup_for_network(&network, &gov_domain_id)
+        .wrap_err("ensure governance domain and lease state")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;

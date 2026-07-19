@@ -6,9 +6,15 @@
  * The script mirrors the behaviour of scripts/sync_docs_i18n.py for the
  * developer portal by emitting lightweight Markdown/MDX placeholders under
  * `i18n/<lang>/docusaurus-plugin-content-docs/current/`.
+ *
+ * Existing translations are preserved by default. Pass one or more scoped
+ * `--refresh-prefix=<relative/docs/path>` arguments when a canonical rewrite
+ * invalidates every translation below that path. Refreshed files are replaced
+ * with traceable `needs-translation` stubs instead of serving stale guidance,
+ * and obsolete cross-locale copies of suffixed source translations are pruned.
  */
 
-import {mkdir, readFile, readdir, stat, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readdir, stat, unlink, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -244,29 +250,75 @@ const languages = [
 const supportedExtensions = new Set(['.md', '.mdx']);
 const translationLocaleCodes = new Set(languages.map((lang) => lang.code.toLowerCase()));
 
-export async function main() {
-  const englishDocs = await collectDocs(docsRoot);
+export async function main({refreshPrefixes = []} = {}) {
+  const collectedDocs = await collectDocs(docsRoot);
+  const englishDocs =
+    refreshPrefixes.length === 0
+      ? collectedDocs
+      : collectedDocs.filter((doc) =>
+          shouldRefreshTranslation(doc.relative, refreshPrefixes),
+        );
   let created = 0;
+  let refreshed = 0;
+  const pruned = await pruneRetiredLocalizedCopies(refreshPrefixes);
 
   for (const doc of englishDocs) {
     for (const locale of languages) {
       const targetPath = buildLocalePath(doc.relative, locale.code);
       const exists = await fileExists(targetPath);
-      if (exists) {
+      const refresh = shouldRefreshTranslation(doc.relative, refreshPrefixes);
+      if (exists && !refresh) {
         continue;
       }
       await mkdir(path.dirname(targetPath), {recursive: true});
       const stub = buildStub(doc.relative, locale, doc.frontMatter, doc.sourceMetadata);
       await writeFile(targetPath, stub, 'utf8');
-      created += 1;
+      if (exists) {
+        refreshed += 1;
+      } else {
+        created += 1;
+      }
     }
   }
 
-  if (created === 0) {
+  if (created === 0 && refreshed === 0 && pruned === 0) {
     console.log('[sync-i18n] all translation stubs already exist');
   } else {
-    console.log(`[sync-i18n] created ${created} translation stub${created === 1 ? '' : 's'}`);
+    console.log(
+      `[sync-i18n] created ${created} translation stub${created === 1 ? '' : 's'}; ` +
+        `refreshed ${refreshed} stale translation${refreshed === 1 ? '' : 's'}; ` +
+        `pruned ${pruned} retired localized cop${pruned === 1 ? 'y' : 'ies'}`,
+    );
   }
+}
+
+export function parseRefreshPrefixes(args) {
+  const marker = '--refresh-prefix=';
+  return args.map((arg) => {
+    if (!arg.startsWith(marker)) {
+      throw new Error(`unknown argument: ${arg}`);
+    }
+    const raw = arg.slice(marker.length).replaceAll('\\', '/');
+    const normalized = path.posix.normalize(raw).replace(/^\.\//, '').replace(/\/$/, '');
+    if (
+      raw.split('/').includes('..') ||
+      !normalized ||
+      normalized === '.' ||
+      normalized === '..' ||
+      normalized.startsWith('../') ||
+      path.posix.isAbsolute(normalized)
+    ) {
+      throw new Error(`invalid refresh prefix: ${raw}`);
+    }
+    return normalized;
+  });
+}
+
+export function shouldRefreshTranslation(relativePath, refreshPrefixes) {
+  const normalizedPath = relativePath.replaceAll('\\', '/');
+  return refreshPrefixes.some(
+    (prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+  );
 }
 
 async function collectDocs(root) {
@@ -296,13 +348,65 @@ async function collectDocs(root) {
   return results;
 }
 
-function isTranslationFile(fileName) {
+export function isTranslationFile(fileName) {
   const nameParts = fileName.toLowerCase().split('.');
   if (nameParts.length < 3) {
     return false;
   }
   const candidate = nameParts[nameParts.length - 2];
   return translationLocaleCodes.has(candidate);
+}
+
+async function pruneRetiredLocalizedCopies(refreshPrefixes) {
+  if (refreshPrefixes.length === 0) {
+    return 0;
+  }
+
+  let pruned = 0;
+  for (const locale of languages) {
+    const localeRoot = path.join(
+      outRoot,
+      locale.code,
+      'docusaurus-plugin-content-docs',
+      'current',
+    );
+    const existing = await collectExistingDocs(localeRoot);
+    for (const doc of existing) {
+      if (
+        shouldRefreshTranslation(doc.relative, refreshPrefixes) &&
+        isTranslationFile(path.basename(doc.relative))
+      ) {
+        await unlink(doc.absolute);
+        pruned += 1;
+      }
+    }
+  }
+  return pruned;
+}
+
+async function collectExistingDocs(root) {
+  const results = [];
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, {withFileTypes: true});
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return;
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile() && supportedExtensions.has(path.extname(entry.name))) {
+        results.push({absolute: fullPath, relative: path.relative(root, fullPath)});
+      }
+    }
+  }
+  await walk(root);
+  return results;
 }
 
 export function buildLocalePath(relativePath, locale) {
@@ -419,8 +523,10 @@ async function extractFrontMatter(filePath) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error('[sync-i18n] failed:', error);
-    process.exit(1);
-  });
+  Promise.resolve()
+    .then(() => main({refreshPrefixes: parseRefreshPrefixes(process.argv.slice(2))}))
+    .catch((error) => {
+      console.error('[sync-i18n] failed:', error);
+      process.exit(1);
+    });
 }

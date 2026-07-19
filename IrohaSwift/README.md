@@ -107,10 +107,39 @@ let toriiAuth = try ToriiClientAuthentication.bearerToken(
 let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
 
 // Account onboarding requires the dedicated route token explicitly. It remains
-// separate from an optional global X-API-Token configured on the client.
-let onboarding = try await torii.registerAccount(
-    onboardingRequest,
-    onboardingToken: routeToken
+// separate from an optional global X-API-Token configured on the client. Plan
+// first, then apply the exact stateless receipt; neither body contains a key or token.
+// The bundled Norito bridge encodes the exact receipt body and verifies its
+// domain-separated hash, pinned chain, and authority signature before either
+// call returns/submits.
+// An older/missing bridge fails closed; JSON is never used as receipt hash input.
+let onboardingIntent = try ToriiAccountOnboardingPlanRequest(
+    alias: "merchant@paynet",
+    accountId: accountId
+)
+let onboardingReceipt = try await torii.planAccountOnboarding(
+    onboardingIntent,
+    onboardingToken: routeToken,
+    expectedAuthority: configuredOnboardingAuthority,
+    expectedChainId: configuredChainId
+)
+let onboarding = try await torii.applyAccountOnboarding(
+    onboardingReceipt,
+    onboardingToken: routeToken,
+    expectedAuthority: configuredOnboardingAuthority,
+    expectedChainId: configuredChainId
+)
+
+// Operator alias setup is plan-only on Torii. The wallet verifies the plan
+// hash and byte-identical instruction frames, signs one ordinary transaction,
+// and submits it through the existing pipeline endpoint.
+let setupPlan = try await torii.planAliasSetup(setupRequest, canonicalAuth: canonicalAuth)
+try await sdk.submitAliasSetupPlan(
+    setupRequest,
+    plan: setupPlan,
+    bodyEncoder: encodeCanonicalAliasPlanBody,
+    feePayment: feePayment,
+    signingKey: signingKey
 )
 
 // Or opt into any native-bridge signing algorithm explicitly.
@@ -152,6 +181,19 @@ sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
+
+Lease renewal and native auto-renew use the same local-signing flow through
+`planAliasLeaseRenewal`, `planAliasAutoRenew`, and
+`submitAliasLifecyclePlan`. An exact auto-renew no-op returns without creating
+or submitting an empty transaction. Visibility-aware reads are available as
+signed or unsigned overloads of `resolveAccountAlias`,
+`resolveAccountAliasIndex`, and `aliasesByAccount`; signed calls emit the
+canonical Iroha account/signature/timestamp/nonce headers. Alias plan and
+intent values never contain API tokens or private keys.
+The default alias frame codec uses the bundled Rust instruction registry to
+typed-decode and canonically re-encode every complete planner frame; an older
+or missing bridge fails closed. Advanced callers may still inject an equivalent
+registry codec for testing or alternate packaging.
 
 Wallet-scoped Torii deployments commonly require the `Authorization`,
 `X-Account-Id`, and `X-Dataspace-Id` headers on every request. Use
@@ -245,10 +287,10 @@ let plan: ToriiSubscriptionPlan = [
 
 ```
 
-The direct subscription mutation helpers now fail closed instead of accepting
-embedded private keys. Build the equivalent subscription instructions locally,
-sign them with your wallet key material, and submit the resulting transaction
-through `submitTransaction` or `/v1/pipeline/transactions`.
+Direct subscription mutation helpers are not exposed. Build the equivalent
+subscription instructions locally, sign them with wallet key material, and
+submit the resulting transaction through `submitTransaction` or
+`/v1/pipeline/transactions`.
 
 ### Canonical request signing
 
