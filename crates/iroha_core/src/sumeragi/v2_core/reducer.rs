@@ -695,6 +695,31 @@ impl Reducer {
         if local_validator.is_some_and(|id| context.validator(&id).is_none()) {
             return Err(ReducerError::LocalValidatorNotInRoster);
         }
+        let retryable_prepare = durable.highest_prepare().filter(|certificate| {
+            durable.decision().is_none()
+                && certificate.round().view() == durable.current_view()
+                && durable.timeout_intent(certificate.round()).is_none()
+        });
+        let mut body_work = BTreeMap::new();
+        let mut pending_prepare = BTreeMap::new();
+        if let Some(certificate) = retryable_prepare {
+            // WAL replay deliberately reconstructs no volatile body stage. An
+            // undecided, open-current-view high PrepareQC is nevertheless
+            // still the exact authority for certified acquisition, so restore
+            // its Missing frontier without emitting work from the constructor.
+            // Periodic retransmission derives the idempotent FetchBody after
+            // ResumeAfterReplay. Closed/old high-QCs remain control evidence;
+            // exact locks and durable Decisions use their narrower recovery
+            // paths instead of acquiring a conflicting owner here.
+            body_work.insert(
+                (certificate.round(), certificate.subject()),
+                BodyWork {
+                    manifest: None,
+                    state: BodyState::Missing,
+                },
+            );
+            pending_prepare.insert(certificate.reference(), certificate.clone());
+        }
         let mut known_prepare = BTreeMap::new();
         if let Some(certificate) = durable.highest_prepare() {
             known_prepare.insert(certificate.reference(), certificate.clone());
@@ -728,8 +753,8 @@ impl Reducer {
             durable,
             candidate: None,
             candidate_signed: None,
-            body_work: BTreeMap::new(),
-            pending_prepare: BTreeMap::new(),
+            body_work,
+            pending_prepare,
             known_prepare,
             votes: BTreeMap::new(),
             timeout_votes: BTreeMap::new(),

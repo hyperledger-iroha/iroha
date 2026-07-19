@@ -169,10 +169,14 @@ pub fn finalize_committed_block(
     mut state_block: StateBlock<'_>,
     committed_block: CommittedBlock,
 ) {
+    let signed_block: SignedBlock = committed_block.as_ref().clone();
+    state
+        .view()
+        .kura()
+        .store_block(Arc::new(signed_block))
+        .expect("store committed test block before publishing its state height");
     let _ = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().unwrap();
-    let signed_block: SignedBlock = committed_block.into();
-    let _ = state.view().kura().store_block(Arc::new(signed_block));
 }
 
 /// Build a minimal self-describing contract artifact containing a single HALT.
@@ -552,6 +556,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
@@ -882,7 +887,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_por: Default::default(),
             sorafs_appeal_finance_settlement: Default::default(),
-            onboarding: None,
+            account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
@@ -1434,10 +1439,15 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = Arc::new(State::new_for_testing(world, kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
+        let state = Arc::new(State::new_with_chain_for_testing(
+            world,
+            kura,
+            query,
+            chain_id.clone(),
+        ));
 
-        assert_ne!(&state.chain_id, &chain_id);
+        assert_eq!(&state.chain_id, &chain_id);
 
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(
@@ -1460,5 +1470,15 @@ mod tests {
 
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
         assert_eq!(applied, 1);
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        assert_eq!(
+            view.latest_block()
+                .expect("committed test block remains readable from Kura")
+                .header()
+                .height()
+                .get(),
+            1
+        );
     }
 }

@@ -38,6 +38,22 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
+import org.hyperledger.iroha.sdk.alias.AliasSetupPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasAutoRenewPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasLeaseRenewPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasLifecycleTransactionPlanJsonParser
+import org.hyperledger.iroha.sdk.alias.AliasLifecycleTransactionPlanV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingApplyRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingJsonParser
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingReceiptVerifier
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
+import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
+import org.hyperledger.iroha.sdk.alias.requireOnboardingCredential
+import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
+import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
+import org.hyperledger.iroha.sdk.alias.AccountAliasName
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -312,9 +328,242 @@ class HttpClientTransport(
         resolveIdentifier(IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening))
 
     override fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
-        val normalizedAlias = normalizeNonBlank(alias, "alias")
+        val normalizedAlias = AccountAliasName.parse(alias).canonicalText()
         val body = encodeJsonBody(linkedMapOf("alias" to normalizedAlias))
-        return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/aliases/resolve", body), AccountAliasJsonParser::parseResolution, "account alias resolve")
+        return fetchJsonAllowingNotFound(
+            buildJsonPostRequest("/v1/aliases/resolve", body),
+            Function { response -> parsePinnedAliasResolution(response, normalizedAlias) },
+            "account alias resolve",
+        )
+    }
+
+    /** Resolves a restricted account alias with canonical account/signature/timestamp/nonce headers. */
+    override fun resolveAccountAlias(
+        alias: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasResolution>> {
+        val normalizedAlias = AccountAliasName.parse(alias).canonicalText()
+        val body = encodeJsonBody(linkedMapOf("alias" to normalizedAlias))
+        val request = buildVpnRequest("POST", "/v1/aliases/resolve", body, canonicalAuth)
+        return fetchJsonAllowingNotFound(
+            request,
+            Function { response -> parsePinnedAliasResolution(response, normalizedAlias) },
+            "account alias resolve",
+        )
+    }
+
+    override fun planAliasSetup(
+        request: AliasSetupPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasTransactionPlanV1> {
+        val body = JsonEncoder.encode(request.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        val httpRequest = buildVpnRequest("POST", "/v1/aliases/setup/plan", body, canonicalAuth)
+        return fetchJson(
+            httpRequest,
+            Function { response ->
+                AliasTransactionPlanJsonParser.parse(response).also { plan ->
+                    require(plan.body.authority == canonicalAuth.accountId) {
+                        "alias setup plan authority does not match the canonical request signer"
+                    }
+                }
+            },
+            "alias setup plan",
+            200,
+        )
+    }
+
+    override fun planAliasLeaseRenewal(
+        request: AliasLeaseRenewPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasLifecycleTransactionPlanV1> =
+        planAliasLifecycle(
+            "/v1/aliases/lease/renew/plan",
+            request.toJsonMap(),
+            canonicalAuth,
+            "alias lease renewal plan",
+        )
+
+    override fun planAliasAutoRenew(
+        request: AliasAutoRenewPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasLifecycleTransactionPlanV1> =
+        planAliasLifecycle(
+            "/v1/aliases/auto-renew/plan",
+            request.toJsonMap(),
+            canonicalAuth,
+            "alias auto-renew plan",
+        )
+
+    private fun planAliasLifecycle(
+        path: String,
+        requestBody: Map<String, Any?>,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        context: String,
+    ): CompletableFuture<AliasLifecycleTransactionPlanV1> {
+        val body = JsonEncoder.encode(requestBody).toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
+            buildVpnRequest("POST", path, body, canonicalAuth),
+            Function { response ->
+                AliasLifecycleTransactionPlanJsonParser.parse(response).also { plan ->
+                    require(plan.body.authority == canonicalAuth.accountId) {
+                        "$context authority does not match the canonical request signer"
+                    }
+                }
+            },
+            context,
+            200,
+        )
+    }
+
+    override fun planSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        onboardingToken: String,
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
+        planSponsoredAccountOnboardingPinned(request, onboardingToken, null)
+
+    override fun planSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        onboardingToken: String,
+        expectedAuthority: String,
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
+        planSponsoredAccountOnboardingPinned(request, onboardingToken, expectedAuthority)
+
+    private fun planSponsoredAccountOnboardingPinned(
+        request: AccountOnboardingPlanRequestV1,
+        onboardingToken: String,
+        expectedAuthority: String?,
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
+        val body = JsonEncoder.encode(request.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
+            buildOnboardingRequest("POST", "/v1/accounts/onboard/plan", body, onboardingToken),
+            Function { response ->
+                AccountOnboardingReceiptVerifier.requireValidForRequest(
+                    request,
+                    AccountOnboardingJsonParser.parseReceipt(response),
+                    expectedAuthority,
+                )
+            },
+            "sponsored account onboarding plan",
+            200,
+        )
+    }
+
+    override fun applySponsoredAccountOnboarding(
+        receipt: AccountOnboardingPlanReceiptV1,
+        onboardingToken: String,
+    ): CompletableFuture<AccountOnboardingResponseV1> =
+        applySponsoredAccountOnboardingPinned(receipt, onboardingToken, null)
+
+    override fun applySponsoredAccountOnboarding(
+        receipt: AccountOnboardingPlanReceiptV1,
+        onboardingToken: String,
+        expectedAuthority: String,
+    ): CompletableFuture<AccountOnboardingResponseV1> =
+        applySponsoredAccountOnboardingPinned(receipt, onboardingToken, expectedAuthority)
+
+    private fun applySponsoredAccountOnboardingPinned(
+        receipt: AccountOnboardingPlanReceiptV1,
+        onboardingToken: String,
+        expectedAuthority: String?,
+    ): CompletableFuture<AccountOnboardingResponseV1> {
+        AccountOnboardingReceiptVerifier.requireValid(receipt, expectedAuthority)
+        val body = JsonEncoder.encode(AccountOnboardingApplyRequestV1(receipt).toJsonMap())
+            .toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
+            buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
+            AccountOnboardingJsonParser::parseResponse,
+            "sponsored account onboarding apply",
+        )
+    }
+
+    override fun getAccountOnboardingReadiness(
+        onboardingToken: String,
+    ): CompletableFuture<AliasSetupReportV1> = fetchJson(
+        buildOnboardingRequest("GET", "/v1/accounts/onboarding/readiness", null, onboardingToken),
+        AccountOnboardingJsonParser::parseReadiness,
+        "account onboarding readiness",
+        200,
+    )
+
+    override fun resolveAccountAliasIndex(
+        index: BigInteger,
+    ): CompletableFuture<Optional<AccountAliasIndexResolution>> {
+        requireAliasU64(index, "index")
+        val body = encodeJsonBody(linkedMapOf("index" to index))
+        return fetchJsonAllowingNotFound(
+            buildJsonPostRequest("/v1/aliases/resolve-index", body),
+            Function { response -> parsePinnedAliasIndexResolution(response, index) },
+            "account alias index resolve",
+        )
+    }
+
+    override fun resolveAccountAliasIndex(
+        index: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasIndexResolution>> {
+        requireAliasU64(index, "index")
+        val body = encodeJsonBody(linkedMapOf("index" to index))
+        return fetchJsonAllowingNotFound(
+            buildVpnRequest("POST", "/v1/aliases/resolve-index", body, canonicalAuth),
+            Function { response -> parsePinnedAliasIndexResolution(response, index) },
+            "account alias index resolve",
+        )
+    }
+
+    override fun listAccountAliases(
+        request: AccountAliasesByAccountRequest,
+    ): CompletableFuture<Optional<AccountAliasesByAccount>> {
+        val body = JsonEncoder.encode(request.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        return fetchJsonAllowingNotFound(
+            buildJsonPostRequest("/v1/aliases/by-account", body),
+            Function { response -> parsePinnedAliasesByAccount(response, request) },
+            "account aliases lookup",
+        )
+    }
+
+    override fun listAccountAliases(
+        request: AccountAliasesByAccountRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasesByAccount>> {
+        val body = JsonEncoder.encode(request.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        return fetchJsonAllowingNotFound(
+            buildVpnRequest("POST", "/v1/aliases/by-account", body, canonicalAuth),
+            Function { response -> parsePinnedAliasesByAccount(response, request) },
+            "account aliases lookup",
+        )
+    }
+
+    private fun parsePinnedAliasResolution(
+        response: ByteArray,
+        requestedAlias: String,
+    ): AccountAliasResolution = AccountAliasJsonParser.parseResolution(response).also { resolution ->
+        require(AccountAliasName.parse(resolution.alias).canonicalText() == requestedAlias) {
+            "account alias response does not match the requested alias"
+        }
+    }
+
+    private fun parsePinnedAliasIndexResolution(
+        response: ByteArray,
+        requestedIndex: BigInteger,
+    ): AccountAliasIndexResolution = AccountAliasReadJsonParser.parseIndexResolution(response).also { resolution ->
+        require(resolution.index == requestedIndex) {
+            "account alias index response does not match the requested index"
+        }
+    }
+
+    private fun parsePinnedAliasesByAccount(
+        response: ByteArray,
+        request: AccountAliasesByAccountRequest,
+    ): AccountAliasesByAccount = AccountAliasReadJsonParser.parseByAccount(response).also { aliases ->
+        require(aliases.accountId == request.accountId) {
+            "account aliases response does not match the requested account"
+        }
+        require(
+            aliases.items.all { item ->
+                (request.dataspace == null || item.dataspace == request.dataspace) &&
+                    (request.domain == null || item.domain == request.domain)
+            },
+        ) { "account aliases response contains entries outside the requested scope" }
     }
 
     fun issueIdentifierClaimReceipt(accountId: String, requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
@@ -728,6 +977,29 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildOnboardingRequest(
+        method: String,
+        path: String,
+        body: ByteArray?,
+        onboardingToken: String,
+    ): TransportRequest {
+        val token = requireOnboardingCredential(onboardingToken)
+        require(config.defaultHeaders().keys.none { it.equals(ONBOARDING_TOKEN_HEADER, ignoreCase = true) }) {
+            "$ONBOARDING_TOKEN_HEADER must be supplied only through the sponsored onboarding API"
+        }
+        val builder = TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod(method)
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout())
+        if (body != null) {
+            builder.setBody(body).addHeader("Content-Type", "application/json")
+        }
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        builder.addHeader(ONBOARDING_TOKEN_HEADER, token)
+        return builder.build()
+    }
+
     private fun buildCanonicalHeaders(method: String, target: URI, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): Map<String, String> {
         val timestampMs = canonicalAuth.timestampMs
         val nonce = canonicalAuth.nonce
@@ -905,6 +1177,7 @@ class HttpClientTransport(
     }
 
     companion object {
+        private const val ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
         private const val RETRY_SIGNAL_ID = "android.torii.http.retry"
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"

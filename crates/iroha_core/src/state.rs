@@ -111,6 +111,7 @@ use iroha_data_model::{
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
         LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
@@ -18656,6 +18657,52 @@ fn account_scope_index_keys(
         .collect()
 }
 
+/// Return the earliest height at which `target_revision` can safely become active.
+///
+/// Sponsor-vault spend leases remain live through their expiry height. An older
+/// revision therefore drains on the following height. The requested activation
+/// is treated as a lower bound, while leases already expired before
+/// `current_height` do not delay it. Persisted `u64::MAX` leases fail closed
+/// because no representable activation height follows them.
+pub(crate) fn fee_sponsor_revision_safe_activation_height(
+    world: &impl WorldReadOnly,
+    program_id: &FeeSponsorProgramId,
+    target_revision: u64,
+    current_height: u64,
+    requested_height: u64,
+) -> Result<u64, String> {
+    let mut safe_height = requested_height;
+    for (key, payload) in world.smart_contract_state().iter() {
+        if !key
+            .to_string()
+            .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+        {
+            continue;
+        }
+        let json: Json = norito::decode_from_bytes(payload).map_err(|error| {
+            format!("verified fee sponsor vault allocation state decode failed: {error}")
+        })?;
+        let record: VerifiedFeeSponsorVaultAllocation =
+            norito::json::from_slice(json.get().as_bytes()).map_err(|error| {
+                format!("verified fee sponsor vault allocation JSON decode failed: {error}")
+            })?;
+        if &record.program_id != program_id
+            || record.program_revision >= target_revision
+            || record.expires_at_height < current_height
+        {
+            continue;
+        }
+        let drained_at = record.expires_at_height.checked_add(1).ok_or_else(|| {
+            format!(
+                "fee sponsor program `{program_id}` revision {} has a spend lease that never drains",
+                record.program_revision
+            )
+        })?;
+        safe_height = safe_height.max(drained_at);
+    }
+    Ok(safe_height)
+}
+
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
@@ -25844,6 +25891,29 @@ impl State {
         let Some(owner) = owner else {
             return;
         };
+        if world.accounts.view().get(&owner).is_none() {
+            return;
+        }
+
+        let intent = iroha_data_model::alias_setup::AliasIntentV1::Dataspace(
+            iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
+                dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
+                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
+                        .parse()
+                        .expect("reserved dataspace alias must stay canonical"),
+                    DataSpaceId::UNIVERSAL,
+                ),
+                owner: owner.clone(),
+            },
+        );
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        permissions.extend(crate::alias_setup::exact_alias_permission_bundle(&intent));
+        world.account_permissions.insert(owner.clone(), permissions);
 
         let selector = crate::sns::selector_for_dataspace_alias(
             crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
@@ -25870,7 +25940,8 @@ impl State {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            Metadata::default(),
+            crate::alias_setup::alias_registration_metadata(&intent.target())
+                .expect("reserved dataspace metadata must stay canonical"),
         );
         world
             .smart_contract_state
@@ -27049,9 +27120,9 @@ impl State {
                 current_slot,
                 axt_lane_map,
             );
-            // Scheduled sponsor-program activations are materialized at the
-            // start of their exact consensus height. This keeps queries,
-            // admission, and execution on one persisted lifecycle view.
+            // Scheduled sponsor-program activation heights are lower bounds.
+            // Recheck older-revision spend leases at block start so legacy or
+            // inconsistent persisted schedules cannot activate over live locks.
             let due_fee_sponsor_programs: Vec<_> = wtx
                 .fee_sponsor_programs
                 .iter()
@@ -27059,26 +27130,57 @@ impl State {
                     program
                         .scheduled_activation
                         .filter(|activation| activation.activate_at_height <= now_h)
-                        .map(|activation| (id.clone(), activation.revision))
+                        .map(|activation| (id.clone(), activation))
                 })
                 .collect();
-            for (program_id, revision) in due_fee_sponsor_programs {
+            for (program_id, activation) in due_fee_sponsor_programs {
                 let mut program = wtx
                     .fee_sponsor_programs
                     .get(&program_id)
                     .cloned()
                     .expect("scheduled fee sponsor program must remain persisted");
+                let safe_height = match fee_sponsor_revision_safe_activation_height(
+                    &wtx,
+                    &program_id,
+                    activation.revision,
+                    now_h,
+                    now_h,
+                ) {
+                    Ok(safe_height) => safe_height,
+                    Err(error) => {
+                        warn!(
+                            program_id = %program_id,
+                            revision = activation.revision,
+                            %error,
+                            "fee sponsor revision activation remains blocked by invalid lease state"
+                        );
+                        continue;
+                    }
+                };
+                if safe_height > now_h {
+                    let Some(scheduled_activation) = program.scheduled_activation.as_mut() else {
+                        warn!(
+                            program_id = %program_id,
+                            revision = activation.revision,
+                            "due fee sponsor activation disappeared before drain rescheduling"
+                        );
+                        continue;
+                    };
+                    scheduled_activation.activate_at_height = safe_height;
+                    wtx.fee_sponsor_programs.insert(program_id, program);
+                    continue;
+                }
                 assert!(
                     wtx.fee_sponsor_program_revisions
                         .get(&FeeSponsorProgramRevisionKey::new(
                             program_id.clone(),
-                            revision,
+                            activation.revision,
                         ))
                         .is_some(),
                     "scheduled fee sponsor revision must remain persisted"
                 );
-                program.active_revision = Some(revision);
-                if program.staged_revision == Some(revision) {
+                program.active_revision = Some(activation.revision);
+                if program.staged_revision == Some(activation.revision) {
                     program.staged_revision = None;
                 }
                 program.scheduled_activation = None;
@@ -36720,6 +36822,13 @@ impl State {
                     iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
                         dataspace,
                     ) => !dataspace_ids.contains(dataspace),
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(
+                        alias,
+                    ) => {
+                        !dataspace_ids.contains(&alias.dataspace_id)
+                            || !dataspace_aliases
+                                .contains(alias.canonical_name.dataspace.as_ref())
+                    }
                 }
             };
         let is_stale_dataspace_permission = |permission: &Permission| {
@@ -46915,6 +47024,11 @@ impl<'state> StateBlock<'state> {
             }
         }
 
+        // Owner-authorized alias lease renewal is native block maintenance, not a
+        // synthetic client transaction or subscription trigger. The sweep is
+        // bounded and advances a durable cursor in canonical storage-key order.
+        crate::sns::process_alias_auto_renewals(self);
+
         let current_block_height = self._curr_block.height().get();
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
@@ -53574,13 +53688,10 @@ mod replay_validation_tests {
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         ChainId, ValidationFail,
-        account::{AccountAlias, AccountAliasDomain, AccountId},
+        account::AccountId,
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{BlockSignature, SignedBlock, consensus_v2::ConsensusMode},
-        isi::{
-            InstructionBox, Log, Mint, Register, SetKeyValue,
-            domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
-        },
+        isi::{InstructionBox, Log, Mint, Register, SetKeyValue},
         name::Name,
         nexus::{
             AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
@@ -55346,16 +55457,6 @@ mod replay_validation_tests {
         let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_id = AccountId::new(user_keypair.public_key().clone());
         let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
-        let primary_alias = AccountAlias::new(
-            "merchant".parse::<Name>().expect("primary alias"),
-            Some(AccountAliasDomain::new(domain_id.name().clone())),
-            dataspace_id,
-        );
-        let secondary_alias = AccountAlias::new(
-            "cashier".parse::<Name>().expect("secondary alias"),
-            Some(AccountAliasDomain::new(domain_id.name().clone())),
-            dataspace_id,
-        );
         let asset_definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             "credit".parse().expect("asset definition name"),
@@ -55364,16 +55465,6 @@ mod replay_validation_tests {
         let instructions = vec![
             InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
             InstructionBox::from(Register::account(Account::new(user_id.clone()))),
-            InstructionBox::from(SetPrimaryAccountAlias::bind(
-                user_id.clone(),
-                primary_alias,
-                Some(10_000),
-            )),
-            InstructionBox::from(SetAccountAliasBinding::bind(
-                user_id.clone(),
-                secondary_alias,
-                Some(10_001),
-            )),
             InstructionBox::from(Register::asset_definition(
                 AssetDefinition::numeric(asset_definition_id.clone())
                     .with_name("credit".to_owned()),
@@ -55424,18 +55515,8 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(legacy_block.clone()))
             .expect("store legacy block");
 
-        let audit_alias = AccountAlias::new(
-            "auditor".parse::<Name>().expect("audit alias"),
-            Some(AccountAliasDomain::new(domain_id.name().clone())),
-            dataspace_id,
-        );
         let block3_instructions = vec![
             InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
-            InstructionBox::from(SetAccountAliasBinding::bind(
-                user_id.clone(),
-                audit_alias,
-                Some(10_002),
-            )),
             InstructionBox::from(SetKeyValue::account(
                 user_id.clone(),
                 "status".parse::<Name>().expect("account metadata key"),
@@ -62052,6 +62133,38 @@ mod tests {
         owner: &AccountId,
         alias: &AccountAlias,
     ) {
+        if let Some(domain_id) = alias
+            .domain_id(&tx.nexus.dataspace_catalog)
+            .expect("fixture alias domain")
+        {
+            let selector = crate::sns::selector_for_domain(&domain_id).expect("domain selector");
+            let storage_key = crate::sns::record_storage_key(&selector);
+            if tx.world.smart_contract_state.get(&storage_key).is_none() {
+                let domain_owner = tx
+                    .world
+                    .domains
+                    .get(&domain_id)
+                    .map(|domain| domain.owned_by().clone())
+                    .unwrap_or_else(|| owner.clone());
+                let address =
+                    iroha_data_model::account::AccountAddress::from_account_id(&domain_owner)
+                        .expect("domain owner address");
+                let record = iroha_data_model::sns::NameRecordV1::new(
+                    selector,
+                    domain_owner,
+                    vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                    0,
+                    0,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    iroha_data_model::metadata::Metadata::default(),
+                );
+                tx.world
+                    .smart_contract_state
+                    .insert(storage_key, norito::codec::Encode::encode(&record));
+            }
+        }
         let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
             .expect("account alias selector");
         let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
@@ -62093,6 +62206,59 @@ mod tests {
                 0,
             ),
             Some(genesis_id)
+        );
+    }
+
+    #[test]
+    fn reserved_universal_dataspace_seed_classifies_noop_then_permission_repair() {
+        let owner = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&owner);
+        let account = Account::new(owner.clone()).build(&owner);
+        let mut world = World::with([domain], [account], []);
+        State::seed_reserved_universal_dataspace_name_record(&mut world);
+        let intent = iroha_data_model::alias_setup::AliasIntentV1::Dataspace(
+            iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
+                dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
+                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
+                        .parse()
+                        .expect("reserved dataspace alias"),
+                    DataSpaceId::UNIVERSAL,
+                ),
+                owner: owner.clone(),
+            },
+        );
+        assert_eq!(
+            crate::alias_setup::classify_alias_intent(
+                &world.view(),
+                &iroha_data_model::nexus::DataSpaceCatalog::default(),
+                &intent,
+                0,
+            )
+            .expect("classify seeded universal dataspace"),
+            iroha_data_model::alias_setup::AliasPlanDispositionV1::NoOp
+        );
+
+        let removed = crate::alias_setup::exact_alias_permission_bundle(&intent)
+            .into_iter()
+            .next()
+            .expect("exact permission bundle");
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(&owner)
+            .cloned()
+            .expect("seeded permissions");
+        assert!(permissions.remove(&removed));
+        world.account_permissions.insert(owner.clone(), permissions);
+        assert_eq!(
+            crate::alias_setup::classify_alias_intent(
+                &world.view(),
+                &iroha_data_model::nexus::DataSpaceCatalog::default(),
+                &intent,
+                0,
+            )
+            .expect("classify permission repair"),
+            iroha_data_model::alias_setup::AliasPlanDispositionV1::Repair
         );
     }
 
@@ -112538,11 +112704,34 @@ seiyaku IdentitylessRawCallback {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
             seed_account_alias_lease(&mut stx, &ALICE_ID, &banking_label);
-            iroha_data_model::isi::domain_link::SetPrimaryAccountAlias {
-                account: ALICE_ID.clone(),
-                alias: Some(banking_label.clone()),
-                lease_expiry_ms: None,
-            }
+            let resolved_alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                banking_label
+                    .to_literal(&stx.nexus.dataspace_catalog)
+                    .expect("fixture alias must resolve")
+                    .parse()
+                    .expect("fixture alias must be canonical"),
+                banking_label.dataspace,
+            );
+            iroha_data_model::isi::alias_setup::EnsureAlias::new(
+                iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
+                    iroha_data_model::alias_setup::AliasAccountIntentV1 {
+                        alias: resolved_alias,
+                        target_account: ALICE_ID.clone(),
+                        provision: iroha_data_model::alias_setup::AccountProvisionV1::Existing,
+                        role: iroha_data_model::alias_setup::AccountAliasRoleV1::Primary,
+                    },
+                ),
+                iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
+                iroha_data_model::alias_setup::AliasQuoteGuardV1 {
+                    expected_policy_version: 0,
+                    expected_payment_asset: iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("assets", "universal").expect("fixture asset domain"),
+                        "xor".parse().expect("fixture asset name"),
+                    ),
+                    max_amount: Quantity::zero(),
+                    valid_until_ms: 0,
+                },
+            )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -121980,6 +122169,128 @@ seiyaku MissingBytecodeTrigger {
         assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
     }
 
+    fn fee_sponsor_activation_lease(
+        program_id: FeeSponsorProgramId,
+        revision: u64,
+        expires_at_height: u64,
+    ) -> VerifiedFeeSponsorVaultAllocation {
+        let asset_definition_id = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("default fee asset is canonical");
+        let lease_id =
+            Hash::new(format!("fee-sponsor-activation-{revision}-{expires_at_height}").as_bytes());
+        VerifiedFeeSponsorVaultAllocation::new(
+            program_id,
+            revision,
+            asset_definition_id,
+            Quantity::from(10_u32),
+            DataSpaceId::UNIVERSAL,
+            1,
+            Hash::new(b"fee-sponsor-activation-source-state"),
+            expires_at_height,
+            lease_id,
+            Hash::new(b"fee-sponsor-activation-proof"),
+            *Hash::new(b"fee-sponsor-activation-statement").as_ref(),
+            Hash::new(b"fee-sponsor-activation-proof-digest"),
+            1,
+            *Hash::new(b"fee-sponsor-activation-manifest").as_ref(),
+            AxtFastpqBinding {
+                parameter: "fastpq-lane-balanced".to_owned(),
+                source_dsid: DataSpaceId::UNIVERSAL.as_u64(),
+                source_dataspace: "universal".to_owned(),
+                source_receipt_id: "fee-sponsor-activation".to_owned(),
+                source_tx_commitment: "aa".repeat(32),
+                claim_type: "fee_sponsor_vault_allocation".to_owned(),
+                claim_digest: "bb".repeat(32),
+                witness_commitment: "cc".repeat(32),
+                policy_commitment: "dd".repeat(32),
+                verified_effect_type: "fee_sponsor_vault_allocation".to_owned(),
+                corridor: "fee-sponsor".to_owned(),
+                verifier_id: "fastpq".to_owned(),
+                verifier_version: "v1".to_owned(),
+                target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+                effect_binding: None,
+            },
+        )
+    }
+
+    fn insert_fee_sponsor_activation_lease(
+        world: &mut WorldTransaction<'_, '_>,
+        record: VerifiedFeeSponsorVaultAllocation,
+    ) {
+        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &record.program_id,
+            &record.asset_definition_id,
+            &record.lease_id,
+        )
+        .parse()
+        .expect("verified allocation state key");
+        let json = Json::try_new(record).expect("verified allocation JSON");
+        world.smart_contract_state.insert(
+            key,
+            norito::to_bytes(&json).expect("verified allocation state"),
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
+        let sponsor = governance_stage_account(b"fee-sponsor-never-drains");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor, "never_drains".parse().expect("program name"));
+        let record = fee_sponsor_activation_lease(program_id.clone(), 1, u64::MAX);
+        let mut world = World::default();
+        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &record.program_id,
+            &record.asset_definition_id,
+            &record.lease_id,
+        )
+        .parse()
+        .expect("verified allocation state key");
+        world.smart_contract_state_mut_for_testing().insert(
+            key,
+            norito::to_bytes(&Json::try_new(record).expect("verified allocation JSON"))
+                .expect("verified allocation state"),
+        );
+        let world = world.block();
+
+        let error = fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 2)
+            .expect_err("u64::MAX lease must not admit a successor revision");
+        assert!(error.contains("never drains"));
+    }
+
+    #[test]
+    fn fee_sponsor_safe_activation_height_preserves_later_request() {
+        let sponsor = governance_stage_account(b"fee-sponsor-later-activation");
+        let program_id = FeeSponsorProgramId::new(sponsor, "later".parse().expect("program name"));
+        let record = fee_sponsor_activation_lease(program_id.clone(), 1, 5);
+        let mut world = World::default();
+        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &record.program_id,
+            &record.asset_definition_id,
+            &record.lease_id,
+        )
+        .parse()
+        .expect("verified allocation state key");
+        world.smart_contract_state_mut_for_testing().insert(
+            key,
+            norito::to_bytes(&Json::try_new(record).expect("verified allocation JSON"))
+                .expect("verified allocation state"),
+        );
+        let world = world.block();
+
+        assert_eq!(
+            fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 9)
+                .expect("finite lease drains"),
+            9
+        );
+        assert_eq!(
+            fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 2)
+                .expect("finite lease drains"),
+            6
+        );
+    }
+
     #[test]
     fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
         use iroha_data_model::nexus::{
@@ -122035,6 +122346,92 @@ seiyaku MissingBytecodeTrigger {
         assert_eq!(activated.staged_revision, None);
         assert_eq!(activated.scheduled_activation, None);
         assert_eq!(activated.lifecycle, FeeSponsorProgramLifecycle::Active);
+    }
+
+    #[test]
+    fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
+        use iroha_data_model::nexus::{
+            FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
+        };
+
+        let sponsor = governance_stage_account(b"fee-sponsor-drain-activation");
+        let program_id = FeeSponsorProgramId::new(sponsor, "drain".parse().expect("program name"));
+        let revision = |revision| FeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision,
+            eligibility: FeeSponsorEligibility::EnrolledOnly,
+            rules: Vec::new(),
+            asset_budgets: Vec::new(),
+        };
+        let mut program = FeeSponsorProgram::new(program_id.clone());
+        program.lifecycle = FeeSponsorProgramLifecycle::Active;
+        program.active_revision = Some(1);
+        program.staged_revision = Some(2);
+        program.scheduled_activation = Some(FeeSponsorProgramActivation {
+            revision: 2,
+            activate_at_height: 2,
+        });
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut first_block = state.block(first_header);
+        {
+            let mut transaction = first_block.transaction();
+            for revision in [revision(1), revision(2)] {
+                transaction.world.fee_sponsor_program_revisions.insert(
+                    FeeSponsorProgramRevisionKey::new(program_id.clone(), revision.revision),
+                    revision,
+                );
+            }
+            transaction
+                .world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+            insert_fee_sponsor_activation_lease(
+                &mut transaction.world,
+                fee_sponsor_activation_lease(program_id.clone(), 1, 3),
+            );
+            transaction.apply();
+        }
+        first_block.commit().expect("commit scheduled program");
+
+        let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let second_block = state.block(second_header);
+        let deferred = second_block
+            .world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .expect("scheduled program exists");
+        assert_eq!(deferred.active_revision, Some(1));
+        assert_eq!(
+            deferred.scheduled_activation,
+            Some(FeeSponsorProgramActivation {
+                revision: 2,
+                activate_at_height: 4,
+            })
+        );
+        second_block.commit().expect("commit deferred activation");
+
+        let third_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
+        state
+            .block(third_header)
+            .commit()
+            .expect("commit final lease height");
+
+        let fourth_header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
+        let fourth_block = state.block(fourth_header);
+        let activated = fourth_block
+            .world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .expect("scheduled program exists");
+        assert_eq!(activated.active_revision, Some(2));
+        assert_eq!(activated.staged_revision, None);
+        assert_eq!(activated.scheduled_activation, None);
     }
 
     fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {

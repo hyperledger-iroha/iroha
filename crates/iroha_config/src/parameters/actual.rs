@@ -19,7 +19,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fmt,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -56,6 +56,9 @@ use iroha_data_model::{
     domain::DomainId,
     hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
     jurisdiction::JdgSignatureScheme,
+    merge::{
+        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+    },
     name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
@@ -1786,8 +1789,10 @@ pub struct Network {
     pub deferred_send_ttl: Duration,
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub deferred_send_max_per_peer: usize,
-    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    /// Maximum stream-wire bytes retained per peer by deferred outbound frames.
     pub deferred_send_max_bytes_per_peer: usize,
+    /// Maximum stream-wire bytes retained across every deferred outbound peer queue.
+    pub deferred_send_max_bytes_total: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -1842,9 +1847,9 @@ pub struct Network {
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
     pub quic_datagram_max_payload_bytes: usize,
-    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    /// Receive buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_receive_buffer_bytes: usize,
-    /// Total send buffer reserved for QUIC datagrams (bytes).
+    /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_send_buffer_bytes: usize,
     /// SCION guided dialing options for outbound peer connections.
     pub scion: ScionConfig,
@@ -1879,9 +1884,14 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
-    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained by each
+    /// connected sender queue and by the process-wide connected-post owner, and the
+    /// ordinary-high actor byte subcap. The actor adds disjoint maximum safety and route-qualified
+    /// semantic-progress frame charges; each authenticated peer separately gets one such progress
+    /// charge, bounded by `max_total_connections` and shared by replacement sessions.
     pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
-    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    /// Maximum low-priority stream wire bytes retained by each connected sender queue and by
+    /// the process-wide connected-post owner, including frame prefixes.
     pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
     /// Maximum encrypted high-priority outbound frames retained per peer.
     pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
@@ -1919,7 +1929,8 @@ pub struct Network {
     /// When `None`, incoming connections are not capped by count.
     pub max_incoming: Option<NonZeroUsize>,
     /// Maximum total number of connections (incoming + outgoing + in-flight accepts).
-    /// When `None`, total connections are not capped by count.
+    /// The P2P runtime interprets `None` as the core-profile hard cap so its
+    /// per-peer progress-frame assembly reserve remains process-bounded.
     pub max_total_connections: Option<NonZeroUsize>,
     /// Optional per-IP(/24 for IPv4, /64 for IPv6) accept throttle, in accepts per second.
     /// When `None`, per-IP throttling is disabled.
@@ -1959,7 +1970,7 @@ pub struct Network {
     pub deny_cidrs: Vec<String>,
     /// Disconnect on per-peer post overflow (bounded per-topic channels)
     pub disconnect_on_post_overflow: bool,
-    /// Maximum allowed frame size (bytes) for P2P messages
+    /// Maximum encrypted P2P frame-body size in bytes (at most 2,147,483,643).
     pub max_frame_bytes: usize,
     /// `TCP_NODELAY` setting for TCP sockets
     pub tcp_nodelay: bool,
@@ -2561,7 +2572,8 @@ pub struct Genesis {
     pub bootstrap_request_timeout: Duration,
     /// Backoff between bootstrap attempts.
     pub bootstrap_retry_interval: Duration,
-    /// Maximum bootstrap attempts before failing.
+    /// Request windows per retry cycle before backoff resets and a warning is emitted.
+    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
     pub bootstrap_max_attempts: u32,
     /// Whether to attempt bootstrap when local genesis is missing.
     pub bootstrap_enabled: bool,
@@ -2713,8 +2725,6 @@ pub struct NexusRelayWorker {
     pub retry_backoff: Duration,
     /// Maximum proof/submission attempts before local worker retry stops.
     pub max_retry_attempts: NonZeroU32,
-    /// Block interval between sponsor budget proof refreshes.
-    pub budget_refresh_interval_blocks: NonZeroU64,
 }
 
 impl Default for NexusRelayWorker {
@@ -2730,10 +2740,6 @@ impl Default for NexusRelayWorker {
             retry_backoff: Duration::from_millis(defaults::nexus::relay_worker::RETRY_BACKOFF_MS),
             max_retry_attempts: NonZeroU32::new(defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS)
                 .expect("default Nexus relay worker max_retry_attempts is non-zero"),
-            budget_refresh_interval_blocks: NonZeroU64::new(
-                defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS,
-            )
-            .expect("default Nexus relay worker budget refresh interval is non-zero"),
         }
     }
 }
@@ -5631,8 +5637,10 @@ pub struct SumeragiQueues {
     pub bodies: NonZeroUsize,
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     pub body_bytes: NonZeroUsize,
-    /// Per-authenticated-source canonical outer-ingress wire bytes, including
-    /// envelope overhead and the isolated timeout-vote reserve.
+    /// Per-authenticated-source canonical outer-ingress wire bytes, partitioned
+    /// between ordinary traffic, payload completions, and timeout votes. Lane
+    /// progress and executable-payload recovery impose fixed one-MiB and
+    /// four-MiB minima on the first two partitions.
     pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub chunks: NonZeroUsize,
@@ -5777,10 +5785,31 @@ impl Sumeragi {
         )?;
         let envelope_headroom = u64::try_from(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
             .expect("static body-envelope headroom fits u64");
+        let manifest_wire_bytes =
+            u64::try_from(defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES)
+                .expect("static recommended transport-completion manifest fits u64");
         let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
             .expect("static timeout-vote reserve fits u64");
-        let minimum_body_source_bytes = max_payload_bytes
+        let lane_progress_bytes =
+            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
+                .expect("static certified lane-source limit fits u64");
+        let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
+            .expect("static complete lane-source limit fits u64");
+        let ordinary_bytes = max_payload_bytes
             .checked_add(envelope_headroom)
+            .map(|ordinary| ordinary.max(lane_progress_bytes))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 ordinary outer-ingress wire-byte minimum",
+            ))?;
+        let completion_bytes = max_payload_bytes
+            .checked_add(envelope_headroom)
+            .and_then(|completion| completion.checked_add(manifest_wire_bytes))
+            .map(|completion| completion.max(lane_completion_bytes))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 completion outer-ingress wire-byte minimum",
+            ))?;
+        let minimum_body_source_bytes = ordinary_bytes
+            .checked_add(completion_bytes)
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
@@ -5791,7 +5820,10 @@ impl Sumeragi {
                 minimum: minimum_body_source_bytes,
                 max_payload_bytes,
                 envelope_headroom,
+                manifest_wire_bytes,
                 timeout_vote_reserve,
+                lane_progress_bytes,
+                lane_completion_bytes,
             });
         }
         let minimum_body_bytes =
@@ -5971,8 +6003,8 @@ pub struct SumeragiV2Limits {
     pub body_queue_capacity: u64,
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     pub body_bytes: u64,
-    /// Per-authenticated-source canonical outer-ingress wire bytes, including
-    /// envelope overhead and the isolated timeout-vote reserve.
+    /// Per-authenticated-source canonical outer-ingress wire bytes, partitioned
+    /// between ordinary traffic, payload completions, and timeout votes.
     pub body_source_bytes: u64,
     /// Capacity for payload chunk ingress and orphan buffering.
     pub chunk_queue_capacity: u64,
@@ -6027,9 +6059,10 @@ pub enum SumeragiV2ConfigError {
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
-    /// The per-source canonical wire-byte budget cannot hold one maximum body envelope.
+    /// The per-source canonical wire-byte budget cannot isolate ordinary and
+    /// payload-completion envelopes plus one timeout vote.
     #[error(
-        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload {max_payload_bytes}, {envelope_headroom} bytes of envelope headroom, and {timeout_vote_reserve} reserved timeout-vote bytes"
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, and {timeout_vote_reserve} reserved timeout-vote bytes"
     )]
     BodySourceBytesTooSmall {
         /// Configured per-source capacity.
@@ -6040,8 +6073,14 @@ pub enum SumeragiV2ConfigError {
         max_payload_bytes: u64,
         /// Fixed wire-envelope headroom.
         envelope_headroom: u64,
+        /// Recommended manifest wire bytes included in the completion partition.
+        manifest_wire_bytes: u64,
         /// Fixed bytes isolated from ordinary traffic for a timeout vote.
         timeout_vote_reserve: u64,
+        /// Minimum ordinary region required by an atomic lane certificate.
+        lane_progress_bytes: u64,
+        /// Minimum completion region required by a lane source bundle.
+        lane_completion_bytes: u64,
     },
     /// The aggregate canonical wire-byte budget cannot isolate two source quotas.
     #[error(
@@ -6583,8 +6622,8 @@ pub struct Torii {
     pub cors: ToriiCors,
     /// Proof endpoint DoS/backpressure policy.
     pub proof_api: ProofApi,
-    /// Optional UAID onboarding authority configuration.
-    pub onboarding: Option<ToriiOnboarding>,
+    /// Optional account-onboarding authority configuration.
+    pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
     /// Optional Kagemusha command-submission authority.
@@ -7202,38 +7241,60 @@ impl From<user::ToriiNoritoRpcTransport> for NoritoRpcTransport {
     }
 }
 
-/// UAID onboarding authority wiring exposed to Torii.
+/// Account-onboarding authority wiring exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiOnboarding {
+pub struct AccountOnboarding {
     /// Account identifier that signs onboarding transactions.
     pub authority: AccountId,
-    /// Private key corresponding to the onboarding authority.
-    pub private_key: ExposedPrivateKey,
-    /// Exact onboarding domain to dedicated API-token BLAKE3 digest.
-    ///
-    /// When empty, signer-backed onboarding routes fail closed with service unavailable. Digests
-    /// are unique, so an authenticated credential is scoped to exactly one domain.
-    pub api_token_hashes_by_domain: BTreeMap<DomainId, [u8; 32]>,
-    /// Permission names that onboarding may grant to newly registered accounts.
-    pub allowed_permissions: Vec<String>,
-    /// Exact domainless account-alias dataspaces automatically granted for read-only resolution.
-    pub alias_resolve_dataspaces: Vec<DataSpaceId>,
-    /// Exact domain-qualified account-alias domains automatically granted for read-only resolution.
-    pub alias_resolve_domains: Vec<DomainId>,
+    /// Runtime-only file from which the onboarding signer was loaded.
+    pub private_key_file: PathBuf,
+    /// Validated signer corresponding exactly to `authority`.
+    pub signer: KeyPair,
+    /// API credentials accepted by sponsored onboarding.
+    pub credentials: Vec<AccountOnboardingCredential>,
+    /// Permission names that onboarding may additionally grant to new accounts.
+    pub additional_permissions: Vec<Name>,
     /// Optional exact sponsor program enrolled for each newly onboarded account.
     pub fee_sponsor_program_id: Option<FeeSponsorProgramId>,
     /// Default alias lease term applied during onboarding.
-    pub alias_lease_term_years: u8,
-    /// Whether onboarding should create a default auto-renew subscription.
-    ///
-    /// Defaults to disabled until `alias_auto_renew_subscription_domain` is configured.
-    pub alias_auto_renew_enabled: bool,
-    /// Retry delay for alias auto-renew after a failed charge.
-    pub alias_auto_renew_retry_backoff_ms: u64,
-    /// Maximum consecutive alias auto-renew failures before suspension.
-    pub alias_auto_renew_max_failures: u32,
-    /// Existing domain used to store internal alias auto-renew subscription NFTs.
-    pub alias_auto_renew_subscription_domain: Option<DomainId>,
+    pub lease_term_years: NonZeroU8,
+    /// Optional native deterministic alias auto-renew configuration.
+    pub auto_renew: Option<AccountOnboardingAutoRenew>,
+}
+
+/// One header-token credential accepted by sponsored onboarding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountOnboardingCredential {
+    /// Stable operator-facing credential identifier.
+    pub id: Name,
+    /// Exact domain or dataspace to which the credential is confined.
+    pub scope: AccountOnboardingCredentialScope,
+    /// BLAKE3 digest of the runtime-only token.
+    pub token_hash: [u8; 32],
+}
+
+/// Exact textual scope attached to an onboarding API credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountOnboardingCredentialScope {
+    /// One fully-qualified domain.
+    Domain(DomainId),
+    /// One textual dataspace name, resolved against static and live catalogs later.
+    Dataspace(Name),
+}
+
+/// Native deterministic auto-renew defaults configured for onboarded aliases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountOnboardingAutoRenew {
+    /// Lease term requested by each renewal.
+    pub term_years: NonZeroU8,
+    /// Maximum amount the owner authorizes per renewal.
+    pub max_amount: Numeric,
+    /// How far before expiry native block processing begins attempting renewal.
+    pub renew_before_expiry: Duration,
+    /// Deterministic retry delay after an insufficient-funds failure.
+    pub retry_backoff: Duration,
+    /// Consecutive failure limit before native processing suspends auto-renew.
+    pub max_failures: NonZeroU32,
 }
 
 /// App-facing faucet configuration exposed to Torii.
@@ -7241,8 +7302,10 @@ pub struct ToriiOnboarding {
 pub struct ToriiFaucet {
     /// Account identifier that signs faucet transfers.
     pub authority: AccountId,
-    /// Private key corresponding to the faucet authority.
-    pub private_key: ExposedPrivateKey,
+    /// Runtime-only file from which the faucet signer was loaded.
+    pub private_key_file: PathBuf,
+    /// Validated signer corresponding exactly to `authority`.
+    pub signer: KeyPair,
     /// Asset definition selector distributed by the faucet.
     ///
     /// This may be either a canonical Base58 asset definition identifier or an
@@ -10964,8 +11027,8 @@ mod tests {
         assert_eq!(shared.limits.max_transactions, 512);
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
-        assert_eq!(shared.limits.body_bytes, 160 * 1024 * 1024);
-        assert_eq!(shared.limits.body_source_bytes, 32 * 1024 * 1024);
+        assert_eq!(shared.limits.body_bytes, 165 * 1024 * 1024);
+        assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
         assert_eq!(
             shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
             "outstanding effect work must fit the trusted completion reserve",
@@ -11136,21 +11199,43 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 16 * 1024 * 1024 + 2 * 64 * 1024,
+                minimum: 2 * 16 * 1024 * 1024 + 230_408,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
+                manifest_wire_bytes: 33_800,
                 timeout_vote_reserve: 64 * 1024,
+                lane_progress_bytes: 1024 * 1024,
+                lane_completion_bytes: 4 * 1024 * 1024,
             },
         );
 
         let mut config = default_v2_sumeragi();
-        config.queues.body_bytes = NonZeroUsize::new(64 * 1024 * 1024 - 1).expect("non-zero");
+        config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
+        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
+        config.queues.body_source_bytes =
+            NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: u64::try_from(lane_minimum - 1).expect("fixture fits u64"),
+                minimum: u64::try_from(lane_minimum).expect("fixture fits u64"),
+                max_payload_bytes: 1,
+                envelope_headroom: 64 * 1024,
+                manifest_wire_bytes: 33_800,
+                timeout_vote_reserve: 64 * 1024,
+                lane_progress_bytes: 1024 * 1024,
+                lane_completion_bytes: 4 * 1024 * 1024,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.body_bytes = NonZeroUsize::new(66 * 1024 * 1024 - 1).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyBytesTooSmall {
-                actual: 64 * 1024 * 1024 - 1,
-                minimum: 64 * 1024 * 1024,
-                body_source_bytes: 32 * 1024 * 1024,
+                actual: 66 * 1024 * 1024 - 1,
+                minimum: 66 * 1024 * 1024,
+                body_source_bytes: 33 * 1024 * 1024,
             },
         );
 

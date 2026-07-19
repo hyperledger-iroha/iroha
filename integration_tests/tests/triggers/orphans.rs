@@ -70,7 +70,7 @@ async fn set_up_trigger(
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
     let failand: DomainId = DomainId::try_new("failand", "universal")?;
-    let create_failand = Register::domain(Domain::new(failand.clone()));
+    let create_failand = domain_setup_instruction(&failand, &iroha.account)?;
 
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
@@ -97,10 +97,8 @@ async fn set_up_trigger(
         .first()
         .expect("test network should expose at least one peer")
         .client_for(&the_one_who_fails, account_keypair.private_key().clone());
-    ensure_domain_registration_lease_for_network(network, &failand)?;
     spawn_blocking({
         let client = iroha.clone();
-        let create_failand: InstructionBox = create_failand.into();
         let create_the_one_who_fails: InstructionBox = create_the_one_who_fails.into();
         let grant_register_trigger_permission: InstructionBox =
             grant_register_trigger_permission.into();

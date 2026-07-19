@@ -85,78 +85,122 @@ public sealed record class ToriiAliasResolveIndexRequest
     public ulong Index { get; init; }
 }
 
-public sealed record class ToriiAccountOnboardingRequest
+/// <summary>Secret-free request accepted by the sponsored onboarding planner.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingPlanRequest
 {
-    private string[]? permissions = Array.Empty<string>();
-    private JsonObject? identity;
+    private string[] permissions = Array.Empty<string>();
+
+    [JsonPropertyName("version")]
+    public byte Version { get; init; } = 1;
 
     [JsonPropertyName("alias")]
     public string Alias { get; init; } = string.Empty;
 
     [JsonPropertyName("account_id")]
-    public string? AccountId { get; init; }
-
-    [JsonPropertyName("public_key_hex")]
-    public string? PublicKeyHex { get; init; }
-
-    [JsonPropertyName("identity")]
-    public JsonObject? Identity
-    {
-        get => ToriiJsonSnapshots.CopyObject(identity);
-        init => identity = ToriiJsonSnapshots.CopyObject(value);
-    }
-
-    [JsonPropertyName("identity_commitment_hex")]
-    public string? IdentityCommitmentHex { get; init; }
-
-    [JsonPropertyName("uaid")]
-    public string? Uaid { get; init; }
+    public string AccountId { get; init; } = string.Empty;
 
     [JsonPropertyName("permissions")]
-    public IReadOnlyList<string>? Permissions
+    public IReadOnlyList<string> Permissions
     {
-        get => permissions?.ToArray();
-        init => permissions = ToriiListSnapshots.CopyNonNullItems(value, nameof(Permissions));
+        get => permissions.ToArray();
+        init => permissions = ToriiListSnapshots.CopyNonNullItems(value, nameof(Permissions))
+            ?? throw new ArgumentNullException(nameof(Permissions));
     }
 }
 
-[JsonConverter(typeof(ToriiAccountOnboardingResponseJsonConverter))]
+/// <summary>Canonical server-signed sponsored onboarding plan body.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingPlanBody
+{
+    [JsonPropertyName("version")]
+    public byte Version { get; init; }
+
+    [JsonPropertyName("request")]
+    public ToriiAccountOnboardingPlanRequest Request { get; init; } = new();
+
+    [JsonPropertyName("authority")]
+    public string Authority { get; init; } = string.Empty;
+
+    [JsonPropertyName("chain_id")]
+    public string ChainId { get; init; } = string.Empty;
+
+    [JsonPropertyName("anchor")]
+    public JsonElement Anchor { get; init; }
+
+    [JsonPropertyName("resource")]
+    public JsonElement Resource { get; init; }
+
+    [JsonPropertyName("acquisition")]
+    public JsonElement Acquisition { get; init; }
+
+    [JsonPropertyName("quote_guard")]
+    public JsonElement QuoteGuard { get; init; }
+
+    [JsonPropertyName("instructions")]
+    public JsonElement Instructions { get; init; }
+
+    [JsonPropertyName("owner_auto_renew_instruction")]
+    public JsonElement OwnerAutoRenewInstruction { get; init; }
+
+    [JsonPropertyName("valid_until_ms")]
+    public ulong ValidUntilMilliseconds { get; init; }
+}
+
+/// <summary>Encodes an onboarding plan body into its exact canonical Norito bytes.</summary>
+public delegate byte[] ToriiAccountOnboardingPlanBodyEncoder(ToriiAccountOnboardingPlanBody body);
+
+/// <summary>Stateless signer-authenticated sponsored onboarding receipt.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingPlanReceipt
+{
+    [JsonPropertyName("body")]
+    public ToriiAccountOnboardingPlanBody Body { get; init; } = new();
+
+    [JsonPropertyName("plan_hash")]
+    public string PlanHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("signature")]
+    public string Signature { get; init; } = string.Empty;
+}
+
+/// <summary>Apply request containing exactly one previously issued receipt.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingApplyRequest
+{
+    [JsonPropertyName("receipt")]
+    public ToriiAccountOnboardingPlanReceipt Receipt { get; init; } = new();
+}
+
+/// <summary>Live disposition returned by sponsored onboarding apply.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingDisposition
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public JsonElement Value { get; init; }
+}
+
+/// <summary>Queued, repaired, or unchanged sponsored onboarding result.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountOnboardingResponse
 {
-    private string accountId = string.Empty;
-    private string uaid = string.Empty;
-    private string transactionHashHex = string.Empty;
-    private string status = string.Empty;
-
     [JsonPropertyName("account_id")]
-    public string AccountId
-    {
-        get => accountId;
-        init => accountId = ToriiOnboardingDirectMetadata.RequireCanonicalAccountId(value, nameof(AccountId));
-    }
+    public string AccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("uaid")]
-    public string Uaid
-    {
-        get => uaid;
-        init => uaid = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(Uaid));
-    }
+    [JsonPropertyName("alias")]
+    public string Alias { get; init; } = string.Empty;
 
     [JsonPropertyName("tx_hash_hex")]
-    public string TransactionHashHex
-    {
-        get => transactionHashHex;
-        init => transactionHashHex = ToriiOnboardingDirectMetadata.RequireOptionalTransactionHashHex(
-            value,
-            nameof(TransactionHashHex));
-    }
+    public string? TransactionHashHex { get; init; }
 
     [JsonPropertyName("status")]
-    public string Status
-    {
-        get => status;
-        init => status = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(Status));
-    }
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("disposition")]
+    public ToriiAccountOnboardingDisposition Disposition { get; init; } = new();
 }
 
 public sealed record class ToriiAccountFaucetRequest
@@ -1488,66 +1532,6 @@ internal static class ToriiVpnDirectMetadata
         RequireOptionalVpnTxInstruction(value.SettleLeaseInstruction, $"{paramName}.{nameof(ToriiVpnReceipt.SettleLeaseInstruction)}");
         CopyRequiredVpnTxInstructions(value.TxInstructions, $"{paramName}.{nameof(ToriiVpnReceipt.TxInstructions)}");
         return value;
-    }
-}
-
-public sealed record class ToriiMultisigAccountOnboardingRequest
-{
-    private string[]? memberAccountIds = Array.Empty<string>();
-    private byte[]? memberWeights = Array.Empty<byte>();
-
-    [JsonPropertyName("alias")]
-    public string Alias { get; init; } = string.Empty;
-
-    [JsonPropertyName("required_signers")]
-    public byte RequiredSigners { get; init; }
-
-    [JsonPropertyName("member_account_ids")]
-    public IReadOnlyList<string>? MemberAccountIds
-    {
-        get => memberAccountIds?.ToArray();
-        init => memberAccountIds = ToriiListSnapshots.CopyNonNullItems(value, nameof(MemberAccountIds));
-    }
-
-    [JsonPropertyName("member_weights")]
-    public IReadOnlyList<byte>? MemberWeights
-    {
-        get => memberWeights?.ToArray();
-        init => memberWeights = value?.ToArray();
-    }
-
-    [JsonPropertyName("transaction_ttl_ms")]
-    public ulong? TransactionTtlMilliseconds { get; init; }
-}
-
-[JsonConverter(typeof(ToriiMultisigAccountOnboardingResponseJsonConverter))]
-public sealed record class ToriiMultisigAccountOnboardingResponse
-{
-    private string accountId = string.Empty;
-    private string transactionHashHex = string.Empty;
-    private string status = string.Empty;
-
-    [JsonPropertyName("account_id")]
-    public string AccountId
-    {
-        get => accountId;
-        init => accountId = ToriiOnboardingDirectMetadata.RequireCanonicalAccountId(value, nameof(AccountId));
-    }
-
-    [JsonPropertyName("tx_hash_hex")]
-    public string TransactionHashHex
-    {
-        get => transactionHashHex;
-        init => transactionHashHex = ToriiOnboardingDirectMetadata.RequireOptionalTransactionHashHex(
-            value,
-            nameof(TransactionHashHex));
-    }
-
-    [JsonPropertyName("status")]
-    public string Status
-    {
-        get => status;
-        init => status = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(Status));
     }
 }
 

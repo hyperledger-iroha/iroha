@@ -19,7 +19,8 @@ HEAD = "1" * 40
 TREE = "2" * 40
 LOCK = "3" * 64
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
 
@@ -374,6 +375,14 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_service_rank_mutation.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_ingress_causal_freshness_mutation.sh",
     )
     for entrypoint in entrypoints:
         source = entrypoint.read_text(encoding="utf-8")
@@ -389,3 +398,77 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
     assert "unset JAVA_BIN" in release
     assert 'release_java_bin="$("$repo_root/scripts/formal/resolve_java.sh")"' in release
     assert "canonical_executable java" not in release
+
+
+def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert 'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.11"\'' in runner
+    assert 'readonly MODEL="SumeragiV2IngressCausalFreshnessMutation.tla"' in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert "-fp 96 -seed 139154308881391968" in runner
+
+    fixed_case = (
+        "run_case scheduler-wide-fixed ingress_causal_freshness_fixed.cfg 0 \\\n"
+        '  "Model checking completed. No error has been found." \\\n'
+        '  "2 states generated, 2 distinct states found, 0 states left on queue." '
+        '\\\n  "depth of the complete state graph search is 2"'
+    )
+    mutation_case = (
+        "run_case inflight-only-mutation \\\n"
+        "  ingress_causal_freshness_inflight_only_bug.cfg 12 \\\n"
+        '  "Invariant PairwiseSingleOwnership is violated." \\\n'
+        "  'phase = \"Admitted\"' \\\n"
+        '  "trackedDuplicateCreated = TRUE" \\\n'
+        '  "queuedDuplicateCreated = TRUE" \\\n'
+        '  "2 states generated, 2 distinct states found, 0 states left on queue." '
+        '\\\n  "depth of the complete state graph search is 2"'
+    )
+    assert fixed_case in runner
+    assert mutation_case in runner
+    assert runner.count("depth of the complete state graph search is 2") == 2
+    assert runner.count(
+        "2 states generated, 2 distinct states found, 0 states left on queue."
+    ) == 2
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    fixed = (formal_dir / "ingress_causal_freshness_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutation = (
+        formal_dir / "ingress_causal_freshness_inflight_only_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.splitlines().count(
+        "CONSTANT RequireSchedulerWideFreshness = TRUE"
+    ) == 1
+    assert "INVARIANT SchedulerWideDuplicateCoalesced\n" in fixed
+    assert "INVARIANT IngressOccurrenceConsumedExactlyOnce\n" in fixed
+    assert mutation.splitlines().count(
+        "CONSTANT RequireSchedulerWideFreshness = FALSE"
+    ) == 1
+    assert "INVARIANT PairwiseSingleOwnership\n" in mutation
+
+    model = (
+        formal_dir / "SumeragiV2IngressCausalFreshnessMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert model.splitlines().count("CONSTANT RequireSchedulerWideFreshness") == 1
+    assert (
+        "IF RequireSchedulerWideFreshness\n  THEN ~CandidateScheduled(candidate)"
+        in model
+    )
+    assert "ELSE ~CandidateInFlight(candidate)" in model

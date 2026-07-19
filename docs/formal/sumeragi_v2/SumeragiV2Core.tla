@@ -1955,6 +1955,10 @@ ResumeTimeout(node, vote) ==
   LET request == TimeoutSign(node, vote)
   IN /\ node \in up \cap Honest
      /\ NodeIdle(node)
+     \* A durable Decision is terminal for timeout signing.  Production
+     \* recovery emits the decided-body frontier instead of replaying any
+     \* older timeout intent, so standalone Core replay keeps the same guard.
+     /\ NoDecisionForNode(node)
      /\ vote \in timeoutIntents
      /\ vote.signer = node
      /\ vote.context = context

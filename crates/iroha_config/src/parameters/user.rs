@@ -24,8 +24,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::{Infallible, TryFrom, TryInto},
     fmt::Debug,
-    io,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    fs, io,
+    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -41,6 +41,9 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     domain::DomainId,
+    merge::{
+        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+    },
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
@@ -5560,7 +5563,8 @@ pub struct Genesis {
     /// Retry/backoff interval between bootstrap attempts.
     #[config(default = "defaults::genesis::BOOTSTRAP_RETRY_INTERVAL.into()")]
     pub bootstrap_retry_interval_ms: DurationMs,
-    /// Maximum bootstrap attempts before failing.
+    /// Request windows per retry cycle before backoff resets and a warning is emitted.
+    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
     #[config(default = "defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS")]
     pub bootstrap_max_attempts: u32,
     /// Whether to attempt network bootstrap when local genesis is missing.
@@ -5719,8 +5723,10 @@ pub struct SumeragiQueues {
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_BYTES")]
     pub body_bytes: NonZeroUsize,
-    /// Per-authenticated-source canonical outer-ingress wire bytes, including
-    /// envelope overhead and the isolated timeout-vote reserve.
+    /// Per-authenticated-source canonical outer-ingress wire bytes, partitioned
+    /// between ordinary traffic, payload completions, and timeout votes. This
+    /// also reserves the fixed atomic lane-certificate and executable-source
+    /// minima when the configured global body limit is smaller.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
     pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
@@ -5899,17 +5905,31 @@ impl Sumeragi {
         }
 
         let envelope_headroom = defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES;
+        let manifest_wire_bytes =
+            defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES;
         let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
-        match block
+        let lane_progress_bytes = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
+        let lane_completion_bytes = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
+        let minimum_source_bytes = block
             .max_payload_bytes
             .get()
             .checked_add(envelope_headroom)
-            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
-        {
+            .map(|ordinary| ordinary.max(lane_progress_bytes))
+            .and_then(|ordinary| {
+                block
+                    .max_payload_bytes
+                    .get()
+                    .checked_add(envelope_headroom)
+                    .and_then(|completion| completion.checked_add(manifest_wire_bytes))
+                    .map(|completion| completion.max(lane_completion_bytes))
+                    .and_then(|completion| ordinary.checked_add(completion))
+            })
+            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve));
+        match minimum_source_bytes {
             Some(minimum) if queues.body_source_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_source_bytes must be at least sumeragi.block.max_payload_bytes + {envelope_headroom} bytes of envelope headroom + {timeout_vote_reserve} reserved timeout-vote bytes (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
                         queues.body_source_bytes,
                     )),
                 );
@@ -5919,7 +5939,7 @@ impl Sumeragi {
             None => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.block.max_payload_bytes + {envelope_headroom} bytes of envelope headroom + {timeout_vote_reserve} reserved timeout-vote bytes exceeds the platform size representation"
+                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
                     )),
                 );
                 valid = false;
@@ -6868,9 +6888,12 @@ pub struct Network {
     /// Maximum deferred outbound frames retained per peer while session is missing.
     #[config(default = "defaults::network::DEFERRED_SEND_MAX_PER_PEER")]
     pub deferred_send_max_per_peer: usize,
-    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    /// Maximum stream-wire bytes retained per peer by deferred outbound frames.
     #[config(default = "defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER")]
     pub deferred_send_max_bytes_per_peer: usize,
+    /// Maximum stream-wire bytes retained across every deferred outbound peer queue.
+    #[config(default = "defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL")]
+    pub deferred_send_max_bytes_total: usize,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
@@ -6886,10 +6909,10 @@ pub struct Network {
     /// Applied as a conservative cap even if the QUIC path MTU supports larger datagrams.
     #[config(default = "defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES")]
     pub quic_datagram_max_payload_bytes: NonZeroUsize,
-    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    /// Receive buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     #[config(default = "defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES")]
     pub quic_datagram_receive_buffer_bytes: NonZeroUsize,
-    /// Total send buffer reserved for QUIC datagrams (bytes).
+    /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     #[config(default = "defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES")]
     pub quic_datagram_send_buffer_bytes: NonZeroUsize,
     /// Enable SCION-guided outbound dialing when peer routes are configured.
@@ -6980,10 +7003,15 @@ pub struct Network {
     /// Capacity for the per-peer post queue (bounded mode only).
     #[config(default = "defaults::network::P2P_POST_QUEUE_CAP")]
     pub p2p_post_queue_cap: NonZeroUsize,
-    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained by each
+    /// connected sender queue and by the process-wide connected-post owner, and the
+    /// ordinary-high actor byte subcap. The actor adds disjoint maximum safety and route-qualified
+    /// semantic-progress frame charges; each authenticated peer separately gets one such progress
+    /// charge, bounded by `max_total_connections` and shared by replacement sessions.
     #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES")]
     pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
-    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    /// Maximum low-priority stream wire bytes retained by each connected sender queue and by
+    /// the process-wide connected-post owner, including frame prefixes.
     #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES")]
     pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
     /// Maximum encrypted high-priority outbound frames retained per peer.
@@ -7030,7 +7058,8 @@ pub struct Network {
     /// If unset, no explicit cap is enforced.
     pub max_incoming: Option<NonZeroUsize>,
     /// Maximum total number of connections (incoming + outgoing + in-flight accepts).
-    /// If unset, no explicit cap is enforced.
+    /// If unset, the core-profile hard cap is enforced so per-peer safety
+    /// assembly reserves retain a finite process-wide bound.
     pub max_total_connections: Option<NonZeroUsize>,
     /// Per-IP(/24 for IPv4, /64 for IPv6) accept rate, in accepts per second.
     /// If unset, per-IP accept throttling is disabled.
@@ -7082,7 +7111,7 @@ pub struct Network {
         default = "defaults::network::DISCONNECT_ON_POST_OVERFLOW"
     )]
     pub disconnect_on_post_overflow: bool,
-    /// Maximum allowed frame size (bytes) for P2P messages
+    /// Maximum encrypted P2P frame-body size in bytes (at most 2,147,483,643).
     #[config(
         env = "P2P_MAX_FRAME_BYTES",
         default = "defaults::network::MAX_FRAME_BYTES"
@@ -7191,6 +7220,7 @@ impl Network {
             deferred_send_ttl_ms,
             deferred_send_max_per_peer,
             deferred_send_max_bytes_per_peer,
+            deferred_send_max_bytes_total,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
@@ -7422,6 +7452,7 @@ impl Network {
                 deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
                 deferred_send_max_per_peer: deferred_send_max_per_peer.max(1),
                 deferred_send_max_bytes_per_peer: deferred_send_max_bytes_per_peer.max(1),
+                deferred_send_max_bytes_total: deferred_send_max_bytes_total.max(1),
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,
@@ -9917,9 +9948,6 @@ pub struct NexusRelayWorker {
     /// Maximum proof/submission attempts before local worker retry stops.
     #[config(default = "defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS")]
     pub max_retry_attempts: u32,
-    /// Block interval between sponsor budget proof refreshes.
-    #[config(default = "defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS")]
-    pub budget_refresh_interval_blocks: u64,
 }
 
 impl Default for NexusRelayWorker {
@@ -9931,8 +9959,6 @@ impl Default for NexusRelayWorker {
             max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
             retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
             max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
-            budget_refresh_interval_blocks:
-                defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS,
         }
     }
 }
@@ -9954,14 +9980,6 @@ impl NexusRelayWorker {
             );
             NonZeroUsize::new(1).expect("placeholder non-zero")
         });
-        let budget_refresh_interval_blocks = NonZeroU64::new(self.budget_refresh_interval_blocks)
-            .unwrap_or_else(|| {
-                emitter.emit(
-                    Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.relay_worker.budget_refresh_interval_blocks must be > 0"),
-                );
-                NonZeroU64::new(1).expect("placeholder non-zero")
-            });
         if self.retry_backoff_ms == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -9976,10 +9994,7 @@ impl NexusRelayWorker {
             );
             NonZeroU32::new(1).expect("placeholder non-zero")
         });
-        if self.max_pending_relays == 0
-            || self.budget_refresh_interval_blocks == 0
-            || self.max_retry_attempts == 0
-        {
+        if self.max_pending_relays == 0 || self.max_retry_attempts == 0 {
             return None;
         }
         Some(actual::NexusRelayWorker {
@@ -9988,7 +10003,6 @@ impl NexusRelayWorker {
             max_pending_relays,
             retry_backoff: Duration::from_millis(self.retry_backoff_ms),
             max_retry_attempts,
-            budget_refresh_interval_blocks,
         })
     }
 }
@@ -13543,8 +13557,10 @@ pub struct Torii {
     /// Webhook destination security configuration (SSRF guard rails).
     #[config(nested)]
     pub webhook_security: WebhookSecurity,
-    /// Optional UAID onboarding authority wiring for app API endpoints.
-    pub onboarding: Option<ToriiOnboarding>,
+    /// Optional account-onboarding authority wiring for app API endpoints.
+    ///
+    /// Absence disables sponsored onboarding; presence enables it structurally.
+    pub account_onboarding: Option<AccountOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
     /// Optional Kagemusha command-submission authority for app API endpoints.
@@ -14112,8 +14128,10 @@ impl Torii {
             webhook,
             webhook_security,
             push,
-            onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
-            faucet: self.faucet.and_then(ToriiFaucet::parse),
+            account_onboarding: self
+                .account_onboarding
+                .and_then(|config| config.parse(emitter)),
+            faucet: self.faucet.and_then(|config| config.parse(emitter)),
             kagemusha_commands: self
                 .kagemusha_commands
                 .and_then(ToriiKagemushaCommands::parse),
@@ -15017,206 +15035,701 @@ impl Default for ToriiMcp {
     }
 }
 
-/// Default constructors for `ToriiOnboarding` when the optional subtree is
-/// deserialized directly.
-const fn default_torii_onboarding_enabled() -> bool {
-    true
+const fn default_account_onboarding_lease_term_years() -> u8 {
+    defaults::torii::account_onboarding::LEASE_TERM_YEARS
 }
 
-fn default_torii_onboarding_allowed_permissions() -> Vec<String> {
-    Vec::new()
+#[derive(Clone, Copy, Default)]
+struct ForbiddenOnboardingSecretInput;
+
+impl Debug for ForbiddenOnboardingSecretInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED forbidden onboarding secret]")
+    }
 }
 
-const fn default_torii_onboarding_alias_lease_term_years() -> u8 {
-    1
+impl norito::json::JsonDeserialize for ForbiddenOnboardingSecretInput {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> core::result::Result<Self, norito::json::Error> {
+        let _ = <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Ok(Self)
+    }
 }
 
-const fn default_torii_onboarding_alias_auto_renew_enabled() -> bool {
-    false
-}
-
-const fn default_torii_onboarding_alias_auto_renew_retry_backoff_ms() -> u64 {
-    86_400_000
-}
-
-const fn default_torii_onboarding_alias_auto_renew_max_failures() -> u32 {
-    5
-}
-
-/// App onboarding authority wiring for UAID registration helpers.
+/// Structurally enabled sponsored account-onboarding configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiOnboarding {
-    /// Master enable switch (defaults to enabled).
-    #[config(default = "true")]
-    #[norito(default = "default_torii_onboarding_enabled")]
-    pub enabled: bool,
-    /// Account identifier that signs onboarding transactions.
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboarding {
+    /// Canonical domainless account identifier that signs onboarding transactions.
     pub authority: String,
-    /// Private key corresponding to the onboarding authority.
-    pub private_key: ExposedPrivateKey,
-    /// Exact fully-qualified onboarding domain to lowercase hexadecimal BLAKE3 token digest.
-    ///
-    /// Each digest must be unique so one credential authenticates exactly one domain. An empty
-    /// map keeps signer-backed onboarding configured but makes its HTTP routes fail closed. Raw
-    /// tokens must never be written to peer configuration.
+    /// Runtime-only file containing the onboarding authority's private key.
+    pub private_key_file: PathBuf,
+    #[norito(default)]
+    private_key: Option<ForbiddenOnboardingSecretInput>,
+    /// Default alias lease acquisition term.
+    #[config(default = "defaults::torii::account_onboarding::LEASE_TERM_YEARS")]
+    #[norito(default = "default_account_onboarding_lease_term_years")]
+    pub lease_term_years: u8,
+    /// Permission names that sponsored onboarding may additionally grant.
     #[config(default)]
     #[norito(default)]
-    pub api_token_hashes_by_domain: BTreeMap<String, String>,
-    /// Permission names that onboarding is allowed to grant to new accounts.
-    #[config(default)]
-    #[norito(default = "default_torii_onboarding_allowed_permissions")]
-    pub allowed_permissions: Vec<String>,
-    /// Exact dataspace ids for domainless account-alias resolution grants applied to every
-    /// newly onboarded account. These scopes are independent of `alias_resolve_domains`.
-    #[config(default)]
-    #[norito(default)]
-    pub alias_resolve_dataspaces: Vec<u64>,
-    /// Exact fully-qualified domains for domain-qualified account-alias resolution grants applied
-    /// to every newly onboarded account. A domain scope does not grant its enclosing dataspace.
-    #[config(default)]
-    #[norito(default)]
-    pub alias_resolve_domains: Vec<String>,
+    pub additional_permissions: Vec<String>,
     /// Optional exact sponsor program enrolled for each newly onboarded account.
     pub fee_sponsor_program_id: Option<String>,
-    /// Default alias lease term applied during onboarding.
-    #[config(default = "1")]
-    #[norito(default = "default_torii_onboarding_alias_lease_term_years")]
-    pub alias_lease_term_years: u8,
-    /// Whether onboarding should create a default auto-renew subscription.
-    ///
-    /// Defaults to disabled until `alias_auto_renew_subscription_domain` is configured.
-    #[config(default = "false")]
-    #[norito(default = "default_torii_onboarding_alias_auto_renew_enabled")]
-    pub alias_auto_renew_enabled: bool,
-    /// Retry delay for alias auto-renew after a failed charge.
-    #[config(default = "86_400_000")]
-    #[norito(default = "default_torii_onboarding_alias_auto_renew_retry_backoff_ms")]
-    pub alias_auto_renew_retry_backoff_ms: u64,
-    /// Maximum consecutive alias auto-renew failures before suspension.
-    #[config(default = "5")]
-    #[norito(default = "default_torii_onboarding_alias_auto_renew_max_failures")]
-    pub alias_auto_renew_max_failures: u32,
-    /// Existing domain used to store internal alias auto-renew subscription NFTs.
-    pub alias_auto_renew_subscription_domain: Option<String>,
+    /// Header-token credentials accepted by sponsored onboarding.
+    #[config(default)]
+    #[norito(default)]
+    pub credentials: Vec<AccountOnboardingCredential>,
+    /// Optional native deterministic alias auto-renew defaults.
+    pub auto_renew: Option<AccountOnboardingAutoRenew>,
 }
 
-impl ToriiOnboarding {
-    fn parse(self) -> Option<actual::ToriiOnboarding> {
-        if !self.enabled {
+/// One API-token credential and its exact onboarding scope.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingCredential {
+    /// Stable operator-facing credential identifier.
+    pub id: String,
+    /// Exactly one domain or dataspace scope.
+    pub scope: AccountOnboardingCredentialScope,
+    /// BLAKE3 digest formatted as `blake3:<64 lowercase hex>`.
+    pub token_hash: String,
+    #[norito(default)]
+    token: Option<ForbiddenOnboardingSecretInput>,
+}
+
+/// User-facing credential scope encoded as `{ domain = "..." }` or
+/// `{ dataspace = "..." }`.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingCredentialScope {
+    /// Optional fully-qualified domain scope.
+    pub domain: Option<String>,
+    /// Optional textual dataspace scope.
+    pub dataspace: Option<String>,
+}
+
+/// Native deterministic alias auto-renew defaults for sponsored onboarding.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingAutoRenew {
+    /// Lease term requested by each renewal.
+    pub term_years: u8,
+    /// Maximum amount the owner authorizes per renewal.
+    pub max_amount: String,
+    /// Milliseconds before expiry when native processing begins renewal attempts.
+    pub renew_before_expiry_ms: u64,
+    /// Deterministic retry delay in milliseconds.
+    pub retry_backoff_ms: u64,
+    /// Consecutive failure limit before suspension.
+    pub max_failures: u32,
+}
+
+impl AccountOnboarding {
+    fn parse_authority(raw: &str, emitter: &mut Emitter<ParseError>) -> Option<AccountId> {
+        let parsed = match AccountId::parse_encoded(raw) {
+            Ok(parsed) => parsed.into_account_id(),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.authority must be a canonical domainless AccountId: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
+        if raw != parsed.to_string() {
+            emit_torii_config_error(
+                emitter,
+                format!("torii.account_onboarding.authority must use canonical form `{parsed}`"),
+            );
             return None;
         }
-        let authority = AccountId::parse_encoded(&self.authority).map_or_else(
-            |err| {
-                panic!(
-                    "invalid torii.onboarding.authority `{}`: {err}",
-                    self.authority
-                )
-            },
-            iroha_data_model::account::ParsedAccountId::into_account_id,
-        );
-        let mut seen_api_token_hashes = BTreeSet::new();
-        let api_token_hashes_by_domain = self
-            .api_token_hashes_by_domain
-            .into_iter()
-            .map(|(domain, value)| {
-                let parsed = DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
-                    panic!(
-                        "invalid torii.onboarding.api_token_hashes_by_domain key `{domain}`: {}",
-                        err.reason()
-                    )
-                });
-                assert_eq!(
-                    domain,
-                    parsed.to_string(),
-                    "torii.onboarding.api_token_hashes_by_domain key `{domain}` must be canonical `{parsed}`"
+        if parsed.try_signatory().is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.authority must be a single-signature AccountId",
+            );
+            return None;
+        }
+        Some(parsed)
+    }
+
+    fn load_private_key(path: &Path, emitter: &mut Emitter<ParseError>) -> Option<PrivateKey> {
+        if path.as_os_str().is_empty() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.private_key_file must not be empty",
+            );
+            return None;
+        }
+        let encoded = match fs::read_to_string(path) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "failed to read torii.account_onboarding.private_key_file `{}`: {err}",
+                        path.display()
+                    ),
                 );
-                assert!(
-                    value.len() == 64
-                        && value.bytes().all(|byte| {
-                            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-                        }),
-                    "torii.onboarding.api_token_hashes_by_domain digest for `{domain}` must be exactly 64 lowercase hexadecimal characters"
+                return None;
+            }
+        };
+        let encoded = encoded.trim_end_matches(['\r', '\n']);
+        if encoded.is_empty() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.account_onboarding.private_key_file `{}` is empty",
+                    path.display()
+                ),
+            );
+            return None;
+        }
+        match PrivateKey::from_str(encoded) {
+            Ok(private_key) => Some(private_key),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.private_key_file `{}` does not contain a canonical private key: {err}",
+                        path.display()
+                    ),
                 );
-                let decoded = hex::decode(&value).expect(
-                    "validated torii.onboarding.api_token_hashes_by_domain digest must decode",
+                None
+            }
+        }
+    }
+
+    fn parse_signer(
+        authority: Option<&AccountId>,
+        private_key: Option<PrivateKey>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<KeyPair> {
+        let (Some(authority), Some(private_key)) = (authority, private_key) else {
+            return None;
+        };
+        let Some(public_key) = authority.try_signatory() else {
+            return None;
+        };
+        match KeyPair::new(public_key.clone(), private_key) {
+            Ok(signer) => Some(signer),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.private_key_file signer does not match authority: {err}"
+                    ),
                 );
-                let digest = <[u8; 32]>::try_from(decoded.as_slice()).expect(
-                    "validated torii.onboarding.api_token_hashes_by_domain digest must be 32 bytes",
+                None
+            }
+        }
+    }
+
+    fn parse_token_hash(
+        raw: &str,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<[u8; 32]> {
+        let Some(hex_digest) = raw.strip_prefix("blake3:") else {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.account_onboarding.credentials[{index}].token_hash must use `blake3:<64 lowercase hex>`"
+                ),
+            );
+            return None;
+        };
+        if hex_digest.len() != 64
+            || !hex_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.account_onboarding.credentials[{index}].token_hash must use `blake3:<64 lowercase hex>`"
+                ),
+            );
+            return None;
+        }
+        let Ok(decoded) = hex::decode(hex_digest) else {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.account_onboarding.credentials[{index}].token_hash is not valid hexadecimal"
+                ),
+            );
+            return None;
+        };
+        match <[u8; 32]>::try_from(decoded.as_slice()) {
+            Ok(digest) => Some(digest),
+            Err(_) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.credentials[{index}].token_hash must decode to 32 bytes"
+                    ),
                 );
-                assert!(
-                    seen_api_token_hashes.insert(digest),
-                    "torii.onboarding.api_token_hashes_by_domain must not reuse a token digest across domains"
+                None
+            }
+        }
+    }
+
+    fn parse_credential_scope(
+        scope: AccountOnboardingCredentialScope,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::AccountOnboardingCredentialScope> {
+        match (scope.domain, scope.dataspace) {
+            (Some(raw), None) => {
+                let parsed = match DomainId::parse_fully_qualified(&raw) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "torii.account_onboarding.credentials[{index}].scope.domain must be fully qualified: {}",
+                                err.reason()
+                            ),
+                        );
+                        return None;
+                    }
+                };
+                if raw != parsed.to_string() {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.credentials[{index}].scope.domain must use canonical form `{parsed}`"
+                        ),
+                    );
+                    return None;
+                }
+                Some(actual::AccountOnboardingCredentialScope::Domain(parsed))
+            }
+            (None, Some(raw)) => {
+                let parsed = match Name::from_str(&raw) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "torii.account_onboarding.credentials[{index}].scope.dataspace is invalid: {err}"
+                            ),
+                        );
+                        return None;
+                    }
+                };
+                if raw != parsed.as_ref() {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.credentials[{index}].scope.dataspace must use canonical form `{parsed}`"
+                        ),
+                    );
+                    return None;
+                }
+                Some(actual::AccountOnboardingCredentialScope::Dataspace(parsed))
+            }
+            (None, None) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.credentials[{index}].scope must set exactly one of `domain` or `dataspace`"
+                    ),
                 );
-                (parsed, digest)
-            })
-            .collect();
-        let allowed_permissions = self
-            .allowed_permissions
-            .into_iter()
-            .map(|permission| permission.trim().to_owned())
-            .filter(|permission| !permission.is_empty())
-            .collect();
-        let alias_resolve_dataspaces = self
-            .alias_resolve_dataspaces
-            .into_iter()
-            .map(DataSpaceId::new)
-            .collect();
-        let alias_resolve_domains = self
-            .alias_resolve_domains
-            .into_iter()
-            .map(|domain| {
-                let canonical = domain.trim();
-                let parsed = DomainId::parse_fully_qualified(canonical).unwrap_or_else(|err| {
-                    panic!(
-                        "invalid torii.onboarding.alias_resolve_domains entry `{domain}`: {}",
-                        err.reason()
-                    )
-                });
-                if canonical != parsed.to_string() {
-                    panic!(
-                        "torii.onboarding.alias_resolve_domains entry `{domain}` must use canonical `{parsed}`"
+                None
+            }
+            (Some(_), Some(_)) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.credentials[{index}].scope must not set both `domain` and `dataspace`"
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    fn parse_credentials(
+        credentials: Vec<AccountOnboardingCredential>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<Vec<actual::AccountOnboardingCredential>> {
+        if credentials.is_empty() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.credentials must contain at least one credential",
+            );
+            return None;
+        }
+
+        let mut valid = true;
+        let mut seen_ids = BTreeSet::new();
+        let mut seen_digests = BTreeSet::new();
+        let mut parsed_credentials = Vec::with_capacity(credentials.len());
+        for (index, credential) in credentials.into_iter().enumerate() {
+            if credential.token.is_some() {
+                valid = false;
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.credentials[{index}].token is forbidden; provide the raw token through a runtime token file or request header and configure only token_hash"
+                    ),
+                );
+            }
+            let id = match Name::from_str(&credential.id) {
+                Ok(id) if credential.id == id.as_ref() => {
+                    if !seen_ids.insert(id.clone()) {
+                        valid = false;
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "torii.account_onboarding.credentials[{index}].id `{id}` is duplicated"
+                            ),
+                        );
+                    }
+                    Some(id)
+                }
+                Ok(id) => {
+                    valid = false;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.credentials[{index}].id must use canonical form `{id}`"
+                        ),
+                    );
+                    None
+                }
+                Err(err) => {
+                    valid = false;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.credentials[{index}].id is invalid: {err}"
+                        ),
+                    );
+                    None
+                }
+            };
+            let scope = Self::parse_credential_scope(credential.scope, index, emitter);
+            if scope.is_none() {
+                valid = false;
+            }
+            let digest = Self::parse_token_hash(&credential.token_hash, index, emitter);
+            if let Some(digest) = digest {
+                if !seen_digests.insert(digest) {
+                    valid = false;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.credentials[{index}].token_hash reuses another credential digest"
+                        ),
                     );
                 }
-                parsed
-            })
-            .collect();
-        let fee_sponsor_program_id = self.fee_sponsor_program_id.map(|raw| {
-            let canonical = raw.trim();
-            let parsed = canonical
-                .parse::<FeeSponsorProgramId>()
-                .unwrap_or_else(|err| {
-                    panic!("invalid torii.onboarding.fee_sponsor_program_id `{raw}`: {err}")
+            } else {
+                valid = false;
+            }
+
+            if let (Some(id), Some(scope), Some(token_hash)) = (id, scope, digest) {
+                parsed_credentials.push(actual::AccountOnboardingCredential {
+                    id,
+                    scope,
+                    token_hash,
                 });
-            assert_eq!(
-                raw,
-                parsed.to_string(),
-                "torii.onboarding.fee_sponsor_program_id `{raw}` must be canonical `{parsed}`"
+            }
+        }
+        valid.then_some(parsed_credentials)
+    }
+
+    fn parse_permissions(
+        permissions: Vec<String>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<Vec<Name>> {
+        const UNSCOPED_DEFAULT_PERMISSIONS: &[&str] = &[
+            "CanManagePeers",
+            "CanManageLaneRelayEmergency",
+            "CanResolveEscrowDispute",
+            "CanManageOfflineEscrow",
+            "CanActivateKagemushaRecursiveReleaseV4",
+            "CanManageOfflineDeviceAttestationPolicy",
+            "CanSetParameters",
+            "CanManageSccpGovernance",
+            "CanProposeSccpRouteGovernance",
+            "CanManageRoles",
+            "CanUpgradeExecutor",
+            "CanRegisterSmartContractCode",
+            "CanManageFxCorridors",
+            "CanEnactGovernance",
+            "CanManageParliament",
+            "CanRegisterSorafsPin",
+            "CanApproveSorafsPin",
+            "CanRetireSorafsPin",
+            "CanBindSorafsAlias",
+            "CanDeclareSorafsCapacity",
+            "CanSubmitSorafsTelemetry",
+            "CanFileSorafsCapacityDispute",
+            "CanIssueSorafsReplicationOrder",
+            "CanCompleteSorafsReplicationOrder",
+            "CanSetSorafsPricing",
+            "CanManageSorafsModeration",
+            "CanManageSorafsPopRegistry",
+            "CanOperateSorafsPopIssuer",
+            "CanUpsertSorafsProviderCredit",
+            "CanRegisterSorafsProviderOwner",
+            "CanUnregisterSorafsProviderOwner",
+            "CanSetMusubiShortAlias",
+            "CanIngestSoranetPrivacy",
+            "CanRegisterOracleFeed",
+            "CanProposeOracleChange",
+            "CanRollbackOracleChange",
+            "CanResolveOracleDispute",
+            "CanManageTwitterBindings",
+        ];
+
+        let mut valid = true;
+        let mut seen = BTreeSet::new();
+        let mut parsed_permissions = Vec::with_capacity(permissions.len());
+        for (index, raw) in permissions.into_iter().enumerate() {
+            let permission = match Name::from_str(&raw) {
+                Ok(permission) if raw == permission.as_ref() => permission,
+                Ok(permission) => {
+                    valid = false;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.additional_permissions[{index}] must use canonical form `{permission}`"
+                        ),
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    valid = false;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.account_onboarding.additional_permissions[{index}] is not a valid permission name: {err}"
+                        ),
+                    );
+                    continue;
+                }
+            };
+            if !seen.insert(permission.clone()) {
+                valid = false;
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.additional_permissions[{index}] `{permission}` is duplicated"
+                    ),
+                );
+                continue;
+            }
+            if !UNSCOPED_DEFAULT_PERMISSIONS.contains(&permission.as_ref()) {
+                valid = false;
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.additional_permissions[{index}] `{permission}` is not a supported unscoped default permission"
+                    ),
+                );
+                continue;
+            }
+            parsed_permissions.push(permission);
+        }
+        valid.then_some(parsed_permissions)
+    }
+
+    fn parse_fee_sponsor_program_id(
+        raw: Option<String>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<Option<FeeSponsorProgramId>> {
+        let Some(raw) = raw else {
+            return Some(None);
+        };
+        let parsed = match FeeSponsorProgramId::from_str(&raw) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.account_onboarding.fee_sponsor_program_id is invalid: {err}"),
+                );
+                return None;
+            }
+        };
+        if raw != parsed.to_string() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.account_onboarding.fee_sponsor_program_id must use canonical form `{parsed}`"
+                ),
             );
-            parsed
-        });
-        let alias_auto_renew_subscription_domain =
-            self.alias_auto_renew_subscription_domain.map(|domain| {
-                DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
-                    panic!(
-                        "invalid torii.onboarding.alias_auto_renew_subscription_domain `{domain}`: {}",
-                        err.reason()
-                    )
-                })
-            });
-        Some(actual::ToriiOnboarding {
+            return None;
+        }
+        Some(Some(parsed))
+    }
+
+    fn parse_auto_renew(
+        config: Option<AccountOnboardingAutoRenew>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<Option<actual::AccountOnboardingAutoRenew>> {
+        let Some(config) = config else {
+            return Some(None);
+        };
+        let term_years = NonZeroU8::new(config.term_years);
+        if term_years.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.auto_renew.term_years must be greater than zero",
+            );
+        }
+        let max_amount = match Numeric::from_str(&config.max_amount) {
+            Ok(amount) if amount > Numeric::zero() && amount.to_string() == config.max_amount => {
+                Some(amount)
+            }
+            Ok(amount) if amount <= Numeric::zero() => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.account_onboarding.auto_renew.max_amount must be greater than zero",
+                );
+                None
+            }
+            Ok(amount) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.auto_renew.max_amount must use canonical form `{amount}`"
+                    ),
+                );
+                None
+            }
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.account_onboarding.auto_renew.max_amount is invalid: {err}"),
+                );
+                None
+            }
+        };
+        let mut renew_before_expiry_ms = NonZeroU64::new(config.renew_before_expiry_ms);
+        if renew_before_expiry_ms.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.auto_renew.renew_before_expiry_ms must be greater than zero",
+            );
+        }
+        if let (Some(term_years), Some(renew_before_expiry)) = (term_years, renew_before_expiry_ms)
+        {
+            let term_duration_ms = u64::from(term_years.get())
+                .saturating_mul(iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS);
+            if renew_before_expiry.get() >= term_duration_ms {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.account_onboarding.auto_renew.renew_before_expiry_ms must be shorter than the {term_duration_ms}ms renewal term"
+                    ),
+                );
+                renew_before_expiry_ms = None;
+            }
+        }
+        let retry_backoff_ms = NonZeroU64::new(config.retry_backoff_ms);
+        if retry_backoff_ms.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.auto_renew.retry_backoff_ms must be greater than zero",
+            );
+        }
+        let max_failures = NonZeroU32::new(config.max_failures);
+        if max_failures.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.auto_renew.max_failures must be greater than zero",
+            );
+        }
+
+        match (
+            term_years,
+            max_amount,
+            renew_before_expiry_ms,
+            retry_backoff_ms,
+            max_failures,
+        ) {
+            (
+                Some(term_years),
+                Some(max_amount),
+                Some(renew_before_expiry_ms),
+                Some(retry_backoff_ms),
+                Some(max_failures),
+            ) => Some(Some(actual::AccountOnboardingAutoRenew {
+                term_years,
+                max_amount,
+                renew_before_expiry: Duration::from_millis(renew_before_expiry_ms.get()),
+                retry_backoff: Duration::from_millis(retry_backoff_ms.get()),
+                max_failures,
+            })),
+            _ => None,
+        }
+    }
+
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::AccountOnboarding> {
+        let secret_free_schema = if self.private_key.is_some() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.private_key is forbidden; use private_key_file",
+            );
+            None
+        } else {
+            Some(())
+        };
+        let authority = Self::parse_authority(&self.authority, emitter);
+        let private_key = Self::load_private_key(&self.private_key_file, emitter);
+        let signer = Self::parse_signer(authority.as_ref(), private_key, emitter);
+        let lease_term_years = NonZeroU8::new(self.lease_term_years);
+        if lease_term_years.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.account_onboarding.lease_term_years must be greater than zero",
+            );
+        }
+        let credentials = Self::parse_credentials(self.credentials, emitter);
+        let additional_permissions = Self::parse_permissions(self.additional_permissions, emitter);
+        let fee_sponsor_program_id =
+            Self::parse_fee_sponsor_program_id(self.fee_sponsor_program_id, emitter);
+        let auto_renew = Self::parse_auto_renew(self.auto_renew, emitter);
+
+        match (
             authority,
-            private_key: self.private_key,
-            api_token_hashes_by_domain,
-            allowed_permissions,
-            alias_resolve_dataspaces,
-            alias_resolve_domains,
+            signer,
+            lease_term_years,
+            credentials,
+            additional_permissions,
             fee_sponsor_program_id,
-            alias_lease_term_years: self.alias_lease_term_years,
-            alias_auto_renew_enabled: self.alias_auto_renew_enabled,
-            alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
-            alias_auto_renew_max_failures: self.alias_auto_renew_max_failures,
-            alias_auto_renew_subscription_domain,
-        })
+            auto_renew,
+            secret_free_schema,
+        ) {
+            (
+                Some(authority),
+                Some(signer),
+                Some(lease_term_years),
+                Some(credentials),
+                Some(additional_permissions),
+                Some(fee_sponsor_program_id),
+                Some(auto_renew),
+                Some(()),
+            ) => Some(actual::AccountOnboarding {
+                authority,
+                private_key_file: self.private_key_file,
+                signer,
+                credentials,
+                additional_permissions,
+                fee_sponsor_program_id,
+                lease_term_years,
+                auto_renew,
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -15228,8 +15741,8 @@ pub struct ToriiFaucet {
     pub enabled: bool,
     /// Account identifier that signs faucet transfers.
     pub authority: String,
-    /// Private key corresponding to the faucet authority.
-    pub private_key: ExposedPrivateKey,
+    /// Runtime-only file containing the faucet authority's private key.
+    pub private_key_file: PathBuf,
     /// Asset definition distributed by the faucet.
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
@@ -15264,49 +15777,194 @@ pub struct ToriiFaucet {
 }
 
 impl ToriiFaucet {
-    fn parse(self) -> Option<actual::ToriiFaucet> {
+    fn parse_authority(raw: &str, emitter: &mut Emitter<ParseError>) -> Option<AccountId> {
+        let parsed = match AccountId::parse_encoded(raw) {
+            Ok(parsed) => parsed.into_account_id(),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.faucet.authority must be a canonical domainless AccountId: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
+        if raw != parsed.to_string() {
+            emit_torii_config_error(
+                emitter,
+                format!("torii.faucet.authority must use canonical form `{parsed}`"),
+            );
+            return None;
+        }
+        if parsed.try_signatory().is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.authority must be a single-signature AccountId",
+            );
+            return None;
+        }
+        Some(parsed)
+    }
+
+    fn load_private_key(path: &Path, emitter: &mut Emitter<ParseError>) -> Option<PrivateKey> {
+        if path.as_os_str().is_empty() {
+            emit_torii_config_error(emitter, "torii.faucet.private_key_file must not be empty");
+            return None;
+        }
+        let encoded = match fs::read_to_string(path) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "failed to read torii.faucet.private_key_file `{}`: {err}",
+                        path.display()
+                    ),
+                );
+                return None;
+            }
+        };
+        let encoded = encoded.trim_end_matches(['\r', '\n']);
+        if encoded.is_empty() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.faucet.private_key_file `{}` is empty",
+                    path.display()
+                ),
+            );
+            return None;
+        }
+        match PrivateKey::from_str(encoded) {
+            Ok(private_key) => Some(private_key),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.faucet.private_key_file `{}` does not contain a canonical private key: {err}",
+                        path.display()
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    fn parse_signer(
+        authority: Option<&AccountId>,
+        private_key: Option<PrivateKey>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<KeyPair> {
+        let (Some(authority), Some(private_key)) = (authority, private_key) else {
+            return None;
+        };
+        let Some(public_key) = authority.try_signatory() else {
+            return None;
+        };
+        match KeyPair::new(public_key.clone(), private_key) {
+            Ok(signer) => Some(signer),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.faucet.private_key_file signer does not match authority: {err}"),
+                );
+                None
+            }
+        }
+    }
+
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiFaucet> {
         if !self.enabled {
             return None;
         }
-        let authority = AccountId::parse_encoded(&self.authority).map_or_else(
-            |err| panic!("invalid torii.faucet.authority `{}`: {err}", self.authority),
-            iroha_data_model::account::ParsedAccountId::into_account_id,
-        );
-        let asset_definition_id = parse_asset_definition_selector_literal(
-            "torii.faucet.asset_definition_id",
-            &self.asset_definition_id,
-        );
-        if self.amount.is_zero() {
-            panic!("torii.faucet.amount must be greater than zero");
+        let authority = Self::parse_authority(&self.authority, emitter);
+        let private_key = Self::load_private_key(&self.private_key_file, emitter);
+        let signer = Self::parse_signer(authority.as_ref(), private_key, emitter);
+        let asset_definition_id =
+            match validate_asset_definition_selector_literal(&self.asset_definition_id) {
+                Ok(selector) => Some(selector),
+                Err(err) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.faucet.asset_definition_id `{}`: {err}",
+                            self.asset_definition_id
+                        ),
+                    );
+                    None
+                }
+            };
+        let amount = (!self.amount.is_zero()).then_some(self.amount);
+        if amount.is_none() {
+            emit_torii_config_error(emitter, "torii.faucet.amount must be greater than zero");
         }
-        if self.pow_scrypt_log_n == 0 {
-            panic!("torii.faucet.pow_scrypt_log_n must be greater than zero");
+        let pow_scrypt_log_n = NonZeroU8::new(self.pow_scrypt_log_n);
+        if pow_scrypt_log_n.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.pow_scrypt_log_n must be greater than zero",
+            );
         }
-        if self.pow_scrypt_r == 0 {
-            panic!("torii.faucet.pow_scrypt_r must be greater than zero");
+        let pow_scrypt_r = NonZeroU32::new(self.pow_scrypt_r);
+        if pow_scrypt_r.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.pow_scrypt_r must be greater than zero",
+            );
         }
-        if self.pow_scrypt_p == 0 {
-            panic!("torii.faucet.pow_scrypt_p must be greater than zero");
+        let pow_scrypt_p = NonZeroU32::new(self.pow_scrypt_p);
+        if pow_scrypt_p.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.pow_scrypt_p must be greater than zero",
+            );
         }
-        let pow_max_anchor_age_blocks = NonZeroU64::new(self.pow_max_anchor_age_blocks)
-            .unwrap_or_else(|| {
-                panic!("torii.faucet.pow_max_anchor_age_blocks must be greater than zero")
-            });
-        Some(actual::ToriiFaucet {
+        let pow_max_anchor_age_blocks = NonZeroU64::new(self.pow_max_anchor_age_blocks);
+        if pow_max_anchor_age_blocks.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.pow_max_anchor_age_blocks must be greater than zero",
+            );
+        }
+
+        match (
             authority,
-            private_key: self.private_key,
+            signer,
             asset_definition_id,
-            amount: self.amount,
-            pow_difficulty_bits: self.pow_difficulty_bits,
-            pow_scrypt_log_n: self.pow_scrypt_log_n,
-            pow_scrypt_r: self.pow_scrypt_r,
-            pow_scrypt_p: self.pow_scrypt_p,
+            amount,
+            pow_scrypt_log_n,
+            pow_scrypt_r,
+            pow_scrypt_p,
             pow_max_anchor_age_blocks,
-            pow_adaptive_lookback_blocks: self.pow_adaptive_lookback_blocks,
-            pow_adaptive_claims_per_extra_bit: self.pow_adaptive_claims_per_extra_bit,
-            pow_adaptive_max_extra_bits: self.pow_adaptive_max_extra_bits,
-            pow_vrf_seed_enabled: self.pow_vrf_seed_enabled,
-        })
+        ) {
+            (
+                Some(authority),
+                Some(signer),
+                Some(asset_definition_id),
+                Some(amount),
+                Some(pow_scrypt_log_n),
+                Some(pow_scrypt_r),
+                Some(pow_scrypt_p),
+                Some(pow_max_anchor_age_blocks),
+            ) => Some(actual::ToriiFaucet {
+                authority,
+                private_key_file: self.private_key_file,
+                signer,
+                asset_definition_id,
+                amount,
+                pow_difficulty_bits: self.pow_difficulty_bits,
+                pow_scrypt_log_n: pow_scrypt_log_n.get(),
+                pow_scrypt_r: pow_scrypt_r.get(),
+                pow_scrypt_p: pow_scrypt_p.get(),
+                pow_max_anchor_age_blocks,
+                pow_adaptive_lookback_blocks: self.pow_adaptive_lookback_blocks,
+                pow_adaptive_claims_per_extra_bit: self.pow_adaptive_claims_per_extra_bit,
+                pow_adaptive_max_extra_bits: self.pow_adaptive_max_extra_bits,
+                pow_vrf_seed_enabled: self.pow_vrf_seed_enabled,
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -15456,48 +16114,82 @@ mod torii_kagemusha_commands_tests {
 
 #[cfg(test)]
 mod torii_faucet_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
     use iroha_crypto::PublicKey;
     use iroha_data_model::DomainId;
 
-    fn sample_faucet() -> ToriiFaucet {
+    static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
+
+    struct TestKeyFile(PathBuf);
+
+    impl TestKeyFile {
+        fn create(contents: &str) -> Self {
+            let sequence = NEXT_KEY_FILE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "iroha-config-faucet-{}-{sequence}.key",
+                std::process::id()
+            ));
+            fs::write(&path, contents).expect("write faucet key file");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestKeyFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn sample_faucet() -> (ToriiFaucet, TestKeyFile) {
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key");
+        let key_file = TestKeyFile::create(
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53\n",
+        );
         let asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("sora", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
         .to_string();
-        ToriiFaucet {
-            enabled: true,
-            authority: AccountId::new(public_key).to_string(),
-            private_key: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .expect("private key"),
-            asset_definition_id,
-            amount: Quantity::from(25_000_u64),
-            pow_difficulty_bits: 18,
-            pow_scrypt_log_n: 13,
-            pow_scrypt_r: 8,
-            pow_scrypt_p: 1,
-            pow_max_anchor_age_blocks: 4,
-            pow_adaptive_lookback_blocks: 32,
-            pow_adaptive_claims_per_extra_bit: 3,
-            pow_adaptive_max_extra_bits: 5,
-            pow_vrf_seed_enabled: true,
-        }
+        (
+            ToriiFaucet {
+                enabled: true,
+                authority: AccountId::new(public_key).to_string(),
+                private_key_file: key_file.path().to_path_buf(),
+                asset_definition_id,
+                amount: Quantity::from(25_000_u64),
+                pow_difficulty_bits: 18,
+                pow_scrypt_log_n: 13,
+                pow_scrypt_r: 8,
+                pow_scrypt_p: 1,
+                pow_max_anchor_age_blocks: 4,
+                pow_adaptive_lookback_blocks: 32,
+                pow_adaptive_claims_per_extra_bit: 3,
+                pow_adaptive_max_extra_bits: 5,
+                pow_vrf_seed_enabled: true,
+            },
+            key_file,
+        )
     }
 
     #[test]
     fn torii_faucet_parse_maps_enabled_config() {
-        let parsed = sample_faucet().parse().expect("enabled faucet");
-        assert_eq!(parsed.authority.to_string(), sample_faucet().authority);
-        assert_eq!(
-            parsed.asset_definition_id,
-            sample_faucet().asset_definition_id
-        );
+        let (faucet, _key_file) = sample_faucet();
+        let expected_authority = faucet.authority.clone();
+        let expected_asset = faucet.asset_definition_id.clone();
+        let mut emitter = Emitter::new();
+        let parsed = faucet.parse(&mut emitter).expect("enabled faucet");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.authority.to_string(), expected_authority);
+        assert_eq!(parsed.asset_definition_id, expected_asset);
         assert_eq!(parsed.amount.to_string(), "25000");
         assert_eq!(parsed.pow_difficulty_bits, 18);
         assert_eq!(parsed.pow_scrypt_log_n, 13);
@@ -15512,49 +16204,74 @@ mod torii_faucet_tests {
 
     #[test]
     fn torii_faucet_parse_returns_none_when_disabled() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.enabled = false;
-        assert!(faucet.parse().is_none());
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_ok());
     }
 
     #[test]
     fn torii_faucet_parse_rejects_zero_amount() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.amount = Quantity::zero();
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero amount to panic");
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
     fn torii_faucet_parse_accepts_asset_alias_selector() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.asset_definition_id = "xor#universal".to_owned();
-        let parsed = faucet.parse().expect("alias selector should parse");
+        let mut emitter = Emitter::new();
+        let parsed = faucet
+            .parse(&mut emitter)
+            .expect("alias selector should parse");
+        assert!(emitter.into_result().is_ok());
         assert_eq!(parsed.asset_definition_id, "xor#universal");
     }
 
     #[test]
     fn torii_faucet_parse_rejects_invalid_asset_selector() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.asset_definition_id = "not a selector".to_owned();
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected invalid asset selector to panic");
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
     fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.pow_max_anchor_age_blocks = 0;
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero pow anchor age to panic");
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
     fn torii_faucet_parse_rejects_non_positive_scrypt_log_n() {
-        let mut faucet = sample_faucet();
+        let (mut faucet, _key_file) = sample_faucet();
         faucet.pow_scrypt_log_n = 0;
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero scrypt log_n to panic");
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_signer_authority_mismatch_without_panicking() {
+        let (mut faucet, _key_file) = sample_faucet();
+        faucet.authority = AccountId::new(
+            KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                .expect("different authority")
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        let mut emitter = Emitter::new();
+        assert!(faucet.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }
 
@@ -19933,10 +20650,17 @@ mod offline_cfg_tests {
 
 #[cfg(test)]
 mod duration_clamp_tests {
-    use std::{collections::BTreeMap, path::PathBuf, time::Duration as StdDuration};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        str::FromStr,
+        time::{Duration, Duration as StdDuration},
+    };
 
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
-    use iroha_data_model::domain::DomainId;
+    use iroha_crypto::{ExposedPrivateKey, KeyPair};
+    use iroha_data_model::{account::AccountId, name::Name};
+    use iroha_primitives::numeric::Numeric;
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -20270,219 +20994,419 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
 
-    #[test]
-    fn onboarding_alias_auto_renew_defaults_disabled_without_subscription_domain() {
-        let mut table = base_table();
-        let torii = table
-            .get_mut("torii")
-            .and_then(Value::as_table_mut)
-            .expect("torii table");
-        let authority = iroha_data_model::account::AccountId::new(
-            checked_onboarding_authority_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        )
-        .to_string();
-        let onboarding: Table = toml::from_str(&format!(
-            r#"
-enabled = true
-authority = "{authority}"
-private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-"#,
-        ))
-        .expect("parse onboarding table");
-        torii.insert("onboarding".into(), Value::Table(onboarding));
+    struct OnboardingKeyFile(PathBuf);
 
-        let actual = load_user_root(table).parse().expect("parse user config");
-        let onboarding = actual.torii.onboarding.expect("onboarding enabled");
-        assert!(
-            !onboarding.alias_auto_renew_enabled,
-            "auto-renew should stay disabled until a subscription domain is configured"
-        );
-        assert!(
-            onboarding.alias_auto_renew_subscription_domain.is_none(),
-            "subscription domain remains optional"
-        );
-        assert!(
-            onboarding.api_token_hashes_by_domain.is_empty(),
-            "missing onboarding token digest map must remain explicit so Torii can fail closed"
-        );
+    impl OnboardingKeyFile {
+        fn new(key_pair: &KeyPair) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+
+            static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "iroha-config-onboarding-{}-{}.key",
+                std::process::id(),
+                NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let encoded = ExposedPrivateKey(key_pair.private_key().clone())
+                .try_to_multihash_string()
+                .expect("encode onboarding test private key");
+            fs::write(&path, format!("{encoded}\n")).expect("write onboarding test key file");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
     }
 
-    fn table_with_onboarding_token_hashes(
-        first_domain: &str,
-        first_hash: &str,
-        second_domain: &str,
-        second_hash: &str,
-    ) -> Table {
+    impl Drop for OnboardingKeyFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn onboarding_credential(
+        id: &str,
+        scope_key: &str,
+        scope_value: &str,
+        token_hash: &str,
+    ) -> Value {
+        let mut scope = Table::new();
+        scope.insert(scope_key.into(), Value::String(scope_value.to_owned()));
+        let mut credential = Table::new();
+        credential.insert("id".into(), Value::String(id.to_owned()));
+        credential.insert("scope".into(), Value::Table(scope));
+        credential.insert("token_hash".into(), Value::String(token_hash.to_owned()));
+        Value::Table(credential)
+    }
+
+    fn table_with_account_onboarding(key_pair: &KeyPair, key_file: &Path) -> Table {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut auto_renew = Table::new();
+        auto_renew.insert("term_years".into(), Value::Integer(2));
+        auto_renew.insert("max_amount".into(), Value::String("25".to_owned()));
+        auto_renew.insert("renew_before_expiry_ms".into(), Value::Integer(86_400_000));
+        auto_renew.insert("retry_backoff_ms".into(), Value::Integer(3_600_000));
+        auto_renew.insert("max_failures".into(), Value::Integer(5));
+
+        let mut account_onboarding = Table::new();
+        account_onboarding.insert("authority".into(), Value::String(authority.to_string()));
+        account_onboarding.insert(
+            "private_key_file".into(),
+            Value::String(key_file.display().to_string()),
+        );
+        account_onboarding.insert("lease_term_years".into(), Value::Integer(2));
+        account_onboarding.insert(
+            "additional_permissions".into(),
+            Value::Array(vec![Value::String("CanManagePeers".to_owned())]),
+        );
+        account_onboarding.insert(
+            "fee_sponsor_program_id".into(),
+            Value::String(format!("{authority}/retail")),
+        );
+        account_onboarding.insert(
+            "credentials".into(),
+            Value::Array(vec![
+                onboarding_credential(
+                    "local-domain",
+                    "domain",
+                    "wonderland.universal",
+                    &format!("blake3:{}", "ab".repeat(32)),
+                ),
+                onboarding_credential(
+                    "local-dataspace",
+                    "dataspace",
+                    "universal",
+                    &format!("blake3:{}", "cd".repeat(32)),
+                ),
+            ]),
+        );
+        account_onboarding.insert("auto_renew".into(), Value::Table(auto_renew));
+
         let mut table = base_table();
-        let torii = table
+        table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
-            .expect("torii table");
-        let authority = iroha_data_model::account::AccountId::new(
-            checked_onboarding_authority_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        )
-        .to_string();
-        let onboarding: Table = toml::from_str(&format!(
-            r#"
-enabled = true
-authority = "{authority}"
-private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-api_token_hashes_by_domain = {{ "{first_domain}" = "{first_hash}", "{second_domain}" = "{second_hash}" }}
-"#,
-        ))
-        .expect("parse onboarding table");
-        torii.insert("onboarding".into(), Value::Table(onboarding));
+            .expect("torii table")
+            .insert(
+                "account_onboarding".into(),
+                Value::Table(account_onboarding),
+            );
         table
     }
 
     #[test]
-    fn onboarding_api_token_hashes_parse_exact_domain_scoped_lowercase_blake3_digests() {
-        let actual = load_user_root(table_with_onboarding_token_hashes(
-            "hbl.sbp",
-            &"ab".repeat(32),
-            "ubl.sbp",
-            &"cd".repeat(32),
-        ))
-        .parse()
-        .expect("parse user config");
-        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
-        assert_eq!(
-            actual
-                .torii
-                .onboarding
-                .expect("onboarding enabled")
-                .api_token_hashes_by_domain,
-            BTreeMap::from([(hbl, [0xab; 32]), (ubl, [0xcd; 32])])
-        );
-    }
-
-    #[test]
-    fn onboarding_api_token_hashes_reject_noncanonical_digest_text() {
-        for invalid in [
-            "AB".repeat(32),
-            format!(" {}", "ab".repeat(32)),
-            format!("{} ", "ab".repeat(32)),
-            "ab".repeat(31),
-            "ab".repeat(33),
-            "g0".repeat(32),
-        ] {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = load_user_root(table_with_onboarding_token_hashes(
-                    "hbl.sbp",
-                    &invalid,
-                    "ubl.sbp",
-                    &"cd".repeat(32),
-                ))
-                .parse();
-            }));
-            assert!(
-                result.is_err(),
-                "noncanonical onboarding digest `{invalid}` must fail closed"
-            );
-        }
-    }
-
-    #[test]
-    fn onboarding_api_token_hashes_reject_noncanonical_domain_keys() {
-        for invalid in [" hbl.sbp", "hbl.sbp ", "HBL.sbp", "hbl"] {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = load_user_root(table_with_onboarding_token_hashes(
-                    invalid,
-                    &"ab".repeat(32),
-                    "ubl.sbp",
-                    &"cd".repeat(32),
-                ))
-                .parse();
-            }));
-            assert!(
-                result.is_err(),
-                "noncanonical onboarding domain `{invalid}` must fail closed"
-            );
-        }
-    }
-
-    #[test]
-    fn onboarding_api_token_hashes_reject_cross_domain_digest_reuse() {
-        let digest = "ab".repeat(32);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = load_user_root(table_with_onboarding_token_hashes(
-                "hbl.sbp", &digest, "ubl.sbp", &digest,
-            ))
-            .parse();
-        }));
-        assert!(
-            result.is_err(),
-            "cross-domain digest reuse must fail closed"
-        );
-    }
-
-    fn table_with_onboarding_fee_sponsor_program(program_id: Option<&str>) -> Table {
-        let mut table = table_with_onboarding_token_hashes(
-            "hbl.sbp",
-            &"ab".repeat(32),
-            "ubl.sbp",
-            &"cd".repeat(32),
-        );
-        let onboarding = table
-            .get_mut("torii")
-            .and_then(Value::as_table_mut)
-            .and_then(|torii| torii.get_mut("onboarding"))
-            .and_then(Value::as_table_mut)
-            .expect("torii onboarding table");
-        if let Some(program_id) = program_id {
-            onboarding.insert(
-                "fee_sponsor_program_id".into(),
-                Value::String(program_id.to_owned()),
-            );
-        }
-        table
-    }
-
-    #[test]
-    fn onboarding_fee_sponsor_parses_one_explicit_program_id() {
-        let sponsor = iroha_data_model::account::AccountId::new(
-            checked_onboarding_authority_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        );
-        let program_id = format!("{sponsor}/retail");
-        let actual = load_user_root(table_with_onboarding_fee_sponsor_program(Some(&program_id)))
+    fn account_onboarding_absence_disables_it() {
+        let actual = load_user_root(base_table())
             .parse()
-            .expect("parse exact onboarding fee sponsor program");
-        let parsed_program_id = actual
-            .torii
-            .onboarding
-            .expect("onboarding enabled")
-            .fee_sponsor_program_id
-            .expect("fee sponsor program configured");
-        assert_eq!(parsed_program_id.sponsor, sponsor);
-        assert_eq!(parsed_program_id.name.to_string(), "retail");
+            .expect("parse config without onboarding");
+        assert!(actual.torii.account_onboarding.is_none());
     }
 
     #[test]
-    fn onboarding_fee_sponsor_rejects_malformed_or_noncanonical_program_id() {
-        let sponsor = iroha_data_model::account::AccountId::new(
-            checked_onboarding_authority_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        )
-        .to_string();
-        for program_id in ["retail".to_owned(), format!(" {sponsor}/retail")] {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ =
-                    load_user_root(table_with_onboarding_fee_sponsor_program(Some(&program_id)))
-                        .parse();
-            }));
+    fn account_onboarding_parses_structural_credentials_and_native_auto_renew() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let actual = load_user_root(table_with_account_onboarding(&key_pair, key_file.path()))
+            .parse()
+            .expect("parse structural account onboarding");
+        let onboarding = actual
+            .torii
+            .account_onboarding
+            .expect("account onboarding configured");
+
+        assert_eq!(
+            onboarding.authority,
+            AccountId::new(key_pair.public_key().clone())
+        );
+        assert_eq!(onboarding.private_key_file, key_file.path());
+        assert_eq!(onboarding.signer, key_pair);
+        assert_eq!(onboarding.lease_term_years.get(), 2);
+        assert_eq!(
+            onboarding.additional_permissions,
+            vec![Name::from_str("CanManagePeers").expect("permission name")]
+        );
+        assert_eq!(onboarding.credentials.len(), 2);
+        assert!(matches!(
+            onboarding.credentials[0].scope,
+            actual::AccountOnboardingCredentialScope::Domain(ref domain)
+                if domain.to_string() == "wonderland.universal"
+        ));
+        assert!(matches!(
+            onboarding.credentials[1].scope,
+            actual::AccountOnboardingCredentialScope::Dataspace(ref dataspace)
+                if dataspace.as_ref() == "universal"
+        ));
+        assert_eq!(onboarding.credentials[0].token_hash, [0xab; 32]);
+        assert_eq!(onboarding.credentials[1].token_hash, [0xcd; 32]);
+        let auto_renew = onboarding.auto_renew.expect("native auto-renew configured");
+        assert_eq!(auto_renew.term_years.get(), 2);
+        assert_eq!(auto_renew.max_amount, Numeric::from(25_u32));
+        assert_eq!(
+            auto_renew.renew_before_expiry,
+            Duration::from_millis(86_400_000)
+        );
+        assert_eq!(auto_renew.retry_backoff, Duration::from_millis(3_600_000));
+        assert_eq!(auto_renew.max_failures.get(), 5);
+    }
+
+    #[test]
+    fn account_onboarding_retains_distinct_credentials_for_the_same_scope() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut table = table_with_account_onboarding(&key_pair, key_file.path());
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .and_then(|onboarding| onboarding.get_mut("credentials"))
+            .and_then(Value::as_array_mut)
+            .expect("onboarding credentials")
+            .push(onboarding_credential(
+                "backup-domain",
+                "domain",
+                "wonderland.universal",
+                &format!("blake3:{}", "ef".repeat(32)),
+            ));
+
+        let actual = load_user_root(table)
+            .parse()
+            .expect("same-scope credentials with distinct identities and digests are valid");
+        let credentials = actual
+            .torii
+            .account_onboarding
+            .expect("account onboarding configured")
+            .credentials;
+
+        assert_eq!(credentials.len(), 3);
+        assert_eq!(credentials[0].scope, credentials[2].scope);
+        assert_eq!(credentials[2].token_hash, [0xef; 32]);
+    }
+
+    #[test]
+    fn account_onboarding_rejects_auto_renew_window_as_long_as_term() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut table = table_with_account_onboarding(&key_pair, key_file.path());
+        let auto_renew = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .and_then(|onboarding| onboarding.get_mut("auto_renew"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding auto-renew table");
+        auto_renew.insert("term_years".into(), Value::Integer(1));
+        auto_renew.insert(
+            "renew_before_expiry_ms".into(),
+            Value::Integer(
+                i64::try_from(iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS)
+                    .expect("lease year fits TOML integer"),
+            ),
+        );
+
+        let error = load_user_root(table)
+            .parse()
+            .expect_err("repeated-charge auto-renew timing must fail config validation");
+        assert!(
+            format!("{error:?}").contains(
+                "auto_renew.renew_before_expiry_ms must be shorter than the 31536000000ms renewal term"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn account_onboarding_aggregates_independent_validation_failures() {
+        let mut first_scope = Table::new();
+        first_scope.insert("domain".into(), Value::String("HBL.sbp".to_owned()));
+        first_scope.insert("dataspace".into(), Value::String("universal".to_owned()));
+        let mut first = Table::new();
+        first.insert("id".into(), Value::String("duplicate".to_owned()));
+        first.insert("scope".into(), Value::Table(first_scope));
+        first.insert(
+            "token_hash".into(),
+            Value::String("not-a-digest".to_owned()),
+        );
+
+        let digest = format!("blake3:{}", "ab".repeat(32));
+        let mut missing_scope = Table::new();
+        let mut second = Table::new();
+        second.insert("id".into(), Value::String("duplicate".to_owned()));
+        second.insert("scope".into(), Value::Table(missing_scope.clone()));
+        second.insert("token_hash".into(), Value::String(digest.clone()));
+        missing_scope.insert("domain".into(), Value::String("HBL.sbp".to_owned()));
+        let mut third = Table::new();
+        third.insert("id".into(), Value::String("third".to_owned()));
+        third.insert("scope".into(), Value::Table(missing_scope));
+        third.insert("token_hash".into(), Value::String(digest));
+
+        let mut auto_renew = Table::new();
+        auto_renew.insert("term_years".into(), Value::Integer(0));
+        auto_renew.insert("max_amount".into(), Value::String("-1".to_owned()));
+        auto_renew.insert("renew_before_expiry_ms".into(), Value::Integer(0));
+        auto_renew.insert("retry_backoff_ms".into(), Value::Integer(0));
+        auto_renew.insert("max_failures".into(), Value::Integer(0));
+
+        let mut account_onboarding = Table::new();
+        account_onboarding.insert(
+            "authority".into(),
+            Value::String("not-an-account".to_owned()),
+        );
+        account_onboarding.insert(
+            "private_key_file".into(),
+            Value::String("/definitely/missing/onboarding.key".to_owned()),
+        );
+        account_onboarding.insert("lease_term_years".into(), Value::Integer(0));
+        account_onboarding.insert(
+            "additional_permissions".into(),
+            Value::Array(vec![
+                Value::String("CanDoThing".to_owned()),
+                Value::String("CanDoThing".to_owned()),
+                Value::String(String::new()),
+            ]),
+        );
+        account_onboarding.insert(
+            "fee_sponsor_program_id".into(),
+            Value::String("not-a-program".to_owned()),
+        );
+        account_onboarding.insert(
+            "credentials".into(),
+            Value::Array(vec![
+                Value::Table(first),
+                Value::Table(second),
+                Value::Table(third),
+            ]),
+        );
+        account_onboarding.insert("auto_renew".into(), Value::Table(auto_renew));
+
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert(
+                "account_onboarding".into(),
+                Value::Table(account_onboarding),
+            );
+
+        let error = load_user_root(table)
+            .parse()
+            .expect_err("all invalid onboarding fields must be reported");
+        let report = format!("{error:?}");
+        for expected in [
+            "authority must be a canonical domainless AccountId",
+            "failed to read torii.account_onboarding.private_key_file",
+            "lease_term_years must be greater than zero",
+            "credentials[0].scope must not set both",
+            "credentials[0].token_hash must use",
+            "credentials[1].id `duplicate` is duplicated",
+            "credentials[1].scope must set exactly one",
+            "credentials[2].scope.domain must use canonical form",
+            "credentials[2].token_hash reuses another credential digest",
+            "additional_permissions[0] `CanDoThing` is not a supported unscoped default permission",
+            "additional_permissions[1] `CanDoThing` is duplicated",
+            "additional_permissions[2] is not a valid permission name",
+            "fee_sponsor_program_id is invalid",
+            "auto_renew.term_years must be greater than zero",
+            "auto_renew.max_amount must be greater than zero",
+            "auto_renew.renew_before_expiry_ms must be greater than zero",
+            "auto_renew.retry_backoff_ms must be greater than zero",
+            "auto_renew.max_failures must be greater than zero",
+        ] {
             assert!(
-                result.is_err(),
-                "malformed or noncanonical fee sponsor program must fail closed"
+                report.contains(expected),
+                "missing `{expected}` in {report}"
             );
         }
+    }
+
+    #[test]
+    fn account_onboarding_rejects_signer_authority_mismatch() {
+        let signer = checked_onboarding_authority_ed25519_key_fixture();
+        let other_authority = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&signer);
+        let mut table = table_with_account_onboarding(&signer, key_file.path());
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding table")
+            .insert(
+                "authority".into(),
+                Value::String(AccountId::new(other_authority.public_key().clone()).to_string()),
+            );
+
+        let error = load_user_root(table)
+            .parse()
+            .expect_err("mismatched signer must fail closed");
+        assert!(
+            format!("{error:?}").contains("signer does not match authority"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn account_onboarding_requires_at_least_one_credential() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut table = table_with_account_onboarding(&key_pair, key_file.path());
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding table")
+            .insert("credentials".into(), Value::Array(Vec::new()));
+
+        let error = load_user_root(table)
+            .parse()
+            .expect_err("empty credentials must fail closed");
+        assert!(
+            format!("{error:?}").contains("credentials must contain at least one credential"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn account_onboarding_rejects_legacy_and_secret_bearing_fields() {
+        let mut legacy_table = base_table();
+        legacy_table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("onboarding".into(), Value::Table(Table::new()));
+        let legacy_error = actual::Root::from_toml_source(TomlSource::inline(legacy_table))
+            .expect_err("legacy onboarding table must be unknown");
+        assert!(format!("{legacy_error:?}").contains("onboarding"));
+
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut secret_table = table_with_account_onboarding(&key_pair, key_file.path());
+        let onboarding = secret_table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding table");
+        onboarding.insert(
+            "private_key".into(),
+            Value::String("must-not-be-accepted".to_owned()),
+        );
+        onboarding
+            .get_mut("credentials")
+            .and_then(Value::as_array_mut)
+            .and_then(|credentials| credentials.first_mut())
+            .and_then(Value::as_table_mut)
+            .expect("first credential")
+            .insert("token".into(), Value::String("raw-secret".to_owned()));
+        let secret_error = actual::Root::from_toml_source(TomlSource::inline(secret_table))
+            .expect_err("inline private keys and raw tokens must be unknown");
+        let report = format!("{secret_error:?}");
+        assert!(report.contains("private_key"), "{report}");
+        assert!(report.contains("token"), "{report}");
+        assert!(!report.contains("raw-secret"), "secret leaked in {report}");
     }
 
     #[test]
@@ -20814,11 +21738,15 @@ initial_delay_seconds = 17
     }
 
     #[test]
-    fn network_deferred_send_byte_cap_defaults_and_clamps_zero() {
+    fn network_deferred_send_byte_caps_default_and_clamp_zero() {
         let actual = load_root(base_table());
         assert_eq!(
             actual.network.deferred_send_max_bytes_per_peer,
             defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER
+        );
+        assert_eq!(
+            actual.network.deferred_send_max_bytes_total,
+            defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL
         );
 
         let mut table = base_table();
@@ -20827,8 +21755,10 @@ initial_delay_seconds = 17
             .and_then(Value::as_table_mut)
             .expect("network table");
         network.insert("deferred_send_max_bytes_per_peer".into(), Value::Integer(0));
+        network.insert("deferred_send_max_bytes_total".into(), Value::Integer(0));
         let actual = load_root(table);
         assert_eq!(actual.network.deferred_send_max_bytes_per_peer, 1);
+        assert_eq!(actual.network.deferred_send_max_bytes_total, 1);
     }
 
     #[test]

@@ -102,7 +102,10 @@ use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
-    executor::{FeeAdmissionQuote, NexusFeeAdmissionError, quote_external_nexus_fee_admission},
+    executor::{
+        FeeAdmissionQuote, FeeChargeBound, FeeSponsorRelayLeaseCapacity, NexusFeeAdmissionError,
+        quote_external_nexus_fee_admission,
+    },
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
@@ -1012,6 +1015,66 @@ struct FeeAdmissionReservation {
     asset_remaining: BTreeMap<FeeReservationAssetSource, Quantity>,
     window_remaining: BTreeMap<FeeSponsorBudgetCounterKey, Quantity>,
     relay_lease_remaining: BTreeMap<Hash, Quantity>,
+}
+
+fn sponsored_charge_totals(
+    charges: &[FeeChargeBound],
+) -> Result<BTreeMap<AssetDefinitionId, Quantity>, Error> {
+    let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
+    for charge in charges {
+        let current = totals
+            .get(&charge.asset_definition_id)
+            .cloned()
+            .unwrap_or_else(Quantity::zero);
+        let total = FeeAdmissionReservationStore::checked_add(
+            &current,
+            &charge.max_bound,
+            "per-asset charge",
+        )?;
+        totals.insert(charge.asset_definition_id.clone(), total);
+    }
+    Ok(totals)
+}
+
+fn relay_lease_reservation_maps(
+    program_id: &FeeSponsorProgramId,
+    sponsor_charges: &BTreeMap<AssetDefinitionId, Quantity>,
+    relay_leases: BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>,
+) -> Result<(BTreeMap<Hash, Quantity>, BTreeMap<Hash, Quantity>), Error> {
+    let mut relay_lease_charges = BTreeMap::<Hash, Quantity>::new();
+    let mut relay_lease_remaining = BTreeMap::<Hash, Quantity>::new();
+    for (asset_definition_id, selection) in relay_leases {
+        let charge = sponsor_charges.get(&asset_definition_id).ok_or_else(|| {
+            Error::NexusFeeAdmissionConfigInvalid {
+                code: FeeRejectionCode::InvalidProgramConfiguration,
+                reason: format!(
+                    "sponsor program `{program_id}` quote selected spend lease `{}` for uncharged asset `{asset_definition_id}`",
+                    selection.lease_id
+                ),
+            }
+        })?;
+        let current = relay_lease_charges
+            .get(&selection.lease_id)
+            .cloned()
+            .unwrap_or_else(Quantity::zero);
+        relay_lease_charges.insert(
+            selection.lease_id,
+            FeeAdmissionReservationStore::checked_add(&current, charge, "per-lease charge")?,
+        );
+        if let Some(previous) =
+            relay_lease_remaining.insert(selection.lease_id, selection.remaining.clone())
+            && previous != selection.remaining
+        {
+            return Err(Error::NexusFeeAdmissionConfigInvalid {
+                code: FeeRejectionCode::InvalidProgramConfiguration,
+                reason: format!(
+                    "sponsor program `{program_id}` quote reported inconsistent remaining capacity for spend lease `{}`",
+                    selection.lease_id
+                ),
+            });
+        }
+    }
+    Ok((relay_lease_charges, relay_lease_remaining))
 }
 
 #[derive(Default)]
@@ -3680,8 +3743,7 @@ impl Queue {
             charges,
             debit_source,
             program_revision,
-            relay_lease_id,
-            relay_lease_remaining,
+            relay_leases,
             capacities,
             authority_balances,
             authority_charge_assets,
@@ -3766,23 +3828,7 @@ impl Queue {
                 ),
             })?;
 
-        let relay_charge = charges
-            .iter()
-            .find(|charge| charge.kind == iroha_data_model::transaction::FeeChargeKind::Nexus)
-            .map(|charge| charge.max_bound.clone());
-        let mut sponsor_charges = BTreeMap::<AssetDefinitionId, Quantity>::new();
-        for charge in charges {
-            let current = sponsor_charges
-                .get(&charge.asset_definition_id)
-                .cloned()
-                .unwrap_or_else(Quantity::zero);
-            let total = FeeAdmissionReservationStore::checked_add(
-                &current,
-                &charge.max_bound,
-                "per-asset charge",
-            )?;
-            sponsor_charges.insert(charge.asset_definition_id, total);
-        }
+        let sponsor_charges = sponsored_charge_totals(&charges)?;
 
         let mut asset_charges = BTreeMap::new();
         let mut asset_remaining = BTreeMap::new();
@@ -3853,25 +3899,8 @@ impl Queue {
             }
         }
 
-        let (relay_lease_charges, relay_lease_remaining) = match (
-            relay_charge,
-            relay_lease_id,
-            relay_lease_remaining,
-        ) {
-            (None, None, None) | (Some(_), None, None) => (BTreeMap::new(), BTreeMap::new()),
-            (Some(charge), Some(lease_id), Some(remaining)) => (
-                BTreeMap::from([(lease_id, charge)]),
-                BTreeMap::from([(lease_id, remaining)]),
-            ),
-            _ => {
-                return Err(Error::NexusFeeAdmissionConfigInvalid {
-                    code: FeeRejectionCode::InvalidProgramConfiguration,
-                    reason: format!(
-                        "sponsor program `{program_id}` quote has inconsistent receipt-lane lease capacity"
-                    ),
-                });
-            }
-        };
+        let (relay_lease_charges, relay_lease_remaining) =
+            relay_lease_reservation_maps(program_id, &sponsor_charges, relay_leases)?;
 
         Ok(FeeAdmissionReservation {
             program_revision: Some(program_revision),
@@ -19799,5 +19828,68 @@ pub mod tests {
         store
             .reserve(second_hash, reservation())
             .expect("released lease capacity is immediately reusable");
+    }
+
+    #[test]
+    fn relay_spend_lease_reservation_maps_use_aggregate_per_asset_charges() {
+        let (sponsor, _) = gen_account_in("relay_lease_map_sponsor");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor, "relay_maps".parse().expect("valid program name"));
+        let domain_id =
+            DomainId::try_new("relay_lease_maps", "universal").expect("valid fee domain");
+        let shared_asset = AssetDefinitionId::new(
+            domain_id.clone(),
+            "shared".parse().expect("valid shared asset name"),
+        );
+        let distinct_asset = AssetDefinitionId::new(
+            domain_id,
+            "distinct".parse().expect("valid distinct asset name"),
+        );
+        let shared_lease = Hash::new(b"queue-shared-asset-spend-lease");
+        let distinct_lease = Hash::new(b"queue-distinct-asset-spend-lease");
+        let component_charges = [
+            FeeChargeBound {
+                kind: iroha_data_model::transaction::FeeChargeKind::Nexus,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(4_u32),
+            },
+            FeeChargeBound {
+                kind: iroha_data_model::transaction::FeeChargeKind::PipelineGas,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(6_u32),
+            },
+        ];
+        let sponsor_charges = sponsored_charge_totals(&component_charges)
+            .expect("Nexus and PipelineGas charges aggregate by fee asset");
+        assert_eq!(sponsor_charges[&shared_asset], Quantity::from(10_u32));
+        let sponsor_charges = BTreeMap::from([
+            (shared_asset.clone(), sponsor_charges[&shared_asset].clone()),
+            (distinct_asset.clone(), Quantity::from(7_u32)),
+        ]);
+        let selections = BTreeMap::from([
+            (
+                shared_asset,
+                FeeSponsorRelayLeaseCapacity {
+                    lease_id: shared_lease,
+                    remaining: Quantity::from(15_u32),
+                },
+            ),
+            (
+                distinct_asset,
+                FeeSponsorRelayLeaseCapacity {
+                    lease_id: distinct_lease,
+                    remaining: Quantity::from(8_u32),
+                },
+            ),
+        ]);
+
+        let (charges, remaining) =
+            relay_lease_reservation_maps(&program_id, &sponsor_charges, selections)
+                .expect("each charged asset maps to its exact selected lease");
+
+        assert_eq!(charges[&shared_lease], Quantity::from(10_u32));
+        assert_eq!(charges[&distinct_lease], Quantity::from(7_u32));
+        assert_eq!(remaining[&shared_lease], Quantity::from(15_u32));
+        assert_eq!(remaining[&distinct_lease], Quantity::from(8_u32));
     }
 }

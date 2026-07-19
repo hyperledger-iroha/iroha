@@ -11,16 +11,22 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    crypto::{Algorithm, HashOf, KeyPair},
+    crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
         Identifiable,
         account::{Account, AccountId},
         block::{
             BlockHeader,
             consensus_v2::{
-                GlobalPhase, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
+                BlockSubject, ConsensusMode, DualQuorum, ExecutionCommitment, GlobalPhase,
+                HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
+                SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus, SumeragiV2IgnoreReason,
+                SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2OutboundIntentKind,
+                SumeragiV2Status, SumeragiV2VoteQuorumStatus, TimeoutCertificateRef,
+                ValidatorIndex,
             },
         },
+        bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::Register,
         parameter::system::SumeragiNposParameters,
         peer::PeerId,
@@ -60,16 +66,21 @@ struct V2StatusSnapshot {
     node_fingerprint: Value,
     build_fingerprint: Value,
     config_fingerprint: Value,
-    height_context_id: Value,
+    height_context_id: HeightContextId,
     height: u64,
     view: u64,
     leader: u64,
     phase: Value,
     body_state: SumeragiV2BodyState,
     last_timeout_view: Option<u64>,
+    last_timeout_certificate: Option<TimeoutCertificateRef>,
     locked_prepare_qc: Option<PrepareQcSnapshot>,
     highest_prepare_qc: Option<PrepareQcSnapshot>,
     last_committed_height: u64,
+    height_context: SumeragiV2HeightContextStatus,
+    last_commit_qc: Option<SumeragiV2CommitQcStatus>,
+    prepare_quorums: Vec<SumeragiV2VoteQuorumStatus>,
+    liveness: SumeragiV2LivenessStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +98,219 @@ struct LockedReproposalPrepareQcSplit<'a> {
 struct DistinctPrepareQcSplit<'a> {
     first: &'a QuorumCertificateRef,
     second: &'a QuorumCertificateRef,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeldVoteSelection {
+    subject: Option<BlockSubject>,
+    execution_commitment: Option<ExecutionCommitment>,
+    senders: BTreeSet<PeerId>,
+    signers: BTreeSet<ValidatorIndex>,
+    envelope_digests: Vec<Hash>,
+    sequences: Vec<u64>,
+}
+
+fn strict_dual_quorum(
+    signer_count: u32,
+    min_signers: u32,
+    signed_power: u64,
+    total_power: u64,
+) -> bool {
+    min_signers > 0
+        && signer_count >= min_signers
+        && total_power > 0
+        && signed_power >= u64::from(signer_count)
+        && signed_power <= total_power
+        && u128::from(signed_power) * 3 > u128::from(total_power) * 2
+}
+
+fn is_minimal_exact_prepare_quorum(
+    quorum: &SumeragiV2VoteQuorumStatus,
+    height_context: &SumeragiV2HeightContextStatus,
+    expected: &QuorumCertificateRef,
+) -> bool {
+    quorum.round == expected.round
+        && quorum.subject == expected.subject
+        && quorum.execution_commitment == expected.execution_commitment
+        && quorum.min_signers == height_context.quorum.min_signers
+        && quorum.total_power == height_context.quorum.total_power
+        && quorum.signer_count == quorum.min_signers
+        && strict_dual_quorum(
+            quorum.signer_count,
+            quorum.min_signers,
+            quorum.signed_power,
+            quorum.total_power,
+        )
+}
+
+fn validate_minimal_exact_prepare_quorum(
+    snapshot: &V2StatusSnapshot,
+    expected: &QuorumCertificateRef,
+) -> Result<()> {
+    let matching = snapshot
+        .prepare_quorums
+        .iter()
+        .filter(|quorum| {
+            quorum.round == expected.round
+                && quorum.subject == expected.subject
+                && quorum.execution_commitment == expected.execution_commitment
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matching.len() == 1,
+        "validator {} must expose exactly one Prepare pool for {expected:?}, found {matching:?}",
+        snapshot.peer
+    );
+    let quorum = matching[0];
+    ensure!(
+        is_minimal_exact_prepare_quorum(quorum, &snapshot.height_context, expected),
+        "validator {} reached the PrepareQC reference without the exact minimal count-and-power quorum: pool={quorum:?}, context={:?}",
+        snapshot.peer,
+        snapshot.height_context,
+    );
+    Ok(())
+}
+
+fn validate_commit_qc_dual_quorum(
+    snapshot: &V2StatusSnapshot,
+    minimum_committed_height: u64,
+) -> Result<()> {
+    let certificate = snapshot.last_commit_qc.as_ref().ok_or_else(|| {
+        eyre!(
+            "validator {} has no durable CommitQC summary after committing height {minimum_committed_height}",
+            snapshot.peer
+        )
+    })?;
+    ensure!(
+        snapshot.last_committed_height >= minimum_committed_height
+            && certificate.certificate.round.height == snapshot.last_committed_height
+            && certificate.certificate.phase == GlobalPhase::Commit,
+        "validator {} retained the wrong durable CommitQC: {certificate:?}",
+        snapshot.peer,
+    );
+    ensure!(
+        certificate.validator_count > 0
+            && DualQuorum::count_threshold(certificate.validator_count)
+                == Some(certificate.min_signers)
+            && certificate.total_power >= u64::from(certificate.validator_count),
+        "validator {} retained a CommitQC with a malformed self-contained quorum: {certificate:?}",
+        snapshot.peer,
+    );
+    ensure!(
+        certificate.signer_count <= certificate.validator_count
+            && strict_dual_quorum(
+                certificate.signer_count,
+                certificate.min_signers,
+                certificate.signed_power,
+                certificate.total_power,
+            ),
+        "validator {} committed without both count and power quorum: {certificate:?}",
+        snapshot.peer,
+    );
+    if certificate.certificate.round.context_id == snapshot.height_context_id {
+        ensure!(
+            certificate.validator_count == snapshot.height_context.validator_count
+                && certificate.min_signers == snapshot.height_context.quorum.min_signers
+                && certificate.total_power == snapshot.height_context.quorum.total_power,
+            "validator {} CommitQC disagrees with its matching active frozen context: certificate={certificate:?}, context={:?}",
+            snapshot.peer,
+            snapshot.height_context,
+        );
+    }
+    Ok(())
+}
+
+fn locked_commit_has_exact_progress_witness(
+    liveness: &SumeragiV2LivenessStatus,
+    locked: &QuorumCertificateRef,
+    last_committed_height: u64,
+    last_commit_qc: Option<&SumeragiV2CommitQcStatus>,
+) -> bool {
+    let exact_pool = liveness.commit_quorums.iter().any(|quorum| {
+        quorum.round == locked.round
+            && quorum.subject == locked.subject
+            && quorum.execution_commitment == locked.execution_commitment
+            && quorum.signer_count > 0
+            && quorum.signed_power > 0
+    });
+    let exact_outbound = liveness.outbound_intents.iter().any(|intent| {
+        matches!(
+            intent.kind,
+            SumeragiV2OutboundIntentKind::CommitVote | SumeragiV2OutboundIntentKind::CommitQc
+        ) && intent.round == locked.round
+            && intent.subject == Some(locked.subject)
+            && intent.execution_commitment == Some(locked.execution_commitment)
+    });
+    let exact_decision = last_committed_height == locked.round.height
+        && last_commit_qc.is_some_and(|certificate| {
+            certificate.certificate.phase == GlobalPhase::Commit
+                && certificate.certificate.round == locked.round
+                && certificate.certificate.subject == locked.subject
+                && certificate.certificate.execution_commitment == locked.execution_commitment
+        });
+
+    exact_pool || exact_outbound || exact_decision
+}
+
+fn validate_locked_commit_progress_witness(
+    snapshot: &V2StatusSnapshot,
+    locked: &QuorumCertificateRef,
+) -> Result<()> {
+    ensure!(
+        snapshot
+            .locked_prepare_qc
+            .as_ref()
+            .is_some_and(|candidate| candidate.reference == *locked),
+        "validator {} does not retain the expected durable PrepareQC lock: expected={locked:?}, actual={:?}",
+        snapshot.peer,
+        snapshot.locked_prepare_qc,
+    );
+    ensure!(
+        locked_commit_has_exact_progress_witness(
+            &snapshot.liveness,
+            locked,
+            snapshot.last_committed_height,
+            snapshot.last_commit_qc.as_ref(),
+        ),
+        "validator {} orphaned its exact durable locked-round Commit path: lock={locked:?}, commit_pools={:?}, outbound={:?}, last_commit_qc={:?}",
+        snapshot.peer,
+        snapshot.liveness.commit_quorums,
+        snapshot.liveness.outbound_intents,
+        snapshot.last_commit_qc,
+    );
+    if let Some(blocker) = snapshot.liveness.blocker {
+        ensure!(
+            matches!(
+                blocker,
+                SumeragiV2LivenessBlocker::CommitQuorumMissing
+                    | SumeragiV2LivenessBlocker::SchedulerStarvation
+                    | SumeragiV2LivenessBlocker::LocalControlPending
+            ),
+            "validator {} misclassified an exact validated locked-Commit delay as {blocker:?}",
+            snapshot.peer,
+        );
+    }
+    Ok(())
+}
+
+fn validate_applied_successor_witness(
+    snapshot: &V2StatusSnapshot,
+    minimum_committed_height: u64,
+) -> Result<()> {
+    validate_commit_qc_dual_quorum(snapshot, minimum_committed_height)?;
+    ensure!(
+        snapshot.last_committed_height >= minimum_committed_height
+            && snapshot.last_committed_height.checked_add(1) == Some(snapshot.height)
+            && status_is_awaiting_proposal(&snapshot.phase)
+            && snapshot.body_state == SumeragiV2BodyState::Missing,
+        "validator {} has a durable decision but no exact applied successor-height witness: committed={}, active={}, phase={:?}, body={:?}",
+        snapshot.peer,
+        snapshot.last_committed_height,
+        snapshot.height,
+        snapshot.phase,
+        snapshot.body_state,
+    );
+    Ok(())
 }
 
 fn classify_locked_reproposal_prepare_qc_split<'a>(
@@ -176,32 +400,48 @@ fn classify_distinct_prepare_qc_split<'a>(
     })
 }
 
-fn held_distinct_sender_sequences(
+fn held_no_high_timeout_vote_selection(
     ack: &ConsensusMessageControlAck,
     height: u64,
     view: u64,
-    kind: ConsensusMessageControlKind,
-    allowed_senders: &BTreeSet<PeerId>,
-    block_hash: Option<&HashOf<BlockHeader>>,
-    require_no_block_hash: bool,
+    allowed_signers: &BTreeMap<PeerId, ValidatorIndex>,
     required: usize,
-) -> Option<Vec<u64>> {
+) -> Option<HeldVoteSelection> {
     let mut senders = BTreeSet::new();
+    let mut signers = BTreeSet::new();
+    let mut envelope_digests = Vec::with_capacity(required);
     let mut sequences = Vec::with_capacity(required);
     for message in &ack.held {
         if message.height != Some(height)
             || message.view != Some(view)
-            || message.kind != kind
-            || !allowed_senders.contains(&message.sender)
-            || block_hash.is_some_and(|expected| message.block_hash.as_ref() != Some(expected))
-            || (require_no_block_hash && message.block_hash.is_some())
+            || message.kind != ConsensusMessageControlKind::TimeoutVote
+            || message.sender != message.authenticated_via
+            || message.block_hash.is_some()
+            || message.subject.is_some()
+            || message.execution_commitment.is_some()
+            || !message.certificate_signers.is_empty()
             || !senders.insert(message.sender.clone())
         {
             continue;
         }
+        let signer = message.signer?;
+        if allowed_signers.get(&message.sender) != Some(&signer)
+            || !signers.insert(signer)
+            || envelope_digests.contains(&message.envelope_digest)
+        {
+            continue;
+        }
+        envelope_digests.push(message.envelope_digest);
         sequences.push(message.sequence);
         if sequences.len() == required {
-            return Some(sequences);
+            return Some(HeldVoteSelection {
+                subject: None,
+                execution_commitment: None,
+                senders,
+                signers,
+                envelope_digests,
+                sequences,
+            });
         }
     }
     None
@@ -211,36 +451,109 @@ fn held_prepare_vote_subject(
     ack: &ConsensusMessageControlAck,
     height: u64,
     view: u64,
-    allowed_senders: &BTreeSet<PeerId>,
-    rejected_hash: Option<&HashOf<BlockHeader>>,
+    allowed_signers: &BTreeMap<PeerId, ValidatorIndex>,
+    rejected_subject: Option<&BlockSubject>,
     required: usize,
-) -> Option<(HashOf<BlockHeader>, Vec<u64>)> {
-    let mut subjects = BTreeMap::<HashOf<BlockHeader>, BTreeMap<PeerId, u64>>::new();
+) -> Option<HeldVoteSelection> {
+    let mut subjects = BTreeMap::<
+        (BlockSubject, ExecutionCommitment),
+        BTreeMap<ValidatorIndex, (&PeerId, u64, Hash)>,
+    >::new();
     for message in &ack.held {
         if message.height != Some(height)
             || message.view != Some(view)
             || message.kind != ConsensusMessageControlKind::PrepareVote
-            || !allowed_senders.contains(&message.sender)
+            || message.sender != message.authenticated_via
+            || !message.certificate_signers.is_empty()
         {
             continue;
         }
-        let block_hash = message.block_hash?;
-        if rejected_hash == Some(&block_hash) {
+        let subject = message.subject?;
+        let execution_commitment = message.execution_commitment?;
+        let signer = message.signer?;
+        if message.block_hash != Some(subject.block_hash)
+            || rejected_subject == Some(&subject)
+            || allowed_signers.get(&message.sender) != Some(&signer)
+        {
             continue;
         }
         subjects
-            .entry(block_hash)
+            .entry((subject, execution_commitment))
             .or_default()
-            .entry(message.sender.clone())
-            .or_insert(message.sequence);
+            .entry(signer)
+            .or_insert((&message.sender, message.sequence, message.envelope_digest));
     }
-    subjects.into_iter().find_map(|(block_hash, senders)| {
-        (senders.len() >= required).then(|| {
-            let mut sequences = senders.into_values().take(required).collect::<Vec<_>>();
-            sequences.sort_unstable();
-            (block_hash, sequences)
+    subjects
+        .into_iter()
+        .find_map(|((subject, execution_commitment), votes)| {
+            (votes.len() >= required).then(|| {
+                let selected = votes.into_iter().take(required).collect::<Vec<_>>();
+                let senders = selected
+                    .iter()
+                    .map(|(_, (sender, _, _))| (*sender).clone())
+                    .collect::<BTreeSet<_>>();
+                let signers = selected
+                    .iter()
+                    .map(|(signer, _)| *signer)
+                    .collect::<BTreeSet<_>>();
+                let envelope_digests = selected
+                    .iter()
+                    .map(|(_, (_, _, digest))| *digest)
+                    .collect::<Vec<_>>();
+                let mut sequences = selected
+                    .into_iter()
+                    .map(|(_, (_, sequence, _))| sequence)
+                    .collect::<Vec<_>>();
+                sequences.sort_unstable();
+                HeldVoteSelection {
+                    subject: Some(subject),
+                    execution_commitment: Some(execution_commitment),
+                    senders,
+                    signers,
+                    envelope_digests,
+                    sequences,
+                }
+            })
         })
-    })
+}
+
+fn held_prepare_certificate_sequences(
+    ack: &ConsensusMessageControlAck,
+    height: u64,
+    view: u64,
+    allowed_senders: &BTreeSet<PeerId>,
+    expected_subject: &BlockSubject,
+    expected_execution_commitment: &ExecutionCommitment,
+    expected_signers: &[ValidatorIndex],
+    required: usize,
+) -> Option<Vec<u64>> {
+    let mut senders = BTreeSet::new();
+    let mut digests = Vec::with_capacity(required);
+    let mut sequences = Vec::with_capacity(required);
+    for message in &ack.held {
+        if message.height != Some(height)
+            || message.view != Some(view)
+            || message.kind != ConsensusMessageControlKind::PrepareCertificate
+            || message.sender != message.authenticated_via
+            || !allowed_senders.contains(&message.sender)
+            || message.subject.as_ref() != Some(expected_subject)
+            || message.execution_commitment.as_ref() != Some(expected_execution_commitment)
+            || message.block_hash.as_ref() != Some(&expected_subject.block_hash)
+            || message.signer.is_some()
+            || message.certificate_signers != expected_signers
+            || !senders.insert(message.sender.clone())
+            || digests.contains(&message.envelope_digest)
+        {
+            continue;
+        }
+        digests.push(message.envelope_digest);
+        sequences.push(message.sequence);
+        if sequences.len() == required {
+            sequences.sort_unstable();
+            return Some(sequences);
+        }
+    }
+    None
 }
 
 fn held_quorum_evidence_sequences(
@@ -400,7 +713,8 @@ mod prepare_qc_split_tests {
         data_model::block::{
             BlockHeader,
             consensus_v2::{
-                BlockSubject, ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
+                BlockSubject, ConsensusRound, DualQuorum, ExecutionCommitment, HeightContext,
+                HeightContextId, SumeragiV2OutboundIntentStage, SumeragiV2OutboundIntentStatus,
             },
         },
     };
@@ -447,6 +761,32 @@ mod prepare_qc_split_tests {
         classify_locked_reproposal_prepare_qc_split(&qcs, HEIGHT, FIRST_VIEW, SECOND_VIEW)
     }
 
+    fn height_context_status() -> SumeragiV2HeightContextStatus {
+        SumeragiV2HeightContextStatus {
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            mode: ConsensusMode::Npos,
+            epoch_seed: [0x11; 32],
+            validator_count: VALIDATOR_COUNT as u32,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        }
+    }
+
+    fn quorum(reference: QuorumCertificateRef) -> SumeragiV2VoteQuorumStatus {
+        SumeragiV2VoteQuorumStatus {
+            round: reference.round,
+            subject: reference.subject,
+            execution_commitment: reference.execution_commitment,
+            signer_count: 3,
+            signed_power: 3,
+            min_signers: 3,
+            total_power: 4,
+        }
+    }
+
     fn peer_ids() -> Vec<PeerId> {
         (0..VALIDATOR_COUNT)
             .map(|index| {
@@ -478,6 +818,74 @@ mod prepare_qc_split_tests {
             fatal: false,
             draining: false,
             drain_fence: None,
+        }
+    }
+
+    fn held_prepare_vote(
+        sequence: u64,
+        sender: PeerId,
+        signer: ValidatorIndex,
+        reference: QuorumCertificateRef,
+    ) -> ConsensusMessageControlHeld {
+        ConsensusMessageControlHeld {
+            sequence,
+            authenticated_via: sender.clone(),
+            sender,
+            kind: ConsensusMessageControlKind::PrepareVote,
+            height: Some(reference.round.height),
+            view: Some(reference.round.view),
+            block_hash: Some(reference.subject.block_hash),
+            subject: Some(reference.subject),
+            execution_commitment: Some(reference.execution_commitment),
+            signer: Some(signer),
+            certificate_signers: Vec::new(),
+            envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
+            size_bytes: 64,
+        }
+    }
+
+    fn held_timeout_vote(
+        sequence: u64,
+        sender: PeerId,
+        signer: ValidatorIndex,
+    ) -> ConsensusMessageControlHeld {
+        ConsensusMessageControlHeld {
+            sequence,
+            authenticated_via: sender.clone(),
+            sender,
+            kind: ConsensusMessageControlKind::TimeoutVote,
+            height: Some(HEIGHT),
+            view: Some(FIRST_VIEW),
+            block_hash: None,
+            subject: None,
+            execution_commitment: None,
+            signer: Some(signer),
+            certificate_signers: Vec::new(),
+            envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
+            size_bytes: 64,
+        }
+    }
+
+    fn held_prepare_certificate(
+        sequence: u64,
+        sender: PeerId,
+        reference: QuorumCertificateRef,
+        certificate_signers: Vec<ValidatorIndex>,
+    ) -> ConsensusMessageControlHeld {
+        ConsensusMessageControlHeld {
+            sequence,
+            authenticated_via: sender.clone(),
+            sender,
+            kind: ConsensusMessageControlKind::PrepareCertificate,
+            height: Some(reference.round.height),
+            view: Some(reference.round.view),
+            block_hash: Some(reference.subject.block_hash),
+            subject: Some(reference.subject),
+            execution_commitment: Some(reference.execution_commitment),
+            signer: None,
+            certificate_signers,
+            envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
+            size_bytes: 96,
         }
     }
 
@@ -545,69 +953,283 @@ mod prepare_qc_split_tests {
         );
 
         let peer_ids = peer_ids();
-        let first_hash = hash_of::<BlockHeader>(0x70);
-        let second_hash = hash_of::<BlockHeader>(0x71);
+        let first_vote = snapshot(FIRST_VIEW, 0x70, 0x72).reference;
+        let second_vote = snapshot(FIRST_VIEW, 0x71, 0x73).reference;
         let held = vec![
-            ConsensusMessageControlHeld {
-                sequence: 1,
-                sender: peer_ids[0].clone(),
-                kind: ConsensusMessageControlKind::PrepareVote,
-                height: Some(HEIGHT),
-                view: Some(FIRST_VIEW),
-                block_hash: Some(first_hash),
-                size_bytes: 64,
-            },
-            ConsensusMessageControlHeld {
-                sequence: 2,
-                sender: peer_ids[0].clone(),
-                kind: ConsensusMessageControlKind::PrepareVote,
-                height: Some(HEIGHT),
-                view: Some(FIRST_VIEW),
-                block_hash: Some(first_hash),
-                size_bytes: 64,
-            },
-            ConsensusMessageControlHeld {
-                sequence: 3,
-                sender: peer_ids[1].clone(),
-                kind: ConsensusMessageControlKind::PrepareVote,
-                height: Some(HEIGHT),
-                view: Some(FIRST_VIEW),
-                block_hash: Some(first_hash),
-                size_bytes: 64,
-            },
-            ConsensusMessageControlHeld {
-                sequence: 4,
-                sender: peer_ids[2].clone(),
-                kind: ConsensusMessageControlKind::PrepareVote,
-                height: Some(HEIGHT),
-                view: Some(FIRST_VIEW),
-                block_hash: Some(second_hash),
-                size_bytes: 64,
-            },
+            held_prepare_vote(1, peer_ids[0].clone(), 0, first_vote),
+            held_prepare_vote(2, peer_ids[0].clone(), 0, first_vote),
+            held_prepare_vote(3, peer_ids[1].clone(), 1, first_vote),
+            held_prepare_vote(4, peer_ids[2].clone(), 2, second_vote),
         ];
         let ack = ack(held);
-        let allowed = peer_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let allowed = peer_ids
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, peer)| (peer, ValidatorIndex::try_from(index).expect("small roster")))
+            .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            held_distinct_sender_sequences(
+            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, None, 2)
+                .map(|selection| selection.sequences),
+            Some(vec![1, 3]),
+        );
+        assert_eq!(
+            held_prepare_vote_subject(
                 &ack,
                 HEIGHT,
                 FIRST_VIEW,
-                ConsensusMessageControlKind::PrepareVote,
                 &allowed,
-                Some(&first_hash),
-                false,
+                Some(&second_vote.subject),
                 2,
-            ),
-            Some(vec![1, 3])
-        );
-        assert_eq!(
-            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, Some(&second_hash), 2,),
-            Some((first_hash, vec![1, 3]))
+            )
+            .map(|selection| selection.sequences),
+            Some(vec![1, 3]),
         );
         assert!(
-            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, Some(&first_hash), 2,)
-                .is_none()
+            held_prepare_vote_subject(
+                &ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &allowed,
+                Some(&first_vote.subject),
+                2,
+            )
+            .is_none()
         );
+
+        let timeout_ack = ack(vec![
+            held_timeout_vote(5, peer_ids[0].clone(), 0),
+            held_timeout_vote(6, peer_ids[1].clone(), 1),
+        ]);
+        let timeout_allowed = allowed
+            .iter()
+            .filter(|(_, signer)| **signer < 2)
+            .map(|(peer, signer)| (peer.clone(), *signer))
+            .collect::<BTreeMap<_, _>>();
+        let timeout = held_no_high_timeout_vote_selection(
+            &timeout_ack,
+            HEIGHT,
+            FIRST_VIEW,
+            &timeout_allowed,
+            2,
+        )
+        .expect("two exact no-high timeout votes");
+        assert_eq!(timeout.signers, BTreeSet::from([0, 1]));
+        assert_eq!(timeout.sequences, vec![5, 6]);
+
+        let certificate_signers = vec![0, 1, 2];
+        let certificate_ack = ack(vec![held_prepare_certificate(
+            7,
+            peer_ids[0].clone(),
+            first_vote,
+            certificate_signers.clone(),
+        )]);
+        assert_eq!(
+            held_prepare_certificate_sequences(
+                &certificate_ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([peer_ids[0].clone()]),
+                &first_vote.subject,
+                &first_vote.execution_commitment,
+                &certificate_signers,
+                1,
+            ),
+            Some(vec![7]),
+        );
+
+        let mut relayed = held_timeout_vote(8, peer_ids[0].clone(), 0);
+        relayed.authenticated_via = peer_ids[2].clone();
+        assert!(
+            held_no_high_timeout_vote_selection(
+                &ack(vec![relayed, held_timeout_vote(9, peer_ids[1].clone(), 1)]),
+                HEIGHT,
+                FIRST_VIEW,
+                &timeout_allowed,
+                2,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn exact_prepare_qc_requires_both_count_and_power_quorum() {
+        assert!(strict_dual_quorum(3, 3, 3, 4));
+        assert!(!strict_dual_quorum(2, 3, 4, 4));
+        assert!(!strict_dual_quorum(3, 3, 2, 3));
+        assert!(!strict_dual_quorum(3, 3, 2, 2));
+        assert!(!strict_dual_quorum(3, 3, 5, 4));
+        assert!(!strict_dual_quorum(3, 3, 0, 0));
+
+        let expected = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
+        let context = height_context_status();
+        let valid = quorum(expected);
+        assert!(is_minimal_exact_prepare_quorum(&valid, &context, &expected));
+
+        let mut count_short = valid;
+        count_short.signer_count = 2;
+        assert!(!is_minimal_exact_prepare_quorum(
+            &count_short,
+            &context,
+            &expected
+        ));
+
+        let mut power_short = valid;
+        power_short.signed_power = 2;
+        assert!(!is_minimal_exact_prepare_quorum(
+            &power_short,
+            &context,
+            &expected
+        ));
+
+        let mut over_delivered = valid;
+        over_delivered.signer_count = 4;
+        over_delivered.signed_power = 4;
+        assert!(!is_minimal_exact_prepare_quorum(
+            &over_delivered,
+            &context,
+            &expected
+        ));
+
+        let mut wrong_subject = valid;
+        wrong_subject.subject = snapshot(FIRST_VIEW, 0x41, 0x50).reference.subject;
+        assert!(!is_minimal_exact_prepare_quorum(
+            &wrong_subject,
+            &context,
+            &expected
+        ));
+
+        let mut wrong_total = valid;
+        wrong_total.total_power = 3;
+        assert!(!is_minimal_exact_prepare_quorum(
+            &wrong_total,
+            &context,
+            &expected
+        ));
+    }
+
+    #[test]
+    fn locked_commit_progress_witness_rejects_inexact_or_empty_ownership() {
+        let locked = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
+        let empty = SumeragiV2LivenessStatus::default();
+        assert!(!locked_commit_has_exact_progress_witness(
+            &empty,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let outbound = |kind, reference: QuorumCertificateRef| SumeragiV2OutboundIntentStatus {
+            kind,
+            round: reference.round,
+            subject: Some(reference.subject),
+            execution_commitment: Some(reference.execution_commitment),
+            stage: SumeragiV2OutboundIntentStage::Sent,
+        };
+        let mut wrong_kind = empty.clone();
+        wrong_kind
+            .outbound_intents
+            .push(outbound(SumeragiV2OutboundIntentKind::PrepareVote, locked));
+        assert!(!locked_commit_has_exact_progress_witness(
+            &wrong_kind,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut wrong_round = empty.clone();
+        wrong_round.outbound_intents.push(outbound(
+            SumeragiV2OutboundIntentKind::CommitVote,
+            snapshot(SECOND_VIEW, 0x40, 0x50).reference,
+        ));
+        assert!(!locked_commit_has_exact_progress_witness(
+            &wrong_round,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut wrong_subject = empty.clone();
+        wrong_subject.outbound_intents.push(outbound(
+            SumeragiV2OutboundIntentKind::CommitVote,
+            snapshot(FIRST_VIEW, 0x41, 0x50).reference,
+        ));
+        assert!(!locked_commit_has_exact_progress_witness(
+            &wrong_subject,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut empty_pool = empty.clone();
+        let mut no_signers = quorum(locked);
+        no_signers.signer_count = 0;
+        no_signers.signed_power = 0;
+        empty_pool.commit_quorums.push(no_signers);
+        assert!(!locked_commit_has_exact_progress_witness(
+            &empty_pool,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+    }
+
+    #[test]
+    fn locked_commit_progress_witness_accepts_each_exact_owner() {
+        let locked = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
+
+        let mut outbound = SumeragiV2LivenessStatus::default();
+        outbound
+            .outbound_intents
+            .push(SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitVote,
+                round: locked.round,
+                subject: Some(locked.subject),
+                execution_commitment: Some(locked.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::PendingSignature,
+            });
+        assert!(locked_commit_has_exact_progress_witness(
+            &outbound,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut pooled = SumeragiV2LivenessStatus::default();
+        let mut one_vote = quorum(locked);
+        one_vote.signer_count = 1;
+        one_vote.signed_power = 1;
+        pooled.commit_quorums.push(one_vote);
+        assert!(locked_commit_has_exact_progress_witness(
+            &pooled,
+            &locked,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let decision = SumeragiV2CommitQcStatus {
+            certificate: QuorumCertificateRef {
+                phase: GlobalPhase::Commit,
+                ..locked
+            },
+            validator_count: VALIDATOR_COUNT as u32,
+            signer_count: 3,
+            min_signers: 3,
+            signed_power: 3,
+            total_power: 4,
+        };
+        assert!(locked_commit_has_exact_progress_witness(
+            &SumeragiV2LivenessStatus::default(),
+            &locked,
+            HEIGHT,
+            Some(&decision),
+        ));
+        assert!(!locked_commit_has_exact_progress_witness(
+            &SumeragiV2LivenessStatus::default(),
+            &locked,
+            HEIGHT - 1,
+            Some(&decision),
+        ));
     }
 
     #[test]
@@ -862,7 +1484,8 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .min()
             .unwrap_or_default();
         let initial_v2 =
-            wait_for_v2_statuses(&all_peers, initial_committed_floor, STATUS_TIMEOUT).await?;
+            wait_for_common_awaiting_v2_round(&all_peers, initial_committed_floor, STATUS_TIMEOUT)
+                .await?;
         validate_v2_status_set(&initial_v2, VALIDATOR_COUNT)?;
 
         let before_restart_account = fixture_account(0xA1)?;
@@ -912,8 +1535,12 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             "the pre-restart transaction must advance committed height (initial={initial_committed_floor}, current={pre_restart_floor})"
         );
         let pre_restart_v2 =
-            wait_for_v2_statuses(&all_peers, pre_restart_floor, STATUS_TIMEOUT).await?;
+            wait_for_common_awaiting_v2_round(&all_peers, pre_restart_floor, STATUS_TIMEOUT)
+                .await?;
         validate_v2_status_set(&pre_restart_v2, VALIDATOR_COUNT)?;
+        for snapshot in &pre_restart_v2 {
+            validate_applied_successor_witness(snapshot, pre_restart_floor)?;
+        }
 
         let config_layers = network
             .config_layers()
@@ -969,9 +1596,16 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             outage_floor > pre_restart_floor,
             "the online quorum must advance height during the outage (before={pre_restart_floor}, during={outage_floor})"
         );
-        let outage_v2 =
-            wait_for_v2_statuses(&remaining_peers, outage_floor, STATUS_TIMEOUT).await?;
+        let outage_v2 = wait_for_common_awaiting_v2_round(
+            &remaining_peers,
+            outage_floor,
+            STATUS_TIMEOUT,
+        )
+        .await?;
         validate_v2_status_set(&outage_v2, VALIDATOR_COUNT)?;
+        for snapshot in &outage_v2 {
+            validate_applied_successor_witness(snapshot, outage_floor)?;
+        }
 
         restart_peer
             .start_checked(config_layers.iter().cloned(), None)
@@ -999,8 +1633,11 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .min()
             .unwrap_or_default();
         let recovered_v2 =
-            wait_for_v2_statuses(&all_peers, recovered_floor, STATUS_TIMEOUT).await?;
+            wait_for_common_awaiting_v2_round(&all_peers, recovered_floor, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&recovered_v2, VALIDATOR_COUNT)?;
+        for snapshot in &recovered_v2 {
+            validate_applied_successor_witness(snapshot, recovered_floor)?;
+        }
         ensure!(
             recovered_v2[restart_index].node_fingerprint == restart_node_fingerprint,
             "a restarted validator must retain its v2 node identity"
@@ -1043,8 +1680,12 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             final_floor > recovered_floor,
             "finalization must continue after restart (recovered={recovered_floor}, final={final_floor})"
         );
-        let final_v2 = wait_for_v2_statuses(&all_peers, final_floor, STATUS_TIMEOUT).await?;
+        let final_v2 =
+            wait_for_common_awaiting_v2_round(&all_peers, final_floor, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&final_v2, VALIDATOR_COUNT)?;
+        for snapshot in &final_v2 {
+            validate_applied_successor_witness(snapshot, final_floor)?;
+        }
         for (before, after) in initial_v2.iter().zip(&final_v2) {
             ensure!(
                 before.node_fingerprint == after.node_fingerprint,
@@ -1235,8 +1876,12 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         )
         .await?;
 
-        let recovered = wait_for_v2_statuses(&all_peers, target_height, STATUS_TIMEOUT).await?;
+        let recovered =
+            wait_for_common_awaiting_v2_round(&all_peers, target_height, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&recovered, VALIDATOR_COUNT)?;
+        for snapshot in &recovered {
+            validate_applied_successor_witness(snapshot, target_height)?;
+        }
         ensure!(
             recovered[leader_peer_index].node_fingerprint == leader_node_fingerprint,
             "the restarted Taira leader changed its v2 node fingerprint"
@@ -1288,6 +1933,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             "locked-body PrepareQC split regression requires four voting validators"
         );
         let peer_ids = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+        let validator_by_peer = validator_indices_by_peer(&peers)?;
         let expected_rules = peers
             .iter()
             .enumerate()
@@ -1354,6 +2000,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             STATUS_TIMEOUT,
         )
         .await?;
+        validate_v2_status_set(&partitioned, VALIDATOR_COUNT)?;
         let qcs = partitioned
             .iter()
             .map(|snapshot| {
@@ -1428,6 +2075,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 "controlled validator {} decided before partition healing",
                 snapshot.peer
             );
+            validate_locked_commit_progress_witness(snapshot, &expected_reference)?;
         }
 
         let prepare_releases = wait_for_held_quorum_evidence(
@@ -1488,12 +2136,16 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
         )
         .await
         .wrap_err("captured Prepare release did not align the four locked-body references")?;
+        validate_v2_status_set(&aligned, VALIDATOR_COUNT)?;
         ensure!(
             aligned
                 .iter()
                 .all(|snapshot| snapshot.last_committed_height < target_height),
             "Prepare-only release unexpectedly decided the controlled height"
         );
+        for snapshot in &aligned {
+            validate_locked_commit_progress_witness(snapshot, &reproposed_reference)?;
+        }
 
         let commit_releases = wait_for_held_quorum_evidence(
             &peers,
@@ -1628,6 +2280,9 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 .await
                 .wrap_err("re-proposed locked body did not activate one common successor height")?;
         validate_v2_status_set(&final_statuses, VALIDATOR_COUNT)?;
+        for snapshot in &final_statuses {
+            validate_applied_successor_witness(snapshot, target_height)?;
+        }
         Ok(())
     }
     .await;
@@ -1640,6 +2295,13 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
 /// different subjects without forging traffic or letting the lower QC reach
 /// the next leader, then converge on the higher-view certified subject after
 /// one FIFO drain fence heals every receiver.
+///
+/// Each QC receiver admits exactly two distinct remote Prepare votes alongside
+/// its own vote. The authoritative liveness snapshot must show that this exact
+/// three-signer pool satisfies both the frozen count threshold and the strict
+/// two-thirds voting-power threshold. This is the reset/dedup boundary which
+/// previously let an authenticated locked-round intent remain durable while
+/// its volatile reconstruction path was suppressed.
 ///
 /// Quorum intersection means an honest 2+2 *lock* split for distinct subjects
 /// is impossible: after one node locks the first QC, the other three validators
@@ -1719,10 +2381,20 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                         && snapshot.view == first_view
                         && snapshot.last_committed_height < height
                         && snapshot.leader == snapshots[0].leader
+                        && status_round_is_open(snapshot, height, first_view)
                 })
             },
         )
         .await?;
+        validate_v2_status_set(&initial, VALIDATOR_COUNT)?;
+        ensure!(
+            initial.iter().all(|snapshot| {
+                snapshot.height_context.mode == ConsensusMode::Npos
+                    && snapshot.height_context.quorum.min_signers == 3
+            }),
+            "distinct-subject regression requires the canonical four-validator NPoS dual quorum: {initial:?}"
+        );
+        validate_open_round(&initial, height, first_view)?;
 
         let first_leader_validator = initial[0].leader;
         ensure!(
@@ -1765,9 +2437,16 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             .iter()
             .enumerate()
             .filter(|(index, _)| *index != first_lock_index)
-            .map(|(_, peer_id)| peer_id.clone())
-            .collect::<BTreeSet<_>>();
-        let (first_block_hash, first_prepare_release) = wait_for_control_selection(
+            .map(|(_, peer_id)| {
+                (
+                    peer_id.clone(),
+                    *validator_by_peer
+                        .get(peer_id)
+                        .expect("every network peer belongs to the frozen roster"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let first_prepare = wait_for_control_selection(
             &peers[first_lock_index],
             "two distinct view-zero Prepare votes for one subject",
             STATUS_TIMEOUT,
@@ -1783,10 +2462,29 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
+        let first_subject = first_prepare
+            .subject
+            .expect("Prepare-vote selection carries a complete subject");
+        let first_execution_commitment = first_prepare
+            .execution_commitment
+            .expect("Prepare-vote selection carries an execution commitment");
+        let first_block_hash = first_subject.block_hash;
+        ensure!(
+            first_prepare.senders.len() == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES
+                && first_prepare.signers.len() == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES
+                && first_prepare.envelope_digests.len()
+                    == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+            "view-zero release did not bind two distinct authenticated signed envelopes: {first_prepare:?}"
+        );
+        let immediately_before_a = fetch_v2_status_set(&peers).await?;
+        validate_v2_status_set(&immediately_before_a, VALIDATOR_COUNT)?;
+        validate_open_round(&immediately_before_a, height, first_view).wrap_err(
+            "view zero closed after A votes were retained but before their exact release",
+        )?;
         release_exact_control_sequences(
             &peers[first_lock_index],
             &expected_rules[first_lock_index],
-            &first_prepare_release,
+            &first_prepare.sequences,
             "view-zero Prepare votes",
             CONTROL_TIMEOUT,
         )
@@ -1816,11 +2514,39 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
+        validate_v2_status_set(&first_locked, VALIDATOR_COUNT)?;
         let first_reference = first_locked[first_lock_index]
             .locked_prepare_qc
             .as_ref()
             .expect("wait condition requires the old lock")
             .reference;
+        ensure!(
+            first_reference.subject == first_subject
+                && first_reference.execution_commitment == first_execution_commitment,
+            "the first leader locked different evidence than the exact released A votes: released={first_prepare:?}, locked={first_reference:?}"
+        );
+        let mut first_qc_signers = first_prepare.signers.clone();
+        first_qc_signers.insert(
+            ValidatorIndex::try_from(first_leader_validator)
+                .expect("four-validator leader index fits the wire type"),
+        );
+        ensure!(
+            first_qc_signers.len() == 3,
+            "A's QC did not consist of the leader plus the two exact remote signers: {first_qc_signers:?}"
+        );
+        let first_qc_signers = first_qc_signers.into_iter().collect::<Vec<_>>();
+        validate_minimal_exact_prepare_quorum(
+            &first_locked[first_lock_index],
+            &first_reference,
+        )?;
+        validate_locked_commit_progress_witness(
+            &first_locked[first_lock_index],
+            &first_reference,
+        )?;
+        let unsafe_proposal_before = ignore_count(
+            &first_locked[first_lock_index],
+            SumeragiV2IgnoreReason::UnsafeProposal,
+        );
 
         // Queue work directly at the next leader only after subject A is
         // frozen. Its no-high-QC timeout justification must therefore produce
@@ -1829,7 +2555,17 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
 
         let unlocked_senders = unlocked
             .iter()
-            .map(|index| peer_ids[*index].clone())
+            .map(|index| {
+                let peer = peer_ids[*index].clone();
+                let signer = *validator_by_peer
+                    .get(&peer)
+                    .expect("every unlocked peer belongs to the frozen roster");
+                (peer, signer)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let unlocked_validator_indices = unlocked_senders
+            .values()
+            .copied()
             .collect::<BTreeSet<_>>();
         let mut timeout_releases = Vec::with_capacity(VALIDATOR_COUNT);
         for receiver_index in 0..VALIDATOR_COUNT {
@@ -1839,27 +2575,38 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 unlocked
                     .iter()
                     .filter(|index| **index != receiver_index)
-                    .map(|index| peer_ids[*index].clone())
-                    .collect::<BTreeSet<_>>()
+                    .map(|index| {
+                        let peer = peer_ids[*index].clone();
+                        let signer = *validator_by_peer
+                            .get(&peer)
+                            .expect("every unlocked peer belongs to the frozen roster");
+                        (peer, signer)
+                    })
+                    .collect::<BTreeMap<_, _>>()
             };
             let release = wait_for_control_selection(
                 &peers[receiver_index],
                 "two no-high-QC view-zero Timeout votes from the unlocked quorum",
                 DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT,
                 |ack| {
-                    held_distinct_sender_sequences(
+                    held_no_high_timeout_vote_selection(
                         ack,
                         height,
                         first_view,
-                        ConsensusMessageControlKind::TimeoutVote,
                         &allowed,
-                        None,
-                        true,
                         LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
                     )
                 },
             )
             .await?;
+            ensure!(
+                release.senders.len() == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES
+                    && release.signers.len() == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES
+                    && release.envelope_digests.len()
+                        == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                "receiver {} did not select two exact no-high-QC timeout envelopes: {release:?}",
+                peers[receiver_index].mnemonic(),
+            );
             timeout_releases.push(release);
         }
         try_join_all(
@@ -1871,7 +2618,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                     release_exact_control_sequences(
                         peer,
                         rules,
-                        release,
+                        &release.sequences,
                         "view-zero Timeout votes",
                         CONTROL_TIMEOUT,
                     )
@@ -1881,7 +2628,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         )
         .await?;
 
-        wait_for_v2_status_condition(
+        let view_one = wait_for_v2_status_condition(
             &peers,
             "all validators in frozen view one with the next leader selected",
             STATUS_TIMEOUT,
@@ -1895,8 +2642,34 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
+        validate_v2_status_set(&view_one, VALIDATOR_COUNT)?;
+        for (index, snapshot) in view_one.iter().enumerate() {
+            let timeout = snapshot.last_timeout_certificate.as_ref().ok_or_else(|| {
+                eyre!(
+                    "{} entered view one without exposing the exact installed TimeoutCertificate",
+                    snapshot.peer
+                )
+            })?;
+            ensure!(
+                timeout.round.height == height && timeout.round.view == first_view,
+                "{} installed the wrong timeout round: {timeout:?}",
+                snapshot.peer,
+            );
+            if index == first_lock_index {
+                ensure!(
+                    timeout.highest_prepare_qc == Some(first_reference),
+                    "the A-locked validator's TC did not preserve A as its safe value: {timeout:?}"
+                );
+            } else {
+                ensure!(
+                    timeout.highest_prepare_qc.is_none(),
+                    "an unlocked validator's TC unexpectedly learned A: peer={}, timeout={timeout:?}",
+                    snapshot.peer,
+                );
+            }
+        }
 
-        let (second_block_hash, second_leader_prepare_release) = wait_for_control_selection(
+        let second_leader_prepare = wait_for_control_selection(
             &peers[second_leader_index],
             "two unlocked view-one Prepare votes for a subject distinct from the old lock",
             STATUS_TIMEOUT,
@@ -1906,45 +2679,74 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                     height,
                     second_view,
                     &unlocked_senders,
-                    Some(&first_block_hash),
+                    Some(&first_subject),
+                    LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                )
+            },
+        )
+        .await?;
+        let second_subject = second_leader_prepare
+            .subject
+            .expect("Prepare-vote selection carries a complete subject");
+        let second_execution_commitment = second_leader_prepare
+            .execution_commitment
+            .expect("Prepare-vote selection carries an execution commitment");
+        let second_block_hash = second_subject.block_hash;
+        ensure!(
+            second_subject != first_subject,
+            "the no-high-QC view-one leader re-used the complete old block subject"
+        );
+        let second_partner_prepare = wait_for_control_selection(
+            &peers[second_qc_partner],
+            "the same two-sender view-one Prepare quorum at the second QC receiver",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_prepare_vote_subject(
+                    ack,
+                    height,
+                    second_view,
+                    &unlocked_senders,
+                    Some(&first_subject),
                     LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
                 )
             },
         )
         .await?;
         ensure!(
-            second_block_hash != first_block_hash,
-            "the no-high-QC view-one leader re-used the old block subject"
+            second_partner_prepare.subject == Some(second_subject)
+                && second_partner_prepare.execution_commitment
+                    == Some(second_execution_commitment),
+            "the two B-QC receivers selected different signed vote values: leader={second_leader_prepare:?}, partner={second_partner_prepare:?}"
         );
-        let second_partner_prepare_release = wait_for_control_selection(
-            &peers[second_qc_partner],
-            "the same two-sender view-one Prepare quorum at the second QC receiver",
-            STATUS_TIMEOUT,
-            |ack| {
-                held_distinct_sender_sequences(
-                    ack,
-                    height,
-                    second_view,
-                    ConsensusMessageControlKind::PrepareVote,
-                    &unlocked_senders,
-                    Some(&second_block_hash),
-                    false,
-                    LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
-                )
-            },
-        )
-        .await?;
+        for (receiver_index, selection) in [
+            (second_leader_index, &second_leader_prepare),
+            (second_qc_partner, &second_partner_prepare),
+        ] {
+            let local_signer = *validator_by_peer
+                .get(&peer_ids[receiver_index])
+                .expect("B-QC receiver belongs to the frozen roster");
+            let mut complete_signers = selection.signers.clone();
+            complete_signers.insert(local_signer);
+            ensure!(
+                complete_signers == unlocked_validator_indices
+                    && selection.senders.len() == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES
+                    && selection.envelope_digests.len()
+                        == LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                "B-QC receiver {} did not combine its local vote with the exact other two unlocked signed envelopes: selection={selection:?}, complete={complete_signers:?}, expected={unlocked_validator_indices:?}",
+                peers[receiver_index].mnemonic(),
+            );
+        }
         let prepare_releases = [
             (
                 &peers[second_leader_index],
                 expected_rules[second_leader_index].as_slice(),
-                second_leader_prepare_release.as_slice(),
+                second_leader_prepare.sequences.as_slice(),
                 "view-one Prepare votes at the leader",
             ),
             (
                 &peers[second_qc_partner],
                 expected_rules[second_qc_partner].as_slice(),
-                second_partner_prepare_release.as_slice(),
+                second_partner_prepare.sequences.as_slice(),
                 "view-one Prepare votes at the partner",
             ),
         ];
@@ -1969,18 +2771,22 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             STATUS_TIMEOUT,
             |snapshots| {
                 second_group.iter().all(|index| {
-                    snapshots[*index]
-                        .highest_prepare_qc
-                        .as_ref()
-                        .is_some_and(|qc| {
-                            qc.reference.round.height == height
-                                && qc.reference.round.view == second_view
-                                && qc.reference.subject.block_hash == second_block_hash
-                        })
+                    let snapshot = &snapshots[*index];
+                    snapshot.highest_prepare_qc.as_ref().is_some_and(|qc| {
+                        qc.reference.round.height == height
+                            && qc.reference.round.view == second_view
+                            && qc.reference.subject.block_hash == second_block_hash
+                            && snapshot.body_state == SumeragiV2BodyState::Validated
+                            && snapshot
+                                .locked_prepare_qc
+                                .as_ref()
+                                .is_some_and(|locked| locked.reference == qc.reference)
+                    })
                 })
             },
         )
         .await?;
+        validate_v2_status_set(&second_certified, VALIDATOR_COUNT)?;
         let second_reference = second_certified[second_leader_index]
             .highest_prepare_qc
             .as_ref()
@@ -1993,10 +2799,78 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 .is_some_and(|qc| qc.reference == second_reference),
             "the two view-one receivers formed different PrepareQC references"
         );
+        for receiver_index in second_group {
+            validate_minimal_exact_prepare_quorum(
+                &second_certified[receiver_index],
+                &second_reference,
+            )?;
+            validate_locked_commit_progress_witness(
+                &second_certified[receiver_index],
+                &second_reference,
+            )?;
+        }
         ensure!(
             first_reference.subject != second_reference.subject,
             "the staged PrepareQCs did not certify distinct subjects"
         );
+        ensure!(
+            second_reference.subject == second_subject
+                && second_reference.execution_commitment == second_execution_commitment,
+            "the B receivers certified different evidence than the exact released votes: votes={second_leader_prepare:?}, qc={second_reference:?}"
+        );
+        ensure!(
+            second_certified[first_lock_index]
+                .locked_prepare_qc
+                .as_ref()
+                .is_some_and(|qc| qc.reference == first_reference)
+                && second_certified[first_lock_index]
+                    .highest_prepare_qc
+                    .as_ref()
+                    .is_some_and(|qc| qc.reference == first_reference)
+                && ignore_count(
+                    &second_certified[first_lock_index],
+                    SumeragiV2IgnoreReason::UnsafeProposal,
+                ) > unsafe_proposal_before
+                && !second_certified[first_lock_index]
+                    .liveness
+                    .outbound_intents
+                    .iter()
+                    .any(|intent| {
+                        intent.kind == SumeragiV2OutboundIntentKind::PrepareVote
+                            && intent.round.height == height
+                            && intent.round.view == second_view
+                            && intent.subject == Some(second_subject)
+                    }),
+            "the A-locked validator did not explicitly reject B under the safe-value rule: before={unsafe_proposal_before}, after={:?}",
+            second_certified[first_lock_index],
+        );
+
+        let second_certificate_senders = second_group
+            .iter()
+            .map(|index| peer_ids[*index].clone())
+            .collect::<BTreeSet<_>>();
+        let unlocked_certificate_signers = unlocked_validator_indices
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let _second_certificate_evidence = wait_for_control_selection(
+            &peers[first_lock_index],
+            "a B PrepareQC carrying the exact three unlocked signer indices",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_prepare_certificate_sequences(
+                    ack,
+                    height,
+                    second_view,
+                    &second_certificate_senders,
+                    &second_subject,
+                    &second_execution_commitment,
+                    &unlocked_certificate_signers,
+                    1,
+                )
+            },
+        )
+        .await?;
 
         let first_certificate_sender = BTreeSet::from([peer_ids[first_lock_index].clone()]);
         let old_certificate_release = wait_for_control_selection(
@@ -2004,14 +2878,14 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             "the authenticated view-zero PrepareQC broadcast from its sole receiver",
             STATUS_TIMEOUT,
             |ack| {
-                held_distinct_sender_sequences(
+                held_prepare_certificate_sequences(
                     ack,
                     height,
                     first_view,
-                    ConsensusMessageControlKind::PrepareCertificate,
                     &first_certificate_sender,
-                    Some(&first_block_hash),
-                    false,
+                    &first_subject,
+                    &first_execution_commitment,
+                    &first_qc_signers,
                     1,
                 )
             },
@@ -2036,6 +2910,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             STATUS_TIMEOUT,
         )
         .await?;
+        validate_v2_status_set(&divergent, VALIDATOR_COUNT)?;
         let qcs = divergent
             .iter()
             .map(|snapshot| {
@@ -2058,6 +2933,40 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             *split.first == first_reference && *split.second == second_reference,
             "the observed split lost the exact staged QC identities"
         );
+        ensure!(
+            divergent[first_lock_index]
+                .locked_prepare_qc
+                .as_ref()
+                .is_some_and(|qc| qc.reference == first_reference)
+                && divergent[first_qc_observer].locked_prepare_qc.is_none()
+                && second_group.iter().all(|index| {
+                    divergent[*index]
+                        .locked_prepare_qc
+                        .as_ref()
+                        .is_some_and(|qc| qc.reference == second_reference)
+                }),
+            "the staged high-QC split did not retain the exact one-A-lock/one-A-observer/two-B-lock geometry: {divergent:?}"
+        );
+        validate_locked_commit_progress_witness(
+            &divergent[first_lock_index],
+            &first_reference,
+        )?;
+        for receiver_index in second_group {
+            validate_locked_commit_progress_witness(
+                &divergent[receiver_index],
+                &second_reference,
+            )?;
+        }
+
+        let controller_baselines = peers
+            .iter()
+            .map(|peer| {
+                peer.consensus_message_control()
+                    .expect("controlled peer")
+                    .read_ack()
+                    .wrap_err_with(|| format!("read pre-heal ACK from {}", peer.mnemonic()))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let healed = try_join_all(peers.iter().map(|peer| async move {
             peer.consensus_message_control()
@@ -2067,17 +2976,20 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 .wrap_err_with(|| format!("heal and drain {} traffic", peer.mnemonic()))
         }))
         .await?;
-        for (peer, ack) in peers.iter().zip(&healed) {
+        for ((peer, before), ack) in peers.iter().zip(&controller_baselines).zip(&healed) {
             ensure!(
                 !ack.draining
                     && ack.drain_fence == Some(ack.revision)
+                    && ack.rules.is_empty()
                     && ack.held.is_empty()
                     && ack.release_pending.is_empty()
                     && ack.in_flight.is_none()
                     && !ack.fatal
-                    && ack.overflowed == 0,
-                "{} did not complete the distinct-subject drain fence",
-                peer.mnemonic()
+                    && ack.overflowed == before.overflowed
+                    && ack.rejected_commands == before.rejected_commands
+                    && ack.dropped == before.dropped,
+                "{} did not complete the distinct-subject drain fence without controller loss: before={before:?}, after={ack:?}",
+                peer.mnemonic(),
             );
         }
 
@@ -2096,6 +3008,32 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             committed_hashes.iter().all(|hash| hash == &expected_hash),
             "validators did not converge on the higher-view certified subject: expected={expected_hash}, committed={committed_hashes:?}"
         );
+        let committed_views =
+            try_join_all(peers.iter().map(|peer| committed_view_at_height(peer, height))).await?;
+        ensure!(
+            committed_views.iter().all(|view| *view == second_view),
+            "the finalized B headers did not retain the exact view-one decision: {committed_views:?}"
+        );
+        let finality_proofs = try_join_all(
+            peers
+                .iter()
+                .map(|peer| fetch_bridge_finality_proof(peer, height)),
+        )
+        .await?;
+        for ((peer, proof), client) in peers
+            .iter()
+            .zip(&finality_proofs)
+            .zip(peers.iter().map(NetworkPeer::client))
+        {
+            validate_exact_finality_proof(
+                peer,
+                proof,
+                &client.chain,
+                height,
+                second_view,
+                &second_reference,
+            )?;
+        }
         wait_for_accounts_visible(
             &peers,
             &[first_account, second_account],
@@ -2104,6 +3042,9 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         .await?;
         let successor = wait_for_common_awaiting_v2_round(&peers, height, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&successor, VALIDATOR_COUNT)?;
+        for snapshot in &successor {
+            validate_applied_successor_witness(snapshot, height)?;
+        }
         Ok(())
     }
     .await;
@@ -2212,6 +3153,13 @@ async fn wait_for_common_awaiting_v2_round(
                     snapshot.leader,
                     snapshot.phase.clone(),
                     snapshot.last_committed_height,
+                    snapshot.liveness.generation,
+                    snapshot
+                        .liveness
+                        .last_progress
+                        .map(|progress| (progress.transition, progress.age_ms)),
+                    snapshot.liveness.blocker,
+                    snapshot.liveness.no_progress_age_ms,
                 ))
                 .collect::<Vec<_>>()
         );
@@ -2255,6 +3203,72 @@ fn status_is_awaiting_proposal(phase: &Value) -> bool {
         })
 }
 
+fn status_round_is_open(snapshot: &V2StatusSnapshot, height: u64, view: u64) -> bool {
+    snapshot.height == height
+        && snapshot.view == view
+        && snapshot
+            .last_timeout_certificate
+            .as_ref()
+            .is_none_or(|timeout| timeout.round.height != height || timeout.round.view != view)
+        && !snapshot.liveness.outbound_intents.iter().any(|intent| {
+            intent.kind == SumeragiV2OutboundIntentKind::TimeoutVote
+                && intent.round.height == height
+                && intent.round.view == view
+        })
+        && !snapshot.liveness.timeout_quorums.iter().any(|quorum| {
+            quorum.round.height == height
+                && quorum.round.view == view
+                && (quorum.signer_count > 0 || quorum.certificate_formed)
+        })
+}
+
+fn validate_open_round(snapshots: &[V2StatusSnapshot], height: u64, view: u64) -> Result<()> {
+    ensure!(
+        snapshots
+            .iter()
+            .all(|snapshot| status_round_is_open(snapshot, height, view)),
+        "controlled round {height}/{view} closed before the causal A release: {:?}",
+        snapshots
+            .iter()
+            .map(|snapshot| (
+                snapshot.peer.clone(),
+                snapshot.height,
+                snapshot.view,
+                snapshot.last_timeout_certificate,
+                snapshot
+                    .liveness
+                    .timeout_quorums
+                    .iter()
+                    .filter(|quorum| quorum.round.height == height && quorum.round.view == view)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                snapshot
+                    .liveness
+                    .outbound_intents
+                    .iter()
+                    .filter(|intent| {
+                        intent.kind == SumeragiV2OutboundIntentKind::TimeoutVote
+                            && intent.round.height == height
+                            && intent.round.view == view
+                    })
+                    .copied()
+                    .collect::<Vec<_>>(),
+                ignore_count(snapshot, SumeragiV2IgnoreReason::ViewClosed),
+            ))
+            .collect::<Vec<_>>(),
+    );
+    Ok(())
+}
+
+fn ignore_count(snapshot: &V2StatusSnapshot, reason: SumeragiV2IgnoreReason) -> u64 {
+    snapshot
+        .liveness
+        .ignore_counts
+        .iter()
+        .find(|entry| entry.reason == reason)
+        .map_or(0, |entry| entry.count)
+}
+
 fn peer_index_for_validator(peers: &[NetworkPeer], validator: u64) -> Result<usize> {
     let mut roster = peers
         .iter()
@@ -2272,6 +3286,22 @@ fn peer_index_for_validator(peers: &[NetworkPeer], validator: u64) -> Result<usi
                 roster.len()
             )
         })
+}
+
+fn validator_indices_by_peer(peers: &[NetworkPeer]) -> Result<BTreeMap<PeerId, ValidatorIndex>> {
+    let mut roster = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+    roster.sort();
+    roster
+        .into_iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            Ok((
+                peer,
+                ValidatorIndex::try_from(index)
+                    .wrap_err("frozen validator index does not fit the wire type")?,
+            ))
+        })
+        .collect()
 }
 
 async fn committed_view_at_height(peer: &NetworkPeer, height: u64) -> Result<u64> {
@@ -2308,6 +3338,108 @@ async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<Str
     })
     .await
     .wrap_err_with(|| format!("block-hash query panicked for {}", peer.mnemonic()))?
+}
+
+async fn fetch_bridge_finality_proof(
+    peer: &NetworkPeer,
+    height: u64,
+) -> Result<BridgeFinalityProof> {
+    let client = peer.client();
+    let url = client
+        .torii_url
+        .join(&format!("v1/bridge/finality/{height}"))
+        .wrap_err("construct bridge-finality URL")?;
+    let response = reqwest::Client::builder()
+        .timeout(client.torii_request_timeout)
+        .build()
+        .wrap_err("build bridge-finality HTTP client")?
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "fetch height-{height} finality proof from {}",
+                peer.mnemonic()
+            )
+        })?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .wrap_err_with(|| format!("read finality proof from {}", peer.mnemonic()))?;
+    ensure!(
+        status.is_success(),
+        "{} returned HTTP {status} for height-{height} finality proof: {}",
+        peer.mnemonic(),
+        String::from_utf8_lossy(&bytes),
+    );
+    norito::json::from_slice::<BridgeFinalityProof>(&bytes).wrap_err_with(|| {
+        format!(
+            "{} returned malformed height-{height} bridge finality JSON",
+            peer.mnemonic()
+        )
+    })
+}
+
+fn validate_exact_finality_proof(
+    peer: &NetworkPeer,
+    proof: &BridgeFinalityProof,
+    chain: &iroha::data_model::ChainId,
+    height: u64,
+    view: u64,
+    expected_prepare: &QuorumCertificateRef,
+) -> Result<()> {
+    verify_bridge_finality_proof(proof, chain).wrap_err_with(|| {
+        format!(
+            "{} returned a cryptographically invalid height-{height} finality proof",
+            peer.mnemonic()
+        )
+    })?;
+    let artifact = &proof.finality_artifact;
+    let commit_qc = &artifact.commit_qc;
+    ensure!(
+        artifact.height == height
+            && artifact.context_id() == expected_prepare.round.context_id
+            && artifact.subject == expected_prepare.subject
+            && artifact.block_hash == expected_prepare.subject.block_hash
+            && proof.block_header.hash() == artifact.block_hash
+            && proof.block_header.height().get() == height
+            && proof.block_header.view_change_index() == view
+            && commit_qc.round == expected_prepare.round
+            && commit_qc.phase == GlobalPhase::Commit
+            && commit_qc.subject == expected_prepare.subject
+            && commit_qc.execution_commitment == expected_prepare.execution_commitment,
+        "{} returned finality evidence for a different height/view/context/value: expected={expected_prepare:?}, proof={proof:?}",
+        peer.mnemonic(),
+    );
+    let signer_count = u32::try_from(commit_qc.signers.len())
+        .wrap_err("CommitQC signer count does not fit the wire type")?;
+    let signed_power = commit_qc.signers.iter().try_fold(0_u64, |power, signer| {
+        let index = usize::try_from(*signer).wrap_err("CommitQC signer does not fit usize")?;
+        let signer_power = artifact
+            .height_context
+            .roster
+            .get(index)
+            .ok_or_else(|| eyre!("CommitQC signer {signer} is outside the finality roster"))?
+            .power;
+        power
+            .checked_add(signer_power)
+            .ok_or_else(|| eyre!("CommitQC signed power overflowed"))
+    })?;
+    ensure!(
+        strict_dual_quorum(
+            signer_count,
+            artifact.height_context.quorum.min_signers,
+            signed_power,
+            artifact.height_context.quorum.total_power,
+        ),
+        "{} returned a finality artifact without the exact count-and-power Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+        peer.mnemonic(),
+        commit_qc.signers,
+        artifact.height_context.quorum,
+    );
+    Ok(())
 }
 
 async fn wait_for_control_selection<T>(
@@ -2423,6 +3555,26 @@ async fn wait_for_v2_status_condition(
                         snapshot.body_state,
                         snapshot.locked_prepare_qc.as_ref().map(|qc| qc.reference),
                         snapshot.highest_prepare_qc.as_ref().map(|qc| qc.reference),
+                        (
+                            snapshot.liveness.generation,
+                            snapshot
+                                .liveness
+                                .last_progress
+                                .map(|progress| (progress.transition, progress.age_ms)),
+                            snapshot.liveness.blocker,
+                            snapshot.liveness.no_progress_age_ms,
+                            (
+                                snapshot.liveness.prepare_quorums.len(),
+                                snapshot.liveness.commit_quorums.len(),
+                                snapshot.liveness.timeout_quorums.len(),
+                            ),
+                            snapshot
+                                .liveness
+                                .outbound_intents
+                                .iter()
+                                .map(|intent| (intent.kind, intent.round, intent.stage))
+                                .collect::<Vec<_>>(),
+                        ),
                     ))
                     .collect::<Vec<_>>()
             ));
@@ -2478,7 +3630,7 @@ async fn wait_for_distinct_prepare_qc_split(
                     snapshots[*index]
                         .locked_prepare_qc
                         .as_ref()
-                        .is_none_or(|qc| qc.reference == *split.second)
+                        .is_some_and(|qc| qc.reference == *split.second)
                 })
         },
     )
@@ -2808,7 +3960,20 @@ async fn fetch_v2_status(peer: &NetworkPeer) -> Result<V2StatusSnapshot> {
     parse_v2_status(peer_name, &value)
 }
 
+async fn fetch_v2_status_set(peers: &[NetworkPeer]) -> Result<Vec<V2StatusSnapshot>> {
+    try_join_all(peers.iter().map(fetch_v2_status)).await
+}
+
 fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
+    let typed = norito::json::from_value::<SumeragiV2Status>(value.clone())
+        .wrap_err_with(|| format!("v2 status for {peer} is not the canonical typed payload"))?;
+    typed
+        .validate()
+        .wrap_err_with(|| format!("v2 status for {peer} violates structural invariants"))?;
+    ensure!(
+        !typed.restart_required,
+        "validator {peer} entered the consensus fail-stop state"
+    );
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("v2 status for {peer} is not a JSON object"))?;
@@ -2828,6 +3993,23 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
     };
     let body_state = norito::json::from_value::<SumeragiV2BodyState>(required_value("body_state")?)
         .wrap_err_with(|| format!("v2 status for {peer} has a malformed body state"))?;
+    let height_context_id =
+        norito::json::from_value::<HeightContextId>(required_value("height_context_id")?)
+            .wrap_err_with(|| format!("v2 status for {peer} has a malformed height context id"))?;
+    let height_context = norito::json::from_value::<SumeragiV2HeightContextStatus>(required_value(
+        "height_context",
+    )?)
+    .wrap_err_with(|| format!("v2 status for {peer} has a malformed height context"))?;
+    let liveness =
+        norito::json::from_value::<SumeragiV2LivenessStatus>(required_value("liveness")?)
+            .wrap_err_with(|| format!("v2 status for {peer} has malformed liveness diagnostics"))?;
+    let last_commit_qc = object
+        .get("last_commit_qc")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(norito::json::from_value::<SumeragiV2CommitQcStatus>)
+        .transpose()
+        .wrap_err_with(|| format!("v2 status for {peer} has a malformed durable CommitQC"))?;
 
     Ok(V2StatusSnapshot {
         peer: peer.clone(),
@@ -2835,16 +4017,21 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
         node_fingerprint: required_value("node_fingerprint")?,
         build_fingerprint: required_value("build_fingerprint")?,
         config_fingerprint: required_value("config_fingerprint")?,
-        height_context_id: required_value("height_context_id")?,
+        height_context_id,
         height: required_u64("height")?,
         view: required_u64("view")?,
         leader: required_u64("leader")?,
         phase: required_value("phase")?,
         body_state,
         last_timeout_view: optional_timeout_view(object, &peer)?,
+        last_timeout_certificate: typed.last_timeout_certificate,
         locked_prepare_qc: optional_prepare_qc(object, &peer, "locked_prepare_qc")?,
         highest_prepare_qc: optional_prepare_qc(object, &peer, "highest_prepare_qc")?,
         last_committed_height: required_u64("last_committed_height")?,
+        height_context,
+        last_commit_qc,
+        prepare_quorums: liveness.prepare_quorums.clone(),
+        liveness,
     })
 }
 
@@ -2912,6 +4099,20 @@ fn validate_v2_status_set(
             snapshot.peer,
             snapshot.leader
         );
+        ensure!(
+            snapshot.height_context.validator_count
+                == u32::try_from(frozen_validator_count)
+                    .expect("four-validator test roster fits canonical count")
+                && snapshot.height_context.quorum.min_signers
+                    == iroha::data_model::block::consensus_v2::DualQuorum::count_threshold(
+                        snapshot.height_context.validator_count,
+                    )
+                    .expect("non-empty frozen roster has a quorum threshold")
+                && snapshot.height_context.quorum.total_power > 0,
+            "{} reported a malformed frozen count-and-power quorum: {:?}",
+            snapshot.peer,
+            snapshot.height_context,
+        );
         if let Some(timeout_view) = snapshot.last_timeout_view {
             ensure!(
                 timeout_view.checked_add(1) == Some(snapshot.view),
@@ -2953,6 +4154,13 @@ fn validate_v2_status_set(
                     left.peer,
                     right.peer,
                     left.height
+                );
+                ensure!(
+                    left.height_context == right.height_context,
+                    "{} and {} disagree on the frozen count-and-power context for height {}",
+                    left.peer,
+                    right.peer,
+                    left.height,
                 );
                 if left.view == right.view {
                     ensure!(

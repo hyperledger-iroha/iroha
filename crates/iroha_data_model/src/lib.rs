@@ -54,6 +54,8 @@ mod id_macros;
 pub mod account;
 /// Account domain model types and queries.
 pub mod alias;
+/// Declarative alias/SNS setup names, intents, plans, and diagnostics.
+pub mod alias_setup;
 /// Asset definitions, instances, and utilities.
 pub mod asset;
 pub use asset::{AssetDefinitionId, AssetId};
@@ -353,6 +355,7 @@ pub mod prelude {
         ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, Registrable,
         ValidationFail,
         account::prelude::*,
+        alias_setup::*,
         asset::prelude::*,
         block::prelude::*,
         bridge::*,

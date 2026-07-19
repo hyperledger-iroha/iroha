@@ -3038,7 +3038,10 @@ impl Bus {
     /// Attach a P2P network handle and spawn an inbound subscriber task to deliver
     /// incoming Connect frames to local WS endpoints.
     pub fn attach_network(&self, network: corelib::IrohaNetwork) {
-        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        use iroha_p2p::network::{
+            SubscriberFilter,
+            message::{SubscriberRoute, Topic},
+        };
 
         let me = self.clone();
         spawn_background_task(async move {
@@ -3047,7 +3050,8 @@ impl Bus {
                 *w = Some(network.clone());
             }
             let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
-            let filter = SubscriberFilter::topics([Topic::Health]);
+            let filter =
+                SubscriberFilter::topics_for_route([Topic::Health], SubscriberRoute::Connect);
             let mut tx = tx;
             loop {
                 match network.subscribe_to_peers_messages_with_filter(tx, filter.clone()) {

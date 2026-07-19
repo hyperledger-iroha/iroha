@@ -110,7 +110,7 @@ readonly verus_log_copy="${invocation_dir}/verus.log"
 readonly harness_lock_copy="${invocation_dir}/harness-Cargo.lock"
 readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
-readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler mutations, bounded TLC, trace replay, and production Verus"
+readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"
 
 verify_identity "before execution"
 set +e

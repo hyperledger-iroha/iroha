@@ -1,64 +1,18 @@
+<!-- Auto-generated stub for Armenian (hy) translation. Replace this content with the full translation. -->
+
 ---
 lang: hy
 direction: ltr
 source: docs/portal/docs/sns/kpi-dashboard.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
-title: SNS KPI dashboard
-description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+source_hash: 7c53fdda3c7a758055ad60eea6328cc0c28aae4e1d236c67a81e0a88fb162d72
+source_last_modified: "2026-07-18T23:03:42.072Z"
+translation_last_reviewed: null
 ---
 
-# Sora Name Service KPI Dashboard
+# Translation In Progress
 
-KPI վահանակը ստյուարդներին, խնամակալներին և կարգավորողներին տալիս է մեկ տեղ
-վերանայել ընդունման, սխալի և եկամտի ազդանշանները մինչև ամսական հավելվածը
-(SN-8a): Grafana սահմանումը առաքվում է պահոցում
-`dashboards/grafana/sns_suffix_analytics.json` և պորտալը նույնն է
-վահանակներ ներկառուցված iframe-ի միջոցով, որպեսզի փորձը համապատասխանի ներքին Grafana-ին
-օրինակ.
+This file is a placeholder for the Armenian translation of the English document. Once the translation is complete, update the `status` metadata above.
 
-## Զտիչներ և տվյալների աղբյուրներ
-
-- **Սածանցի ֆիլտր** – մղում է `sns_registrar_status_total{suffix}` հարցումները
-  `.sora`, `.nexus` և `.dao` կարող են ստուգվել ինքնուրույն:
-- **Զանգվածային թողարկման զտիչ** – ընդգրկում է `sns_bulk_release_payment_*` չափումները
-  ֆինանսները կարող են հաշտեցնել կոնկրետ ռեգիստրի մանիֆեստը:
-- **Չափանիշներ** – քաշվում է Torii-ից (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), խնամակալ CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total` և զանգվածային տեղակայման օգնական չափումներ:
-
-## Վահանակներ
-
-1. **Գրանցումներ (վերջին 24 ժամը)** – գրանցման հաջողված իրադարձությունների քանակը
-   ընտրված վերջածանց.
-2. **Կառավարման ակտիվացումներ (30դ)** – կանոնադրության/լրացման միջնորդություններ, որոնք արձանագրվել են
-   CLI.
-3. **Գրանցողի թողունակությունը** – գրանցման հաջող գործողությունների յուրաքանչյուր վերջածանցի տոկոսադրույքը:
-4. **Գրանցողի սխալի ռեժիմներ** – պիտակավորված սխալի 5 րոպե արագություն
-   `sns_registrar_status_total` հաշվիչներ.
-5. **Guardian-ի սառեցման պատուհանները** – կենդանի ընտրիչներ, որտեղ `guardian_freeze_active`
-   հաղորդում է բաց սառեցման տոմս:
-6. **Զուտ վճարային միավորներ ըստ ակտիվների** – կողմից ներկայացված հանրագումարները
-   `sns_bulk_release_payment_net_units` մեկ ակտիվի համար:
-7. **Զանգվածային հարցումներ ըստ վերջածանցի** – մանիֆեստի ծավալները յուրաքանչյուր վերջածանցի համար:
-8. **Զուտ միավորներ ըստ հարցումի** – ARPU-ի ոճի հաշվարկ, որը ստացվել է թողարկումից
-   չափումներ.
-
-## Ամսական KPI վերանայման ստուգաթերթ
-
-Ֆինանսական առաջատարը յուրաքանչյուր ամսվա առաջին երեքշաբթի օրը կրկնվող վերանայում է իրականացնում.
-
-1. Բացեք պորտալի **Analytics → SNS KPI** էջը (կամ Grafana վահանակ `sns-kpis`):
-2. Գրանցեք գրանցողի թողունակության և եկամուտների աղյուսակների PDF/CSV արտահանումը:
-3. Համեմատեք SLA-ի խախտումների վերջածանցները (սխալների արագության բարձրացում, սառեցված ընտրիչներ >72 ժամ,
-   ARPU դելտաներ >10%):
-4. Գրանցամատյանների ամփոփագրեր + գործողությունների կետերը համապատասխան հավելվածի ստորև նշված գրառումում
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Արտահանված վահանակի արտեֆակտները կցեք հավելվածի կոմիտին և միացրեք դրանք
-   խորհրդի օրակարգը։
-
-Եթե վերանայումը բացահայտի SLA-ի խախտումներ, ապա ներկայացրեք PagerDuty միջադեպ տուժածների համար
-սեփականատերը (գրանցողի հերթապահ մենեջեր, պահապան խնամակալ կամ ծրագրի ղեկավար) և
-հետևել վերականգնմանը հավելվածի մատյանում:
+Replace this stub with the completed Armenian translation and update `translation_last_reviewed` after verification against the English source.

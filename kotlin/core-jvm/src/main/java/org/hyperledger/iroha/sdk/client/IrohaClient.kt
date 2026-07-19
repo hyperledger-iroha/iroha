@@ -1,7 +1,27 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
+import org.hyperledger.iroha.sdk.alias.AliasSetupPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasEnsureInstructionFrameCodec
+import org.hyperledger.iroha.sdk.alias.AliasAutoRenewPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasLeaseRenewPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasLifecycleInstructionFrameCodec
+import org.hyperledger.iroha.sdk.alias.AliasLifecyclePlanApply
+import org.hyperledger.iroha.sdk.alias.AliasLifecyclePlanBodyNoritoEncoder
+import org.hyperledger.iroha.sdk.alias.AliasLifecyclePlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AliasLifecycleTransactionPlanV1
+import org.hyperledger.iroha.sdk.alias.AliasPlanApply
+import org.hyperledger.iroha.sdk.alias.AliasPlanBodyNoritoEncoder
+import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
+import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 
 /** High-level client for interacting with Iroha nodes. */
@@ -115,6 +135,247 @@ interface IrohaClient {
         val future = CompletableFuture<Optional<AccountAliasResolution>>()
         future.completeExceptionally(
             IllegalStateException("resolveAccountAlias requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Resolves a restricted account alias with canonical Iroha request authentication. */
+    fun resolveAccountAlias(
+        alias: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasResolution>> {
+        val future = CompletableFuture<Optional<AccountAliasResolution>>()
+        future.completeExceptionally(
+            IllegalStateException("authenticated resolveAccountAlias requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Plans one indivisible alias setup request using canonical request authentication. */
+    fun planAliasSetup(
+        request: AliasSetupPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasTransactionPlanV1> {
+        val future = CompletableFuture<AliasTransactionPlanV1>()
+        future.completeExceptionally(
+            IllegalStateException("planAliasSetup requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Plans one expiry-CAS lease renewal using canonical request authentication. */
+    fun planAliasLeaseRenewal(
+        request: AliasLeaseRenewPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasLifecycleTransactionPlanV1> {
+        val future = CompletableFuture<AliasLifecycleTransactionPlanV1>()
+        future.completeExceptionally(
+            IllegalStateException("planAliasLeaseRenewal requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Plans one revision-CAS native auto-renew configuration. */
+    fun planAliasAutoRenew(
+        request: AliasAutoRenewPlanRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AliasLifecycleTransactionPlanV1> {
+        val future = CompletableFuture<AliasLifecycleTransactionPlanV1>()
+        future.completeExceptionally(
+            IllegalStateException("planAliasAutoRenew requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Verifies, locally signs, and submits one plan through the ordinary transaction endpoint. */
+    fun submitAliasSetupPlan(
+        request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: AliasPlanBodyNoritoEncoder,
+        frameCodec: AliasEnsureInstructionFrameCodec,
+        transactionBuilder: TransactionBuilder,
+        signer: Signer,
+        feePayment: FeePaymentIntent,
+        creationTimeMs: Long = System.currentTimeMillis(),
+        nonce: Int? = null,
+    ): CompletableFuture<ClientResponse> = AliasPlanApply.signAndSubmit(
+        this,
+        request,
+        plan,
+        bodyEncoder,
+        frameCodec,
+        transactionBuilder,
+        signer,
+        feePayment,
+        creationTimeMs,
+        nonce,
+    )
+
+    /** Verifies with the canonical alias codecs, locally signs, and submits one setup plan. */
+    fun submitAliasSetupPlan(
+        request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        transactionBuilder: TransactionBuilder,
+        signer: Signer,
+        feePayment: FeePaymentIntent,
+        creationTimeMs: Long = System.currentTimeMillis(),
+        nonce: Int? = null,
+    ): CompletableFuture<ClientResponse> = AliasPlanApply.signAndSubmit(
+        this,
+        request,
+        plan,
+        transactionBuilder,
+        signer,
+        feePayment,
+        creationTimeMs,
+        nonce,
+    )
+
+    /** Verifies, locally signs, and submits one lease or auto-renew lifecycle plan. */
+    fun submitAliasLifecyclePlan(
+        request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
+        frameCodec: AliasLifecycleInstructionFrameCodec,
+        transactionBuilder: TransactionBuilder,
+        signer: Signer,
+        feePayment: FeePaymentIntent,
+        creationTimeMs: Long = System.currentTimeMillis(),
+        nonce: Int? = null,
+    ): CompletableFuture<ClientResponse> = AliasLifecyclePlanApply.signAndSubmit(
+        this,
+        request,
+        plan,
+        bodyEncoder,
+        frameCodec,
+        transactionBuilder,
+        signer,
+        feePayment,
+        creationTimeMs,
+        nonce,
+    )
+
+    /** Verifies with canonical alias codecs, locally signs, and submits one lifecycle plan. */
+    fun submitAliasLifecyclePlan(
+        request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        transactionBuilder: TransactionBuilder,
+        signer: Signer,
+        feePayment: FeePaymentIntent,
+        creationTimeMs: Long = System.currentTimeMillis(),
+        nonce: Int? = null,
+    ): CompletableFuture<ClientResponse> = AliasLifecyclePlanApply.signAndSubmit(
+        this,
+        request,
+        plan,
+        transactionBuilder,
+        signer,
+        feePayment,
+        creationTimeMs,
+        nonce,
+    )
+
+    /** Resolves a public numeric alias index. */
+    fun resolveAccountAliasIndex(index: BigInteger): CompletableFuture<Optional<AccountAliasIndexResolution>> {
+        val future = CompletableFuture<Optional<AccountAliasIndexResolution>>()
+        future.completeExceptionally(
+            IllegalStateException("resolveAccountAliasIndex requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Resolves a restricted numeric alias index with canonical request authentication. */
+    fun resolveAccountAliasIndex(
+        index: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasIndexResolution>> {
+        val future = CompletableFuture<Optional<AccountAliasIndexResolution>>()
+        future.completeExceptionally(
+            IllegalStateException("authenticated resolveAccountAliasIndex requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Lists visible aliases bound to an account. */
+    fun listAccountAliases(
+        request: AccountAliasesByAccountRequest,
+    ): CompletableFuture<Optional<AccountAliasesByAccount>> {
+        val future = CompletableFuture<Optional<AccountAliasesByAccount>>()
+        future.completeExceptionally(
+            IllegalStateException("listAccountAliases requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Requests a stateless sponsored-onboarding receipt using a dedicated header token. */
+    fun planSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        onboardingToken: String,
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
+        val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
+        future.completeExceptionally(
+            IllegalStateException("planSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Requests a receipt and pins its signature to the configured onboarding authority. */
+    fun planSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        onboardingToken: String,
+        expectedAuthority: String,
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
+        val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
+        future.completeExceptionally(
+            IllegalStateException("pinned planSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Revalidates and applies a stateless sponsored-onboarding receipt. */
+    fun applySponsoredAccountOnboarding(
+        receipt: AccountOnboardingPlanReceiptV1,
+        onboardingToken: String,
+    ): CompletableFuture<AccountOnboardingResponseV1> {
+        val future = CompletableFuture<AccountOnboardingResponseV1>()
+        future.completeExceptionally(
+            IllegalStateException("applySponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Applies a receipt only when its signature matches the configured onboarding authority. */
+    fun applySponsoredAccountOnboarding(
+        receipt: AccountOnboardingPlanReceiptV1,
+        onboardingToken: String,
+        expectedAuthority: String,
+    ): CompletableFuture<AccountOnboardingResponseV1> {
+        val future = CompletableFuture<AccountOnboardingResponseV1>()
+        future.completeExceptionally(
+            IllegalStateException("pinned applySponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Fetches authenticated, secret-free onboarding readiness diagnostics. */
+    fun getAccountOnboardingReadiness(
+        onboardingToken: String,
+    ): CompletableFuture<AliasSetupReportV1> {
+        val future = CompletableFuture<AliasSetupReportV1>()
+        future.completeExceptionally(
+            IllegalStateException("getAccountOnboardingReadiness requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Lists visible aliases with canonical request authentication. */
+    fun listAccountAliases(
+        request: AccountAliasesByAccountRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<AccountAliasesByAccount>> {
+        val future = CompletableFuture<Optional<AccountAliasesByAccount>>()
+        future.completeExceptionally(
+            IllegalStateException("authenticated listAccountAliases requires a concrete IrohaClient implementation")
         )
         return future
     }

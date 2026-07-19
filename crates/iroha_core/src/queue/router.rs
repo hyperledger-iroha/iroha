@@ -2607,6 +2607,39 @@ fn instruction_transaction_dataspace_target(
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
+    if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
+        return Some(ensure.intent.target().dataspace_id());
+    }
+    if let Some(renew) = any.downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>() {
+        return Some(renew.target.dataspace_id());
+    }
+    if let Some(configure) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
+    {
+        return Some(configure.target.dataspace_id());
+    }
+    if let Some(rebind) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::RebindAccountAlias>()
+    {
+        return Some(rebind.alias.dataspace_id);
+    }
+    if let Some(primary) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
+    {
+        return primary
+            .new_alias
+            .as_ref()
+            .or(primary.expected_alias.as_ref())
+            .map(|alias| alias.dataspace_id)
+            .or_else(|| {
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &primary.account,
+                    state_view.map(state_view_ledger_time_ms),
+                )
+            });
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -3053,6 +3086,33 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
+
+    if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
+        return Some(ensure.intent.target().dataspace_id());
+    }
+    if let Some(renew) = any.downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>() {
+        return Some(renew.target.dataspace_id());
+    }
+    if let Some(configure) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
+    {
+        return Some(configure.target.dataspace_id());
+    }
+    if let Some(rebind) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::RebindAccountAlias>()
+    {
+        return Some(rebind.alias.dataspace_id);
+    }
+    if let Some(primary) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
+    {
+        return primary
+            .new_alias
+            .as_ref()
+            .or(primary.expected_alias.as_ref())
+            .map(|alias| alias.dataspace_id)
+            .or_else(|| account_dataspace_target(Some(world), &primary.account, ledger_time_ms));
+    }
 
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
@@ -5286,6 +5346,7 @@ fn account_alias_permission_scope_dataspace_target_with_state(
             domain_dataspace_target_with_state(domain_id, dataspace_catalog, state_view)
         }
         AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AccountAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
 
@@ -5300,6 +5361,7 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
             domain_dataspace_target_with_world(domain_id, dataspace_catalog, world, ledger_time_ms)
         }
         AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+        AccountAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
 

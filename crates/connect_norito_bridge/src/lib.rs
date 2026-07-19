@@ -41,6 +41,7 @@ use iroha_data_model::{
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
+        decode_instruction_from_pair, framed_instruction_payload,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
@@ -179,6 +180,8 @@ const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
 const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 const ERR_CONNECT_KEYPAIR: c_int = -407;
+const ERR_ACCOUNT_ONBOARDING_BODY: c_int = -408;
+const ERR_ALIAS_INSTRUCTION: c_int = -409;
 const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
@@ -225,6 +228,8 @@ enum BridgeError {
     TransactionSign,
     FeePayment,
     ConnectKeypair,
+    AccountOnboardingBody,
+    AliasInstruction,
     DetachedTransactionScaffold,
     DetachedTransactionSignature,
     CanonicalJson,
@@ -276,6 +281,8 @@ impl BridgeError {
             BridgeError::TransactionSign => ERR_TRANSACTION_SIGN,
             BridgeError::FeePayment => ERR_FEE_PAYMENT,
             BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,
+            BridgeError::AccountOnboardingBody => ERR_ACCOUNT_ONBOARDING_BODY,
+            BridgeError::AliasInstruction => ERR_ALIAS_INSTRUCTION,
             BridgeError::DetachedTransactionScaffold => ERR_DETACHED_TRANSACTION_SCAFFOLD,
             BridgeError::DetachedTransactionSignature => ERR_DETACHED_TRANSACTION_SIGNATURE,
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
@@ -475,10 +482,11 @@ where
     // decode state here would make canonicality depend on whichever protocol
     // was decoded previously on this thread (for example, Connect uses layout
     // flags 0 while Kagemusha archives use packed layouts).
-    let canonical = match {
+    let canonical_result = {
         let _layout = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
         norito::to_bytes(&value)
-    } {
+    };
+    let canonical = match canonical_result {
         Ok(bytes) => Zeroizing::new(bytes),
         Err(_) => {
             cleanup(&mut value);
@@ -552,17 +560,32 @@ unsafe fn write_kagemusha_archive_pair_bridge(
     Ok(())
 }
 
+struct KagemushaArchiveOutput<'a> {
+    ptr: *mut *mut c_uchar,
+    len: *mut c_ulong,
+    bytes: &'a [u8],
+}
+
 unsafe fn write_kagemusha_archive_triple_bridge(
-    first_ptr: *mut *mut c_uchar,
-    first_len: *mut c_ulong,
-    first: &[u8],
-    second_ptr: *mut *mut c_uchar,
-    second_len: *mut c_ulong,
-    second: &[u8],
-    third_ptr: *mut *mut c_uchar,
-    third_len: *mut c_ulong,
-    third: &[u8],
+    first: KagemushaArchiveOutput<'_>,
+    second: KagemushaArchiveOutput<'_>,
+    third: KagemushaArchiveOutput<'_>,
 ) -> BridgeResult<()> {
+    let KagemushaArchiveOutput {
+        ptr: first_ptr,
+        len: first_len,
+        bytes: first,
+    } = first;
+    let KagemushaArchiveOutput {
+        ptr: second_ptr,
+        len: second_len,
+        bytes: second,
+    } = second;
+    let KagemushaArchiveOutput {
+        ptr: third_ptr,
+        len: third_len,
+        bytes: third,
+    } = third;
     clear_bridge_output(first_ptr, first_len);
     clear_bridge_output(second_ptr, second_len);
     clear_bridge_output(third_ptr, third_len);
@@ -5686,6 +5709,187 @@ pub unsafe extern "C" fn connect_norito_detached_transaction_scaffold_finalize_e
     bridge_result_to_code(result)
 }
 
+#[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ConnectAccountOnboardingPlanRequestV1 {
+    version: u8,
+    alias: String,
+    account_id: String,
+    permissions: Vec<String>,
+}
+
+#[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ConnectAccountOnboardingPlanBodyV1 {
+    version: u8,
+    request: ConnectAccountOnboardingPlanRequestV1,
+    authority: AccountId,
+    chain_id: ChainId,
+    anchor: iroha_data_model::alias_setup::AliasPlanAnchorV1,
+    resource: iroha_data_model::alias_setup::AliasPlanResourceV1,
+    acquisition: iroha_data_model::alias_setup::AliasLeaseAcquisitionV1,
+    quote_guard: iroha_data_model::alias_setup::AliasQuoteGuardV1,
+    instructions: Vec<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
+    #[norito(default)]
+    owner_auto_renew_instruction: Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
+    valid_until_ms: u64,
+}
+
+/// Encode an exact sponsored-onboarding plan body from its typed JSON form.
+///
+/// The returned buffer is the bare canonical Norito encoding committed by the
+/// V1 receipt hash. Callers release it with [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_account_onboarding_plan_body_v1(
+    json_ptr: *const c_uchar,
+    json_len: c_ulong,
+    out_body_ptr: *mut *mut c_uchar,
+    out_body_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_body_ptr, out_body_len);
+    let result = (|| {
+        if out_body_ptr.is_null() || out_body_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let json_len = usize::try_from(json_len).map_err(|_| BridgeError::AccountOnboardingBody)?;
+        if json_len == 0 || json_len > DETACHED_TRANSACTION_JSON_MAX_BYTES || json_ptr.is_null() {
+            return Err(BridgeError::AccountOnboardingBody);
+        }
+        let input = unsafe { slice::from_raw_parts(json_ptr, json_len) };
+        let body: ConnectAccountOnboardingPlanBodyV1 =
+            norito::json::from_slice(input).map_err(|_| BridgeError::AccountOnboardingBody)?;
+        if body.version != 1 || body.request.version != 1 {
+            return Err(BridgeError::AccountOnboardingBody);
+        }
+        use norito::codec::Encode as _;
+        let encoded = body.encode();
+        if encoded.is_empty() {
+            return Err(BridgeError::AccountOnboardingBody);
+        }
+        unsafe { write_bytes_bridge(out_body_ptr, out_body_len, &encoded) }
+    })();
+    bridge_result_to_code(result)
+}
+
+fn alias_instruction_json(instruction: &InstructionBox, wire_id: &str) -> BridgeResult<Vec<u8>> {
+    use iroha_data_model::isi::alias_setup::{
+        CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias, RebindAccountAlias,
+        RenewAliasLease,
+    };
+
+    let value = match wire_id {
+        EnsureAlias::WIRE_ID => norito::json::to_value(
+            instruction
+                .as_any()
+                .downcast_ref::<EnsureAlias>()
+                .ok_or(BridgeError::AliasInstruction)?,
+        ),
+        RenewAliasLease::WIRE_ID => norito::json::to_value(
+            instruction
+                .as_any()
+                .downcast_ref::<RenewAliasLease>()
+                .ok_or(BridgeError::AliasInstruction)?,
+        ),
+        ConfigureAliasAutoRenew::WIRE_ID => norito::json::to_value(
+            instruction
+                .as_any()
+                .downcast_ref::<ConfigureAliasAutoRenew>()
+                .ok_or(BridgeError::AliasInstruction)?,
+        ),
+        // These lifecycle operations are registry-validated and canonically
+        // re-encoded even though the current Swift setup planner does not need
+        // their typed payloads.
+        RebindAccountAlias::WIRE_ID => {
+            instruction
+                .as_any()
+                .downcast_ref::<RebindAccountAlias>()
+                .ok_or(BridgeError::AliasInstruction)?;
+            Ok(JsonValue::Null)
+        }
+        CompareAndSetPrimaryAccountAlias::WIRE_ID => {
+            instruction
+                .as_any()
+                .downcast_ref::<CompareAndSetPrimaryAccountAlias>()
+                .ok_or(BridgeError::AliasInstruction)?;
+            Ok(JsonValue::Null)
+        }
+        _ => return Err(BridgeError::AliasInstruction),
+    }
+    .map_err(|_| BridgeError::AliasInstruction)?;
+    let envelope = JsonValue::Object(JsonMap::from_iter([
+        (
+            "schema".into(),
+            JsonValue::from("iroha.alias_instruction_round_trip.v1"),
+        ),
+        ("wire_id".into(), JsonValue::from(wire_id)),
+        ("instruction".into(), value),
+    ]));
+    norito::json::to_vec(&envelope).map_err(|_| BridgeError::AliasInstruction)
+}
+
+/// Registry-decode and canonically re-encode one alias instruction frame.
+///
+/// The frame is accepted only under its exact stable alias wire ID. The first
+/// output is the complete canonical Norito frame; the second is a bounded JSON
+/// envelope carrying the decoded typed payload for Swift-side request binding.
+/// Both outputs are released with [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_alias_instruction_round_trip_v1(
+    wire_id_ptr: *const c_uchar,
+    wire_id_len: c_ulong,
+    framed_payload_ptr: *const c_uchar,
+    framed_payload_len: c_ulong,
+    out_framed_payload_ptr: *mut *mut c_uchar,
+    out_framed_payload_len: *mut c_ulong,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_framed_payload_ptr, out_framed_payload_len);
+    clear_bridge_output(out_json_ptr, out_json_len);
+    let result = (|| {
+        let wire_id_len =
+            usize::try_from(wire_id_len).map_err(|_| BridgeError::AliasInstruction)?;
+        let framed_payload_len =
+            usize::try_from(framed_payload_len).map_err(|_| BridgeError::AliasInstruction)?;
+        if wire_id_ptr.is_null()
+            || wire_id_len == 0
+            || wire_id_len > 256
+            || framed_payload_ptr.is_null()
+            || framed_payload_len == 0
+            || framed_payload_len > DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES
+        {
+            return Err(BridgeError::AliasInstruction);
+        }
+        let wire_id_bytes = unsafe { slice::from_raw_parts(wire_id_ptr, wire_id_len) };
+        let wire_id =
+            std::str::from_utf8(wire_id_bytes).map_err(|_| BridgeError::AliasInstruction)?;
+        let framed_payload =
+            unsafe { slice::from_raw_parts(framed_payload_ptr, framed_payload_len) };
+        let instruction = decode_instruction_from_pair(wire_id, framed_payload)
+            .map_err(|_| BridgeError::AliasInstruction)?;
+        let (canonical_wire_id, canonical_frame) =
+            framed_instruction_payload(&instruction).ok_or(BridgeError::AliasInstruction)?;
+        if canonical_wire_id != wire_id || canonical_frame.is_empty() {
+            return Err(BridgeError::AliasInstruction);
+        }
+        let json = alias_instruction_json(&instruction, wire_id)?;
+        if json.is_empty() || json.len() > DETACHED_TRANSACTION_JSON_MAX_BYTES {
+            return Err(BridgeError::AliasInstruction);
+        }
+        unsafe {
+            write_detached_transaction_pair(
+                out_framed_payload_ptr,
+                out_framed_payload_len,
+                &canonical_frame,
+                out_json_ptr,
+                out_json_len,
+                &json,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
 /// Canonicalize strict JSON and return BLAKE3 over the exact canonical bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_canonical_json_blake3_v1(
@@ -5787,21 +5991,28 @@ where
     encode_asset_transaction_with_nonce(
         chain_id,
         authority,
-        creation_time_ms,
-        ttl_option,
-        None,
+        AssetTransactionTiming {
+            creation_time_ms,
+            ttl: ttl_option,
+            nonce: None,
+        },
         fee_payment,
         private_key,
         build_executable,
     )
 }
 
+#[derive(Clone, Copy)]
+struct AssetTransactionTiming {
+    creation_time_ms: u64,
+    ttl: Option<NonZeroU64>,
+    nonce: Option<NonZeroU32>,
+}
+
 fn encode_asset_transaction_with_nonce<F>(
     chain_id: ChainId,
     authority: AccountId,
-    creation_time_ms: u64,
-    ttl_option: Option<NonZeroU64>,
-    nonce_option: Option<NonZeroU32>,
+    timing: AssetTransactionTiming,
     fee_payment: FeePaymentIntent,
     private_key: PrivateKey,
     build_executable: F,
@@ -5812,9 +6023,9 @@ where
     encode_asset_transaction_with_nonce_and_metadata(
         chain_id,
         authority,
-        creation_time_ms,
-        ttl_option,
-        nonce_option,
+        timing.creation_time_ms,
+        timing.ttl,
+        timing.nonce,
         fee_payment,
         Metadata::default(),
         private_key,
@@ -8282,6 +8493,12 @@ impl KagemushaRequestAuthorizationPlatformV2 {
         }
     }
 
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     fn parse(label: &str) -> BridgeResult<Self> {
         match label {
             iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM => {
@@ -8604,6 +8821,12 @@ fn validate_kagemusha_append_input_cardinality_v2(
     Ok(())
 }
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn validate_kagemusha_optional_branch_presence_v2(
     bundle_present: bool,
     witness_present: bool,
@@ -8835,10 +9058,10 @@ impl KagemushaOutputMembershipPathsV4 {
                 if recipient.update_path.root != self.initial_root {
                     return Err(BridgeError::KagemushaProve);
                 }
-                if let Some(change) = change {
-                    if recipient.leaf_index.checked_add(1) != Some(change.leaf_index) {
-                        return Err(BridgeError::KagemushaProve);
-                    }
+                if let Some(change) = change
+                    && recipient.leaf_index.checked_add(1) != Some(change.leaf_index)
+                {
+                    return Err(BridgeError::KagemushaProve);
                 }
             }
             (KagemushaOutputMembershipOperationV4::RedemptionChange, None, Some(change)) => {
@@ -11988,15 +12211,21 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
             )?;
         unsafe {
             write_kagemusha_archive_triple_bridge(
-                out_authorization_ptr,
-                out_authorization_len,
-                &archive,
-                out_signature_raw_ptr,
-                out_signature_raw_len,
-                &signature_raw,
-                out_authenticator_data_ptr,
-                out_authenticator_data_len,
-                &authenticator_data,
+                KagemushaArchiveOutput {
+                    ptr: out_authorization_ptr,
+                    len: out_authorization_len,
+                    bytes: &archive,
+                },
+                KagemushaArchiveOutput {
+                    ptr: out_signature_raw_ptr,
+                    len: out_signature_raw_len,
+                    bytes: &signature_raw,
+                },
+                KagemushaArchiveOutput {
+                    ptr: out_authenticator_data_ptr,
+                    len: out_authenticator_data_len,
+                    bytes: &authenticator_data,
+                },
             )
         }
     })();
@@ -15076,8 +15305,13 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
 ///
 /// Only pointers returned by a Kagemusha secret-output entrypoint are valid.
 /// Public bridge buffers remain owned by [`connect_norito_free`].
+///
+/// # Safety
+///
+/// `ptr_` must be null or the exact payload pointer returned by a Kagemusha
+/// secret-output entrypoint, and its allocation must remain live.
 #[unsafe(no_mangle)]
-pub extern "C" fn connect_norito_kagemusha_secret_free_buffer(ptr_: *mut c_uchar) {
+pub unsafe extern "C" fn connect_norito_kagemusha_secret_free_buffer(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
             if let Some(base) = clear_kagemusha_secret_allocated_buffer(ptr_) {
@@ -17452,7 +17686,7 @@ mod kagemusha_bridge_tests {
         );
         let result_archive =
             Zeroizing::new(unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() });
-        connect_norito_kagemusha_secret_free_buffer(out_ptr);
+        unsafe { connect_norito_kagemusha_secret_free_buffer(out_ptr) };
 
         let result = decode_canonical_kagemusha_archive::<
             KagemushaRecursiveSpendRedemptionChangePrepareResultV4,
@@ -17556,7 +17790,7 @@ mod kagemusha_bridge_tests {
         unsafe {
             (*header).magic ^= 1;
         }
-        connect_norito_kagemusha_secret_free_buffer(out_ptr);
+        unsafe { connect_norito_kagemusha_secret_free_buffer(out_ptr) };
         assert_eq!(
             unsafe { slice::from_raw_parts(out_ptr, payload.len()) },
             payload
@@ -17565,7 +17799,7 @@ mod kagemusha_bridge_tests {
             (*header).magic = KAGEMUSHA_SECRET_BUFFER_HEADER_MAGIC;
             (*header).len = payload.len() + 1;
         }
-        connect_norito_kagemusha_secret_free_buffer(out_ptr);
+        unsafe { connect_norito_kagemusha_secret_free_buffer(out_ptr) };
         assert_eq!(
             unsafe { slice::from_raw_parts(out_ptr, payload.len()) },
             payload
@@ -17584,7 +17818,7 @@ mod kagemusha_bridge_tests {
         assert!(zeroed_header.iter().all(|byte| *byte == 0));
         unsafe { free(base as *mut _) };
 
-        connect_norito_kagemusha_secret_free_buffer(std::ptr::null_mut());
+        unsafe { connect_norito_kagemusha_secret_free_buffer(std::ptr::null_mut()) };
 
         let oversized =
             vec![0x41; KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4 + 1];
@@ -23507,9 +23741,11 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
-            creation_time_ms,
-            ttl,
-            nonce,
+            AssetTransactionTiming {
+                creation_time_ms,
+                ttl,
+                nonce,
+            },
             fee_payment,
             private_key,
             || {
@@ -23600,9 +23836,11 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
-            creation_time_ms,
-            ttl,
-            nonce,
+            AssetTransactionTiming {
+                creation_time_ms,
+                ttl,
+                nonce,
+            },
             fee_payment,
             private_key,
             || {
@@ -23833,9 +24071,11 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
-            creation_time_ms,
-            ttl,
-            nonce,
+            AssetTransactionTiming {
+                creation_time_ms,
+                ttl,
+                nonce,
+            },
             fee_payment,
             private_key,
             || {
@@ -24051,9 +24291,11 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
-            creation_time_ms,
-            ttl,
-            nonce,
+            AssetTransactionTiming {
+                creation_time_ms,
+                ttl,
+                nonce,
+            },
             fee_payment,
             private_key,
             || {
@@ -26275,7 +26517,7 @@ fn java_native_kagemusha_artifact_set_install_v4(
             review.len(),
             promotion.len(),
         ]
-        .map(|length| c_ulong::try_from(length));
+        .map(c_ulong::try_from);
         let [
             manifest_len,
             policy_len,
@@ -27331,6 +27573,13 @@ where
     }
 }
 
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn kagemusha_branch_claims_conflict_v2(
     left: &iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     right: &iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
@@ -28851,7 +29100,7 @@ fn java_native_kagemusha_project_verify_result_v4(
             artifact_binding,
             result.recipient_request_digest.to_vec(),
             result.request_output_binding_digest.to_vec(),
-            result.verifier_key_id.backend.as_str().as_bytes().to_vec(),
+            result.verifier_key_id.backend.as_bytes().to_vec(),
             result.verifier_key_id.name.as_bytes().to_vec(),
             result.verifier_circuit_id.as_bytes().to_vec(),
             result
@@ -37655,6 +37904,170 @@ mod tests {
                 "noncanonical or negative public Quantity {malformed:?} must fail"
             );
         }
+    }
+
+    #[test]
+    fn account_onboarding_body_bridge_returns_exact_bare_norito() {
+        use iroha_data_model::alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
+            AliasPlanResourceV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        };
+        use norito::codec::Encode as _;
+
+        let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("derive onboarding bridge authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let alias = ResolvedAccountAliasV1::new(
+            "merchant@paynet".parse().expect("account alias"),
+            DataSpaceId::new(7),
+        );
+        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias,
+            target_account: authority.clone(),
+            provision: AccountProvisionV1::Create,
+            role: AccountAliasRoleV1::Primary,
+        });
+        let body = ConnectAccountOnboardingPlanBodyV1 {
+            version: 1,
+            request: ConnectAccountOnboardingPlanRequestV1 {
+                version: 1,
+                alias: "merchant@paynet".to_owned(),
+                account_id: authority.to_string(),
+                permissions: vec!["CanManageAlias".to_owned()],
+            },
+            authority,
+            chain_id: ChainId::from("onboarding-bridge-test"),
+            anchor: AliasPlanAnchorV1 {
+                block_height: 9,
+                block_hash: Hash::new(b"onboarding-bridge-anchor"),
+            },
+            resource: AliasPlanResourceV1 {
+                intent,
+                disposition: AliasPlanDispositionV1::NoOp,
+                quote: None,
+                instruction_index: None,
+            },
+            acquisition: AliasLeaseAcquisitionV1::new(1, None),
+            quote_guard: AliasQuoteGuardV1 {
+                expected_policy_version: 2,
+                expected_payment_asset: "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+                    .parse()
+                    .expect("payment asset"),
+                max_amount: "10".parse::<Quantity>().expect("quantity"),
+                valid_until_ms: 50_000,
+            },
+            instructions: Vec::new(),
+            owner_auto_renew_instruction: None,
+            valid_until_ms: 50_000,
+        };
+        let expected = body.encode();
+        let json = norito::json::to_vec(&body).expect("onboarding body JSON");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_encode_account_onboarding_plan_body_v1(
+                json.as_ptr(),
+                c_ulong::try_from(json.len()).expect("JSON length"),
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, 0);
+        assert!(!out_ptr.is_null());
+        let actual = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn alias_instruction_bridge_registry_decodes_and_reencodes_exact_frame() {
+        use iroha_data_model::{
+            alias_setup::{
+                AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+                AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+            },
+            isi::alias_setup::{EnsureAlias, RenewAliasLease},
+        };
+
+        let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
+            .expect("derive alias bridge account");
+        let instruction = EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: ResolvedAccountAliasV1::new(
+                    "merchant@paynet".parse().expect("account alias"),
+                    DataSpaceId::new(7),
+                ),
+                target_account: AccountId::new(key_pair.public_key().clone()),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Additional,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 2,
+                expected_payment_asset: "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+                    .parse()
+                    .expect("payment asset"),
+                max_amount: "10".parse::<Quantity>().expect("quantity"),
+                valid_until_ms: 50_000,
+            },
+        );
+        let boxed: InstructionBox = instruction.into();
+        let (wire_id, framed) = framed_instruction_payload(&boxed).expect("frame EnsureAlias");
+        assert_eq!(wire_id, EnsureAlias::WIRE_ID);
+
+        let mut out_frame_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_frame_len: c_ulong = 0;
+        let mut out_json_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_json_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_alias_instruction_round_trip_v1(
+                wire_id.as_ptr(),
+                c_ulong::try_from(wire_id.len()).expect("wire ID length"),
+                framed.as_ptr(),
+                c_ulong::try_from(framed.len()).expect("frame length"),
+                &mut out_frame_ptr,
+                &mut out_frame_len,
+                &mut out_json_ptr,
+                &mut out_json_len,
+            )
+        };
+        assert_eq!(status, 0);
+        assert!(!out_frame_ptr.is_null());
+        assert!(!out_json_ptr.is_null());
+        let actual_frame =
+            unsafe { slice::from_raw_parts(out_frame_ptr, out_frame_len as usize).to_vec() };
+        let actual_json =
+            unsafe { slice::from_raw_parts(out_json_ptr, out_json_len as usize).to_vec() };
+        connect_norito_free(out_frame_ptr);
+        connect_norito_free(out_json_ptr);
+        assert_eq!(actual_frame, framed);
+        let decoded_json: JsonValue =
+            norito::json::from_slice(&actual_json).expect("typed alias bridge JSON");
+        assert!(matches!(decoded_json, JsonValue::Object(_)));
+
+        let wrong_wire_id = RenewAliasLease::WIRE_ID;
+        let mut rejected_frame_ptr: *mut c_uchar = ptr::null_mut();
+        let mut rejected_frame_len: c_ulong = 0;
+        let mut rejected_json_ptr: *mut c_uchar = ptr::null_mut();
+        let mut rejected_json_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_alias_instruction_round_trip_v1(
+                wrong_wire_id.as_ptr(),
+                c_ulong::try_from(wrong_wire_id.len()).expect("wire ID length"),
+                framed.as_ptr(),
+                c_ulong::try_from(framed.len()).expect("frame length"),
+                &mut rejected_frame_ptr,
+                &mut rejected_frame_len,
+                &mut rejected_json_ptr,
+                &mut rejected_json_len,
+            )
+        };
+        assert_eq!(status, ERR_ALIAS_INSTRUCTION);
+        assert!(rejected_frame_ptr.is_null());
+        assert_eq!(rejected_frame_len, 0);
+        assert!(rejected_json_ptr.is_null());
+        assert_eq!(rejected_json_len, 0);
     }
 
     struct ResetConfig(AccelerationConfig);

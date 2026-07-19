@@ -141,6 +141,8 @@ fn trust_config(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -287,6 +289,8 @@ async fn network_create() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -735,6 +739,7 @@ async fn ws_fallback_connects_and_handshakes() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1008,6 +1013,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1268,6 +1274,8 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1407,6 +1415,8 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1636,6 +1646,7 @@ async fn update_peers_triggers_immediate_connect() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1776,6 +1787,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1961,6 +1973,7 @@ async fn happy_eyeballs_parallel_dials() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2102,6 +2115,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2311,6 +2325,7 @@ async fn low_topics_do_not_starve_each_other() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2452,6 +2467,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2691,6 +2707,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2963,6 +2980,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
                 peer_gossip_period: PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: PEER_GOSSIP_PERIOD,
                 trust_decay_half_life:
@@ -3307,6 +3325,8 @@ async fn start_network(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3527,6 +3547,8 @@ async fn tls_inbound_listener_smoke() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3680,6 +3702,7 @@ async fn tls_inbound_listener_smoke() {
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:

@@ -38,6 +38,7 @@ p2p_outbound_frame_queue_max_low_frames = 32768
 p2p_subscriber_queue_cap = 65536
 deferred_send_max_per_peer = 8192
 deferred_send_max_bytes_per_peer = 268435456
+deferred_send_max_bytes_total = 134217728
 disconnect_on_post_overflow = false
 
 [torii]
@@ -68,6 +69,10 @@ allowed_headers = [
   "idempotency-key",
   "x-api-token",
   "x-iroha-onboarding-token",
+  "x-iroha-account",
+  "x-iroha-signature",
+  "x-iroha-timestamp-ms",
+  "x-iroha-nonce",
 ]
 exposed_headers = ["etag", "location", "retry-after"]
 
@@ -77,17 +82,22 @@ profile = "writer"
 expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
-[torii.onboarding]
-enabled = true
+[torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
-private_key = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY"
-allowed_permissions = []
+private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
+lease_term_years = 1
+additional_permissions = []
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
+scope = { domain = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
+token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
 enabled = true
 authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
-private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
+private_key_file = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
 asset_definition_id = "xor#universal"
 amount = "25000"
 pow_difficulty_bits = 4
@@ -181,9 +191,10 @@ max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
-# Canonical wire-byte quotas cover four validators plus the shared untrusted-source lane.
-body_bytes = 167772160
-body_source_bytes = 33554432
+# The checked-in baseline covers four validators plus the shared untrusted-source lane.
+# The validator-bundle renderer scales body_bytes to at least (N + 1) * body_source_bytes.
+body_bytes = 173015040
+body_source_bytes = 34603008
 
 [confidential]
 enabled = true

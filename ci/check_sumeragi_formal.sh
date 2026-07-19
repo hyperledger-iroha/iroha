@@ -26,7 +26,10 @@ bash scripts/formal/run_sumeragi_v2_productive_mutation.sh
 bash scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh
 bash scripts/formal/run_sumeragi_v2_progress_mutations.sh
 bash scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh
+bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
+bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
+bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh
 bash scripts/verify_sumeragi_v2.sh
@@ -37,4 +40,4 @@ python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
   --release \
   --evidence target/formal/sumeragi_v2/proof_evidence.json
 
-echo "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/effect-capacity mutations, bounded TLC, trace replay, and production Verus"
+echo "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"

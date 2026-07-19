@@ -18,7 +18,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile iroha3-taira` and patched with deterministic topology+PoPs
 - verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337) and enabling native Torii MCP with the curated public `iroha.*` writer profile
-  plus explicit `nexus.fees.fee_asset_id = "xor#universal"` and `nexus.staking.stake_asset_id = "xor#universal"` overrides. The alias is bound in genesis to the live Taira XOR asset definition `6TEAJqbb8oEPmLncoNiMRbLEK6tw`. Named SoraFS hosts are configured through `[sorafs.gateway.site_bindings]`; Torii validates and caches that file at startup.
+  plus explicit `nexus.fees.fee_asset_id = "xor#universal"` and `nexus.staking.stake_asset_id = "xor#universal"` overrides. The alias is bound in genesis to the live Taira XOR asset definition `6TEAJqbb8oEPmLncoNiMRbLEK6tw`. Named SoraFS hosts are configured through `[sorafs.gateway.site_bindings]`; Torii validates and caches that file at startup. This checked-in generic sample intentionally omits faucet and account-onboarding signers; use `kagami localnet` for a complete runtime-only onboarding bundle.
 - sorafs_sites.json — empty version-1 named-host binding document used by the sample config
 - docker-compose.yml — single-node snippet mounting the config, genesis, and site-binding document
 

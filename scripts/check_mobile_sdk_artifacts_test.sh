@@ -204,7 +204,7 @@ bridge_dir = root / "crates/connect_norito_bridge"
     encoding="utf-8",
 )
 rust_lines = [
-    "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;",
+    "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;",
     *(f'pub unsafe extern "C" fn {symbol}() {{}}' for symbol in c_symbols),
 ]
 for namespace in (
@@ -304,7 +304,7 @@ PLIST
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
-  "native_bridge_abi_version": 20,
+  "native_bridge_abi_version": 21,
   "privacy_production_enabled": false,
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
@@ -318,6 +318,8 @@ PLIST
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
+    "connect_norito_encode_account_onboarding_plan_body_v1",
+    "connect_norito_alias_instruction_round_trip_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
@@ -969,7 +971,7 @@ retired_swift_binding="$TMP_DIR/retired-swift-binding"
 make_fixture "$retired_swift_binding"
 printf '%s\n' 'let retired = "connect_norito_kagemusha_recursive_spend_init_v3"' \
   >>"$retired_swift_binding/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
-run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-20/V4"
+run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-21/V4"
 
 retired_swift_surface="$TMP_DIR/retired-swift-surface"
 make_fixture "$retired_swift_surface"
@@ -984,7 +986,7 @@ retired_bridge_source="$TMP_DIR/retired-bridge-source"
 make_fixture "$retired_bridge_source"
 mkdir -p "$retired_bridge_source/crates/connect_norito_bridge/src"
 cat >"$retired_bridge_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v3() {}
@@ -995,13 +997,13 @@ retired_kotlin_native="$TMP_DIR/retired-kotlin-native"
 make_fixture "$retired_kotlin_native"
 printf '%s\n' 'private external fun nativeArtifactBindingV3()' \
   >>"$retired_kotlin_native/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
-run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-20/V4" --android-only
+run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-21/V4" --android-only
 
 retired_java_native="$TMP_DIR/retired-java-native"
 make_fixture "$retired_java_native"
 printf '%s\n' 'private static native void nativeArtifactBindingV3();' \
   >>"$retired_java_native/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
-run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-20/V4" --android-only
+run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-21/V4" --android-only
 
 retired_rust_jni="$TMP_DIR/retired-rust-jni"
 make_fixture "$retired_rust_jni"
@@ -1012,10 +1014,10 @@ run_expect_fail "$retired_rust_jni" "Rust bridge exposes retired or unexpected K
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
-sed -i.bak 's/"native_bridge_abi_version": 20/"native_bridge_abi_version": 19/' \
+sed -i.bak 's/"native_bridge_abi_version": 21/"native_bridge_abi_version": 20/' \
   "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json"
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
-run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 20"
+run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"

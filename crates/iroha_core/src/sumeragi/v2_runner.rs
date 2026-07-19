@@ -55,7 +55,7 @@ use super::{
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkLimits, require_validator_storage_platform,
+        V2LaneWorkError, V2LaneWorkLimits, require_validator_storage_platform,
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
@@ -509,8 +509,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         network,
         genesis_network,
         block_rx,
-        vote_rx,
-        block_payload_rx,
         lane_relay_rx,
         wake_rx,
         shutdown_signal,
@@ -590,6 +588,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let mut pending_successor_activation = recovered_successor_activation_parent.map(|parent| {
         PendingSuccessorActivation::recovered(parent, verified_context.context().id())
     });
+    let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -602,11 +601,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let context = verified_context.context().clone();
         close_ingress_for_rollover(&ingress_ready, &block_rx);
         block_rx
-            .configure_roster(
+            .configure_roster_for_context(
                 context
                     .roster
                     .iter()
                     .map(|validator| validator.validator.clone()),
+                &context.chain_id,
+                context.da_layout,
             )
             .map_err(ingress_capacity_error)?;
         super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
@@ -828,8 +829,22 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 services.allow_clean_shutdown();
                 return Ok(());
             }
+            // Every retry/continue path returns through this edge-triggered
+            // poll. It rebuilds the live overlays only at its next semantic
+            // deadline or after the published height owner changes.
+            liveness_watchdog.poll(Instant::now());
 
+            // Retry actor-owned output first, but keep servicing bounded
+            // reducer and completion sources while one target is unavailable.
+            // Each producer either transfers its complete fanout into the
+            // corridor or retains the durable/reconstructible semantic source.
+            let _ = services
+                .retry_pending_exact_output()
+                .map_err(V2RunnerError::Service)?;
             services.drain_completions(&mut executor)?;
+            let _ = services
+                .retry_pending_exact_output()
+                .map_err(V2RunnerError::Service)?;
             if !recovering_interrupted_tip {
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
@@ -894,6 +909,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut block_sync_request,
                     body_queue_capacity,
                 )?;
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
                 lane_work.retain_merge_sidecars_for_global_view(
@@ -901,14 +919,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     directive.locked_subject(),
                     directive.decided_subject(),
                 )?;
-                drain_lane_work_ingress(
-                    &vote_rx,
-                    &block_payload_rx,
+                drain_lane_relay_ingress(
                     &lane_relay_rx,
                     &mut lane_work,
                     executor.current_tag().view(),
                     control_queue_capacity,
-                );
+                )?;
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
@@ -916,6 +932,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
             }
 
             if recovering_interrupted_tip {
@@ -926,6 +945,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
             } else {
                 advance_executor(&mut executor, &mut services, control_queue_capacity)?;
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
                 lane_work.retain_merge_sidecars_for_global_view(
@@ -965,11 +987,60 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
 
             if executor.ready_to_finish() {
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
+                let _ = lane_work.service_next_historical_recovery()?;
+                if lane_work.has_pending_historical_recovery() {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
+                let (durable_receipt, durable_artifact) = executor
+                    .durable_finality()
+                    .map(|(receipt, artifact)| (receipt.clone(), artifact.clone()))
+                    .ok_or_else(|| {
+                        V2RunnerError::Service(
+                            "ready Sumeragi v2 executor has no durable finality authority"
+                                .to_owned(),
+                        )
+                    })?;
                 close_ingress_for_rollover(&ingress_ready, &block_rx);
                 lane_work.persist_anchored_sessions()?;
+                let durable_lane_authority =
+                    lane_work.durable_lane_rollover_authority(&durable_artifact)?;
                 lane_work.prune_finalized_merge_sidecars()?;
+                services
+                    .handoff_applied_height_output_to_durable_reconstruction(
+                        &durable_receipt,
+                        &durable_artifact,
+                        &durable_lane_authority,
+                    )
+                    .map_err(V2RunnerError::Service)?;
                 if !recovering_interrupted_tip {
                     dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                }
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
+                services
+                    .handoff_applied_height_output_to_durable_reconstruction(
+                        &durable_receipt,
+                        &durable_artifact,
+                        &durable_lane_authority,
+                    )
+                    .map_err(V2RunnerError::Service)?;
+                if lane_work.has_pending_committed_output_handoff() {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
+                if services
+                    .has_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?
+                {
+                    return Err(V2RunnerError::Service(
+                        "applied-height output remained after durable reconstruction handoff"
+                            .to_owned(),
+                    ));
                 }
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let wal_retirement = output_guard
@@ -1451,16 +1522,12 @@ fn drain_v2_ingress(
             break;
         };
         let (message, sender) = inbound.into_message_and_sender();
-        if matches!(
-            message,
-            BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-        ) {
+        if message.is_lane_local() {
             let _ = lane_work.accept_lane_message(
                 InboundBlockMessage::new(message, sender),
                 executor.current_tag().view(),
             );
+            let _ = lane_work.service_next_historical_recovery()?;
             continue;
         }
         let BlockMessage::V2(message) = message else {
@@ -1531,7 +1598,11 @@ fn drain_v2_ingress(
                             )
                         },
                         |response, permit| {
-                            services.post_to_peer_with_permit(response_peer, response, permit)
+                            services.post_durable_history_response_with_permit(
+                                response_peer,
+                                response,
+                                permit,
+                            )
                         },
                     ) {
                         Ok(()) => {}
@@ -1582,7 +1653,11 @@ fn drain_v2_ingress(
                     output_guard,
                     || block_sync_server.serve(kura, request, &sender, local_key),
                     |response, permit| {
-                        services.post_to_peer_with_permit(response_peer, response, permit)
+                        services.post_durable_history_response_with_permit(
+                            response_peer,
+                            response,
+                            permit,
+                        )
                     },
                 ) {
                     Ok(()) => {}
@@ -1968,10 +2043,22 @@ fn dispatch_lane_work_effects(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    for effect in lane_work.drain_effects(limit.max(1)) {
+    for _ in 0..limit.max(1) {
+        if !services
+            .can_retain_exact_fanout()
+            .map_err(V2RunnerError::Service)?
+        {
+            break;
+        }
+        let Some(effect) = lane_work.drain_effects(1).pop() else {
+            break;
+        };
         match effect {
             V2LaneWorkEffect::PostLaneBlock { peer, message } => services
                 .post_lane_block(peer, message)
+                .map_err(V2RunnerError::Service)?,
+            V2LaneWorkEffect::PostDurableLaneCertificate { peer, certificate } => services
+                .post_durable_lane_certificate(peer, certificate)
                 .map_err(V2RunnerError::Service)?,
             V2LaneWorkEffect::PostNativeAmx { peer, message } => {
                 services.post_native_amx(peer, message);
@@ -2048,24 +2135,14 @@ fn drive_merge_sidecar_recovery(
     Ok(())
 }
 
-fn drain_lane_work_ingress(
-    vote_rx: &std::sync::mpsc::Receiver<InboundBlockMessage>,
-    block_payload_rx: &std::sync::mpsc::Receiver<InboundBlockMessage>,
+fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
     limit: usize,
-) {
+) -> std::result::Result<(), V2LaneWorkError> {
     for _ in 0..limit.max(1) {
         let mut drained = false;
-        if let Ok(message) = vote_rx.try_recv() {
-            let _ = lane_work.accept_lane_message(message, active_view);
-            drained = true;
-        }
-        if let Ok(message) = block_payload_rx.try_recv() {
-            let _ = lane_work.accept_lane_message(message, active_view);
-            drained = true;
-        }
         if let Ok(message) = lane_relay_rx.try_recv() {
             let _ = lane_work.accept_relay_message(message, active_view);
             drained = true;
@@ -2074,6 +2151,8 @@ fn drain_lane_work_ingress(
             break;
         }
     }
+    let _ = lane_work.service_next_historical_recovery()?;
+    Ok(())
 }
 
 /// Fail-closed live-runner error.
@@ -2752,7 +2831,7 @@ mod tests {
     #[test]
     fn finalized_rollover_closes_ingress_before_successor_replay() {
         let ready = AtomicBool::new(true);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");
@@ -2770,6 +2849,65 @@ mod tests {
     }
 
     #[test]
+    fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff() {
+        // This narrow rollover contract starts from a synthesized, internally
+        // consistent Kura receipt/finality artifact. It does not exercise the
+        // QC -> body recovery -> store -> validation -> application pipeline or
+        // claim end-to-end catch-up coverage.
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let context = super::super::v2_worker::tests::production_output_handoff_with_dead_target();
+        publish_applied_runner_status(&context);
+
+        let construction =
+            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+        let ready = AtomicBool::new(false);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure successor ingress");
+        let mut successor_context = context.clone();
+        successor_context.height = successor_context.height.saturating_add(1);
+        let mut successor = runner_status(&successor_context);
+        successor.last_committed_height = context.height;
+        successor.liveness.generation = successor_context.height;
+        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
+            generation: successor.liveness.generation,
+            round: wire::ConsensusRound {
+                context_id: successor.height_context_id,
+                height: successor.height,
+                view: successor.view,
+            },
+            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            age_ms: 0,
+        });
+        let activation = construction.bind(successor.height_context_id);
+        let output_guard = ConsensusOutputGuard::isolated();
+
+        open_ingress_for_active_height(
+            output_guard.as_ref(),
+            &ready,
+            &ingress,
+            Some((activation, successor.clone())),
+        )
+        .expect("dead-target durable handoff permits successor activation");
+
+        assert!(ready.load(Ordering::Acquire));
+        let active = super::super::status::v2_status().expect("active successor status");
+        assert_eq!(active.height, successor.height);
+        assert_eq!(active.last_committed_height, context.height);
+        assert!(matches!(
+            active.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+        close_ingress_for_rollover(&ready, &ingress);
+        super::super::status::clear_v2_status();
+    }
+
+    #[test]
     fn successor_activation_is_published_only_after_ingress_is_open() {
         let _guard = super::super::status::rbc_status_test_guard();
         super::super::status::clear_v2_status();
@@ -2778,7 +2916,7 @@ mod tests {
         let construction =
             PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
         let ready = AtomicBool::new(false);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");
@@ -2864,7 +3002,7 @@ mod tests {
             ));
         let activation = construction.bind(foreign_context_id);
         let rejected_ready = AtomicBool::new(false);
-        let rejected_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        let rejected_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         rejected_ingress
             .configure_roster(std::iter::empty())
             .expect("configure rejected test lane");
@@ -2912,7 +3050,7 @@ mod tests {
         super::super::status::clear_v2_status();
         let (parent_context, _) = context();
         let ready = AtomicBool::new(false);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");
@@ -2991,7 +3129,7 @@ mod tests {
         let activation =
             PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
         let ready = Arc::new(AtomicBool::new(false));
-        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0));
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");
@@ -3089,18 +3227,18 @@ mod tests {
             .map(|validator| validator.validator.clone())
             .collect::<Vec<_>>();
 
-        let count_error = FairV2Ingress::new(6, 3 * 1024, 1024, 0)
+        let count_error = FairV2Ingress::new(8, 3 * 1024, 1024, 0, 0)
             .configure_roster(validators.clone())
-            .expect_err("two validators require seven protected message slots");
+            .expect_err("two validators require nine protected message slots");
         assert!(matches!(
             ingress_capacity_error(count_error),
             V2RunnerError::IngressCapacity {
-                configured: 6,
-                required: 7,
+                configured: 8,
+                required: 9,
             }
         ));
 
-        let byte_error = FairV2Ingress::new(7, 2 * 1024, 1024, 0)
+        let byte_error = FairV2Ingress::new(9, 2 * 1024, 1024, 0, 0)
             .configure_roster(validators)
             .expect_err("two validators and untrusted traffic require three byte partitions");
         assert!(matches!(
@@ -3115,7 +3253,7 @@ mod tests {
     #[test]
     fn ingress_guard_fails_closed_during_unwind() {
         let ready = Arc::new(AtomicBool::new(true));
-        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0));
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");

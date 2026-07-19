@@ -148,15 +148,19 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
-   `torii_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
+   `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
    values in the runtime file. SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
-3. Render the per-validator bundle:
+4. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
-4. Point each validator host at its own generated
-   `dist/taira-validators/<validator-slug>/config.toml`.
+5. Copy each validator's complete generated directory to its host and point the
+   node at `<validator-slug>/config.toml`. The renderer creates bundle and
+   runtime directories with mode `0700`, creates the onboarding/faucet signer
+   and API-token sidecars with mode `0600`, writes only signer paths and the
+   BLAKE3 token digest to peer config, and emits a protective `.gitignore`.
+   It prints sidecar paths but never their contents.
 
 The bundle also contains one shared unsigned `genesis.json` whose dedicated
 topology transaction is rebuilt from the public roster and PoPs, plus
@@ -923,12 +927,14 @@ away from the shipped MCP-enabled config:
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
-     keys and the shared `torii_onboarding_*`, `torii_faucet_*`, and
+     keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `sorafs_council_public_keys`, and
      `sorafs_council_signature_threshold` fields because the checked-in template
      intentionally leaves those deployment values as fail-closed placeholders
-   - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
-   - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
+   - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator-1`
+   - `sudo cp -R dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator-1/`
+   - preserve the generated `0600` modes and update the absolute signer paths
+     in `config.toml` if the bundle moved to a different location
 4. Install the newly built binaries plus the sample systemd unit from
    `configs/soranexus/taira/taira-irohad.service`:
    - install native Inrou prerequisites before enabling the unit, for example
@@ -1067,10 +1073,12 @@ From `../iroha2-block-explorer-web`:
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
      `max_transactions = 96`, `max_payload_bytes = 16777216`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
-     `[sumeragi.queues]` canonical outer-ingress wire-byte budgets
-     `body_bytes = 167772160` and `body_source_bytes = 33554432`, before running
-     public write canaries or scenario sweeps. The aggregate budget covers four
-     authenticated validator sources plus the shared untrusted-source lane.
+     `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
+     `body_bytes = 173015040` and `body_source_bytes = 34603008`, before running
+     public write canaries or scenario sweeps. The four-validator baseline
+     covers every authenticated source plus the shared untrusted-source lane;
+     `render_taira_validator_bundle.py` raises `body_bytes` to at least
+     `(validator_count + 1) * body_source_bytes` for larger legal rosters.
      Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can

@@ -63,136 +63,6 @@ use tokio::{
 };
 use toml::Table;
 
-fn test_sns_lease_payment() -> iroha_primitives::numeric::Quantity {
-    "0.5".parse().expect("valid test payment")
-}
-const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
-const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
-
-fn test_account_alias_name_controller(
-    account: &AccountId,
-) -> Result<iroha::data_model::sns::NameControllerV1> {
-    let address = iroha::data_model::account::AccountAddress::from_account_id(account)?;
-    Ok(iroha::data_model::sns::NameControllerV1::account(&address))
-}
-
-fn test_account_alias_register_request(
-    alias_literal: &str,
-    owner: &AccountId,
-) -> Result<iroha::data_model::sns::RegisterNameRequestV1> {
-    Ok(iroha::data_model::sns::RegisterNameRequestV1 {
-        selector: iroha::data_model::sns::NameSelectorV1 {
-            version: iroha::data_model::sns::NameSelectorV1::VERSION,
-            suffix_id: iroha::data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
-            label: alias_literal.to_owned(),
-        },
-        owner: owner.clone(),
-        controllers: vec![test_account_alias_name_controller(owner)?],
-        term_years: 1,
-        pricing_class_hint: None,
-        payment: iroha::data_model::sns::PaymentProofV1 {
-            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: test_sns_lease_payment(),
-            net_amount: test_sns_lease_payment(),
-            settlement_tx: iroha_primitives::json::Json::from("mock-settlement"),
-            payer: owner.clone(),
-            signature: iroha_primitives::json::Json::from("mock-signature"),
-        },
-        governance: None,
-        metadata: Metadata::default(),
-    })
-}
-
-fn ensure_account_alias_registration_lease(client: &Client, alias_literal: &str) -> Result<()> {
-    if account_alias_registration_lease_visible_to_client(client, alias_literal)? {
-        return Ok(());
-    }
-
-    let request = test_account_alias_register_request(alias_literal, &client.account)?;
-    match client.sns().register(
-        &request,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        Ok(_) => Ok(()),
-        Err(err) if is_duplicate_sns_selector_error(&err) => {
-            if wait_for_account_alias_registration_lease(client, alias_literal)? {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        }
-        Err(err) => Err(err),
-    }
-}
-
-fn account_alias_registration_lease_visible_to_client(
-    client: &Client,
-    alias_literal: &str,
-) -> Result<bool> {
-    match client
-        .sns()
-        .get_name(iroha::sns::SnsNamespacePath::AccountAlias, alias_literal)
-    {
-        Ok(record)
-            if record.owner == client.account
-                && record.status == iroha::data_model::sns::NameStatus::Active =>
-        {
-            Ok(true)
-        }
-        Ok(record) => Err(eyre!(
-            "account alias `{alias_literal}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.account,
-            record.owner,
-            record.status
-        )),
-        Err(_) => Ok(false),
-    }
-}
-
-fn wait_for_account_alias_registration_lease(client: &Client, alias_literal: &str) -> Result<bool> {
-    let deadline = Instant::now() + TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT;
-    while Instant::now() < deadline {
-        if account_alias_registration_lease_visible_to_client(client, alias_literal)? {
-            return Ok(true);
-        }
-        std::thread::sleep(TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_POLL);
-    }
-    account_alias_registration_lease_visible_to_client(client, alias_literal)
-}
-
-fn is_duplicate_sns_selector_error(err: &eyre::Report) -> bool {
-    err.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("selector `") && message.contains(" is already registered")
-    })
-}
-
-fn ensure_account_alias_registration_lease_for_network(
-    network: &Network,
-    alias_literal: &str,
-) -> Result<()> {
-    let clients = network
-        .peers()
-        .iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    let Some((primary, replicas)) = clients.split_first() else {
-        return Ok(());
-    };
-
-    ensure_account_alias_registration_lease(primary, alias_literal)?;
-    for client in replicas {
-        if !wait_for_account_alias_registration_lease(client, alias_literal)? {
-            return Err(eyre!(
-                "account alias `{alias_literal}` SNS lease was not visible to peer `{}` within {:?}",
-                client.torii_url,
-                TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT
-            ));
-        }
-    }
-    Ok(())
-}
-
 const PRIVATE_MODEL_SERVICE_NAME: &str = "portal";
 const PRIVATE_MODEL_SERVICE_VERSION: &str = "1.0.0";
 const PRIVATE_MODEL_ID: &str = "vision_model";
@@ -772,14 +642,15 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let quantity = numeric!(321);
 
-    ensure_domain_registration_lease_for_network(&network, &domain_id)?;
-    ensure_account_alias_registration_lease_for_network(&network, "merchant@universal")?;
-
     let client = network.client();
+    let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
+    let setup_alias = account_alias_setup_instruction(
+        "merchant@universal",
+        &account_id,
+        AccountProvisionV1::Create,
+        AccountAliasRoleV1::Primary,
+    )?;
     let submit_client = client.clone();
-    let submit_domain = domain_id.clone();
-    let submit_account = account_id.clone();
-    let submit_alias = alias.clone();
     let submit_definition = asset_definition_id.clone();
     let submit_asset = asset_id.clone();
     let submit_quantity =
@@ -788,9 +659,8 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         submit_client
             .submit_all_blocking::<InstructionBox>(
                 [
-                    Register::domain(Domain::new(submit_domain)).into(),
-                    Register::account(Account::new(submit_account).with_label(Some(submit_alias)))
-                        .into(),
+                    setup_domain,
+                    setup_alias,
                     Register::asset_definition({
                         let definition_id = submit_definition.clone();
                         AssetDefinition::numeric(definition_id.clone())

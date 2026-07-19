@@ -24,9 +24,22 @@ ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
 
 def test_default_chain_id_targets_public_sumeragi_v2_taira() -> None:
     assert MODULE.DEFAULT_CHAIN_ID == "fc56984b-2be7-431d-840e-21514d1883f0"
-    assert MODULE.derive_canary_uaid(" AABBCC ") == (
-        "uaid:54b79979e70601aa2d9573b9c37778809a62ff3096ed05f940b964752f45cd69"
-    )
+
+
+def test_build_alias_preserves_full_normalized_domain() -> None:
+    assert MODULE.build_alias(
+        "Taira-Rollout_Canary",
+        "ed0123456789ABCDEF",
+        " Wonderland.Universal ",
+    ) == "tairarolloutcanary0123456789abcdef@wonderland.universal"
+
+
+def test_build_alias_expands_single_segment_domain() -> None:
+    assert MODULE.build_alias(
+        "canary",
+        "ed0123456789ABCDEF",
+        "Wonderland",
+    ) == "canary0123456789abcdef@wonderland.universal"
 
 
 def test_pipeline_status_requires_current_nested_shape() -> None:
@@ -140,103 +153,134 @@ def test_pipeline_status_rejects_noncanonical_http_status(monkeypatch) -> None:
         raise AssertionError("noncanonical pipeline-status HTTP code was accepted")
 
 
-def current_onboarding_response(public_key_hex: str, alias: str) -> dict:
+def current_onboarding_receipt(request_payload: dict) -> dict:
     return {
-        "account_id": "sora-test-account",
-        "uaid": MODULE.derive_canary_uaid(public_key_hex),
-        "tx_hash_hex": "ab" * 32,
-        "status": "QUEUED",
-        "lease": {
-            "alias": alias,
-            "dataspace": "universal",
-            "domain": "wonderland.universal",
-            "is_primary": True,
-            "lease_status": "active",
-            "expires_at_ms": 1000,
-            "grace_expires_at_ms": 2000,
-            "redemption_expires_at_ms": 3000,
-            "auto_renew_enabled": False,
+        "body": {
+            "version": 1,
+            "request": dict(request_payload),
+            "authority": "sora-onboarding-authority",
+            "chain_id": MODULE.DEFAULT_CHAIN_ID,
+            "anchor": {"block_height": 1, "block_hash": "11" * 32},
+            "resource": {"disposition": {"kind": "create"}},
+            "acquisition": {"term_years": 1},
+            "quote_guard": {"valid_until_ms": 9999999999999},
+            "instructions": [],
+            "valid_until_ms": 9999999999999,
         },
+        "plan_hash": "22" * 32,
+        "signature": "33" * 64,
     }
 
 
-def test_onboarding_uses_current_universal_account_dto(monkeypatch) -> None:
-    captured = {}
-    public_key_hex = "AABBCC"
+def current_onboarding_apply_response(account_id: str, alias: str) -> dict:
+    return {
+        "account_id": account_id,
+        "alias": alias,
+        "tx_hash_hex": "ab" * 32,
+        "status": "Queued",
+        "disposition": {"kind": "create"},
+    }
+
+
+def test_onboarding_plans_then_applies_exact_receipt(monkeypatch) -> None:
+    captured = []
+    account_id = "sora-test-account"
     alias = "canary@universal"
 
     def fake_http_json(method, url, payload=None, **kwargs):
-        captured.update(method=method, url=url, payload=payload, **kwargs)
-        return 202, current_onboarding_response(public_key_hex, alias)
+        captured.append({"method": method, "url": url, "payload": payload, **kwargs})
+        if url.endswith("/plan"):
+            return 200, current_onboarding_receipt(payload)
+        return 202, current_onboarding_apply_response(account_id, alias)
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
     result = MODULE.onboard_account(
         "https://taira.example",
         alias,
-        public_key_hex,
+        account_id,
         onboarding_token=ONBOARDING_TOKEN,
         permissions=["CanFoo", "", "CanFoo", "CanBar"],
     )
 
     assert result["status"] == "created"
     assert result["response_status"] == 202
-    assert captured == {
+    expected_request = {
+        "version": 1,
+        "alias": alias,
+        "account_id": account_id,
+        "permissions": ["CanBar", "CanFoo"],
+    }
+    expected_receipt = current_onboarding_receipt(expected_request)
+    common = {
         "method": "POST",
-        "url": "https://taira.example/v1/accounts/onboard",
-        "payload": {
-            "alias": alias,
-            "public_key_hex": public_key_hex,
-            "uaid": MODULE.derive_canary_uaid(public_key_hex),
-            "permissions": ["CanFoo", "CanBar"],
-        },
         "headers": {MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER: ONBOARDING_TOKEN},
         "allow_redirects": False,
         "sensitive_value": ONBOARDING_TOKEN,
     }
+    assert captured == [
+        {
+            **common,
+            "url": "https://taira.example/v1/accounts/onboard/plan",
+            "payload": expected_request,
+        },
+        {
+            **common,
+            "url": "https://taira.example/v1/accounts/onboard",
+            "payload": {"receipt": expected_receipt},
+        },
+    ]
+    rendered_requests = json.dumps(captured, sort_keys=True)
+    assert ONBOARDING_TOKEN not in json.dumps([item["payload"] for item in captured])
+    assert "public_key_hex" not in rendered_requests
+    assert "private_key" not in rendered_requests
+    assert result["receipt"] == expected_receipt
 
 
 def test_onboarding_rejects_retired_synchronous_response(monkeypatch) -> None:
-    response = current_onboarding_response("aabbcc", "canary@universal")
-    response["status"] = "Applied"
-    monkeypatch.setattr(
-        MODULE,
-        "_http_json",
-        lambda *_args, **_kwargs: (200, response),
-    )
+    account_id = "sora-test-account"
+    alias = "canary@universal"
+
+    def fake_http_json(_method, url, payload=None, **_kwargs):
+        if url.endswith("/plan"):
+            return 200, current_onboarding_receipt(payload)
+        response = current_onboarding_apply_response(account_id, alias)
+        response["status"] = "Applied"
+        return 200, response
+
+    monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
 
     try:
         MODULE.onboard_account(
             "https://taira.example",
-            "canary@universal",
-            "aabbcc",
+            alias,
+            account_id,
             onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
-        assert "status=200" in str(error)
+        assert "unexpected account onboarding apply status" in str(error)
     else:  # pragma: no cover
         raise AssertionError("retired synchronous onboarding was accepted")
 
 
-def test_onboarding_rejects_mismatched_uaid(monkeypatch) -> None:
-    response = current_onboarding_response("aabbcc", "canary@universal")
-    response["uaid"] = "uaid:" + "01" * 32
-    monkeypatch.setattr(
-        MODULE,
-        "_http_json",
-        lambda *_args, **_kwargs: (202, response),
-    )
+def test_onboarding_rejects_substituted_receipt_request(monkeypatch) -> None:
+    def fake_http_json(_method, _url, payload=None, **_kwargs):
+        receipt = current_onboarding_receipt(payload)
+        receipt["body"]["request"]["alias"] = "substituted@universal"
+        return 200, receipt
+
+    monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
 
     try:
         MODULE.onboard_account(
             "https://taira.example",
             "canary@universal",
-            "aabbcc",
+            "sora-test-account",
             onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
-        assert "does not match" in str(error)
+        assert "differs from the submitted intent" in str(error)
     else:  # pragma: no cover
-        raise AssertionError("mismatched onboarding UAID was accepted")
+        raise AssertionError("substituted onboarding receipt was accepted")
 
 
 @pytest.mark.parametrize(
@@ -320,7 +364,7 @@ def test_onboarding_http_refuses_redirect_and_sends_one_header(monkeypatch) -> N
                 req.full_url,
                 307,
                 "Temporary Redirect",
-                {"Location": "https://redirect.example/v1/accounts/onboard"},
+                {"Location": "https://redirect.example/v1/accounts/onboard/plan"},
                 io.BytesIO(f"server echoed {ONBOARDING_TOKEN}".encode()),
             )
 
@@ -332,7 +376,7 @@ def test_onboarding_http_refuses_redirect_and_sends_one_header(monkeypatch) -> N
 
     status, body = MODULE._http_json(
         "POST",
-        "https://taira.example/v1/accounts/onboard",
+        "https://taira.example/v1/accounts/onboard/plan",
         {"alias": "canary@universal"},
         headers={
             MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): "stale-duplicate",

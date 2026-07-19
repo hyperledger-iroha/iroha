@@ -48,6 +48,9 @@ Contracts API (locally signed deployment)
   deployment private key.
 - Clients upload/finalize bytecode, register a locally signed manifest, and
   submit `CommitContractDeployment` through the standard transaction pipeline.
+- Client tooling records the result as `DeployContractBundleReceiptDto`: its
+  `contracts[]` entries preserve the per-contract address, hashes, nonce, and
+  outcome instead of flattening a multi-contract deployment into one response.
 - The commit instruction atomically checks the expected deployment nonce and
   previous alias target before activation or rotation.
 - Related reads:

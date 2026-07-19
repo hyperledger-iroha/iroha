@@ -17,6 +17,7 @@ use iroha_data_model::{
     alias::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
+    alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
     domain::DomainId,
     name::Name,
     nexus::DataSpaceId,
@@ -175,6 +176,31 @@ fn authority_has_permission(
     false
 }
 
+fn resolved_account_alias_from_numeric(
+    world: &impl WorldReadOnly,
+    alias: &AccountAlias,
+) -> Option<ResolvedAccountAliasV1> {
+    let literal = alias.to_literal(world.dataspace_catalog()).ok()?;
+    let canonical_name = literal.parse::<AccountAliasName>().ok()?;
+    Some(ResolvedAccountAliasV1::new(canonical_name, alias.dataspace))
+}
+
+fn authority_has_exact_alias_permission<T>(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &ResolvedAccountAliasV1,
+    permission: impl FnOnce(AccountAliasPermissionScope) -> T,
+) -> bool
+where
+    T: Into<Permission>,
+{
+    authority_has_permission(
+        world,
+        authority,
+        &permission(AccountAliasPermissionScope::Alias(alias.clone())).into(),
+    )
+}
+
 /// Return `true` when the authority holds the exact permission required to resolve `alias`.
 ///
 /// Domain-qualified aliases require their exact domain permission. Dataspace permission applies
@@ -185,6 +211,13 @@ pub fn authority_can_resolve_account_alias(
     authority: &AccountId,
     alias: &AccountAlias,
 ) -> bool {
+    if let Some(resolved) = resolved_account_alias_from_numeric(world, alias)
+        && authority_has_exact_alias_permission(world, authority, &resolved, |scope| {
+            CanResolveAccountAlias { scope }
+        })
+    {
+        return true;
+    }
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(Some(domain_id)) => {
             let domain_permission: Permission = CanResolveAccountAlias {
@@ -204,12 +237,43 @@ pub fn authority_can_resolve_account_alias(
     }
 }
 
+/// Return `true` when the authority may resolve an exact resolved account alias.
+///
+/// Exact alias permission is checked before applicable domain or dataspace scope.
+pub fn authority_can_resolve_resolved_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &ResolvedAccountAliasV1,
+) -> bool {
+    if authority_has_exact_alias_permission(world, authority, alias, |scope| {
+        CanResolveAccountAlias { scope }
+    }) {
+        return true;
+    }
+    let scope = match alias.canonical_name.domain_id() {
+        Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
+        None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
+    };
+    authority_has_permission(
+        world,
+        authority,
+        &Permission::from(CanResolveAccountAlias { scope }),
+    )
+}
+
 /// Return `true` when the authority holds the exact permissions required to mutate `alias`.
 pub fn authority_can_manage_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &AccountAlias,
 ) -> bool {
+    if let Some(resolved) = resolved_account_alias_from_numeric(world, alias)
+        && authority_has_exact_alias_permission(world, authority, &resolved, |scope| {
+            CanManageAccountAlias { scope }
+        })
+    {
+        return true;
+    }
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(domain_id) => authority_can_manage_account_alias_scope(
             world,
@@ -219,6 +283,30 @@ pub fn authority_can_manage_account_alias(
         ),
         Err(_) => false,
     }
+}
+
+/// Return `true` when the authority may mutate an exact resolved account alias.
+///
+/// Exact alias permission is checked before applicable domain or dataspace scope.
+pub fn authority_can_manage_resolved_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &ResolvedAccountAliasV1,
+) -> bool {
+    if authority_has_exact_alias_permission(world, authority, alias, |scope| {
+        CanManageAccountAlias { scope }
+    }) {
+        return true;
+    }
+    let scope = match alias.canonical_name.domain_id() {
+        Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
+        None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
+    };
+    authority_has_permission(
+        world,
+        authority,
+        &Permission::from(CanManageAccountAlias { scope }),
+    )
 }
 
 /// Return `true` when `authority` holds account-alias management permission for an explicit

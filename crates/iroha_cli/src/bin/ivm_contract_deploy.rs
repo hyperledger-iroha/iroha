@@ -229,13 +229,13 @@ fn resolve_alias_dataspace(
     if let Some(dataspace_id) = dataspace_id {
         return Ok(DataSpaceId::new(dataspace_id));
     }
-    match alias.dataspace_segment() {
-        "universal" => Ok(DataSpaceId::UNIVERSAL),
-        "governance" => Ok(DataSpaceId::new(1)),
-        "zk" => Ok(DataSpaceId::new(2)),
-        other => Err(eyre!(
-            "unsupported dataspace alias `{other}`; pass --dataspace-id for non-standard dataspaces"
-        )),
+    if alias.dataspace_segment() == "universal" {
+        Ok(DataSpaceId::UNIVERSAL)
+    } else {
+        Err(eyre!(
+            "dataspace alias `{}` has no built-in numeric mapping; pass the catalog-resolved --dataspace-id",
+            alias.dataspace_segment()
+        ))
     }
 }
 
@@ -396,6 +396,25 @@ mod tests {
             .expect("IVM contract deploy fixture key advertises a valid algorithm");
 
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
+    }
+
+    #[test]
+    fn alias_dataspace_resolution_has_no_embedded_catalog_ids() -> Result<()> {
+        let universal: ContractAlias = "router::universal".parse()?;
+        assert_eq!(
+            resolve_alias_dataspace(&universal, None)?,
+            DataSpaceId::UNIVERSAL
+        );
+
+        let governance: ContractAlias = "router::governance".parse()?;
+        let error = resolve_alias_dataspace(&governance, None)
+            .expect_err("non-reserved aliases require a catalog-resolved id");
+        assert!(error.to_string().contains("--dataspace-id"));
+        assert_eq!(
+            resolve_alias_dataspace(&governance, Some(17))?,
+            DataSpaceId::new(17)
+        );
+        Ok(())
     }
 
     #[test]

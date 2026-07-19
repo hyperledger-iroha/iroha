@@ -1305,7 +1305,6 @@ enum ComposerInstructionKind {
     MintAsset,
     BurnAsset,
     TransferAsset,
-    RegisterDomain,
     RegisterAccount,
     RegisterAssetDefinition,
     PublishSpaceDirectoryManifest,
@@ -1322,7 +1321,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::MintAsset => "Mint asset",
             ComposerInstructionKind::BurnAsset => "Burn asset",
             ComposerInstructionKind::TransferAsset => "Transfer asset",
-            ComposerInstructionKind::RegisterDomain => "Register domain",
             ComposerInstructionKind::RegisterAccount => "Register account",
             ComposerInstructionKind::RegisterAssetDefinition => "Register asset definition",
             ComposerInstructionKind::PublishSpaceDirectoryManifest => {
@@ -1341,7 +1339,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::MintAsset => InstructionPermission::MintAsset,
             ComposerInstructionKind::BurnAsset => InstructionPermission::BurnAsset,
             ComposerInstructionKind::TransferAsset => InstructionPermission::TransferAsset,
-            ComposerInstructionKind::RegisterDomain => InstructionPermission::RegisterDomain,
             ComposerInstructionKind::RegisterAccount => InstructionPermission::RegisterAccount,
             ComposerInstructionKind::RegisterAssetDefinition => {
                 InstructionPermission::RegisterAssetDefinition
@@ -1369,14 +1366,11 @@ enum ComposerTemplate {
     BurnRoseFromSigner,
     TransferRoseToTeammate,
     TransferRoseImplicitReceive,
-    RegisterDomainSideGarden,
     RegisterAccountForDomain,
     RegisterAssetDefinitionLily,
     SpaceDirectoryAxtTouch,
     SpaceDirectoryAmxHandle,
     PinManifestSample,
-    GrantCanRegisterDomain,
-    RevokeCanRegisterDomain,
     AdmissionPolicyImplicitReceive,
     AdmissionPolicyExplicitOnly,
     MultisigProposeSample,
@@ -1401,14 +1395,11 @@ impl ComposerTemplate {
             ComposerTemplate::BurnRoseFromSigner => "Burn rose sample",
             ComposerTemplate::TransferRoseToTeammate => "Transfer rose sample",
             ComposerTemplate::TransferRoseImplicitReceive => "Implicit receive sample",
-            ComposerTemplate::RegisterDomainSideGarden => "Register domain sample",
             ComposerTemplate::RegisterAccountForDomain => "Register account sample",
             ComposerTemplate::RegisterAssetDefinitionLily => "Register asset def. sample",
             ComposerTemplate::SpaceDirectoryAxtTouch => "AXT touch manifest",
             ComposerTemplate::SpaceDirectoryAmxHandle => "AMX handle manifest",
             ComposerTemplate::PinManifestSample => "Pin manifest sample",
-            ComposerTemplate::GrantCanRegisterDomain => "Grant registrar role",
-            ComposerTemplate::RevokeCanRegisterDomain => "Revoke registrar role",
             ComposerTemplate::AdmissionPolicyImplicitReceive => "Implicit receive policy",
             ComposerTemplate::AdmissionPolicyExplicitOnly => "Explicit-only policy",
             ComposerTemplate::MultisigProposeSample => "Multisig propose sample",
@@ -1432,9 +1423,6 @@ impl ComposerTemplate {
             ComposerTemplate::TransferRoseImplicitReceive => {
                 "Prefill a transfer that targets a new account to demo implicit receive."
             }
-            ComposerTemplate::RegisterDomainSideGarden => {
-                "Suggest registering the sample `side_garden` domain."
-            }
             ComposerTemplate::RegisterAccountForDomain => {
                 "Suggest registering `carol` in the selected signer's domain."
             }
@@ -1449,12 +1437,6 @@ impl ComposerTemplate {
             }
             ComposerTemplate::PinManifestSample => {
                 "Prefill a sample SoraFS pin manifest registration."
-            }
-            ComposerTemplate::GrantCanRegisterDomain => {
-                "Grant a sample registrar role (`can_register_domain`) to another signer."
-            }
-            ComposerTemplate::RevokeCanRegisterDomain => {
-                "Revoke the registrar role from the sample teammate account."
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 "Prefill an implicit-receive policy with caps, fee, and default role."
@@ -1478,7 +1460,6 @@ impl ComposerTemplate {
             ComposerTemplate::TransferRoseToTeammate,
             ComposerTemplate::TransferRoseImplicitReceive,
         ];
-        const REGISTER_DOMAIN: &[ComposerTemplate] = &[ComposerTemplate::RegisterDomainSideGarden];
         const REGISTER_ACCOUNT: &[ComposerTemplate] = &[ComposerTemplate::RegisterAccountForDomain];
         const REGISTER_ASSET_DEF: &[ComposerTemplate] =
             &[ComposerTemplate::RegisterAssetDefinitionLily];
@@ -1487,8 +1468,8 @@ impl ComposerTemplate {
             ComposerTemplate::SpaceDirectoryAmxHandle,
         ];
         const PIN_MANIFEST: &[ComposerTemplate] = &[ComposerTemplate::PinManifestSample];
-        const GRANT_ROLE: &[ComposerTemplate] = &[ComposerTemplate::GrantCanRegisterDomain];
-        const REVOKE_ROLE: &[ComposerTemplate] = &[ComposerTemplate::RevokeCanRegisterDomain];
+        const GRANT_ROLE: &[ComposerTemplate] = &[];
+        const REVOKE_ROLE: &[ComposerTemplate] = &[];
         const ADMISSION_POLICY: &[ComposerTemplate] = &[
             ComposerTemplate::AdmissionPolicyImplicitReceive,
             ComposerTemplate::AdmissionPolicyExplicitOnly,
@@ -1499,7 +1480,6 @@ impl ComposerTemplate {
             ComposerInstructionKind::MintAsset => MINT,
             ComposerInstructionKind::BurnAsset => BURN,
             ComposerInstructionKind::TransferAsset => TRANSFER,
-            ComposerInstructionKind::RegisterDomain => REGISTER_DOMAIN,
             ComposerInstructionKind::RegisterAccount => REGISTER_ACCOUNT,
             ComposerInstructionKind::RegisterAssetDefinition => REGISTER_ASSET_DEF,
             ComposerInstructionKind::PublishSpaceDirectoryManifest => SPACE_DIRECTORY,
@@ -1610,11 +1590,6 @@ impl ComposerTemplate {
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
             }
-            ComposerTemplate::RegisterDomainSideGarden => {
-                app.composer_instruction_kind = ComposerInstructionKind::RegisterDomain;
-                app.composer_domain_id = "side_garden".to_owned();
-                app.last_info = Some("Loaded domain registration template.".to_owned());
-            }
             ComposerTemplate::RegisterAccountForDomain => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
                 app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
@@ -1649,40 +1624,6 @@ impl ComposerTemplate {
                     draft_fixture_payload(COMPOSER_DRAFT_PIN_MANIFEST, "request");
                 app.composer_space_directory_manifest_json.clear();
                 app.last_info = Some("Loaded pin manifest template.".to_owned());
-            }
-            ComposerTemplate::GrantCanRegisterDomain => {
-                app.composer_instruction_kind = ComposerInstructionKind::GrantRole;
-                app.composer_role_id = "can_register_domain".to_owned();
-                let recipient = signers
-                    .iter()
-                    .find(|candidate| {
-                        Some(candidate.account_id()) != signer.map(SigningAuthority::account_id)
-                    })
-                    .or_else(|| development_signing_authorities().get(1))
-                    .unwrap_or_else(|| {
-                        development_signing_authorities()
-                            .first()
-                            .expect("development authorities must not be empty")
-                    });
-                app.composer_role_account = account_literal(recipient.account_id());
-                app.last_info = Some("Loaded role grant template.".to_owned());
-            }
-            ComposerTemplate::RevokeCanRegisterDomain => {
-                app.composer_instruction_kind = ComposerInstructionKind::RevokeRole;
-                app.composer_role_id = "can_register_domain".to_owned();
-                let recipient = signers
-                    .iter()
-                    .find(|candidate| {
-                        Some(candidate.account_id()) != signer.map(SigningAuthority::account_id)
-                    })
-                    .or_else(|| development_signing_authorities().get(1))
-                    .unwrap_or_else(|| {
-                        development_signing_authorities()
-                            .first()
-                            .expect("development authorities must not be empty")
-                    });
-                app.composer_role_account = account_literal(recipient.account_id());
-                app.last_info = Some("Loaded role revoke template.".to_owned());
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
@@ -2313,7 +2254,6 @@ struct MochiApp {
     composer_nonce_value: u32,
     composer_selected_signer: Option<usize>,
     composer_destination_account: String,
-    composer_domain_id: String,
     composer_account_id: String,
     composer_asset_definition_id: String,
     composer_asset_definition_mintable: Mintable,
@@ -2575,7 +2515,6 @@ impl MochiApp {
             composer_nonce_value: 1,
             composer_selected_signer: None,
             composer_destination_account: String::new(),
-            composer_domain_id: String::new(),
             composer_account_id: String::new(),
             composer_asset_definition_id: String::new(),
             composer_asset_definition_mintable: Mintable::Infinitely,
@@ -10464,11 +10403,10 @@ impl MochiApp {
     }
 
     fn render_composer_build_step(&mut self, ui: &mut egui::Ui, supervisor: &Supervisor) {
-        const COMMON_KINDS: [ComposerInstructionKind; 6] = [
+        const COMMON_KINDS: [ComposerInstructionKind; 5] = [
             ComposerInstructionKind::MintAsset,
             ComposerInstructionKind::BurnAsset,
             ComposerInstructionKind::TransferAsset,
-            ComposerInstructionKind::RegisterDomain,
             ComposerInstructionKind::RegisterAccount,
             ComposerInstructionKind::RegisterAssetDefinition,
         ];
@@ -10564,16 +10502,6 @@ impl MochiApp {
             ui.small(
                 "Implicit receives follow the domain admission policy (caps, fees, default role).",
             );
-        }
-
-        if matches!(
-            self.composer_instruction_kind,
-            ComposerInstructionKind::RegisterDomain
-        ) {
-            ui.horizontal(|ui| {
-                ui.label("Domain ID");
-                ui.text_edit_singleline(&mut self.composer_domain_id);
-            });
         }
 
         if matches!(
@@ -11252,15 +11180,6 @@ impl MochiApp {
                     return;
                 }
                 InstructionDraft::transfer_from_input(&asset, &quantity, &destination)
-            }
-            ComposerInstructionKind::RegisterDomain => {
-                let domain = self.composer_domain_id.trim().to_owned();
-                self.composer_domain_id = domain.clone();
-                if domain.is_empty() {
-                    self.composer_error = Some("Domain identifier is required.".to_owned());
-                    return;
-                }
-                InstructionDraft::register_domain_from_input(&domain)
             }
             ComposerInstructionKind::RegisterAccount => {
                 let account = self.composer_account_id.trim().to_owned();
@@ -15468,9 +15387,9 @@ mod tests {
     #[test]
     fn add_instruction_respects_signer_permissions() {
         let mut app = MochiApp::default();
-        app.composer_instruction_kind = ComposerInstructionKind::RegisterDomain;
-        app.composer_domain_id = "side_garden".to_owned();
-        // Bob is the second development signer and lacks register-domain permission.
+        app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
+        app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
+        // Bob is the second development signer and lacks register-account permission.
         app.composer_selected_signer = Some(1);
         app.add_instruction_to_batch(None);
         assert!(
@@ -15479,7 +15398,7 @@ mod tests {
         );
         let message = app.composer_error.as_deref().unwrap_or_default().to_owned();
         assert!(
-            message.contains("cannot register domains"),
+            message.contains("cannot register accounts"),
             "expected permission error, got `{message}`"
         );
     }

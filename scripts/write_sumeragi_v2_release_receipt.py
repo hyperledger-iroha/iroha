@@ -105,7 +105,8 @@ _IDENTITY_KEYS = {
     "cargo_lock_sha256",
 }
 _FORMAL_FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
 _CHAOS_MARKER = (
@@ -186,12 +187,12 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 204
+_PRODUCTION_TEST_COUNT = 289
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
-        "kura::tests::progress_witness_durability",
-        11,
+        "kura::tests",
+        12,
     ),
     (
         "production-kura-lane-geometry",
@@ -201,42 +202,57 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        8,
+        22,
     ),
-    ("production-v2-core", "sumeragi::v2_core::tests", 14),
+    ("production-v2-core", "sumeragi::v2_core::tests", 15),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 24),
+    ("production-v2-adapter", "sumeragi::v2::tests", 31),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 46),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 15),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 20),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 52),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 20),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 23),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 11),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 19),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 12),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 27),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
-        16,
+        18,
     ),
     (
         "production-v2-integration-runner",
         "sumeragi_v2_runner",
+        4,
+    ),
+    (
+        "production-p2p-peer-reliable-flush",
+        "peer::run::tests",
+        9,
+    ),
+    (
+        "production-p2p-network-reliable-actor",
+        "network::tests",
+        24,
+    ),
+    (
+        "production-irohad-authenticated-via",
+        "tests::relay_fairness",
         1,
     ),
 )
-_PRODUCTION_INTEGRATION_TEST = (
-    "sumeragi_v2_runner::prepare_qc_split_tests::"
-    "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one"
-)
+_PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
 _DATA_STATUS_TEST = (
     "block::consensus_v2::tests::"
     "status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry"
+)
+_DATA_LANE_CERTIFICATE_TEST = (
+    "block::consensus::tests::lane_block_certificate_decodes_atomically_from_slice"
 )
 _TAIRA_CONTRACT_TESTS = (
     "taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile",
@@ -287,7 +303,16 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
         len(tests) != _PRODUCTION_TEST_COUNT
         or len(set(tests)) != _PRODUCTION_TEST_COUNT
         or any(
-            not test.startswith(("sumeragi::", "sumeragi_v2_runner::", "kura::"))
+            not test.startswith(
+                (
+                    "sumeragi::",
+                    "sumeragi_v2_runner::",
+                    "kura::",
+                    "peer::",
+                    "network::",
+                    "tests::relay_fairness::",
+                )
+            )
             for test in tests
         )
     ):
@@ -298,20 +323,30 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
     return tests
 
 
+def _production_module_command(module: str) -> str:
+    if module == "sumeragi_v2_runner":
+        return (
+            "cargo test --locked -p integration_tests --test "
+            "sumeragi_v2_runner_isolated "
+            f"{_PRODUCTION_INTEGRATION_MODULE} -- --test-threads=1"
+        )
+    if module in {"peer::run::tests", "network::tests"}:
+        return f"cargo test --locked -p iroha_p2p --lib {module} -- --test-threads=1"
+    if module == "tests::relay_fairness":
+        return (
+            "cargo test --locked -p irohad --bin irohad "
+            f"{module} -- --test-threads=1"
+        )
+    return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"
+
+
 def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs = [
         (
             leg_id,
-            "cargo-exact" if module == "sumeragi_v2_runner" else "cargo-module",
+            "cargo-module",
             count,
-            (
-                "cargo test --locked -p integration_tests --test "
-                "sumeragi_v2_runner_isolated "
-                f"{_PRODUCTION_INTEGRATION_TEST} -- --exact --test-threads=1"
-                if module == "sumeragi_v2_runner"
-                else f"cargo test --locked -p iroha_core --lib {module} "
-                "-- --test-threads=1"
-            ),
+            _production_module_command(module),
         )
         for leg_id, module, count in _PRODUCTION_MODULES
     ]
@@ -322,6 +357,15 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             1,
             "cargo test --locked -p iroha_data_model --lib "
             f"{_DATA_STATUS_TEST} -- --test-threads=1",
+        )
+    )
+    legs.append(
+        (
+            "lane-certificate-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked -p iroha_data_model --lib "
+            f"{_DATA_LANE_CERTIFICATE_TEST} -- --exact --test-threads=1",
         )
     )
     legs.extend(
@@ -436,7 +480,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                477,
+                570,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -3309,8 +3353,8 @@ def _corridor_artifacts(
     logs: list[Path] = []
     module_for_leg = {leg_id: module for leg_id, module, _ in _PRODUCTION_MODULES}
     exact_cargo_tests: dict[str, tuple[str, ...]] = {
-        "production-v2-integration-runner": (_PRODUCTION_INTEGRATION_TEST,),
         "status-rust": (_DATA_STATUS_TEST,),
+        "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
     }
     exact_cargo_tests.update(

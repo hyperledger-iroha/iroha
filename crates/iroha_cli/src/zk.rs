@@ -2628,14 +2628,11 @@ fn vk_submission_client(client: &Client, prepared: &PreparedVkSubmission) -> Res
     Ok(workflow_client)
 }
 
-fn vk_submission_key_pair(
-    prepared: &PreparedVkSubmission,
-) -> Result<iroha::crypto::KeyPair> {
+fn vk_submission_key_pair(prepared: &PreparedVkSubmission) -> Result<iroha::crypto::KeyPair> {
     let key_pair = iroha::crypto::KeyPair::from_private_key(prepared.private_key.0.clone())
         .wrap_err("failed to derive VK submission public key")?;
-    let derived_authority = iroha::data_model::account::AccountId::new(
-        key_pair.public_key().clone(),
-    );
+    let derived_authority =
+        iroha::data_model::account::AccountId::new(key_pair.public_key().clone());
     if derived_authority != prepared.authority {
         eyre::bail!("VK submission private_key does not match authority");
     }

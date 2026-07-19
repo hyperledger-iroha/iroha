@@ -426,6 +426,7 @@ fn minimal_config_snapshot() {
                 deferred_send_ttl: 1.5s,
                 deferred_send_max_per_peer: 256,
                 deferred_send_max_bytes_per_peer: 33554432,
+                deferred_send_max_bytes_total: 134217728,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -515,14 +516,14 @@ fn minimal_config_snapshot() {
                 allow_cidrs: [],
                 deny_cidrs: [],
                 disconnect_on_post_overflow: true,
-                max_frame_bytes: 16777216,
+                max_frame_bytes: 17825820,
                 tcp_nodelay: true,
                 tcp_keepalive: Some(
                     60s,
                 ),
-                max_frame_bytes_consensus: 16777216,
-                max_frame_bytes_control: 131072,
-                max_frame_bytes_block_sync: 16777216,
+                max_frame_bytes_consensus: 17825792,
+                max_frame_bytes_control: 2097152,
+                max_frame_bytes_block_sync: 17825792,
                 max_frame_bytes_tx_gossip: 262144,
                 max_frame_bytes_peer_gossip: 65536,
                 max_frame_bytes_health: 32768,
@@ -1365,7 +1366,7 @@ fn minimal_config_snapshot() {
                     cache_max_age: 30s,
                     retry_after: 1s,
                 },
-                onboarding: None,
+                account_onboarding: None,
                 faucet: None,
                 kagemusha_commands: None,
                 ram_lfe: None,
@@ -1516,9 +1517,9 @@ fn minimal_config_snapshot() {
                 },
                 queues: SumeragiQueues {
                     commands: 1024,
-                    bodies: 256,
-                    body_bytes: 167772160,
-                    body_source_bytes: 33554432,
+                    bodies: 514,
+                    body_bytes: 173015040,
+                    body_source_bytes: 34603008,
                     chunks: 2048,
                     ready_bodies: 128,
                 },
@@ -1649,7 +1650,6 @@ fn minimal_config_snapshot() {
                     max_pending_relays: 1024,
                     retry_backoff: 5s,
                     max_retry_attempts: 10,
-                    budget_refresh_interval_blocks: 10,
                 },
                 hf_shared_leases: NexusHfSharedLeases {
                     drain_grace: 5s,
@@ -4243,14 +4243,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("sumeragi.queues should be configured");
     assert_eq!(
         queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(160 * 1024 * 1024),
+        Some(165 * 1024 * 1024),
         "Taira aggregate canonical wire-byte budget should isolate its five ingress source lanes"
     );
     assert_eq!(
         queues
             .get("body_source_bytes")
             .and_then(TomlValue::as_integer),
-        Some(32 * 1024 * 1024),
+        Some(33 * 1024 * 1024),
         "Taira should retain one canonical outer-ingress wire-byte quota per authenticated source"
     );
 
@@ -4446,7 +4446,7 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 64 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
-        16 * 1024 * 1024
+        17 * 1024 * 1024
     );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
@@ -4475,11 +4475,11 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must be at least sumeragi.block.max_payload_bytes + 65536 bytes of envelope headroom + 65536 reserved timeout-vote bytes (minimum 16908288, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate two sumeragi.block.max_payload_bytes envelopes + 65536 bytes of fixed headroom per envelope + 33800 recommended payload-completion manifest wire bytes + 65536 reserved timeout-vote bytes (minimum 33784840, configured 16777216)",
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum 67108864, configured 67108863)",
+            "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum 69206016, configured 69206015)",
         ),
         (
             "bad.sumeragi_empty_hsm_provider.toml",
@@ -4636,6 +4636,33 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
 }
 
 #[test]
+fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
+    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_811_581;
+
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES.get(),
+        17 * 1024 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert!(
+        defaults::network::MAX_FRAME_BYTES.get() > MAX_CERTIFIED_BODY_RESPONSE_BYTES,
+        "the encrypted frame cap must retain room for the P2P wrapper and AEAD overhead"
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+        2 * 1024 * 1024,
+        "consensus-safety proposals and timeout certificates use the control topic"
+    );
+}
+
+#[test]
 fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
@@ -4651,14 +4678,18 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         16 * 1024 * 1024,
     );
     assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 256);
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 514);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT + 2
+    );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-        160 * 1024 * 1024
+        165 * 1024 * 1024
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-        32 * 1024 * 1024
+        33 * 1024 * 1024
     );
     assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
     assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
@@ -4676,11 +4707,11 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 256);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 160 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 514);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 165 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
-        32 * 1024 * 1024
+        33 * 1024 * 1024
     );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);

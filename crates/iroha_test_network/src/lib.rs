@@ -52,17 +52,24 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
 };
 #[cfg(test)]
-use iroha_data_model::da::commitment::DaProofPolicyBundle;
+use iroha_data_model::{
+    da::commitment::DaProofPolicyBundle,
+    isi::register::RegisterBox,
+};
 use iroha_data_model::{
     ChainId,
-    account::{AccountAddress, AccountId},
+    account::AccountId,
+    alias_setup::{
+        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+        AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+        AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+    },
     block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
     domain::NewDomain,
     isi::{
         InstructionBox, SetParameter,
-        register::RegisterBox,
+        alias_setup::EnsureAlias,
         set_instruction_registry,
-        sns::RegisterSnsName,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     metadata::Metadata,
@@ -73,9 +80,7 @@ use iroha_data_model::{
             SumeragiNposParameters, consensus_metadata,
         },
     },
-    sns::{
-        DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
-    },
+    sns::NameStatus,
     transaction::Executable,
     transaction::signed::TransactionResultInner,
     trigger::DataTriggerSequence,
@@ -114,6 +119,8 @@ use crate::config::ensure_genesis_results_with_runtime_config;
 pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 
 const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
+const TEST_SNS_POLICY_VERSION: u16 = 1;
+const TEST_SNS_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
@@ -142,75 +149,130 @@ pub fn genesis_factory_with_post_topology(
     )
 }
 
-fn test_domain_name_controller(account: &AccountId) -> Result<NameControllerV1> {
-    let address = AccountAddress::from_account_id(account)
-        .map_err(|err| eyre!("convert account `{account}` to SNS controller: {err}"))?;
-    Ok(NameControllerV1::account(&address))
-}
-
-fn test_domain_register_request(
-    domain: &DomainId,
-    owner: &AccountId,
-) -> Result<RegisterNameRequestV1> {
-    test_domain_register_request_for_owner_payer(domain, owner, owner)
-}
-
-fn test_domain_register_request_for_owner_payer(
-    domain: &DomainId,
-    owner: &AccountId,
-    payer: &AccountId,
-) -> Result<RegisterNameRequestV1> {
-    let domain_label = domain.to_string();
-    Ok(RegisterNameRequestV1 {
-        selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
-            .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
-        owner: owner.clone(),
-        controllers: vec![test_domain_name_controller(owner)?],
-        term_years: 1,
-        pricing_class_hint: None,
-        payment: PaymentProofV1 {
-            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
-            net_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
-            settlement_tx: Json::from("mock-settlement"),
-            payer: payer.clone(),
-            signature: Json::from("mock-signature"),
-        },
-        governance: None,
-        metadata: Metadata::default(),
+fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
+    iroha_core::sns::dataspace_id_for_sns_alias(domain.dataspace().as_ref()).ok_or_else(|| {
+        eyre!(
+            "derive deterministic dataspace id for domain `{domain}`; pass an explicit id for a static catalog mapping"
+        )
     })
 }
 
-/// Build the SNS lease instruction required before a runtime domain registration.
-pub fn domain_registration_lease_instruction_for_owner_payer(
+fn test_domain_setup_instruction(
     domain: &DomainId,
+    dataspace_id: DataSpaceId,
     owner: &AccountId,
-    payer: &AccountId,
+) -> Result<EnsureAlias> {
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(domain.clone(), dataspace_id),
+            owner: owner.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    ))
+}
+
+/// Build one declarative instruction that ensures a domain and its lease state.
+pub fn domain_setup_instruction_in_dataspace(
+    domain: &DomainId,
+    dataspace_id: DataSpaceId,
+    owner: &AccountId,
 ) -> Result<InstructionBox> {
-    Ok(
-        RegisterSnsName::new(test_domain_register_request_for_owner_payer(
-            domain, owner, payer,
-        )?)
-        .into(),
+    Ok(test_domain_setup_instruction(domain, dataspace_id, owner)?.into())
+}
+
+/// Build one declarative instruction for a deterministically mapped domain.
+pub fn domain_setup_instruction(domain: &DomainId, owner: &AccountId) -> Result<InstructionBox> {
+    domain_setup_instruction_in_dataspace(domain, test_domain_dataspace_id(domain)?, owner)
+}
+
+/// Build one declarative dataspace-alias setup instruction.
+pub fn dataspace_setup_instruction(
+    alias: &str,
+    dataspace_id: DataSpaceId,
+    owner: &AccountId,
+) -> Result<InstructionBox> {
+    let canonical_name = alias
+        .parse()
+        .wrap_err_with(|| format!("parse test dataspace alias `{alias}`"))?;
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: ResolvedDataSpaceV1::new(canonical_name, dataspace_id),
+            owner: owner.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    )
+    .into())
+}
+
+/// Build one declarative account-alias setup instruction with an explicit dataspace mapping.
+pub fn account_alias_setup_instruction_in_dataspace(
+    alias_literal: &str,
+    dataspace_id: DataSpaceId,
+    target_account: &AccountId,
+    provision: AccountProvisionV1,
+    role: AccountAliasRoleV1,
+) -> Result<InstructionBox> {
+    let canonical_name = alias_literal
+        .parse::<AccountAliasName>()
+        .wrap_err_with(|| format!("parse test account alias `{alias_literal}`"))?;
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: ResolvedAccountAliasV1::new(canonical_name, dataspace_id),
+            target_account: target_account.clone(),
+            provision,
+            role,
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    )
+    .into())
+}
+
+/// Build one declarative account-alias setup instruction for a deterministically mapped alias.
+pub fn account_alias_setup_instruction(
+    alias_literal: &str,
+    target_account: &AccountId,
+    provision: AccountProvisionV1,
+    role: AccountAliasRoleV1,
+) -> Result<InstructionBox> {
+    let parsed = alias_literal
+        .parse::<AccountAliasName>()
+        .wrap_err_with(|| format!("parse test account alias `{alias_literal}`"))?;
+    let dataspace_id = iroha_core::sns::dataspace_id_for_sns_alias(parsed.dataspace.as_ref())
+        .ok_or_else(|| eyre!("derive deterministic dataspace id for alias `{alias_literal}`"))?;
+    account_alias_setup_instruction_in_dataspace(
+        alias_literal,
+        dataspace_id,
+        target_account,
+        provision,
+        role,
     )
 }
 
-/// Build the SNS lease instruction required before a runtime domain registration.
-pub fn domain_registration_lease_instruction(
-    domain: &DomainId,
-    owner: &AccountId,
-) -> Result<InstructionBox> {
-    domain_registration_lease_instruction_for_owner_payer(domain, owner, owner)
-}
-
-fn is_duplicate_sns_selector_error(err: &Report) -> bool {
-    err.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("selector `") && message.contains(" is already registered")
-    })
-}
-
-fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_label = domain.to_string();
     match client
         .sns()
@@ -229,9 +291,19 @@ fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainI
     }
 }
 
-fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.query(FindDomains::new()).execute_all() {
-        Ok(domains) => domains.into_iter().any(|existing| existing.id() == domain),
+        Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
+            Some(existing) if existing.owned_by() == &client.account => true,
+            Some(existing) => {
+                return Err(eyre!(
+                    "domain `{domain}` is owned by `{}`, not setup authority `{}`",
+                    existing.owned_by(),
+                    client.account
+                ));
+            }
+            None => false,
+        },
         Err(err) => {
             let report = Report::from(err);
             if torii_request_error_is_transient(&report) {
@@ -247,61 +319,59 @@ fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Re
             }
         }
     };
-    if domain_exists {
-        return Ok(true);
-    }
-    domain_registration_lease_visible_to_client(client, domain)
+    domain_exists
+        .then(|| domain_alias_record_visible_to_client(client, domain))
+        .transpose()
+        .map(|visible| visible.unwrap_or(false))
 }
 
-fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<bool> {
+fn wait_for_domain_setup(client: &Client, domain: &DomainId) -> Result<bool> {
     let deadline = Instant::now() + TEST_SNS_LEASE_VISIBILITY_TIMEOUT;
     while Instant::now() < deadline {
-        if domain_registration_ready_to_client(client, domain)? {
+        if domain_setup_ready_to_client(client, domain)? {
             return Ok(true);
         }
         std::thread::sleep(TEST_SNS_LEASE_VISIBILITY_POLL);
     }
-    domain_registration_ready_to_client(client, domain)
+    domain_setup_ready_to_client(client, domain)
 }
 
-/// Ensure a runtime domain registration has the SNS lease required by the executor.
-pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
-    if domain_registration_ready_to_client(client, domain)? {
+/// Ensure a domain and all of its lease-derived state in one ordinary transaction.
+pub fn ensure_domain_setup_in_dataspace(
+    client: &Client,
+    domain: &DomainId,
+    dataspace_id: DataSpaceId,
+) -> Result<()> {
+    if domain_setup_ready_to_client(client, domain)? {
         return Ok(());
     }
 
-    let request = test_domain_register_request(domain, &client.account)?;
     match client.submit_blocking(
-        RegisterSnsName::new(request),
+        test_domain_setup_instruction(domain, dataspace_id, &client.account)?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
         Ok(_) => {
-            if wait_for_domain_registration_lease(client, domain)? {
+            if wait_for_domain_setup(client, domain)? {
                 Ok(())
             } else {
                 Err(eyre!(
-                    "domain `{domain}` SNS lease was not visible within {:?}",
+                    "domain `{domain}` declarative setup was not visible within {:?}",
                     TEST_SNS_LEASE_VISIBILITY_TIMEOUT
                 ))
-            }
-        }
-        Err(err) if is_duplicate_sns_selector_error(&err) => {
-            if wait_for_domain_registration_lease(client, domain)? {
-                Ok(())
-            } else {
-                Err(err)
             }
         }
         Err(err) => Err(err),
     }
 }
 
+/// Ensure a domain whose dataspace uses the deterministic dynamic mapping.
+pub fn ensure_domain_setup(client: &Client, domain: &DomainId) -> Result<()> {
+    ensure_domain_setup_in_dataspace(client, domain, test_domain_dataspace_id(domain)?)
+}
+
 /// Ensure a runtime domain registration has the SNS lease required by the executor on every peer
 /// in a test network.
-pub fn ensure_domain_registration_lease_for_network(
-    network: &Network,
-    domain: &DomainId,
-) -> Result<()> {
+pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> Result<()> {
     let mut peers = network.peers().iter().collect::<Vec<_>>();
     peers.sort_by(|left, right| left.id().cmp(&right.id()));
     let clients = peers
@@ -312,11 +382,11 @@ pub fn ensure_domain_registration_lease_for_network(
         return Ok(());
     };
 
-    ensure_domain_registration_lease(primary, domain)?;
+    ensure_domain_setup(primary, domain)?;
     for client in replicas {
-        if !wait_for_domain_registration_lease(client, domain)? {
+        if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
+                "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
                 client.torii_url,
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
@@ -325,131 +395,33 @@ pub fn ensure_domain_registration_lease_for_network(
     Ok(())
 }
 
-fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainId>) -> Result<()> {
-    let mut registrations = Vec::new();
-    for domain in domains {
-        if domain_registration_ready_to_client(client, domain)? {
-            continue;
-        }
-        let request = test_domain_register_request(domain, &client.account)?;
-        registrations.push(RegisterSnsName::new(request));
+/// Ensure a runtime domain declaratively.
+pub fn submit_ensure_domain(client: &Client, domain: NewDomain) -> Result<()> {
+    if domain.logo.is_some() || !domain.metadata.is_empty() {
+        return Err(eyre!(
+            "declarative test domain setup requires empty immutable metadata and no logo"
+        ));
     }
-
-    if !registrations.is_empty() {
-        match client.submit_all_blocking(
-            registrations,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            Ok(_) => {}
-            Err(err) if is_duplicate_sns_selector_error(&err) => {
-                for domain in domains {
-                    ensure_domain_registration_lease(client, domain)?;
-                }
-                return Ok(());
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    for domain in domains {
-        if !wait_for_domain_registration_lease(client, domain)? {
-            return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible within {:?}",
-                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-            ));
-        }
-    }
-
-    Ok(())
+    ensure_domain_setup(client, &domain.id)
 }
 
-/// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
-pub fn ensure_domain_registration_leases_for_executable(
-    client: &Client,
-    executable: &Executable,
-) -> Result<()> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-    let mut domains = BTreeSet::new();
-    for instruction in instructions {
-        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
-            continue;
-        };
-        if let RegisterBox::Domain(register_domain) = register {
-            domains.insert(register_domain.object.id.clone());
-        }
-    }
-    ensure_domain_registration_leases(client, &domains)
-}
-
-/// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
-/// executable.
-pub fn ensure_domain_registration_leases_for_network_executable(
-    network: &Network,
-    executable: &Executable,
-) -> Result<()> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-    let mut domains = BTreeSet::new();
-    for instruction in instructions {
-        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
-            continue;
-        };
-        if let RegisterBox::Domain(register_domain) = register {
-            domains.insert(register_domain.object.id.clone());
-        }
-    }
-
-    let mut peers = network.peers().iter().collect::<Vec<_>>();
-    peers.sort_by(|left, right| left.id().cmp(&right.id()));
-    let clients = peers
-        .into_iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    let Some((primary, replicas)) = clients.split_first() else {
-        return Ok(());
-    };
-
-    ensure_domain_registration_leases(primary, &domains)?;
-    for client in replicas {
-        for domain in &domains {
-            if !wait_for_domain_registration_lease(client, domain)? {
-                return Err(eyre!(
-                    "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
-                    client.torii_url,
-                    TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Register a runtime domain after provisioning its required SNS lease.
-pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
-    ensure_domain_registration_lease(client, &domain.id)?;
-    client.submit_blocking(
-        Register::domain(domain),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    Ok(())
-}
-
-/// Register a runtime domain after provisioning its required SNS lease on every peer in a test
-/// network.
-pub fn submit_register_domain_with_network_lease(
+/// Ensure a runtime domain declaratively and wait for every peer to observe it.
+pub fn submit_ensure_domain_for_network(
     network: &Network,
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    ensure_domain_registration_lease_for_network(network, &domain.id)?;
-    client.submit_blocking(
-        Register::domain(domain),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    Ok(())
+    if client.account != network.client().account {
+        return Err(eyre!(
+            "network domain setup must be submitted by the network client authority"
+        ));
+    }
+    if domain.logo.is_some() || !domain.metadata.is_empty() {
+        return Err(eyre!(
+            "declarative test domain setup requires empty immutable metadata and no logo"
+        ));
+    }
+    ensure_domain_setup_for_network(network, &domain.id)
 }
 
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);

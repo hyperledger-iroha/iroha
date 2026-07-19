@@ -3846,6 +3846,7 @@ mod tests {
 deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer: defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,

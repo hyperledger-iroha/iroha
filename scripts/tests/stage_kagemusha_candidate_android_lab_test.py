@@ -124,7 +124,7 @@ class Fixture:
             "source_tree_sha256": SOURCE.tree_sha256,
             "source_repo_dirty": False,
             "generation": "candidate.test.v4",
-            "bridge_abi_version": 20,
+            "bridge_abi_version": 21,
             "artifact_count": 8,
             "artifacts": artifacts,
             "topup_finality_roster_file_name": stage.ROSTER_NAME,

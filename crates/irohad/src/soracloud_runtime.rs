@@ -273,13 +273,10 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             )
         }
         .map_err(|error| {
-            eyre::eyre!(
-                "quote internal Soracloud runtime mutation at `{endpoint}`: {error}"
-            )
+            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error}")
         })?;
         payload.fee_payment = quote.recommended_intent;
-        let tx =
-            sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;
+        let tx = sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;
         let (max_clock_drift, transaction_params, crypto) = {
             let world = self.state.world_view();
             let params = world.parameters();
@@ -15599,7 +15596,8 @@ mod tests {
     }
 
     #[test]
-    fn soracloud_runtime_submission_payload_binds_fee_intent_without_legacy_metadata() -> Result<()> {
+    fn soracloud_runtime_submission_payload_binds_fee_intent_without_legacy_metadata() -> Result<()>
+    {
         let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
         let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
         let payload = build_soracloud_runtime_submission_payload(

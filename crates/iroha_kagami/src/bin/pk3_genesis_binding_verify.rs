@@ -49,7 +49,7 @@ struct Receipt {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    match run(args) {
+    match run(&args) {
         Ok(receipt) => match norito::json::to_json(&receipt) {
             Ok(json) => {
                 println!("{json}");
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(args: Args) -> Result<Receipt, String> {
+fn run(args: &Args) -> Result<Receipt, String> {
     let (policy_bytes, policy_metadata) = read_owner_file(&args.genesis, "policy genesis")?;
     let (signed_bytes, _) = read_owner_file(&args.signed_genesis, "signed genesis")?;
 

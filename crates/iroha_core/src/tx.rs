@@ -991,24 +991,38 @@ fn instruction_self_registers_authority(
     registration.clone().build(authority).id == *authority
 }
 
-pub(crate) fn allows_unregistered_authority(
-    executable: &Executable,
-    authority: &AccountId,
-) -> bool {
+/// Return whether the executable's first instruction registers its exact authority.
+///
+/// Self-registering transactions are the only single-signature transactions that may enter
+/// admission before their authority exists in world state. Keeping this recognition in Core lets
+/// pre-admission services, such as fee quoting, apply the same instruction-shape rule.
+#[must_use]
+pub fn executable_self_registers_authority(executable: &Executable, authority: &AccountId) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
             let Some((first, _rest)) = instructions.split_first() else {
                 return false;
             };
 
-            if instruction_self_registers_authority(first, authority) {
-                return true;
-            }
-
-            instructions_allow_multisig_envelope_authority(instructions)
+            instruction_self_registers_authority(first, authority)
         }
         Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
+}
+
+/// Return whether admission may accept an authority that is absent from world state.
+///
+/// This includes exact first-instruction account self-registration and the existing multisig
+/// proposal envelope path, whose authorisation is established from multisig membership rather
+/// than a materialised authority account.
+#[must_use]
+pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
+    executable_self_registers_authority(executable, authority)
+        || matches!(
+            executable,
+            Executable::Instructions(instructions)
+                if instructions_allow_multisig_envelope_authority(instructions)
+        )
 }
 
 pub(crate) fn instructions_allow_multisig_envelope_authority(
@@ -6882,6 +6896,46 @@ pub mod tests {
             }
             other => panic!("expected AccountDoesNotExist rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unregistered_authority_predicates_require_exact_first_self_registration() {
+        let (authority, _) = gen_account_in("wonderland");
+        let (other, _) = gen_account_in("wonderland");
+        let exact = Executable::Instructions(
+            vec![
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+                InstructionBox::from(Log::new(Level::INFO, "after registration".into())),
+            ]
+            .into(),
+        );
+        assert!(executable_self_registers_authority(&exact, &authority));
+        assert!(allows_unregistered_authority(&exact, &authority));
+
+        let registers_other = Executable::Instructions(
+            vec![InstructionBox::from(Register::account(Account::new(other)))].into(),
+        );
+        assert!(!executable_self_registers_authority(
+            &registers_other,
+            &authority
+        ));
+        assert!(!allows_unregistered_authority(&registers_other, &authority));
+
+        let registration_is_not_first = Executable::Instructions(
+            vec![
+                InstructionBox::from(Log::new(Level::INFO, "before registration".into())),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            ]
+            .into(),
+        );
+        assert!(!executable_self_registers_authority(
+            &registration_is_not_first,
+            &authority
+        ));
+        assert!(!allows_unregistered_authority(
+            &registration_is_not_first,
+            &authority
+        ));
     }
 
     #[test]

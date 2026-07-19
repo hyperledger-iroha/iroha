@@ -84,7 +84,9 @@ use crate::{
         Execute as _, code,
         ivm::cache::{ExecutableProgramSummary, IvmCache},
     },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{
+        StateReadOnly, StateTransaction, WorldReadOnly, fee_sponsor_revision_safe_activation_height,
+    },
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
 // NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
@@ -1358,6 +1360,48 @@ fn select_fee_sponsor_relay_lease(
     })
 }
 
+fn select_fee_sponsor_relay_leases(
+    world: &impl WorldReadOnly,
+    program_id: &FeeSponsorProgramId,
+    program_revision: u64,
+    route_dataspace_id: Option<DataSpaceId>,
+    admission_height: u64,
+    charges: &[FeeChargeBound],
+) -> Result<BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>, NexusFeeAdmissionError> {
+    let mut required_by_asset = BTreeMap::<AssetDefinitionId, Quantity>::new();
+    for charge in charges {
+        let current = required_by_asset
+            .get(&charge.asset_definition_id)
+            .cloned()
+            .unwrap_or_else(Quantity::zero);
+        required_by_asset.insert(
+            charge.asset_definition_id.clone(),
+            checked_quantity_add(&current, &charge.max_bound, "relay spend-lease charge")?,
+        );
+    }
+
+    let mut selections = BTreeMap::new();
+    for (asset_definition_id, required) in required_by_asset {
+        let (record, remaining) = select_fee_sponsor_relay_lease(
+            world,
+            program_id,
+            program_revision,
+            &asset_definition_id,
+            route_dataspace_id,
+            admission_height,
+            &required,
+        )?;
+        selections.insert(
+            asset_definition_id,
+            FeeSponsorRelayLeaseCapacity {
+                lease_id: record.lease_id,
+                remaining,
+            },
+        );
+    }
+    Ok(selections)
+}
+
 /// Reject account-paid receipt settlement until authority balances have an
 /// authenticated source-lock protocol equivalent to sponsor spend leases.
 ///
@@ -1432,6 +1476,15 @@ pub struct FeeSponsorCapacity {
     pub beneficiary_epoch_remaining: Quantity,
 }
 
+/// Exact proof-bound spend lease selected for one sponsored fee asset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeeSponsorRelayLeaseCapacity {
+    /// Canonical lease selected for the program revision, asset, and route.
+    pub lease_id: iroha_crypto::Hash,
+    /// Remaining verified allocation on the lease before this quote.
+    pub remaining: Quantity,
+}
+
 /// Read-only deterministic fee quote shared by queue admission and Torii.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeAdmissionQuote {
@@ -1441,10 +1494,12 @@ pub struct FeeAdmissionQuote {
     pub debit_source: FeeDebitSource,
     /// Active immutable sponsor revision, when sponsored.
     pub program_revision: Option<u64>,
-    /// Canonically selected proof-bound spend lease for receipt-lane settlement.
-    pub relay_lease_id: Option<iroha_crypto::Hash>,
-    /// Remaining verified allocation on the selected lease before this quote.
-    pub relay_lease_remaining: Option<Quantity>,
+    /// Canonically selected proof-bound spend lease for each sponsored fee asset.
+    ///
+    /// This map is populated only for receipt-lane settlement. All charge
+    /// components using the same asset share one selection and consume its
+    /// aggregate maximum.
+    pub relay_leases: BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>,
     /// Per-asset sponsor capacity snapshot, empty for authority payment.
     pub capacities: BTreeMap<AssetDefinitionId, FeeSponsorCapacity>,
     /// Exact authority balance buckets observed for account-paid charges.
@@ -1634,7 +1689,19 @@ fn resolve_fee_sponsor_program(
     let due_revision = program
         .scheduled_activation
         .filter(|activation| activation.activate_at_height <= block_height)
-        .map(|activation| activation.revision);
+        .map(|activation| {
+            fee_sponsor_revision_safe_activation_height(
+                world,
+                program_id,
+                activation.revision,
+                block_height,
+                block_height,
+            )
+            .map(|safe_height| (safe_height == block_height).then_some(activation.revision))
+            .map_err(NexusFeeAdmissionError::ConfigInvalid)
+        })
+        .transpose()?
+        .flatten();
     let effective_revision = due_revision.or(program.active_revision);
     let lifecycle_accepts = program.lifecycle == FeeSponsorProgramLifecycle::Active
         || (due_revision.is_some()
@@ -3465,8 +3532,7 @@ fn evaluate_nexus_fee_admission_payload(
                 charges,
                 debit_source: FeeDebitSource::Account(payload.authority.clone()),
                 program_revision: None,
-                relay_lease_id: None,
-                relay_lease_remaining: None,
+                relay_leases: BTreeMap::new(),
                 capacities: BTreeMap::new(),
                 authority_balances,
                 authority_charge_assets,
@@ -3490,35 +3556,25 @@ fn evaluate_nexus_fee_admission_payload(
                 next_block_height,
                 &charges,
             )?;
-            let (relay_lease_id, relay_lease_remaining) = if nexus.fees.settlement_mode
+            let relay_leases = if nexus.fees.settlement_mode
                 == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
             {
-                charges
-                    .iter()
-                    .find(|charge| charge.kind == FeeChargeKind::Nexus)
-                    .map(|charge| {
-                        select_fee_sponsor_relay_lease(
-                            world,
-                            program_id,
-                            program_revision,
-                            &charge.asset_definition_id,
-                            route_dataspace_id,
-                            next_block_height,
-                            &charge.max_bound,
-                        )
-                        .map(|(record, remaining)| (Some(record.lease_id), Some(remaining)))
-                    })
-                    .transpose()?
-                    .unwrap_or((None, None))
+                select_fee_sponsor_relay_leases(
+                    world,
+                    program_id,
+                    program_revision,
+                    route_dataspace_id,
+                    next_block_height,
+                    &charges,
+                )?
             } else {
-                (None, None)
+                BTreeMap::new()
             };
             Ok(FeeAdmissionQuote {
                 charges,
                 debit_source: FeeDebitSource::SponsorProgram(program_id.clone()),
                 program_revision: Some(program_revision),
-                relay_lease_id,
-                relay_lease_remaining,
+                relay_leases,
                 capacities,
                 authority_balances: BTreeMap::new(),
                 authority_charge_assets: BTreeMap::new(),
@@ -3599,8 +3655,7 @@ fn fee_exempt_admission_quote(payload: &TransactionPayload) -> FeeAdmissionQuote
         charges: Vec::new(),
         debit_source,
         program_revision,
-        relay_lease_id: None,
-        relay_lease_remaining: None,
+        relay_leases: BTreeMap::new(),
         capacities: BTreeMap::new(),
         authority_balances: BTreeMap::new(),
         authority_charge_assets: BTreeMap::new(),
@@ -3692,6 +3747,14 @@ pub fn quote_nexus_fee_admission(
     )
 }
 
+/// Return whether fee processing is running inside the chain's initial genesis block.
+///
+/// The empty committed-block history keeps a genesis-shaped header replayed against live state
+/// subject to ordinary signed fee limits.
+fn is_initial_genesis_context(state_transaction: &StateTransaction<'_, '_>) -> bool {
+    state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()
+}
+
 pub(crate) fn quote_external_nexus_fee_admission(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -3720,19 +3783,22 @@ pub(crate) fn quote_external_nexus_fee_admission(
 /// Revalidate the exact signed fee intent against the state used for block execution.
 ///
 /// Queue reservations are an availability optimization, not consensus
-/// authority. Every execution path, including overlay application, must run
-/// this check before applying business effects so a block producer cannot
-/// bypass signed maxima, sponsor rules, budgets, or payer balance checks.
+/// authority. Except for the authentic initial genesis bootstrap, every
+/// execution path, including overlay application, must run this check before
+/// applying business effects so a block producer cannot bypass signed maxima,
+/// sponsor rules, budgets, or payer balance checks.
 pub(crate) fn validate_transaction_fee_admission(
     state_transaction: &mut StateTransaction<'_, '_>,
     transaction: &SignedTransaction,
 ) -> Result<(), ValidationFail> {
-    if fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    ) {
+    if is_initial_genesis_context(state_transaction)
+        || fee_exempt_transaction(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            transaction,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+    {
         return Ok(());
     }
 
@@ -3813,7 +3879,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     _tx_bytes_len: usize,
 ) -> Result<(), ValidationFail> {
     // Genesis transactions are bootstrap operations and must remain fee-free.
-    if state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty() {
+    if is_initial_genesis_context(state_transaction) {
         return Ok(());
     }
     let tx_bytes_len = to_bytes(transaction.payload())
@@ -4072,6 +4138,7 @@ impl Executor {
         program_revision: u64,
         asset_definition_id: &AssetDefinitionId,
         amount: &Quantity,
+        directly_settled: bool,
     ) -> Result<iroha_crypto::Hash, ValidationFail> {
         let (record, _) = select_fee_sponsor_relay_lease(
             &state_transaction.world,
@@ -4083,22 +4150,29 @@ impl Executor {
             amount,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        let spent = fee_sponsor_vault_allocation_spent(&state_transaction.world, &record.lease_id)
+        let executed_key = fee_sponsor_vault_allocation_usage_state_key(&record.lease_id)
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        let updated = spent.checked_add(amount).map_err(|_| {
+        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&record.lease_id)
+            .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        let executed =
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        let settled =
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        let spent = core::cmp::max(executed, settled.clone());
+        let updated_executed = spent.checked_add(amount).map_err(|_| {
             ValidationFail::InternalError(
                 "verified fee sponsor vault allocation usage overflow".to_owned(),
             )
         })?;
-        if updated > record.verified_allocation {
+        if updated_executed > record.verified_allocation {
             return Err(ValidationFail::NotPermitted(format!(
                 "verified fee sponsor spend lease `{}` is insufficient",
                 record.lease_id
             )));
         }
-        let key = fee_sponsor_vault_allocation_usage_state_key(&record.lease_id)
-            .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        let encoded = norito::to_bytes(&updated).map_err(|err| {
+        let encoded = norito::to_bytes(&updated_executed).map_err(|err| {
             ValidationFail::InternalError(format!(
                 "failed to encode verified fee sponsor vault allocation usage: {err}"
             ))
@@ -4106,7 +4180,23 @@ impl Executor {
         state_transaction
             .world
             .smart_contract_state
-            .insert(key, encoded);
+            .insert(executed_key, encoded);
+        if directly_settled {
+            let updated_settled = settled.checked_add(amount).map_err(|_| {
+                ValidationFail::InternalError(
+                    "settled verified fee sponsor vault allocation usage overflow".to_owned(),
+                )
+            })?;
+            let settled_encoded = norito::to_bytes(&updated_settled).map_err(|err| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode settled verified fee sponsor vault allocation usage: {err}"
+                ))
+            })?;
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(settled_key, settled_encoded);
+        }
         Ok(record.lease_id)
     }
 
@@ -4312,6 +4402,33 @@ impl Executor {
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let payer = if let Some(program_id) = fee_sponsor {
+            let relay_program_revision = (state_transaction.nexus.fees.settlement_mode
+                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn)
+                .then(|| {
+                    transaction
+                        .fee_payment_intent()
+                        .sponsor_program()
+                        .map(|(_, revision)| revision)
+                        .ok_or_else(|| {
+                            ValidationFail::InternalError(
+                                "sponsored PipelineGas charge is missing its signed program revision"
+                                    .to_owned(),
+                            )
+                        })
+                })
+                .transpose()?;
+            if let Some(program_revision) = relay_program_revision {
+                select_fee_sponsor_relay_lease(
+                    &state_transaction.world,
+                    program_id,
+                    program_revision,
+                    &asset_definition_id,
+                    state_transaction.current_dataspace_id,
+                    state_transaction.block_height(),
+                    &qty,
+                )
+                .map_err(nexus_fee_admission_error_to_validation_fail)?;
+            }
             Self::debit_fee_sponsor_program(
                 state_transaction,
                 authority,
@@ -4321,6 +4438,16 @@ impl Executor {
                 &asset_definition_id,
                 &qty,
             )?;
+            if let Some(program_revision) = relay_program_revision {
+                Self::consume_fee_sponsor_relay_lease(
+                    state_transaction,
+                    program_id,
+                    program_revision,
+                    &asset_definition_id,
+                    &qty,
+                    true,
+                )?;
+            }
             state_transaction
                 .nexus
                 .fees
@@ -4489,6 +4616,7 @@ impl Executor {
                             program_revision,
                             &asset_def,
                             &fee,
+                            false,
                         )
                     })
                     .transpose()?;
@@ -8029,6 +8157,13 @@ fn initial_alias_scope_owned_by(
             .as_ref()
                 == Some(authority))
         }
+        executor_permission::account::AccountAliasPermissionScope::Alias(alias) => {
+            Ok(state_transaction
+                .world
+                .account_aliases()
+                .get(&alias.account_alias())
+                .is_some_and(|owner| owner == authority))
+        }
     }
 }
 
@@ -8812,12 +8947,11 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::ApproveAccountRecovery,
         iroha_data_model::isi::CancelAccountRecovery,
         iroha_data_model::isi::FinalizeAccountRecovery,
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease,
-        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease,
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding,
-        iroha_data_model::isi::domain_link::SetPrimaryAccountAlias,
-        iroha_data_model::isi::sns::RegisterSnsName,
-        iroha_data_model::isi::sns::RenewSnsName,
+        iroha_data_model::isi::alias_setup::EnsureAlias,
+        iroha_data_model::isi::alias_setup::RenewAliasLease,
+        iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew,
+        iroha_data_model::isi::alias_setup::RebindAccountAlias,
+        iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
     ) {
         return true;
     }
@@ -9018,12 +9152,6 @@ fn validate_initial_native_instruction_authority(
             .downcast_ref::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>()
             .is_some()
         || any
-            .downcast_ref::<iroha_data_model::isi::sns::TransferSnsName>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::sns::UnfreezeSnsName>()
-            .is_some()
-        || any
             .downcast_ref::<iroha_data_model::isi::content::PublishContentBundle>()
             .is_some()
         || any
@@ -9088,6 +9216,9 @@ fn validate_initial_native_instruction_authority(
     }
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        if matches!(register, RegisterBox::Domain(_)) && !is_genesis {
+            return deny("raw domain registration is reserved for genesis; use EnsureAlias");
+        }
         let allowed = match register {
             RegisterBox::Peer(_) => {
                 is_genesis
@@ -9097,14 +9228,7 @@ fn validate_initial_native_instruction_authority(
                         executor_permission::peer::CanManagePeers.into(),
                     )?
             }
-            RegisterBox::Domain(_) => {
-                is_genesis
-                    || initial_authority_has_exact_permission(
-                        state_transaction,
-                        authority,
-                        executor_permission::domain::CanRegisterDomain.into(),
-                    )?
-            }
+            RegisterBox::Domain(_) => true,
             RegisterBox::Nft(register) => can_register_nft_initial(
                 state_transaction,
                 authority,
@@ -12620,6 +12744,178 @@ mod tests {
             }];
     }
 
+    fn sponsored_pipeline_fee_fixture(
+        lease_allocation: Option<Quantity>,
+    ) -> (
+        State,
+        SignedTransaction,
+        AccountId,
+        AccountId,
+        AccountId,
+        AssetDefinitionId,
+        FeeSponsorProgramId,
+        Hash,
+    ) {
+        let (sponsor, _) = gen_account_in("sponsored_pipeline_fee");
+        let (beneficiary, beneficiary_keypair) = gen_account_in("sponsored_pipeline_fee");
+        let (custody, _) = gen_account_in("sponsored_pipeline_fee");
+        let (tech_account, _) = gen_account_in("sponsored_pipeline_fee");
+        let domain_id = DomainId::try_new("sponsored_pipeline_fee", "universal")
+            .expect("sponsored pipeline fee domain");
+        let asset_definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "gas".parse().expect("sponsored pipeline gas asset name"),
+        );
+        let instruction =
+            InstructionBox::from(Log::new(Level::INFO, "sponsored pipeline gas".to_owned()));
+        let wire_id = iroha_data_model::isi::instruction_wire_id(&instruction)
+            .expect("Log instruction has a registered wire id")
+            .to_owned();
+        let program_id = FeeSponsorProgramId::new(
+            sponsor.clone(),
+            "pipeline".parse().expect("sponsor program name"),
+        );
+        let mut world = World::with_assets(
+            [Domain::new(domain_id).build(&sponsor)],
+            [
+                Account::new(sponsor.clone()).build(&sponsor),
+                Account::new(beneficiary.clone()).build(&sponsor),
+                Account::new(custody.clone()).build(&sponsor),
+                Account::new(tech_account.clone()).build(&sponsor),
+            ],
+            [AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name("sponsored pipeline gas".to_owned())
+                .with_balance_scope_policy(AssetBalancePolicy::Global)
+                .build(&sponsor)],
+            [Asset::new(
+                AssetId::new(asset_definition_id.clone(), custody.clone()),
+                Quantity::from(10_u32),
+            )],
+            [],
+        );
+        seed_test_asset_supply(&mut world, &asset_definition_id);
+        let mut program = iroha_data_model::nexus::FeeSponsorProgram::new(program_id.clone());
+        program.lifecycle = FeeSponsorProgramLifecycle::Active;
+        program.active_revision = Some(1);
+        world
+            .fee_sponsor_programs
+            .insert(program_id.clone(), program);
+        world.fee_sponsor_program_revisions.insert(
+            FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+            FeeSponsorProgramRevision {
+                program_id: program_id.clone(),
+                revision: 1,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![iroha_data_model::nexus::FeeSponsorRule {
+                    id: "allow_log".parse().expect("sponsor rule id"),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![FeeSponsorRuleSelector::NativeInstruction(
+                        iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
+                            wire_id,
+                            asset_definition_id: None,
+                        },
+                    )],
+                }],
+                asset_budgets: vec![iroha_data_model::nexus::FeeSponsorAssetBudget {
+                    asset_definition_id: asset_definition_id.clone(),
+                    per_transaction: Quantity::from(10_u32),
+                    per_block: Quantity::from(10_u32),
+                    per_program_epoch: Quantity::from(10_u32),
+                    per_beneficiary_epoch: Quantity::from(10_u32),
+                    reserve_floor: Quantity::zero(),
+                    epoch_length_blocks: nonzero!(1_u64),
+                }],
+            },
+        );
+        let enrollment_key = FeeSponsorEnrollmentKey {
+            program_id: program_id.clone(),
+            beneficiary: beneficiary.clone(),
+        };
+        world.fee_sponsor_enrollments.insert(
+            enrollment_key.clone(),
+            iroha_data_model::nexus::FeeSponsorEnrollment {
+                key: enrollment_key,
+                enrolled_at_height: 1,
+            },
+        );
+        let vault_key = FeeSponsorVaultKey {
+            program_id: program_id.clone(),
+            asset_definition_id: asset_definition_id.clone(),
+        };
+        world.fee_sponsor_vaults.insert(
+            vault_key.clone(),
+            iroha_data_model::nexus::FeeSponsorVault {
+                key: vault_key,
+                balance: Quantity::from(10_u32),
+            },
+        );
+        let lease_id = Hash::new(b"sponsored-pipeline-fee-lease");
+        if let Some(allocation) = lease_allocation {
+            insert_relay_allocation(
+                &mut world,
+                &relay_allocation_fixture(
+                    program_id.clone(),
+                    1,
+                    asset_definition_id.clone(),
+                    allocation,
+                    DataSpaceId::UNIVERSAL,
+                    20,
+                    lease_id,
+                ),
+            );
+        }
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            beneficiary.clone(),
+            FeePaymentIntent::sponsor(
+                program_id.clone(),
+                1,
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::PipelineGas,
+                    asset_definition_id.clone(),
+                    Quantity::from(2_u32),
+                )],
+                None,
+            ),
+        )
+        .with_instructions([instruction])
+        .sign(beneficiary_keypair.private_key());
+        (
+            state,
+            transaction,
+            beneficiary,
+            custody,
+            tech_account,
+            asset_definition_id,
+            program_id,
+            lease_id,
+        )
+    }
+
+    fn configure_sponsored_pipeline_fee_transaction(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        custody: &AccountId,
+        tech_account: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+        settlement_mode: iroha_config::parameters::actual::NexusFeeSettlementMode,
+    ) {
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.tx_call_hash = Some(Hash::new(b"sponsored-pipeline-fee-call"));
+        state_transaction.nexus.enabled = true;
+        state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
+        state_transaction
+            .nexus
+            .fees
+            .sponsor_vault_custody_account_id = custody.clone();
+        state_transaction.nexus.fees.settlement_mode = settlement_mode;
+        configure_pipeline_fee_snapshot(state_transaction, tech_account, asset_definition_id, 1);
+    }
+
     #[test]
     fn stateful_fee_admission_rejects_understated_authority_limit_before_effects() {
         let (state, keypair, authority, tech_account, _, gas_asset, _) =
@@ -12748,6 +13044,308 @@ mod tests {
                 .get(&AssetId::new(gas_asset, tech_account))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn sponsored_pipeline_gas_consumes_and_settles_lane_spend_lease() {
+        let (
+            state,
+            transaction,
+            beneficiary,
+            custody,
+            tech_account,
+            asset_definition_id,
+            program_id,
+            lease_id,
+        ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(10_u32)));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_sponsored_pipeline_fee_transaction(
+            &mut state_transaction,
+            &custody,
+            &tech_account,
+            &asset_definition_id,
+            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+        );
+
+        super::Executor::charge_pipeline_gas_asset_fee(
+            &mut state_transaction,
+            &beneficiary,
+            &transaction,
+            transaction.hash(),
+            [9; Hash::LENGTH],
+            &asset_definition_id.canonical_address(),
+            2,
+            Some(&program_id),
+        )
+        .expect("sponsored PipelineGas charge has exact lane spend capacity");
+
+        let executed_key =
+            fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
+        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
+            .expect("settled usage key");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::from(2_u32)
+        );
+        let vault_key = FeeSponsorVaultKey {
+            program_id,
+            asset_definition_id: asset_definition_id.clone(),
+        };
+        assert_eq!(
+            state_transaction
+                .world
+                .fee_sponsor_vaults
+                .get(&vault_key)
+                .expect("sponsor vault")
+                .balance,
+            Quantity::from(8_u32)
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .assets()
+                .get(&AssetId::new(asset_definition_id.clone(), custody))
+                .expect("custody balance")
+                .as_ref(),
+            &Quantity::from(8_u32)
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .assets()
+                .get(&AssetId::new(asset_definition_id, tech_account))
+                .expect("technical-account balance")
+                .as_ref(),
+            &Quantity::from(2_u32)
+        );
+    }
+
+    #[test]
+    fn sponsored_pipeline_gas_direct_mode_does_not_require_or_consume_lease() {
+        let (
+            state,
+            transaction,
+            beneficiary,
+            custody,
+            tech_account,
+            asset_definition_id,
+            program_id,
+            lease_id,
+        ) = sponsored_pipeline_fee_fixture(None);
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_sponsored_pipeline_fee_transaction(
+            &mut state_transaction,
+            &custody,
+            &tech_account,
+            &asset_definition_id,
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct,
+        );
+
+        super::Executor::charge_pipeline_gas_asset_fee(
+            &mut state_transaction,
+            &beneficiary,
+            &transaction,
+            transaction.hash(),
+            [10; Hash::LENGTH],
+            &asset_definition_id.canonical_address(),
+            2,
+            Some(&program_id),
+        )
+        .expect("direct-settled sponsored PipelineGas does not require a spend lease");
+
+        let executed_key =
+            fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
+        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
+            .expect("settled usage key");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::zero()
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::zero()
+        );
+    }
+
+    #[test]
+    fn sponsored_pipeline_gas_insufficient_lease_fails_before_debit_or_transfer() {
+        let (
+            state,
+            transaction,
+            beneficiary,
+            custody,
+            tech_account,
+            asset_definition_id,
+            program_id,
+            lease_id,
+        ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(1_u32)));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_sponsored_pipeline_fee_transaction(
+            &mut state_transaction,
+            &custody,
+            &tech_account,
+            &asset_definition_id,
+            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+        );
+
+        let error = super::Executor::charge_pipeline_gas_asset_fee(
+            &mut state_transaction,
+            &beneficiary,
+            &transaction,
+            transaction.hash(),
+            [11; Hash::LENGTH],
+            &asset_definition_id.canonical_address(),
+            2,
+            Some(&program_id),
+        )
+        .expect_err("insufficient spend lease must reject the PipelineGas charge");
+
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        let vault_key = FeeSponsorVaultKey {
+            program_id,
+            asset_definition_id: asset_definition_id.clone(),
+        };
+        assert_eq!(
+            state_transaction
+                .world
+                .fee_sponsor_vaults
+                .get(&vault_key)
+                .expect("sponsor vault")
+                .balance,
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .assets()
+                .get(&AssetId::new(asset_definition_id.clone(), custody))
+                .expect("custody balance")
+                .as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(
+            state_transaction
+                .world
+                .assets()
+                .get(&AssetId::new(asset_definition_id.clone(), tech_account))
+                .is_none()
+        );
+        let executed_key =
+            fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
+        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
+            .expect("settled usage key");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::zero()
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::zero()
+        );
+    }
+
+    #[test]
+    fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() {
+        let (
+            state,
+            transaction,
+            beneficiary,
+            custody,
+            tech_account,
+            asset_definition_id,
+            program_id,
+            _,
+        ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(10_u32)));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_sponsored_pipeline_fee_transaction(
+            &mut state_transaction,
+            &custody,
+            &tech_account,
+            &asset_definition_id,
+            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+        );
+        let revision_one = state_transaction
+            .world
+            .fee_sponsor_program_revisions
+            .get(&FeeSponsorProgramRevisionKey::new(program_id.clone(), 1))
+            .cloned()
+            .expect("revision one");
+        let mut revision_two = revision_one;
+        revision_two.revision = 2;
+        state_transaction
+            .world
+            .fee_sponsor_program_revisions
+            .insert(
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), 2),
+                revision_two,
+            );
+        let mut program = state_transaction
+            .world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .cloned()
+            .expect("sponsor program");
+        program.staged_revision = Some(2);
+        program.scheduled_activation = Some(iroha_data_model::nexus::FeeSponsorProgramActivation {
+            revision: 2,
+            activate_at_height: 10,
+        });
+        state_transaction
+            .world
+            .fee_sponsor_programs
+            .insert(program_id.clone(), program);
+
+        let current = resolve_fee_sponsor_program(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            &program_id,
+            1,
+            &beneficiary,
+            transaction.payload(),
+            Some(DataSpaceId::UNIVERSAL),
+            10,
+        )
+        .expect("old revision stays effective while its lease is live");
+        assert_eq!(current.revision.revision, 1);
+        let early_error = resolve_fee_sponsor_program(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            &program_id,
+            2,
+            &beneficiary,
+            transaction.payload(),
+            Some(DataSpaceId::UNIVERSAL),
+            10,
+        )
+        .expect_err("scheduled revision must not be predicted before old leases drain");
+        assert_eq!(early_error.code(), FeeRejectionCode::RevisionNotActive);
+
+        let drained = resolve_fee_sponsor_program(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            &program_id,
+            2,
+            &beneficiary,
+            transaction.payload(),
+            Some(DataSpaceId::UNIVERSAL),
+            21,
+        )
+        .expect("scheduled revision becomes effective after the old lease expiry");
+        assert_eq!(drained.revision.revision, 2);
     }
 
     #[test]
@@ -13081,8 +13679,7 @@ mod tests {
         assert!(draft.quote.capacities.is_empty());
         assert!(draft.quote.authority_balances.is_empty());
         assert!(draft.quote.authority_charge_assets.is_empty());
-        assert_eq!(draft.quote.relay_lease_id, None);
-        assert_eq!(draft.quote.relay_lease_remaining, None);
+        assert!(draft.quote.relay_leases.is_empty());
         assert_eq!(draft.quote.program_revision, None);
         assert_eq!(draft.quote.debit_source, FeeDebitSource::Account(authority));
         assert_eq!(
@@ -13629,6 +14226,133 @@ mod tests {
     }
 
     #[test]
+    fn sponsor_relay_lease_selection_aggregates_same_asset_and_selects_distinct_assets() {
+        let program_id = FeeSponsorProgramId::new(
+            checked_account_id(),
+            "multi-asset-relay".parse().expect("program name"),
+        );
+        let domain_id = DomainId::try_new("relay_multi", "universal").expect("relay domain");
+        let shared_asset = AssetDefinitionId::new(
+            domain_id.clone(),
+            "shared".parse().expect("shared asset name"),
+        );
+        let distinct_asset =
+            AssetDefinitionId::new(domain_id, "distinct".parse().expect("distinct asset name"));
+        let dataspace_id = DataSpaceId::new(23);
+        let shared_lease = Hash::new(b"shared-component-relay-lease");
+        let distinct_lease = Hash::new(b"distinct-component-relay-lease");
+        let mut world = World::default();
+        insert_relay_allocation(
+            &mut world,
+            &relay_allocation_fixture(
+                program_id.clone(),
+                7,
+                shared_asset.clone(),
+                Quantity::from(10_u32),
+                dataspace_id,
+                20,
+                shared_lease,
+            ),
+        );
+        insert_relay_allocation(
+            &mut world,
+            &relay_allocation_fixture(
+                program_id.clone(),
+                7,
+                distinct_asset.clone(),
+                Quantity::from(8_u32),
+                dataspace_id,
+                20,
+                distinct_lease,
+            ),
+        );
+        let world = world.block();
+        let same_asset_charges = [
+            FeeChargeBound {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(4_u32),
+            },
+            FeeChargeBound {
+                kind: FeeChargeKind::PipelineGas,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(6_u32),
+            },
+        ];
+
+        let same_asset_selection = select_fee_sponsor_relay_leases(
+            &world,
+            &program_id,
+            7,
+            Some(dataspace_id),
+            10,
+            &same_asset_charges,
+        )
+        .expect("aggregate lease capacity covers both same-asset components");
+
+        assert_eq!(same_asset_selection.len(), 1);
+        assert_eq!(same_asset_selection[&shared_asset].lease_id, shared_lease);
+        assert_eq!(
+            same_asset_selection[&shared_asset].remaining,
+            Quantity::from(10_u32)
+        );
+
+        let distinct_asset_charges = [
+            FeeChargeBound {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(4_u32),
+            },
+            FeeChargeBound {
+                kind: FeeChargeKind::PipelineGas,
+                asset_definition_id: distinct_asset.clone(),
+                max_bound: Quantity::from(7_u32),
+            },
+        ];
+        let distinct_asset_selections = select_fee_sponsor_relay_leases(
+            &world,
+            &program_id,
+            7,
+            Some(dataspace_id),
+            10,
+            &distinct_asset_charges,
+        )
+        .expect("each distinct charged asset has its own lease capacity");
+        assert_eq!(distinct_asset_selections.len(), 2);
+        assert_eq!(
+            distinct_asset_selections[&shared_asset].lease_id,
+            shared_lease
+        );
+        assert_eq!(
+            distinct_asset_selections[&distinct_asset].lease_id,
+            distinct_lease
+        );
+
+        let over_capacity = [
+            FeeChargeBound {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: shared_asset.clone(),
+                max_bound: Quantity::from(5_u32),
+            },
+            FeeChargeBound {
+                kind: FeeChargeKind::PipelineGas,
+                asset_definition_id: shared_asset,
+                max_bound: Quantity::from(6_u32),
+            },
+        ];
+        let error = select_fee_sponsor_relay_leases(
+            &world,
+            &program_id,
+            7,
+            Some(dataspace_id),
+            10,
+            &over_capacity,
+        )
+        .expect_err("same-asset components must be checked as one lease charge");
+        assert_eq!(error.code(), FeeRejectionCode::RelayCapacityUnavailable);
+    }
+
+    #[test]
     fn sponsor_relay_lease_selection_rejects_noncanonical_record_key() {
         let program_id = FeeSponsorProgramId::new(
             checked_account_id(),
@@ -13670,6 +14394,126 @@ mod tests {
         )
         .expect_err("noncanonical allocation state must fail closed");
         assert_eq!(error.code(), FeeRejectionCode::InvalidProgramConfiguration);
+    }
+
+    #[test]
+    fn sponsor_relay_lease_consumption_tracks_direct_and_receipt_settlement() {
+        let program_id = FeeSponsorProgramId::new(
+            checked_account_id(),
+            "relay-consumption".parse().expect("program name"),
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("relay_consumption", "universal").expect("relay domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let lease_id = Hash::new(b"relay-consumption-lease");
+        let mut world = World::default();
+        insert_relay_allocation(
+            &mut world,
+            &relay_allocation_fixture(
+                program_id.clone(),
+                9,
+                asset_definition_id.clone(),
+                Quantity::from(10_u32),
+                DataSpaceId::UNIVERSAL,
+                20,
+                lease_id,
+            ),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+        super::Executor::consume_fee_sponsor_relay_lease(
+            &mut state_transaction,
+            &program_id,
+            9,
+            &asset_definition_id,
+            &Quantity::from(3_u32),
+            true,
+        )
+        .expect("direct-settled PipelineGas consumes both usage counters");
+
+        let executed_key =
+            fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
+        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
+            .expect("settled usage key");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::from(3_u32)
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::from(3_u32)
+        );
+
+        super::Executor::consume_fee_sponsor_relay_lease(
+            &mut state_transaction,
+            &program_id,
+            9,
+            &asset_definition_id,
+            &Quantity::from(2_u32),
+            false,
+        )
+        .expect("receipt-settled Nexus charge advances executed usage only");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::from(3_u32)
+        );
+
+        super::Executor::consume_fee_sponsor_relay_lease(
+            &mut state_transaction,
+            &program_id,
+            9,
+            &asset_definition_id,
+            &Quantity::from(1_u32),
+            true,
+        )
+        .expect("a later direct charge must not mark the pending receipt as settled");
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::from(6_u32)
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::from(4_u32)
+        );
+
+        let error = super::Executor::consume_fee_sponsor_relay_lease(
+            &mut state_transaction,
+            &program_id,
+            9,
+            &asset_definition_id,
+            &Quantity::from(5_u32),
+            true,
+        )
+        .expect_err("insufficient remaining capacity must reject before usage mutation");
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                .expect("executed usage"),
+            Quantity::from(6_u32)
+        );
+        assert_eq!(
+            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                .expect("settled usage"),
+            Quantity::from(4_u32)
+        );
     }
 
     fn generate_fixture_placeholder_program(vector_length: u8) -> Vec<u8> {
@@ -14401,6 +15245,43 @@ mod tests {
             .apply_with_chunk(&mut overlay_tx, &ALICE_ID.clone(), 1)
             .expect("borrowed overlay applies instruction");
         assert!(overlay_tx.world.domains.get(&domain_id).is_some());
+    }
+
+    #[test]
+    fn initial_executor_rejects_raw_domain_registration_after_genesis() {
+        use iroha_executor_data_model::permission::domain::CanRegisterDomain;
+
+        let existing_domain =
+            DomainId::try_new("wonderland", "universal").expect("existing domain id");
+        let world = World::with(
+            [Domain::new(existing_domain).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            ChainId::from("raw-domain-registration"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        Grant::account_permission(CanRegisterDomain, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("seed legacy permission directly");
+
+        let domain_id = DomainId::try_new("planned", "universal").expect("planned domain id");
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &ALICE_ID,
+                Register::domain(Domain::new(domain_id)).into(),
+            )
+            .expect_err("raw domain registration must be denied after genesis");
+
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("reserved for genesis"))
+        );
     }
 
     #[test]

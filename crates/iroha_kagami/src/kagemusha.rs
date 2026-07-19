@@ -943,10 +943,6 @@ impl VerificationReport {
             artifacts,
         }
     }
-
-    fn canonical_json(&self) -> Result<String> {
-        norito::json::to_json(self).wrap_err("failed to encode Kagemusha verification JSON")
-    }
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize)]

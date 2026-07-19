@@ -136,7 +136,7 @@ impl ProgressSidecarDurabilityFault {
 #[cfg(test)]
 std::thread_local! {
     static FAIL_ARCHIVED_RECEIPT_DURABILITY_ATTESTATION: std::cell::Cell<Option<ProgressSidecarDurabilityFault>> = const { std::cell::Cell::new(None) };
-    static SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY: std::cell::RefCell<Option<(String, PathBuf)>> = const { std::cell::RefCell::new(None) };
+    static SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY: std::cell::RefCell<Option<(String, PathBuf, PathBuf)>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -156,9 +156,17 @@ fn inject_archived_receipt_durability_fault_for_test() {
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-fn substitute_progress_directory_after_recovery_for_test(kind: &str, displaced: PathBuf) {
+fn substitute_progress_directory_after_recovery_for_test(
+    kind: &str,
+    target_lane_artifacts: &Path,
+    displaced: PathBuf,
+) {
     SUBSTITUTE_PROGRESS_DIRECTORY_AFTER_RECOVERY.with(|slot| {
-        let previous = slot.replace(Some((kind.to_owned(), displaced)));
+        let previous = slot.replace(Some((
+            kind.to_owned(),
+            target_lane_artifacts.to_path_buf(),
+            displaced,
+        )));
         assert!(
             previous.is_none(),
             "progress-directory substitution injection must be single-owner"
@@ -172,9 +180,11 @@ fn maybe_substitute_progress_directory_after_recovery_for_test(kind: &str, lane_
         let mut injection = slot.borrow_mut();
         if injection
             .as_ref()
-            .is_some_and(|(target_kind, _)| target_kind == kind)
+            .is_some_and(|(target_kind, target_lane_artifacts, _)| {
+                target_kind == kind && target_lane_artifacts.as_path() == lane_artifacts
+            })
         {
-            injection.take().map(|(_, displaced)| displaced)
+            injection.take().map(|(_, _, displaced)| displaced)
         } else {
             None
         }
@@ -14205,6 +14215,7 @@ mod tests {
             let retiring_lane = LaneId::new(1);
             let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
             let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+            fs::create_dir_all(&artifact_dir).expect("artifact directory");
             let temp_path = artifact_dir.join(data_file).with_extension("norito.tmp");
             fs::write(&temp_path, b"unpublished progress rewrite")
                 .expect("stage unpublished progress data temp");
@@ -14279,6 +14290,7 @@ mod tests {
             let retiring_lane = LaneId::new(1);
             let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
             let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+            fs::create_dir_all(&artifact_dir).expect("artifact directory");
             let temp_data_path = artifact_dir.join(data_file).with_extension("norito.tmp");
             fs::write(&temp_data_path, b"unpublished progress rewrite")
                 .expect("stage recoverable progress temp");
@@ -14287,7 +14299,11 @@ mod tests {
             fs::write(artifact_dir.join(sentinel_name), sentinel)
                 .expect("write bound-directory identity sentinel");
             let displaced = root.join("displaced-lane-artifacts");
-            substitute_progress_directory_after_recovery_for_test(kind, displaced.clone());
+            substitute_progress_directory_after_recovery_for_test(
+                kind,
+                &artifact_dir,
+                displaced.clone(),
+            );
 
             let error = kura
                 .first_release_lane_retirement_admissible_for_test(
@@ -14342,6 +14358,7 @@ mod tests {
         let retiring_lane = LaneId::new(1);
         let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
         let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        fs::create_dir_all(&artifact_dir).expect("artifact directory");
         let data_path = artifact_dir.join(LANE_ARTIFACTS_DATA_FILE);
         let index_path = artifact_dir.join(LANE_ARTIFACTS_INDEX_FILE);
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -14460,6 +14477,7 @@ mod tests {
         let retiring_lane = LaneId::new(1);
         let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
         let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        fs::create_dir_all(&artifact_dir).expect("artifact directory");
         let data_path = artifact_dir.join(AUTONOMOUS_LANE_BLOCKS_DATA_FILE);
         let index_path = artifact_dir.join(AUTONOMOUS_LANE_BLOCKS_INDEX_FILE);
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -14520,6 +14538,7 @@ mod tests {
         let retiring_lane = LaneId::new(1);
         let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
         let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
+        fs::create_dir_all(&artifact_dir).expect("artifact directory");
         let temp_data_path = artifact_dir
             .join(CERTIFIED_LANE_BLOCKS_DATA_FILE)
             .with_extension("norito.tmp");
@@ -14666,38 +14685,47 @@ mod tests {
                 &initial_activations,
                 &extended_activations,
             );
-            let (canonical_hash, _) = durable_geometry_snapshot_identity(&kura, 1);
-            let canonical_view = kura
-                .get_block(NonZeroUsize::new(1).expect("non-zero height"))
-                .expect("canonical block")
-                .header()
-                .view_change_index();
-            let hint = match label {
-                "fork-hash" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: 1,
-                    proposal_view: canonical_view,
-                    proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"geometry-retirement-fork",
-                    )),
-                },
-                "stale-height" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: 2,
-                    proposal_view: canonical_view,
-                    proposal_block_hash: canonical_hash,
-                },
-                "stale-view" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: 1,
-                    proposal_view: canonical_view.saturating_add(1),
-                    proposal_block_hash: canonical_hash,
-                },
-                _ => unreachable!(),
-            };
             let mut certified = certified_geometry_lane_block(
                 LaneId::SINGLE,
                 DataSpaceId::new(7),
                 extended_incarnations[&LaneId::SINGLE],
                 1,
             );
+            let canonical_height = certified.proposal.descriptor.proposal_height;
+            let canonical_height_index = NonZeroUsize::new(
+                usize::try_from(canonical_height).expect("canonical height fits usize"),
+            )
+            .expect("canonical height is non-zero");
+            let stale_height = canonical_height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .expect("fixture proposal height has a stale predecessor");
+            let (canonical_hash, _) = durable_geometry_snapshot_identity(&kura, canonical_height);
+            let canonical_view = kura
+                .get_block(canonical_height_index)
+                .expect("canonical block")
+                .header()
+                .view_change_index();
+            let hint = match label {
+                "fork-hash" => LaneBlockProposalPayloadHintV1 {
+                    proposal_height: canonical_height,
+                    proposal_view: canonical_view,
+                    proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"geometry-retirement-fork",
+                    )),
+                },
+                "stale-height" => LaneBlockProposalPayloadHintV1 {
+                    proposal_height: stale_height,
+                    proposal_view: canonical_view,
+                    proposal_block_hash: canonical_hash,
+                },
+                "stale-view" => LaneBlockProposalPayloadHintV1 {
+                    proposal_height: canonical_height,
+                    proposal_view: canonical_view.saturating_add(1),
+                    proposal_block_hash: canonical_hash,
+                },
+                _ => unreachable!(),
+            };
             certified.proposal.payload_block_hint = Some(hint);
             kura.write_certified_lane_block_artifact(&certified)
                 .expect("persist adversarial hinted certificate");

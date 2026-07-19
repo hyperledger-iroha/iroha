@@ -194,12 +194,6 @@ fn bench_isi(
 
 /// Register the individual ISI microbenchmarks for this group.
 fn run_benchmarks(c: &mut Criterion) {
-    bench_isi(c, "RegisterDomain", setup_none, |_ctx| {
-        Register::domain(Domain::new(
-            DomainId::try_new("bench", "universal").unwrap(),
-        ))
-        .into()
-    });
     bench_isi(c, "RegisterAccount", setup_none, |_ctx| {
         let (acc, _) = gen_account_in("wonderland");
         Register::account(Account::new(acc.clone())).into()

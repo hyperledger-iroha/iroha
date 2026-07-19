@@ -861,6 +861,18 @@ fn event_stream_response(description: &str) -> Value {
 fn alias_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/aliases/setup/plan".to_owned(),
+        Value::Object(alias_setup_plan_operation()),
+    );
+    paths.insert(
+        "/v1/aliases/lease/renew/plan".to_owned(),
+        Value::Object(alias_lease_renew_plan_operation()),
+    );
+    paths.insert(
+        "/v1/aliases/auto-renew/plan".to_owned(),
+        Value::Object(alias_auto_renew_plan_operation()),
+    );
+    paths.insert(
         "/v1/aliases/resolve".to_owned(),
         Value::Object(alias_resolve_operation()),
     );
@@ -4155,8 +4167,16 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/accounts/onboard/plan".to_owned(),
+        Value::Object(account_onboarding_plan_operation()),
+    );
+    paths.insert(
         "/v1/accounts/onboard".to_owned(),
         Value::Object(account_onboarding_operation()),
+    );
+    paths.insert(
+        "/v1/accounts/onboarding/readiness".to_owned(),
+        Value::Object(account_onboarding_readiness_operation()),
     );
     let mut account_get = json_get_operation(
         "Accounts",
@@ -4330,12 +4350,12 @@ fn account_onboarding_operation() -> Map {
     );
     operation.insert(
         "summary".to_owned(),
-        Value::String("Onboard an account.".to_owned()),
+        Value::String("Apply a sponsored onboarding receipt.".to_owned()),
     );
     operation.insert(
         "description".to_owned(),
         Value::String(
-            "Register an account, bind its alias and explicit UAID, and queue the signer-backed onboarding transaction. Supply `uaid` plus exactly one of `account_id` or `public_key_hex`; raw identity metadata is rejected, while optional identity evidence is accepted only as `identity_commitment_hex`. The dedicated onboarding token is required even for CIDR-allowlisted callers and is independent of any global Torii API token. A 202 response means the transaction is queued, not finalized on the ledger."
+            "Revalidate a hash-bound, onboarding-authority-signed receipt returned by `/v1/accounts/onboard/plan`, then submit at most one atomic transaction containing `EnsureAlias::Account` and configured allowlisted ancillary instructions. Exact replay returns `Unchanged` without queueing or charging another lease. The dedicated onboarding token is required and never appears in the body."
                 .to_owned(),
         ),
     );
@@ -4353,10 +4373,17 @@ fn account_onboarding_operation() -> Map {
     operation.insert(
         "requestBody".to_owned(),
         Value::Object(json_request_body(
-            "#/components/schemas/AccountOnboardingRequest",
+            "#/components/schemas/AccountOnboardingApplyRequest",
         )),
     );
     let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "The receipt revalidated to exact existing state; no transaction was submitted.",
+            schema_ref("AccountOnboardingResponse"),
+        ),
+    );
     responses.insert(
         "202".to_owned(),
         json_response(
@@ -4367,7 +4394,7 @@ fn account_onboarding_operation() -> Map {
     responses.insert(
         "400".to_owned(),
         typed_dual_format_response(
-            "The canonical JSON body, headers, account/UAID/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint.",
+            "The canonical JSON body, headers, account/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint.",
             "#/components/schemas/ErrorEnvelope",
         ),
     );
@@ -4386,12 +4413,69 @@ fn account_onboarding_operation() -> Map {
             "#/components/schemas/ErrorEnvelope",
         ),
     );
+    responses.insert(
+        "409".to_owned(),
+        typed_dual_format_response(
+            "The receipt hash/signature/context is invalid, expired, or live state now contains authoritative drift.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
     responses.insert("429".to_owned(), onboarding_rate_limited_response());
     responses.insert("503".to_owned(), onboarding_auth_unavailable_response());
     operation.insert("responses".to_owned(), Value::Object(responses));
 
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn account_onboarding_plan_operation() -> Map {
+    let mut methods = json_post_operation(
+        "Accounts",
+        "Plan sponsored account onboarding.",
+        "Resolve and classify one account-alias onboarding intent against live state without mutation. The response is a stateless, expiring receipt signed by the configured onboarding authority. Auto-renew defaults, when configured, are returned only as a separate owner-signed follow-up because native auto-renew requires explicit resource-owner authority.",
+        "#/components/schemas/AccountOnboardingPlanRequest",
+        "#/components/schemas/AccountOnboardingPlanReceipt",
+        vec![
+            onboarding_token_header_parameter(),
+            string_header_param(
+                "X-API-Token",
+                "Optional deployment-wide Torii API token; required only when the node enables global API-token enforcement. It is independent of the required onboarding token.",
+                false,
+            ),
+        ],
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("post")
+        && let Some(Value::Object(responses)) = operation.get_mut("responses")
+    {
+        responses.insert("401".to_owned(), onboarding_auth_required_response());
+        responses.insert(
+            "409".to_owned(),
+            typed_dual_format_response(
+                "Live state conflicts with the requested owner, target account, primary status, or text-to-dataspace mapping.",
+                "#/components/schemas/ErrorEnvelope",
+            ),
+        );
+        responses.insert("429".to_owned(), onboarding_rate_limited_response());
+        responses.insert("503".to_owned(), onboarding_auth_unavailable_response());
+    }
+    methods
+}
+
+fn account_onboarding_readiness_operation() -> Map {
+    let mut methods = json_get_operation(
+        "Accounts",
+        "Inspect account-onboarding readiness.",
+        "Recompute the secret-free account-onboarding readiness report from current world state. The endpoint never reconciles or mutates state and may move from Pending to Ready without a node restart.",
+        "#/components/schemas/JsonValue",
+        vec![onboarding_token_header_parameter()],
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("get")
+        && let Some(Value::Object(responses)) = operation.get_mut("responses")
+    {
+        responses.insert("401".to_owned(), onboarding_auth_required_response());
+        responses.insert("503".to_owned(), onboarding_auth_unavailable_response());
+    }
     methods
 }
 
@@ -7148,17 +7232,6 @@ Role- or sponsor-gated bundles require canonical request headers \
 fn sns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sns/names".to_owned(),
-        Value::Object(json_post_operation(
-            "SNS",
-            "Register a SNS name lease.",
-            "Register a ledger-backed SNS name record in one of the fixed namespaces.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/sns/names/{namespace}/{literal}".to_owned(),
         Value::Object(json_get_operation(
             "SNS",
@@ -7173,97 +7246,6 @@ fn sns_paths() -> Map {
                 string_path_param("literal", "Canonical SNS literal for the namespace."),
             ],
         )),
-    );
-    paths.insert(
-        "/v1/sns/names/{namespace}/{literal}/renew".to_owned(),
-        Value::Object(json_post_operation(
-            "SNS",
-            "Renew a SNS name record.",
-            "Renew a ledger-backed SNS name record by namespace and canonical literal.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param(
-                    "namespace",
-                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-                ),
-                string_path_param("literal", "Canonical SNS literal for the namespace."),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/sns/names/{namespace}/{literal}/transfer".to_owned(),
-        Value::Object(json_post_operation(
-            "SNS",
-            "Transfer a SNS name record.",
-            "Transfer a ledger-backed SNS name record by namespace and canonical literal.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param(
-                    "namespace",
-                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-                ),
-                string_path_param("literal", "Canonical SNS literal for the namespace."),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/sns/names/{namespace}/{literal}/controllers".to_owned(),
-        Value::Object(json_post_operation(
-            "SNS",
-            "Update SNS controllers.",
-            "Update controllers for a ledger-backed SNS name record.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param(
-                    "namespace",
-                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-                ),
-                string_path_param("literal", "Canonical SNS literal for the namespace."),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/sns/names/{namespace}/{literal}/freeze".to_owned(),
-        Value::Object({
-            let post_op = json_post_operation(
-                "SNS",
-                "Freeze a SNS name record.",
-                "Freeze a ledger-backed SNS name record.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                vec![
-                    string_path_param(
-                        "namespace",
-                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-                    ),
-                    string_path_param("literal", "Canonical SNS literal for the namespace."),
-                ],
-            );
-            let delete_op = json_delete_operation(
-                "SNS",
-                "Unfreeze a SNS name record.",
-                "Unfreeze a ledger-backed SNS name record.",
-                "#/components/schemas/JsonValue",
-                vec![
-                    string_path_param(
-                        "namespace",
-                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
-                    ),
-                    string_path_param("literal", "Canonical SNS literal for the namespace."),
-                ],
-            );
-            let mut methods = Map::new();
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            if let Some(delete_value) = delete_op.get("delete") {
-                methods.insert("delete".to_owned(), delete_value.clone());
-            }
-            methods
-        }),
     );
     paths.insert(
         "/v1/sns/policies/{suffix_id}".to_owned(),
@@ -9981,6 +9963,9 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                 uri::QUERY
                     | "/v1/accounts/query"
                     | "/v1/aliases/by-account"
+                    | "/v1/aliases/setup/plan"
+                    | "/v1/aliases/lease/renew/plan"
+                    | "/v1/aliases/auto-renew/plan"
                     | "/v1/aliases/resolve"
                     | "/v1/aliases/resolve-index"
                     | "/v1/retail/recipients/lookup"
@@ -10033,11 +10018,11 @@ fn alias_resolve_operation() -> Map {
         "description".into(),
         Value::String(
             "Accepts one exact canonical fully-qualified alias, routes it through the Nexus \
-             read proxy using the encoded dataspace, and returns its account binding. Canonical \
-             request signing is required, and the signer must hold exact alias-resolution \
-             permission for the qualified domain, or for the dataspace when the alias is \
-             domainless. The route is \
-             independently rate limited."
+             read proxy using the encoded dataspace, and returns its account binding. Public \
+             dataspaces may be read unsigned. A known restricted dataspace requires canonical \
+             request signing plus exact Alias or applicable Domain/Dataspace resolve permission. \
+             Authorization is checked before alias lookup so restricted existence is not leaked. \
+             The route is independently rate limited."
                 .to_owned(),
         ),
     );
@@ -10054,6 +10039,166 @@ fn alias_resolve_operation() -> Map {
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
+}
+
+fn alias_setup_plan_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Plan one atomic declarative alias setup transaction.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Classifies the complete dataspace/domain/account-alias dependency graph against one committed world-state anchor without mutating it. The canonical request signer is the lease payer. Success returns ordered exact Norito instruction frames, exact create-only quotes, caps, per-asset totals, an expiry, and a canonical plan hash. A parent lease ending before its child is a stable warning; an unsigned canonical transaction payload above the configured limit is a blocker, and the graph is never split. Drift returns a structured 409 report and no executable plan."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("aliasSetupPlan".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        norito::json!({
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": "#/components/schemas/AliasSetupPlanRequestV1" }
+                }
+            }
+        }),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Atomic setup plan; clients must reject it when blockers are present.",
+            schema_ref("AliasTransactionPlanV1"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed or empty setup intent.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required; the signer becomes the lease payer.",
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "A committed planning anchor is not yet available.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn alias_lifecycle_plan_operation(
+    summary: &str,
+    description: &str,
+    operation_id: &str,
+    request_schema: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(&format!(
+            "#/components/schemas/{request_schema}"
+        ))),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Verified lifecycle plan or exact no-op.",
+            schema_ref("AliasLifecycleTransactionPlanV1"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed or unsupported lifecycle planning request.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required; the signer becomes the transaction authority.",
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "A committed planning anchor is not yet available.",
+            schema_ref("AliasSetupReportV1"),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn alias_lease_renew_plan_operation() -> Map {
+    alias_lifecycle_plan_operation(
+        "Plan one guarded alias lease renewal.",
+        "Revalidates canonical text and numeric dataspace ID, active lease state, lifecycle authority, expected-current-expiry CAS, absolute target expiry, live policy/payment asset, cap, and deadline without mutation. Success returns the exact framed RenewAliasLease instruction, exact charge, and a canonical plan hash.",
+        "aliasLeaseRenewPlan",
+        "AliasLeaseRenewPlanRequestV1",
+    )
+}
+
+fn alias_auto_renew_plan_operation() -> Map {
+    alias_lifecycle_plan_operation(
+        "Plan one alias auto-renew configuration CAS.",
+        "Revalidates canonical text and numeric dataspace ID, active lease owner, expected revision, ranges, policy version, and payment asset without mutation. Exact clean configuration returns a zero-charge no-op; changed configuration returns the exact framed ConfigureAliasAutoRenew instruction and a canonical plan hash.",
+        "aliasAutoRenewPlan",
+        "AliasAutoRenewPlanRequestV1",
+    )
 }
 
 fn contract_alias_resolve_operation() -> Map {
@@ -10459,10 +10604,9 @@ fn alias_resolve_index_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Requires canonical request signing. Fans out the alias-index lookup across \
-             caller-visible Nexus dataspaces because the index alone does not encode a \
-             dataspace, dedupes identical bindings, and returns `source = fanout` when the \
-             result comes from multi-route merging."
+            "Fans out the alias-index lookup across public dataspaces and, when canonical \
+             authentication is supplied, exactly authorized restricted dataspaces. Invisible \
+             entries are removed before totals and cursors are computed."
                 .to_owned(),
         ),
     );
@@ -10528,12 +10672,12 @@ fn alias_lookup_by_account_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Accepts one exact canonical I105 account identifier, routes the public reverse \
-             lookup through caller-permitted Nexus routes, merges and deterministically sorts \
-             at most 64 deduplicated alias rows, and recomputes `total`. Canonical request \
-             signing is required, and the signed caller must hold the exact alias-resolution \
-             permissions needed for returned bindings. The route is independently rate limited \
-             and does not expose prefix or index search."
+            "Accepts one exact canonical I105 account identifier, routes the reverse lookup \
+             through public dataspaces and any exactly authorized restricted routes, filters \
+             invisible aliases before merging, sorting, totals, and cursors, and returns at most \
+             64 deduplicated rows. Canonical authentication is optional for public data and \
+             required for restricted data. The route is independently rate limited and does not \
+             expose prefix or index search."
                 .to_owned(),
         ),
     );
@@ -18468,48 +18612,25 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "AccountOnboardingRequest".to_owned(),
+        "AccountOnboardingPlanRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["alias", "uaid"],
+            "required": ["version", "alias", "account_id"],
             "additionalProperties": false,
-            "oneOf": [
-                { "required": ["account_id"] },
-                { "required": ["public_key_hex"] }
-            ],
             "properties": {
+                "version": { "type": "integer", "const": 1 },
                 "alias": {
                     "type": "string",
-                    "minLength": 1,
-                    "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`."
+                    "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`."
                 },
                 "account_id": {
                     "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material."
-                },
-                "public_key_hex": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9A-Fa-f]{64}$",
-                    "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key."
-                },
-                "uaid": {
-                    "type": "string",
-                    "description": "Explicit UAID literal. Torii trims surrounding whitespace and accepts either a case-insensitive `uaid:` prefix followed by a 64-hex digest or the raw 64-hex digest."
-                },
-                "identity_commitment_hex": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9A-Fa-f]{64}$",
-                    "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted."
+                    "description": "Canonical domainless I105 AccountId."
                 },
                 "permissions": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional permission literals requested from the onboarding allowlist."
+                    "description": "Optional names selected from configured additional_permissions."
                 }
             }
         }),
@@ -18518,84 +18639,50 @@ fn openapi_schemas() -> Map {
         "AccountAliasLease".to_owned(),
         norito::json!({
             "type": "object",
-            "required": [
-                "alias",
-                "dataspace",
-                "is_primary",
-                "lease_status",
-                "expires_at_ms",
-                "grace_expires_at_ms",
-                "redemption_expires_at_ms",
-                "auto_renew_enabled"
-            ],
+            "required": ["alias", "dataspace", "is_primary", "lease_status", "expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms", "auto_renew_enabled"],
             "additionalProperties": false,
             "properties": {
-                "alias": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical account alias bound by the onboarding transaction."
+                "alias": { "type": "string" },
+                "dataspace": { "type": "string" },
+                "domain": { "type": "string" },
+                "is_primary": { "type": "boolean" },
+                "lease_status": { "type": "string" },
+                "expires_at_ms": { "type": "integer", "format": "uint64" },
+                "grace_expires_at_ms": { "type": "integer", "format": "uint64" },
+                "redemption_expires_at_ms": { "type": "integer", "format": "uint64" },
+                "auto_renew_enabled": { "type": "boolean" },
+                "auto_renew_revision": { "type": "integer", "format": "uint64" },
+                "next_retry_at_ms": { "type": "integer", "format": "uint64" },
+                "auto_renew_failure_count": { "type": "integer", "format": "uint32" },
+                "auto_renew_suspended_reason": { "type": "string" },
+                "max_renewal_amount": { "$ref": "#/components/schemas/Quantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountOnboardingPlanReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["body", "plan_hash", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry."
                 },
-                "dataspace": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical alias of the dataspace that owns the binding."
-                },
-                "domain": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Optional fully qualified alias domain scope. Omitted for a dataspace-root alias."
-                },
-                "is_primary": {
-                    "type": "boolean",
-                    "description": "Whether this is the account's primary alias in the dataspace."
-                },
-                "lease_status": {
-                    "type": "string",
-                    "enum": ["active", "grace_period", "redemption", "frozen", "tombstoned"],
-                    "description": "Current account-alias lease lifecycle state."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Lease expiry timestamp in Unix milliseconds."
-                },
-                "grace_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Grace-period expiry timestamp in Unix milliseconds."
-                },
-                "redemption_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Redemption-period expiry timestamp in Unix milliseconds."
-                },
-                "auto_renew_enabled": {
-                    "type": "boolean",
-                    "description": "Whether onboarding configured automatic renewal for this lease."
-                },
-                "subscription_status": {
-                    "type": "string",
-                    "enum": ["active", "paused", "past_due", "canceled", "suspended"],
-                    "description": "Optional auto-renew subscription state."
-                },
-                "next_charge_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "description": "Optional next automatic charge timestamp in Unix milliseconds."
-                },
-                "last_invoice_status": {
-                    "type": "string",
-                    "enum": ["paid", "failed"],
-                    "description": "Optional outcome of the most recent auto-renew invoice."
-                },
-                "max_charge_amount": {
-                    "$ref": "#/components/schemas/Quantity",
-                    "description": "Optional exact cap on an automatic renewal charge."
-                }
+                "plan_hash": { "type": "string", "description": "Domain-separated hash of the canonical Norito body." },
+                "signature": { "$ref": "#/components/schemas/JsonValue", "description": "Onboarding-authority signature over plan_hash." }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountOnboardingApplyRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["receipt"],
+            "additionalProperties": false,
+            "properties": {
+                "receipt": { "$ref": "#/components/schemas/AccountOnboardingPlanReceipt" }
             }
         }),
     );
@@ -18603,37 +18690,14 @@ fn openapi_schemas() -> Map {
         "AccountOnboardingResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["account_id", "uaid", "tx_hash_hex", "status", "lease"],
+            "required": ["account_id", "alias", "status", "disposition"],
             "additionalProperties": false,
             "properties": {
-                "account_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical domainless I105 account identifier queued for registration."
-                },
-                "uaid": {
-                    "type": "string",
-                    "minLength": 69,
-                    "maxLength": 69,
-                    "pattern": "^uaid:[0-9a-f]{64}$",
-                    "description": "Canonical lowercase UAID literal bound to the account."
-                },
-                "tx_hash_hex": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Canonical lowercase hash of the queued onboarding transaction."
-                },
-                "status": {
-                    "type": "string",
-                    "const": "QUEUED",
-                    "description": "Queue acceptance state; this is not ledger finality."
-                },
-                "lease": {
-                    "$ref": "#/components/schemas/AccountAliasLease",
-                    "description": "Alias lease derived from the accepted onboarding quote."
-                }
+                "account_id": { "type": "string" },
+                "alias": { "type": "string" },
+                "tx_hash_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "status": { "type": "string", "enum": ["Queued", "Repaired", "Unchanged"] },
+                "disposition": { "$ref": "#/components/schemas/JsonValue" }
             }
         }),
     );
@@ -18744,6 +18808,106 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional topic labels stored with the device; bounded by torii.push.max_topics_per_device."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasSetupPlanRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "intents"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "enum": [1] },
+                "intents": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "EnsureAlias instructions. The planner canonicalizes dependency order to dataspace, domain, then account alias.",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasTransactionPlanV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["body", "plan_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Canonical versioned plan body containing the authority, chain, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry."
+                },
+                "plan_hash": {
+                    "type": "string",
+                    "description": "Domain-separated hash of the canonical Norito-encoded plan body."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLeaseRenewPlanRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "renewal"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "enum": [1] },
+                "renewal": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact RenewAliasLease target, expected-current-expiry CAS, absolute target expiry, and guarded quote cap."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasAutoRenewPlanRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "configuration"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "enum": [1] },
+                "configuration": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact ConfigureAliasAutoRenew target, expected revision, and optional owner configuration."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLifecycleTransactionPlanV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["body", "plan_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Canonical versioned lifecycle plan body containing the authority, chain, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry."
+                },
+                "plan_hash": {
+                    "type": "string",
+                    "description": "Domain-separated hash of the canonical Norito-encoded lifecycle plan body."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasSetupReportV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "status", "diagnostics"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "status": { "type": "string", "enum": ["ready", "pending", "blocked"] },
+                "diagnostics": {
+                    "type": "array",
+                    "description": "Deterministically sorted, secret-free diagnostics with phase, stable code, severity, resource, expected/actual values, and remediation.",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
                 }
             }
         }),
@@ -23456,9 +23620,9 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn account_onboarding_openapi_matches_runtime_auth_and_queue_contract() {
+    fn account_onboarding_openapi_exposes_plan_and_receipt_apply_only() {
         use iroha_torii_shared::route_catalog::application_api::{
-            ACCOUNTS_ONBOARD_MULTISIG_POST, ACCOUNTS_ONBOARD_POST,
+            ACCOUNTS_ONBOARD_PLAN_POST, ACCOUNTS_ONBOARD_POST,
         };
 
         let document = generate_spec();
@@ -23466,273 +23630,49 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("OpenAPI paths");
-        assert!(ACCOUNTS_ONBOARD_POST.projections().openapi());
-        assert!(ACCOUNTS_ONBOARD_POST.projections().sdk());
-        assert!(!ACCOUNTS_ONBOARD_MULTISIG_POST.projections().openapi());
-        assert!(ACCOUNTS_ONBOARD_MULTISIG_POST.projections().sdk());
-        assert!(
-            !paths.contains_key("/v1/accounts/onboard/multisig"),
-            "the SDK-only multisig onboarding route must not enter OpenAPI"
-        );
-
-        let path = "/v1/accounts/onboard";
-        let operation = openapi_operation(&document, path, "post");
-        assert_eq!(
-            operation_header_requirements(operation),
-            vec![
-                ("X-Iroha-Onboarding-Token".to_owned(), true),
-                ("X-API-Token".to_owned(), false),
-            ],
-            "POST {path} dedicated and global token header contract"
-        );
-        let token_parameter = operation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .and_then(|parameters| parameters.first())
-            .and_then(Value::as_object)
-            .expect("onboarding token header parameter");
-        let token_description = token_parameter
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("onboarding token header description");
-        assert!(token_description.contains("Exactly one opaque raw"));
-        assert!(token_description.contains("printable non-whitespace ASCII"));
-        assert!(token_description.contains("BLAKE3 digest"));
-        assert!(token_description.contains("protected transport"));
-        let token_schema = token_parameter
-            .get("schema")
-            .and_then(Value::as_object)
-            .expect("onboarding token header schema");
-        assert_eq!(token_schema.get("minLength"), Some(&Value::from(32_u64)));
-        assert_eq!(token_schema.get("maxLength"), Some(&Value::from(256_u64)));
-        assert_eq!(
-            token_schema.get("pattern").and_then(Value::as_str),
-            Some("^[!-~]{32,256}$")
-        );
-
-        assert_eq!(
-            operation_request_schema_ref(operation, path),
-            "#/components/schemas/AccountOnboardingRequest"
-        );
-        let request_content = operation
-            .get("requestBody")
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("content"))
-            .and_then(Value::as_object)
-            .expect("onboarding request media types");
-        assert_eq!(
-            request_content
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            vec!["application/json"],
-            "onboarding accepts exactly one canonical request representation"
-        );
-
-        let responses = operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .expect("onboarding responses");
-        assert_eq!(
-            responses
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["202", "400", "401", "406", "415", "429", "503"])
-        );
-        assert_eq!(
-            operation_response_schema_ref(operation, "202", path),
-            "#/components/schemas/AccountOnboardingResponse"
-        );
-
-        for (status, codes) in [
+        for (descriptor, path, request_schema) in [
             (
-                "401",
-                &["api_token_required", "onboarding_auth_required"][..],
+                ACCOUNTS_ONBOARD_PLAN_POST,
+                "/v1/accounts/onboard/plan",
+                "#/components/schemas/AccountOnboardingPlanRequest",
             ),
             (
-                "503",
-                &[
-                    "api_token_unavailable",
-                    "onboarding_auth_unavailable",
-                    "preauth_*_capacity",
-                ][..],
+                ACCOUNTS_ONBOARD_POST,
+                "/v1/accounts/onboard",
+                "#/components/schemas/AccountOnboardingApplyRequest",
             ),
         ] {
-            let response = responses
-                .get(status)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("onboarding HTTP {status}"));
-            let description = response
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("onboarding HTTP {status} description"));
-            for code in codes {
-                assert!(
-                    description.contains(code),
-                    "HTTP {status} must name ErrorEnvelope code {code}"
-                );
-            }
-            let content = response
-                .get("content")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("onboarding HTTP {status} content"));
+            assert!(descriptor.projections().openapi());
+            let operation = openapi_operation(&document, path, "post");
             assert_eq!(
-                content
-                    .get("application/json")
-                    .and_then(Value::as_object)
-                    .and_then(|media| media.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some("#/components/schemas/ErrorEnvelope")
+                operation_request_schema_ref(operation, path),
+                request_schema
             );
-            let norito_schema = content
-                .get("application/x-norito")
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("onboarding HTTP {status} Norito schema"));
-            assert_eq!(
-                norito_schema.get("type").and_then(Value::as_str),
-                Some("string")
-            );
-            assert_eq!(
-                norito_schema.get("format").and_then(Value::as_str),
-                Some("binary")
-            );
-            assert_eq!(
-                response
-                    .get("headers")
-                    .and_then(Value::as_object)
-                    .and_then(|headers| headers.get("Vary"))
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some("Accept")
+            assert!(
+                operation_header_requirements(operation)
+                    .iter()
+                    .any(|(name, required)| name == "X-Iroha-Onboarding-Token" && *required)
             );
         }
-
-        let unauthorized_headers = responses
-            .get("401")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .expect("onboarding 401 headers");
-        assert_eq!(
-            unauthorized_headers
-                .get("WWW-Authenticate")
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("enum"))
-                .and_then(Value::as_array),
-            Some(&vec![
-                Value::String("IrohaApiToken realm=\"torii\"".to_owned()),
-                Value::String("IrohaOnboardingToken".to_owned()),
-            ])
-        );
-        let unavailable_headers = responses
-            .get("503")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .expect("onboarding 503 headers");
-        assert!(!unavailable_headers.contains_key("WWW-Authenticate"));
-        assert_eq!(
-            unavailable_headers
-                .get("Retry-After")
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
-                .and_then(Value::as_str),
-            Some("1")
-        );
-        let rate_limited_headers = responses
-            .get("429")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .expect("onboarding 429 headers");
-        assert_eq!(
-            rate_limited_headers
-                .get("Retry-After")
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
-                .and_then(Value::as_str),
-            Some("1")
-        );
-
-        let schemas = component_schemas(&document);
-        assert_strict_object_schema(
-            schemas,
+        assert!(!paths.contains_key("/v1/accounts/onboard/multisig"));
+        for removed in [
             "AccountOnboardingRequest",
-            &["alias", "uaid"],
-            &[
-                "account_id",
-                "public_key_hex",
-                "identity_commitment_hex",
-                "permissions",
-            ],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "AccountOnboardingResponse",
-            &["account_id", "uaid", "tx_hash_hex", "status", "lease"],
-            &[],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "AccountAliasLease",
-            &[
-                "alias",
-                "dataspace",
-                "is_primary",
-                "lease_status",
-                "expires_at_ms",
-                "grace_expires_at_ms",
-                "redemption_expires_at_ms",
-                "auto_renew_enabled",
-            ],
-            &[
-                "domain",
-                "subscription_status",
-                "next_charge_ms",
-                "last_invoice_status",
-                "max_charge_amount",
-            ],
-        );
-        let onboarding_response = schemas
-            .get("AccountOnboardingResponse")
-            .and_then(Value::as_object)
-            .expect("AccountOnboardingResponse schema");
-        let response_properties = onboarding_response
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("AccountOnboardingResponse properties");
-        assert_eq!(
-            response_properties
-                .get("status")
-                .and_then(Value::as_object)
-                .and_then(|status| status.get("const"))
-                .and_then(Value::as_str),
-            Some("QUEUED")
-        );
-        for field in ["uaid", "tx_hash_hex"] {
+            "MultisigAccountOnboardingRequest",
+            "AccountAliasRenewRequest",
+            "AccountAliasAutoRenewRequest",
+        ] {
             assert!(
-                response_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|property| property.get("pattern"))
-                    .and_then(Value::as_str)
-                    .is_some(),
-                "AccountOnboardingResponse.{field} canonical output pattern"
+                !component_schemas(&document).contains_key(removed),
+                "removed schema {removed} must not be published"
             );
+        }
+        for required in [
+            "AccountOnboardingPlanRequest",
+            "AccountOnboardingPlanReceipt",
+            "AccountOnboardingApplyRequest",
+            "AccountOnboardingResponse",
+        ] {
+            assert!(component_schemas(&document).contains_key(required));
         }
     }
 
@@ -26211,6 +26151,9 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve-index"));
         assert!(paths.contains_key("/v1/aliases/by-account"));
+        assert!(paths.contains_key("/v1/aliases/setup/plan"));
+        assert!(paths.contains_key("/v1/aliases/lease/renew/plan"));
+        assert!(paths.contains_key("/v1/aliases/auto-renew/plan"));
         assert!(paths.contains_key("/v1/retail/recipients/lookup"));
         assert!(paths.contains_key("/v1/retail/recipients/route"));
         assert!(paths.contains_key("/v1/fee-sponsor-programs/by-id"));
@@ -26535,7 +26478,9 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/moderation/viewer-audit-reports/publish-due"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
-        assert!(paths.contains_key("/v1/sns/names"));
+        assert!(paths.contains_key("/v1/sns/names/{namespace}/{literal}"));
+        assert!(!paths.contains_key("/v1/sns/names"));
+        assert!(!paths.contains_key("/v1/sns/names/{namespace}/{literal}/renew"));
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
@@ -29769,7 +29714,7 @@ mod tests {
             PathCase {
                 label: "sns",
                 builder: sns_paths,
-                expected: "/v1/sns/names",
+                expected: "/v1/sns/names/{namespace}/{literal}",
             },
             PathCase {
                 label: "soranet",
@@ -31913,7 +31858,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_alias_and_recipient_openapi_requires_canonical_auth_and_exact_401() {
+    fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
         let document = generate_spec();
         let canonical_headers = vec![
             ("X-Iroha-Account".to_owned(), false),
@@ -31944,9 +31889,8 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("alias by-account description");
-        assert!(lookup_description.contains("Canonical request signing is required"));
-        assert!(lookup_description.contains("exact alias-resolution permissions"));
-        assert!(!lookup_description.contains("Unsigned requests are allowed"));
+        assert!(lookup_description.contains("Canonical authentication is optional"));
+        assert!(lookup_description.contains("required for restricted data"));
 
         let exact_resolve = openapi_operation(&document, "/v1/aliases/resolve", "post");
         assert_eq!(
@@ -31960,9 +31904,43 @@ mod tests {
                 .get("description")
                 .and_then(Value::as_str)
                 .is_some_and(
-                    |description| description.contains("Canonical request signing is required")
+                    |description| description.contains("Public dataspaces may be read unsigned")
                 )
         );
+
+        let setup_plan = openapi_operation(&document, "/v1/aliases/setup/plan", "post");
+        assert_eq!(
+            operation_header_requirements(setup_plan),
+            canonical_headers,
+            "POST /v1/aliases/setup/plan canonical authentication headers"
+        );
+        assert_alias_auth_required_response(setup_plan, "/v1/aliases/setup/plan");
+        assert!(
+            setup_plan
+                .get("responses")
+                .and_then(Value::as_object)
+                .is_some_and(|responses| responses.contains_key("409")),
+            "planner must document structured drift conflicts"
+        );
+        for path in [
+            "/v1/aliases/lease/renew/plan",
+            "/v1/aliases/auto-renew/plan",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "POST {path} canonical authentication headers"
+            );
+            assert_alias_auth_required_response(operation, path);
+            assert!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .is_some_and(|responses| responses.contains_key("409")),
+                "POST {path} must document live CAS/owner/quote conflicts"
+            );
+        }
         assert!(
             exact_resolve
                 .get("responses")

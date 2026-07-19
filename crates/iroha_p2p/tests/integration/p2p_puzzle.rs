@@ -101,6 +101,8 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,

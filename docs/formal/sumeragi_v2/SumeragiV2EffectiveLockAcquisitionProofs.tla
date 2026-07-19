@@ -524,9 +524,7 @@ AcquisitionProgressRankCarrier == 1..5
 AcquisitionProgressOrdering == OpToRel(<, Nat)
 
 AcquisitionProgressGoal(round, subject) ==
-  \/ decided
-  \/ desiredRound > round
-  \/ LockReady(round, subject)
+  decided \/ desiredRound > round \/ LockReady(round, subject)
 
 AcquisitionProgressRank ==
   CASE acquisitionPhase = "Ready" -> 0
@@ -1377,7 +1375,8 @@ PROOF
              /\ [AcquisitionNext]_acquisitionVars
             => \/ AcquisitionProgressAtRank(round, subject, 1)'
                \/ AcquisitionProgressExit(round, subject, 1)'
-      BY AcquisitionProgressRankIsNotOrphaned
+      BY <1>1, AcquisitionProgressRankIsNotOrphaned
+         DEF AcquisitionProgressRankCarrier
     <2>2. AcquisitionProgressAtRank(round, subject, 1)
               => ENABLED <<CompleteOwnedLoad>>_acquisitionVars
       BY AcquisitionRank1ActionIsEnabled
@@ -1408,7 +1407,8 @@ PROOF
              /\ [AcquisitionNext]_acquisitionVars
             => \/ AcquisitionProgressAtRank(round, subject, 2)'
                \/ AcquisitionProgressExit(round, subject, 2)'
-      BY AcquisitionProgressRankIsNotOrphaned
+      BY <1>1, AcquisitionProgressRankIsNotOrphaned
+         DEF AcquisitionProgressRankCarrier
     <2>2. AcquisitionProgressAtRank(round, subject, 2)
               => ENABLED <<RetryRecoveredBody>>_acquisitionVars
       BY AcquisitionRank2ActionIsEnabled
@@ -1439,7 +1439,8 @@ PROOF
              /\ [AcquisitionNext]_acquisitionVars
             => \/ AcquisitionProgressAtRank(round, subject, 3)'
                \/ AcquisitionProgressExit(round, subject, 3)'
-      BY AcquisitionProgressRankIsNotOrphaned
+      BY <1>1, AcquisitionProgressRankIsNotOrphaned
+         DEF AcquisitionProgressRankCarrier
     <2>2. AcquisitionProgressAtRank(round, subject, 3)
               => ENABLED <<RecoverDesiredBody>>_acquisitionVars
       BY AcquisitionRank3ActionIsEnabled
@@ -1470,7 +1471,8 @@ PROOF
              /\ [AcquisitionNext]_acquisitionVars
             => \/ AcquisitionProgressAtRank(round, subject, 4)'
                \/ AcquisitionProgressExit(round, subject, 4)'
-      BY AcquisitionProgressRankIsNotOrphaned
+      BY <1>1, AcquisitionProgressRankIsNotOrphaned
+         DEF AcquisitionProgressRankCarrier
     <2>2. AcquisitionProgressAtRank(round, subject, 4)
               => ENABLED <<CompleteOwnedLoad>>_acquisitionVars
       BY AcquisitionRank4ActionIsEnabled
@@ -1501,7 +1503,8 @@ PROOF
              /\ [AcquisitionNext]_acquisitionVars
             => \/ AcquisitionProgressAtRank(round, subject, 5)'
                \/ AcquisitionProgressExit(round, subject, 5)'
-      BY AcquisitionProgressRankIsNotOrphaned
+      BY <1>1, AcquisitionProgressRankIsNotOrphaned
+         DEF AcquisitionProgressRankCarrier
     <2>2. AcquisitionProgressAtRank(round, subject, 5)
               => ENABLED <<CompleteOwnedLoad>>_acquisitionVars
       BY AcquisitionRank5ActionIsEnabled
@@ -1514,34 +1517,6 @@ PROOF
       BY DEF AcquisitionSpec
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
          DEF AcquisitionSpec
-  <1> QED BY <1>1
-
-THEOREM AcquisitionEveryRankLeadsToExit ==
-  \A round \in 0..MaxAcquisitionLockRound,
-     subject \in AcquisitionSubjects,
-     rank \in AcquisitionProgressRankCarrier:
-    AcquisitionSpec
-      => (AcquisitionProgressAtRank(round, subject, rank)
-            ~> AcquisitionProgressExit(round, subject, rank))
-PROOF
-  <1>1. ASSUME NEW round \in 0..MaxAcquisitionLockRound,
-                NEW subject \in AcquisitionSubjects,
-                NEW rank \in AcquisitionProgressRankCarrier
-         PROVE AcquisitionSpec
-                 => (AcquisitionProgressAtRank(round, subject, rank)
-                       ~> AcquisitionProgressExit(round, subject, rank))
-    <2>1. CASE rank = 1
-      BY <2>1, AcquisitionRank1LeadsToExit
-    <2>2. CASE rank = 2
-      BY <2>2, AcquisitionRank2LeadsToExit
-    <2>3. CASE rank = 3
-      BY <2>3, AcquisitionRank3LeadsToExit
-    <2>4. CASE rank = 4
-      BY <2>4, AcquisitionRank4LeadsToExit
-    <2>5. CASE rank = 5
-      BY <2>5, AcquisitionRank5LeadsToExit
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
-         AcquisitionProgressRankCarrierCases
   <1> QED BY <1>1
 
 THEOREM AcquisitionRank1ExitClassification ==
@@ -1773,39 +1748,6 @@ PROOF
     <2> QED BY <2>1, <2>7, PTL
   <1> QED BY <1>1
 
-THEOREM AcquisitionEveryRankLeadsToGoal ==
-  \A round \in 0..MaxAcquisitionLockRound,
-     subject \in AcquisitionSubjects:
-    AcquisitionSpec
-      => \A rank \in AcquisitionProgressRankCarrier:
-           AcquisitionProgressAtRank(round, subject, rank)
-             ~> AcquisitionProgressGoal(round, subject)
-PROOF
-  <1>1. ASSUME NEW round \in 0..MaxAcquisitionLockRound,
-                NEW subject \in AcquisitionSubjects
-         PROVE AcquisitionSpec
-                 => \A rank \in AcquisitionProgressRankCarrier:
-                      AcquisitionProgressAtRank(round, subject, rank)
-                        ~> AcquisitionProgressGoal(round, subject)
-    <2>1. ASSUME NEW rank \in AcquisitionProgressRankCarrier
-           PROVE AcquisitionSpec
-                   => (AcquisitionProgressAtRank(round, subject, rank)
-                         ~> AcquisitionProgressGoal(round, subject))
-      <3>1. CASE rank = 1
-        BY <3>1, AcquisitionRank1LeadsToGoal
-      <3>2. CASE rank = 2
-        BY <3>2, AcquisitionRank2LeadsToGoal
-      <3>3. CASE rank = 3
-        BY <3>3, AcquisitionRank3LeadsToGoal
-      <3>4. CASE rank = 4
-        BY <3>4, AcquisitionRank4LeadsToGoal
-      <3>5. CASE rank = 5
-        BY <3>5, AcquisitionRank5LeadsToGoal
-      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5,
-           AcquisitionProgressRankCarrierCases
-    <2> QED BY <2>1
-  <1> QED BY <1>1
-
 THEOREM AcquisitionPendingHasConcreteProgressRank ==
   \A round \in 0..MaxAcquisitionLockRound,
      subject \in AcquisitionSubjects:
@@ -1896,9 +1838,27 @@ PROOF
 
 THEOREM AcquisitionSpecProvidesEffectiveLockProgress ==
   AcquisitionSpec => EffectiveLockAcquisitionProgress
-BY AcquisitionDesiredLockLeadsToGoal
-   DEF EffectiveLockAcquisitionProgress,
-       AcquisitionProgressGoal
+PROOF
+  <1>1. ASSUME AcquisitionSpec
+         PROVE EffectiveLockAcquisitionProgress
+    <2>1. \A round \in 0..MaxAcquisitionLockRound,
+              subject \in AcquisitionSubjects:
+             DesiredLock(round, subject)
+               ~> AcquisitionProgressGoal(round, subject)
+      PROOF
+        <3>1. ASSUME NEW round \in 0..MaxAcquisitionLockRound,
+                      NEW subject \in AcquisitionSubjects
+               PROVE DesiredLock(round, subject)
+                       ~> AcquisitionProgressGoal(round, subject)
+        <4>1. AcquisitionSpec
+                 => (DesiredLock(round, subject)
+                       ~> AcquisitionProgressGoal(round, subject))
+          BY <3>1, AcquisitionDesiredLockLeadsToGoal
+        <4> QED BY <1>1, <4>1, PTL
+        <3> QED BY <3>1
+    <2> QED BY <2>1
+         DEF AcquisitionProgressGoal, EffectiveLockAcquisitionProgress
+  <1> QED BY <1>1
 
 (***************************************************************************
 Ready delivery is a second weak-fair obligation.  Same-lock consumer churn

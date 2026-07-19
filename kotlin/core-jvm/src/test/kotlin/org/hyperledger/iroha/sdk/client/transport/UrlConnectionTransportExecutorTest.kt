@@ -121,6 +121,57 @@ class UrlConnectionTransportExecutorTest {
     }
 
     @Test
+    fun redirectsAreReturnedWithoutForwardingSensitiveHeaders() {
+        ServerSocket(0).use { server ->
+            server.soTimeout = 1_000
+            val port = server.localPort
+            val redirectedRequest = AtomicReference<String?>(null)
+            val serverThread = Thread {
+                server.accept().use { socket ->
+                    readHeaders(socket.getInputStream())
+                    socket.getOutputStream().apply {
+                        write(
+                            ("HTTP/1.1 302 Found\r\n" +
+                                "Location: http://127.0.0.1:$port/redirected\r\n" +
+                                "Content-Length: 0\r\nConnection: close\r\n\r\n")
+                                .toByteArray(StandardCharsets.UTF_8),
+                        )
+                        flush()
+                    }
+                }
+                try {
+                    server.accept().use { socket ->
+                        redirectedRequest.set(readHeaders(socket.getInputStream()))
+                        socket.getOutputStream().apply {
+                            write(
+                                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    .toByteArray(StandardCharsets.UTF_8),
+                            )
+                            flush()
+                        }
+                    }
+                } catch (_: java.net.SocketTimeoutException) {
+                    // Expected: the executor must expose the redirect without following it.
+                }
+            }.apply {
+                isDaemon = true
+                start()
+            }
+            val request = TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(URI.create("http://127.0.0.1:$port/original"))
+                .addHeader("X-Iroha-Onboarding-Token", "sensitive-runtime-token")
+                .build()
+
+            val response = UrlConnectionTransportExecutor().execute(request).get()
+
+            assertEquals(302, response.statusCode)
+            serverThread.join(3_000)
+            assertNull(redirectedRequest.get(), "redirect target must not receive a second request")
+        }
+    }
+
+    @Test
     fun bufferedResponseAcceptsExactConfiguredLimit() {
         val response = executeRawResponse(
             "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n12345678",
@@ -128,6 +179,16 @@ class UrlConnectionTransportExecutorTest {
         )
 
         assertEquals("12345678", response.body.toString(StandardCharsets.UTF_8))
+    }
+
+    private fun readHeaders(input: InputStream): String {
+        val result = StringBuilder()
+        while (!result.endsWith("\r\n\r\n")) {
+            val next = input.read()
+            if (next == -1) break
+            result.append(next.toChar())
+        }
+        return result.toString()
     }
 
     @Test

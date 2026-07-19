@@ -831,32 +831,6 @@ export function buildApplySccpRouteGovernanceTransaction({
 }
 
 /**
- * Build and sign an SNS name-registration consensus transaction.
- * @param {{
- *   chainId: string,
- *   authority: string,
- *   request: object,
- *   metadata?: object | string | null,
- *   creationTimeMs?: number,
- *   ttlMs?: number,
- *   nonce?: number,
- *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   privateKeyAlgorithm?: string
- * }} input
- * @returns {{signedTransaction: Buffer, hash: Buffer}}
- */
-export function buildRegisterSnsNameTransaction(input) {
-  const request = input?.request;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new TypeError("request must be a non-null object");
-  }
-  return buildTransaction({
-    ...input,
-    instructions: [{ RegisterSnsName: request }],
-  });
-}
-
-/**
  * Build and sign a transaction whose executable is `Executable::IvmProved`.
  * @param {{
  *   chainId: string,
@@ -5201,81 +5175,6 @@ export async function submitSignedTransaction(
   error.submission = submission;
   error.status = status;
   throw error;
-}
-
-/**
- * Build, submit, and optionally wait for an SNS name-registration transaction.
- * @param {{
- *   client?: ToriiClient,
- *   toriiUrl?: string,
- *   chainId: string,
- *   authority: string,
- *   request: object,
- *   metadata?: object | string | null,
- *   creationTimeMs?: number,
- *   ttlMs?: number,
- *   nonce?: number,
- *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   waitForCommit?: boolean,
- *   pollIntervalMs?: number,
- *   timeoutMs?: number,
- *   scope?: "local" | "auto" | "global" | string | null
- * }} input
- * @returns {Promise<{hash: string, submittedHash: string | null, submission: any, status?: any}>}
- */
-export async function registerSnsNameViaConsensus(input) {
-  if (!input || typeof input !== "object") {
-    throw new TypeError("input must be an object");
-  }
-  let client = input.client ?? null;
-  if (client === null) {
-    const toriiUrl = String(input.toriiUrl ?? "").trim();
-    if (!toriiUrl) {
-      throw new TypeError("client or toriiUrl is required");
-    }
-    client = new ToriiClient(toriiUrl);
-  }
-  if (!(client instanceof ToriiClient)) {
-    throw new TypeError("client must be an instance of ToriiClient");
-  }
-  const transaction = buildRegisterSnsNameTransaction(input);
-  try {
-    const result = await submitSignedTransaction(
-      client,
-      transaction.signedTransaction,
-      {
-        waitForCommit: input.waitForCommit ?? true,
-        pollIntervalMs: input.pollIntervalMs,
-        timeoutMs: input.timeoutMs,
-        scope: input.scope,
-      },
-    );
-    return {
-      hash: transaction.hash.toString("hex"),
-      submittedHash: result?.hash ?? null,
-      submission: result?.submission ?? null,
-      status: result?.status ?? null,
-    };
-  } catch (error) {
-    const message = String(error?.message ?? error);
-    if (
-      !message
-        .toLowerCase()
-        .includes("timed out waiting for transaction status")
-    ) {
-      throw error;
-    }
-    return {
-      hash: transaction.hash.toString("hex"),
-      submittedHash: error?.hash ?? null,
-      submission: error?.submission ?? null,
-      status: {
-        kind: "PendingTimeout",
-        error: message,
-        ...(error?.status !== undefined ? { lastStatus: error.status } : {}),
-      },
-    };
-  }
 }
 
 /**

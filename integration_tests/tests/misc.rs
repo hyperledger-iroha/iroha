@@ -3,27 +3,11 @@
 
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{
-    client,
-    data_model::{
-        account::AccountAddress,
-        metadata::Metadata,
-        prelude::*,
-        sns::{
-            DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameSelectorV1, PaymentProofV1,
-            RegisterNameRequestV1,
-        },
-    },
-};
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha::{client, data_model::prelude::*};
 use iroha_telemetry::metrics::Status;
 use iroha_test_network::*;
 use sandbox::start_network_async_or_skip;
 use tokio::task::spawn_blocking;
-
-fn test_sns_lease_payment() -> Quantity {
-    "0.5".parse().expect("valid test payment")
-}
 
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
     lhs.peers == rhs.peers
@@ -85,30 +69,8 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         let client = client.clone();
         spawn_blocking(move || {
             let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
-            let owner = client.account.clone();
-            let controller = AccountAddress::from_account_id(&owner)?;
-            client.sns().register(
-                &RegisterNameRequestV1 {
-                    selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.to_string())?,
-                    owner: owner.clone(),
-                    controllers: vec![NameControllerV1::account(&controller)],
-                    term_years: 1,
-                    pricing_class_hint: Some(0),
-                    payment: PaymentProofV1 {
-                        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-                        gross_amount: test_sns_lease_payment(),
-                        net_amount: test_sns_lease_payment(),
-                        settlement_tx: Json::from("mock-settlement"),
-                        payer: owner,
-                        signature: Json::from("mock-signature"),
-                    },
-                    governance: None,
-                    metadata: Metadata::default(),
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )?;
             client.submit_blocking(
-                Register::domain(Domain::new(domain)),
+                domain_setup_instruction(&domain, &client.account)?,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
         })

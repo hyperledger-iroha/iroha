@@ -217,7 +217,7 @@ run_case effective-lock-future-completion-bug \
 run_case ownership-invariant-n1 \
   SumeragiV2OwnershipInvariantCheck.tla ownership_n1.cfg 0 \
   "Model checking completed. No error has been found." \
-  "42817 states generated, 6208 distinct states found" \
-  "depth of the complete state graph search is 45"
+  "454273 states generated, 49664 distinct states found" \
+  "depth of the complete state graph search is 48"
 
 echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, and ownership mutation matrix passed"

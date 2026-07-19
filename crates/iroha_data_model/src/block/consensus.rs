@@ -1479,6 +1479,26 @@ pub struct LaneBlockQcV1 {
     pub payload_availability_qc: Option<LanePayloadAvailabilityQcV1>,
 }
 
+/// Complete certified lane-block artifact used for authenticated recovery.
+///
+/// A lagging validator retransmits the exact canonical proposal as an
+/// idempotent request. A peer which durably retains the matching Kura artifact
+/// returns this single envelope, so Prepare and Commit evidence cannot be split
+/// across a volatile transport-capacity boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockCertificateV1 {
+    /// Exact canonical proposal certified by both quorum certificates.
+    pub proposal: LaneBlockProposalV1,
+    /// Prepare quorum certificate for [`Self::proposal`].
+    pub prepare_qc: LaneBlockQcV1,
+    /// Commit quorum certificate for [`Self::proposal`].
+    pub commit_qc: LaneBlockQcV1,
+}
+
 #[derive(Clone, Debug, Encode)]
 struct LanePayloadOwnershipSubjectPreimage {
     version: u8,
@@ -4204,6 +4224,7 @@ impl_decode_from_slice_via_codec!(LaneBlockDescriptorV1);
 impl_decode_from_slice_via_codec!(LaneBlockProposalV1);
 impl_decode_from_slice_via_codec!(LaneBlockVoteBodyV1);
 impl_decode_from_slice_via_codec!(LaneBlockQcV1);
+impl_decode_from_slice_via_codec!(LaneBlockCertificateV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(NativeAmxPhase);
@@ -5462,6 +5483,37 @@ mod tests {
             body.accepted_transaction_hashes,
             decoded.descriptor.accepted_transaction_hashes
         );
+    }
+
+    #[test]
+    fn lane_block_certificate_decodes_atomically_from_slice() {
+        let proposal = sample_lane_block_proposal();
+        let qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+            validator_set_hash: proposal.descriptor.validator_set_hash,
+            validator_set: proposal.descriptor.validator_set.clone(),
+            signers_bitmap: vec![0b0000_0111],
+            bls_aggregate_signature: vec![0xA5; 96],
+            payload_availability_qc: None,
+        };
+        let prepare_qc = qc(CertPhase::Prepare);
+        let commit_qc = qc(CertPhase::Commit);
+        let certificate = LaneBlockCertificateV1 {
+            proposal,
+            prepare_qc,
+            commit_qc,
+        };
+        let encoded = certificate.encode();
+        let mut framed = encoded.clone();
+        framed.extend_from_slice(b"next-frame");
+
+        let (decoded, used) = LaneBlockCertificateV1::decode_from_slice(&framed)
+            .expect("atomic lane certificate decodes from its canonical prefix");
+
+        assert_eq!(decoded, certificate);
+        assert_eq!(used, encoded.len());
+        assert_eq!(&framed[used..], b"next-frame");
     }
 
     fn sample_proposal() -> Proposal {

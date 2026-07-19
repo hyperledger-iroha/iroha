@@ -97,6 +97,10 @@ generated `README.md` into the output directory.
 
 `kagami localnet`
 - Bare-metal local network generator
+- Requires at least four peers so generated networks use a representative
+  DA/RBC topology
+- Protects validator/client configs and runtime signer/token sidecars with
+  owner-only permissions and emits a bundle-wide `.gitignore`
 - Defaults to `permissioned` unless a Sora profile or perf preset requires
   `npos`
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`

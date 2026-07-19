@@ -1,53 +1,20 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
+source_hash: e5cc46a4943e57d8a93f1f78a790e0058ddba131560db69fdb6a6720ad1aef32
+source_last_modified: "2026-03-27T18:25:59.298Z"
+translation_last_reviewed: null
 ---
 
-# مجموعة ادوات عناوين Local -> Global
+# قيد الترجمة
 
-تعكس هذه الصفحة `docs/source/sns/local_to_global_toolkit.md` من المستودع الاحادي. وهي تجمع ادوات CLI و runbooks المطلوبة لبند خارطة الطريق **ADDR-5c**.
+<div dir="rtl">
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
 
-## نظرة عامة
-
-- `scripts/address_local_toolkit.sh` يلف CLI الخاص بـ `iroha` لانتاج:
-  - `audit.json` -- خرج منظم من `iroha tools address audit --format json`.
-  - `normalized.txt` -- literals i105 (المفضل) / i105 (الخيار الثاني) محولة لكل selector من نطاق Local.
-- استخدم السكربت مع لوحة ingest للعناوين (`dashboards/grafana/address_ingest.json`)
-  وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
-  Local-12 امن. راقب لوحات التصادم Local-8 و Local-12 والتنبيهات
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, و `AddressInvalidRatioSlo` قبل
-  ترقية تغييرات manifest.
-- ارجع الى [Address Display Guidelines](address-display-guidelines.md) و
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) لسياق UX واستجابة الحوادث.
-
-## الاستخدام
-
-```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
-```
-
-الخيارات:
-
-- `--format i105` لخروج `sora...` بدلا من i105.
-- `domainless output (default)` لاصدار literals بدون نطاق.
-- `--audit-only` لتخطي خطوة التحويل.
-- `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).
-
-يطبع السكربت مسارات artefact في نهاية التشغيل. ارفق كلا الملفين مع
-تذكرة change-management ومع لقطة Grafana التي تثبت صفر
-اكتشافات Local-8 وصفر تصادمات Local-12 لمدة >=30 يوما.
-
-## تكامل CI
-
-1. شغل السكربت في job مخصص وارفع المخرجات.
-2. احظر عمليات الدمج عندما يبلغ `audit.json` عن Local selectors (`domain.kind = local12`).
-   على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
-   تشخيص التراجعات) واضف
-   `iroha tools address normalize` الى CI حتى تفشل
-   محاولات التراجع قبل الوصول الى production.
-
-راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة و release-note snippet
-الذي يمكنك اعادة استخدامه عند اعلان cutover للعملاء.
+هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+</div>

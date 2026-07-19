@@ -13,9 +13,7 @@ use iroha_data_model::{
     },
     prelude::{AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, NumericSpec},
 };
-use iroha_executor_data_model::permission::{
-    domain::CanRegisterDomain, parameter::CanSetParameters,
-};
+use iroha_executor_data_model::permission::parameter::CanSetParameters;
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
@@ -91,7 +89,6 @@ pub fn default_manifest(
     let mint_cabbage =
         Mint::asset_quantity(44u32, AssetId::new(cabbage_definition, ALICE_ID.clone()));
     let grant_set_parameters = Grant::account_permission(CanSetParameters, ALICE_ID.clone());
-    let grant_register_domains = Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
     let transfer_rose_definition = Transfer::asset_definition(
         genesis_account_id.clone(),
         rose_definition,
@@ -115,8 +112,7 @@ pub fn default_manifest(
         .append_instruction(mint_cabbage)
         .append_instruction(transfer_rose_definition)
         .append_instruction(transfer_wonderland)
-        .append_instruction(grant_set_parameters)
-        .append_instruction(grant_register_domains);
+        .append_instruction(grant_set_parameters);
 
     let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse()?);
     let gas_param_val = ivm_gas_limit_per_block.unwrap_or(1_680_000u64);

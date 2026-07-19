@@ -13,9 +13,10 @@ max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
-# Canonical wire-byte quotas cover four validators plus the shared untrusted-source lane.
-body_bytes = 167772160
-body_source_bytes = 33554432
+# The checked-in baseline covers four validators plus the shared untrusted-source lane.
+# The validator-bundle renderer scales body_bytes to at least (N + 1) * body_source_bytes.
+body_bytes = 173015040
+body_source_bytes = 34603008
 
 [confidential]
 enabled = true
@@ -90,40 +91,17 @@ address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1073741824
 
 [torii.cors]
-allowed_headers = ["accept", "authorization", "content-type", "idempotency-key", "x-api-token", "x-iroha-onboarding-token"]
+allowed_headers = ["accept", "authorization", "content-type", "idempotency-key", "x-api-token", "x-iroha-onboarding-token", "x-iroha-account", "x-iroha-signature", "x-iroha-timestamp-ms", "x-iroha-nonce"]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_origins = ["http://127.0.0.1:3000", "http://localhost:3000", "https://test.soraswap.org"]
 enabled = true
 exposed_headers = ["etag", "location", "retry-after"]
-
-[torii.faucet]
-amount = "25000"
-asset_definition_id = "xor#universal"
-authority = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-enabled = true
-pow_adaptive_claims_per_extra_bit = 0
-pow_adaptive_lookback_blocks = 64
-pow_adaptive_max_extra_bits = 0
-pow_difficulty_bits = 4
-pow_max_anchor_age_blocks = 256
-pow_scrypt_log_n = 13
-pow_scrypt_p = 1
-pow_scrypt_r = 8
-pow_vrf_seed_enabled = true
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
 [torii.mcp]
 allow_tool_prefixes = ["iroha."]
 enabled = true
 expose_operator_routes = false
 profile = "writer"
-
-[torii.onboarding]
-allowed_permissions = []
-authority = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-enabled = true
-fee_sponsor_program_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/default"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
 [[trusted_peers_pop]]
 pop_hex = "b08719da2ee0976152c12bd33e4f3e40670287ce1a6b764fe58bf1f21ce379e38f72e379bf0623101bbe63a2687ecf06047fd807f14fd2cde9c565c2bd25b29a96986944ca71b962d7d0e1a96ea0d692ec592a2971112ba8f582f06c0a546f43"

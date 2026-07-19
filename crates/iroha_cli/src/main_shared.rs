@@ -113,13 +113,12 @@ pub(crate) fn apply_cli_gas_limit_override(
     let Some(gas_limit) = gas_limit else {
         return Ok(fee_payment);
     };
-    let gas_limit = NonZeroU64::new(gas_limit)
-        .ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
+    let gas_limit =
+        NonZeroU64::new(gas_limit).ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
     Ok(match fee_payment {
-        FeePaymentIntent::Authority(payment) => FeePaymentIntent::authority(
-            payment.charge_limits,
-            Some(gas_limit),
-        ),
+        FeePaymentIntent::Authority(payment) => {
+            FeePaymentIntent::authority(payment.charge_limits, Some(gas_limit))
+        }
         FeePaymentIntent::Sponsor(payment) => FeePaymentIntent::sponsor(
             payment.program_id,
             payment.program_revision,
@@ -129,10 +128,7 @@ pub(crate) fn apply_cli_gas_limit_override(
     })
 }
 
-fn fee_payment_selection_matches(
-    requested: &FeePaymentIntent,
-    quoted: &FeePaymentIntent,
-) -> bool {
+fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
     match (requested, quoted) {
         (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
             requested.gas_limit == quoted.gas_limit
@@ -146,10 +142,7 @@ fn fee_payment_selection_matches(
     }
 }
 
-fn fee_quote_rejection_message(
-    status: reqwest::StatusCode,
-    body: &[u8],
-) -> String {
+fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> String {
     let Ok(envelope) = norito::json::from_slice::<ErrorEnvelope>(body) else {
         let fallback = String::from_utf8_lossy(body);
         return format!(
@@ -162,7 +155,11 @@ fn fee_quote_rejection_message(
         "fee quote rejected with HTTP {status} [{}]: {}",
         envelope.code, envelope.message
     );
-    if let Some(fee) = envelope.details.as_ref().and_then(|details| details.fee.as_ref()) {
+    if let Some(fee) = envelope
+        .details
+        .as_ref()
+        .and_then(|details| details.fee.as_ref())
+    {
         use std::fmt::Write as _;
 
         let _ = write!(
@@ -206,11 +203,7 @@ pub(crate) fn quote_and_sign_transaction(
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
     let mut payload = client
-        .try_build_transaction_payload(
-            executable.clone(),
-            requested_fee_payment.clone(),
-            metadata,
-        )
+        .try_build_transaction_payload(executable.clone(), requested_fee_payment.clone(), metadata)
         .wrap_err("Failed to build exact unsigned transaction payload for fee quoting")?;
     let response = client
         .post_fee_quote_response(&payload)
@@ -331,9 +324,9 @@ impl FeePaymentArgs {
                     .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program"))?
                     .parse()
                     .wrap_err("invalid --fee-program")?;
-                let revision = self.fee_program_revision.ok_or_else(|| {
-                    eyre!("--fee-payer sponsor requires --fee-program-revision")
-                })?;
+                let revision = self
+                    .fee_program_revision
+                    .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program-revision"))?;
                 if revision == 0 {
                     eyre::bail!("--fee-program-revision must be greater than zero");
                 }
@@ -437,14 +430,14 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
+    /// `echo "[]" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
     #[arg(short, long)]
     input: bool,
     /// Outputs instructions to stdout without submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
+    /// `iroha -o asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -641,8 +634,7 @@ trait RunContext {
                 Executable::Instructions(out.into())
             }
         };
-        let fee_payment =
-            apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
+        let fee_payment = apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
         let client = self.client_from_config();
         let (transaction, fee_quote) =
             quote_and_sign_transaction(&client, executable, fee_payment, metadata)?;
@@ -995,7 +987,7 @@ mod app {
         /// Sora Name Service helpers (registrar + policy tooling)
         #[command(subcommand)]
         Sns(crate::commands::sns::Command),
-        /// Alias helpers (placeholder pipeline)
+        /// Alias resolution and declarative setup helpers
         #[command(subcommand)]
         Alias(crate::commands::alias::Command),
         /// Repo settlement helpers
@@ -2052,8 +2044,6 @@ mod domain {
         List(List),
         /// Retrieve details of a specific domain
         Get(Id),
-        /// Register a domain
-        Register(Id),
         /// Unregister a domain
         Unregister(Id),
         /// Transfer ownership of a domain
@@ -2079,13 +2069,6 @@ mod domain {
                         .find(|e| e.id() == &args.id)
                         .ok_or_else(|| eyre!("Domain not found"))?;
                     context.print_data(&entry)
-                }
-                Register(args) => {
-                    let instruction =
-                        iroha::data_model::isi::Register::domain(Domain::new(args.id));
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to register domain")
                 }
                 Unregister(args) => {
                     let instruction = iroha::data_model::isi::Unregister::domain(args.id);
@@ -9085,6 +9068,7 @@ mod tests {
             err_write: Vec::new(),
             config: fallback_config(),
             transaction_metadata: None,
+            fee_payment: FeePaymentArgs::default(),
             input_instructions: false,
             output_instructions: false,
             output_format,
@@ -9155,6 +9139,22 @@ mod tests {
         assert!(
             Args::try_parse_from(["iroha", "contracts", "dev", "doctor"]).is_err(),
             "the retired plural alias must not remain as a compatibility surface"
+        );
+    }
+
+    #[test]
+    fn raw_domain_registration_command_is_not_parseable() {
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "ledger",
+                "domain",
+                "register",
+                "--id",
+                "planned.universal",
+            ])
+            .is_err(),
+            "ordinary domain creation must use `app alias setup`"
         );
     }
 
@@ -9905,11 +9905,9 @@ mod tests {
 
     #[test]
     fn apply_cli_gas_limit_override_rejects_zero() {
-        let err = apply_cli_gas_limit_override(
-            FeePaymentIntent::authority(Vec::new(), None),
-            Some(0),
-        )
-        .expect_err("zero gas limit must fail");
+        let err =
+            apply_cli_gas_limit_override(FeePaymentIntent::authority(Vec::new(), None), Some(0))
+                .expect_err("zero gas limit must fail");
         assert!(err.to_string().contains("greater than zero"));
     }
 
@@ -9920,7 +9918,7 @@ mod tests {
             &executable,
             &FeePaymentIntent::authority(Vec::new(), None),
         )
-            .expect("plain instructions should not require gas_limit");
+        .expect("plain instructions should not require gas_limit");
     }
 
     #[test]
@@ -9964,9 +9962,8 @@ mod tests {
     fn apply_cli_gas_limit_override_sets_and_replaces_signed_value() {
         let fee_payment = authority_fee_payment_with_gas(10);
         let fee_payment = apply_cli_gas_limit_override(fee_payment, Some(42)).unwrap();
-        let gas_limit =
-            iroha::data_model::transaction::require_transaction_gas_limit(&fee_payment)
-                .expect("gas limit should be present");
+        let gas_limit = iroha::data_model::transaction::require_transaction_gas_limit(&fee_payment)
+            .expect("gas limit should be present");
         assert_eq!(gas_limit, 42);
     }
 
@@ -10015,12 +10012,7 @@ mod tests {
             AccountId::new(fixture_key_pair(7).public_key().clone()),
             "default".parse().expect("program name"),
         );
-        let wrong_payer = FeePaymentIntent::sponsor(
-            sponsor,
-            1,
-            Vec::new(),
-            NonZeroU64::new(42),
-        );
+        let wrong_payer = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), NonZeroU64::new(42));
         assert!(!fee_payment_selection_matches(&requested, &wrong_payer));
         let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
         assert!(!fee_payment_selection_matches(&requested, &wrong_gas));

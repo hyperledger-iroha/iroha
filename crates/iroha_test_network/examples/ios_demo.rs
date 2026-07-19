@@ -15,7 +15,9 @@ use color_eyre::{
 };
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain,
+};
 use norito::json::{JsonDeserialize, JsonSerialize};
 use url::Url;
 
@@ -291,13 +293,8 @@ fn main() -> Result<()> {
         };
 
         if known_domains.insert(domain_id.clone()) {
-            let new_domain = Domain::new(domain_id.clone());
-            client
-                .submit_blocking(
-                    Register::domain(new_domain),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .wrap_err_with(|| eyre!("Failed to register domain `{domain_id}`"))?;
+            submit_ensure_domain(&client, Domain::new(domain_id.clone()))
+                .wrap_err_with(|| eyre!("Failed to ensure domain `{domain_id}`"))?;
         }
 
         if known_asset_defs.insert(asset_def_id.clone()) {

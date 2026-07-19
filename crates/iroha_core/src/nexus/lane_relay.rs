@@ -4,13 +4,19 @@
 //! settlement_hash)`, validates each payload, persists it to the Sumeragi status snapshot,
 //! and emits a high-priority control-plane frame so peers can ingest the relay evidence.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, LaneRelayProofStatus},
 };
-use iroha_p2p::{Broadcast, Priority};
+use iroha_p2p::{
+    Broadcast, Priority,
+    network::{
+        NetworkActorAdmissionRejection, NetworkBroadcastAdmissionError,
+        NetworkBroadcastAdmissionTicket,
+    },
+};
 use iroha_telemetry::metrics;
 
 use crate::{IrohaNetwork, NetworkMessage, sumeragi::status};
@@ -45,24 +51,133 @@ fn record_relay_error(err: &LaneRelayError) {
 
 /// Minimal interface required to broadcast relay envelopes.
 pub trait LaneRelayTx: Clone + Send + Sync + 'static {
-    /// Broadcast a validated relay envelope to peers.
-    fn broadcast_relay(&self, envelope: LaneRelayEnvelope);
+    /// Opaque FIFO position retained across temporary actor backpressure.
+    type RetryToken: Send + 'static;
+
+    /// Try to transfer one validated relay envelope into the reliable actor corridor.
+    fn try_broadcast_relay(
+        &self,
+        envelope: LaneRelayEnvelope,
+        retry: Option<Self::RetryToken>,
+    ) -> LaneRelaySendDisposition<Self::RetryToken>;
+}
+
+/// Ownership-preserving result of one lane-relay actor handoff.
+pub enum LaneRelaySendDisposition<R> {
+    /// The network actor accepted exact ownership.
+    Accepted,
+    /// Admission is temporarily full; the exact envelope and FIFO token are returned.
+    Retry {
+        /// Exact envelope which remains owned by the broadcaster.
+        envelope: LaneRelayEnvelope,
+        /// Stable actor-admission position, when the actor had ticket capacity.
+        token: Option<R>,
+    },
+    /// The actor has terminated; this handle cannot make further progress.
+    Closed {
+        /// Exact envelope which never crossed admission.
+        envelope: LaneRelayEnvelope,
+    },
+    /// The envelope permanently violates the actor admission contract.
+    Rejected {
+        /// Exact rejected envelope.
+        envelope: LaneRelayEnvelope,
+        /// Stable admission rejection reason.
+        reason: NetworkActorAdmissionRejection,
+    },
 }
 
 impl LaneRelayTx for IrohaNetwork {
-    fn broadcast_relay(&self, envelope: LaneRelayEnvelope) {
-        self.broadcast(Broadcast {
-            data: NetworkMessage::LaneRelay(Box::new(envelope)),
-            priority: Priority::High,
-        });
+    type RetryToken = NetworkBroadcastAdmissionTicket;
+
+    fn try_broadcast_relay(
+        &self,
+        envelope: LaneRelayEnvelope,
+        retry: Option<Self::RetryToken>,
+    ) -> LaneRelaySendDisposition<Self::RetryToken> {
+        let result = self.broadcast_recoverable(
+            Broadcast {
+                data: NetworkMessage::LaneRelay(Box::new(envelope)),
+                priority: Priority::High,
+            },
+            retry,
+        );
+        match result {
+            Ok(()) => LaneRelaySendDisposition::Accepted,
+            Err(NetworkBroadcastAdmissionError::Backpressured {
+                message, ticket, ..
+            }) => LaneRelaySendDisposition::Retry {
+                envelope: lane_relay_from_broadcast(message),
+                token: Some(ticket),
+            },
+            Err(NetworkBroadcastAdmissionError::Closed {
+                message,
+                ticket: _,
+            }) => {
+                LaneRelaySendDisposition::Closed {
+                    envelope: lane_relay_from_broadcast(message),
+                }
+            }
+            Err(NetworkBroadcastAdmissionError::Rejected {
+                message,
+                ticket: _,
+                reason,
+            }) => {
+                LaneRelaySendDisposition::Rejected {
+                    envelope: lane_relay_from_broadcast(message),
+                    reason,
+                }
+            }
+        }
     }
 }
 
+fn lane_relay_from_broadcast(message: Broadcast<NetworkMessage>) -> LaneRelayEnvelope {
+    match message.data {
+        NetworkMessage::LaneRelay(envelope) => *envelope,
+        _ => unreachable!("lane-relay admission must return the submitted lane relay"),
+    }
+}
+
+const LANE_RELAY_BROADCAST_CAPACITY: usize = 64;
+
+struct PendingRelay<R> {
+    envelope: LaneRelayEnvelope,
+    token: Option<R>,
+}
+
+/// Terminal ownership returned by [`LaneRelayBroadcaster`].
+#[derive(Debug)]
+pub enum LaneRelayBroadcastError<R> {
+    /// All bounded semantic owners are occupied by undelivered relays.
+    Capacity {
+        /// Exact relay which was not admitted into the broadcaster.
+        envelope: LaneRelayEnvelope,
+        /// Stable actor-admission position for every target copy still owned
+        /// by this residual.
+        token: Option<R>,
+    },
+    /// The network actor has terminated.
+    Closed {
+        /// Exact relay which was not admitted into the actor.
+        envelope: LaneRelayEnvelope,
+    },
+    /// The reliable actor rejected a protocol-valid relay permanently.
+    Rejected {
+        /// Exact rejected relay.
+        envelope: LaneRelayEnvelope,
+        /// Stable actor-admission reason.
+        reason: NetworkActorAdmissionRejection,
+    },
+}
+
 /// Broadcasts validated lane relay envelopes and records them in the local status snapshot.
-#[derive(Clone)]
 pub struct LaneRelayBroadcaster<N: LaneRelayTx> {
     network: N,
     seen: BTreeMap<LaneRelayKey, LaneRelayProofStatus>,
+    seen_order: VecDeque<LaneRelayKey>,
+    pending: BTreeMap<LaneRelayKey, PendingRelay<N::RetryToken>>,
+    pending_order: VecDeque<LaneRelayKey>,
 }
 
 impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
@@ -72,11 +187,24 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
         Self {
             network,
             seen: BTreeMap::new(),
+            seen_order: VecDeque::new(),
+            pending: BTreeMap::new(),
+            pending_order: VecDeque::new(),
         }
     }
 
-    /// Validate, de-duplicate, record, and broadcast the provided envelopes.
-    pub fn broadcast(&mut self, envelopes: impl IntoIterator<Item = LaneRelayEnvelope>) {
+    /// Validate, de-duplicate, record, and retain the provided envelopes until actor handoff.
+    ///
+    /// Every capacity or terminal transport failure returns the exact unadmitted envelope. The
+    /// caller must retain those errors across network restart or apply its own fail-stop policy.
+    /// Temporary pressure remains owned internally with its actor FIFO ticket.
+    #[must_use = "terminal lane-relay ownership must be handled"]
+    pub fn broadcast(
+        &mut self,
+        envelopes: impl IntoIterator<Item = LaneRelayEnvelope>,
+    ) -> Result<usize, Vec<LaneRelayBroadcastError<N::RetryToken>>> {
+        let mut errors = Vec::new();
+        let mut immediately_transferred = 0usize;
         for envelope in envelopes {
             if let Err(err) = envelope.verify().and_then(|()| {
                 if envelope.fastpq_proof.is_some() {
@@ -104,10 +232,153 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
             }) {
                 continue;
             }
+
+            if !self.seen.contains_key(&key) && self.seen.len() >= LANE_RELAY_BROADCAST_CAPACITY {
+                let evictable = self
+                    .seen_order
+                    .iter()
+                    .position(|candidate| !self.pending.contains_key(candidate));
+                let Some(position) = evictable else {
+                    // Do not let a full producer-side residual set suppress
+                    // fanout to currently free targets. P2P admits each target
+                    // independently; if any target remains, its opaque ticket
+                    // and this exact envelope are surfaced to the caller as
+                    // Capacity.
+                    status::push_lane_relay_envelope(envelope.clone());
+                    match self.network.try_broadcast_relay(envelope, None) {
+                        LaneRelaySendDisposition::Accepted => {
+                            immediately_transferred = immediately_transferred.saturating_add(1);
+                        }
+                        LaneRelaySendDisposition::Retry {
+                            envelope,
+                            token,
+                        } => errors.push(LaneRelayBroadcastError::Capacity { envelope, token }),
+                        LaneRelaySendDisposition::Closed { envelope } => {
+                            errors.push(LaneRelayBroadcastError::Closed { envelope });
+                        }
+                        LaneRelaySendDisposition::Rejected { envelope, reason } => {
+                            errors.push(LaneRelayBroadcastError::Rejected { envelope, reason });
+                        }
+                    }
+                    continue;
+                };
+                let evicted = self
+                    .seen_order
+                    .remove(position)
+                    .expect("located delivered relay must remain in seen order");
+                self.seen.remove(&evicted);
+            }
+            if !self.seen.contains_key(&key) {
+                self.seen_order.push_back(key);
+            }
             self.seen.insert(key, proof_status);
             status::push_lane_relay_envelope(envelope.clone());
-            self.network.broadcast_relay(envelope);
+            if let Some(pending) = self.pending.get_mut(&key) {
+                // An upgraded proof has a different exact actor shape; dropping the old token
+                // cancels its rank before the replacement acquires a fresh one.
+                pending.envelope = envelope;
+                pending.token = None;
+            } else {
+                self.pending.insert(
+                    key,
+                    PendingRelay {
+                        envelope,
+                        token: None,
+                    },
+                );
+                self.pending_order.push_back(key);
+            }
         }
+
+        let transferred = immediately_transferred
+            .saturating_add(self.retry_pending_inner(&mut errors));
+        if errors.is_empty() {
+            Ok(transferred)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Retry every currently owned relay at most once in round-robin order.
+    #[must_use = "terminal lane-relay ownership must be handled"]
+    pub fn retry_pending(
+        &mut self,
+    ) -> Result<usize, Vec<LaneRelayBroadcastError<N::RetryToken>>> {
+        let mut errors = Vec::new();
+        let transferred = self.retry_pending_inner(&mut errors);
+        if errors.is_empty() {
+            Ok(transferred)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Retry a capacity residual which could not fit in this broadcaster's
+    /// bounded internal owner set.
+    ///
+    /// The caller must retain both fields of [`LaneRelayBroadcastError::Capacity`]
+    /// and keep retrying this method fairly until ownership transfers or a
+    /// terminal result is handled.
+    #[must_use = "terminal lane-relay ownership must be handled"]
+    pub fn retry_capacity_residual(
+        &self,
+        envelope: LaneRelayEnvelope,
+        token: Option<N::RetryToken>,
+    ) -> Result<(), LaneRelayBroadcastError<N::RetryToken>> {
+        match self.network.try_broadcast_relay(envelope, token) {
+            LaneRelaySendDisposition::Accepted => Ok(()),
+            LaneRelaySendDisposition::Retry { envelope, token } => {
+                Err(LaneRelayBroadcastError::Capacity { envelope, token })
+            }
+            LaneRelaySendDisposition::Closed { envelope } => {
+                Err(LaneRelayBroadcastError::Closed { envelope })
+            }
+            LaneRelaySendDisposition::Rejected { envelope, reason } => {
+                Err(LaneRelayBroadcastError::Rejected { envelope, reason })
+            }
+        }
+    }
+
+    fn retry_pending_inner(
+        &mut self,
+        errors: &mut Vec<LaneRelayBroadcastError<N::RetryToken>>,
+    ) -> usize {
+        let attempts = self.pending_order.len();
+        let mut transferred = 0usize;
+        for _ in 0..attempts {
+            let Some(key) = self.pending_order.pop_front() else {
+                break;
+            };
+            let Some(PendingRelay { envelope, token }) = self.pending.remove(&key) else {
+                continue;
+            };
+            match self.network.try_broadcast_relay(envelope, token) {
+                LaneRelaySendDisposition::Accepted => {
+                    transferred = transferred.saturating_add(1);
+                }
+                LaneRelaySendDisposition::Retry { envelope, token } => {
+                    self.pending.insert(key, PendingRelay { envelope, token });
+                    self.pending_order.push_back(key);
+                }
+                LaneRelaySendDisposition::Closed { envelope } => {
+                    self.seen.remove(&key);
+                    self.seen_order.retain(|candidate| *candidate != key);
+                    errors.push(LaneRelayBroadcastError::Closed { envelope });
+                }
+                LaneRelaySendDisposition::Rejected { envelope, reason } => {
+                    self.seen.remove(&key);
+                    self.seen_order.retain(|candidate| *candidate != key);
+                    errors.push(LaneRelayBroadcastError::Rejected { envelope, reason });
+                }
+            }
+        }
+        transferred
+    }
+
+    /// Number of exact relays still waiting for actor ownership.
+    #[must_use]
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 }
 
@@ -115,7 +386,10 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
 mod tests {
     use std::{
         num::NonZeroU64,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use iroha_crypto::{Hash as UntypedHash, HashOf};
@@ -127,7 +401,10 @@ mod tests {
         nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope},
     };
 
-    use super::{LaneRelayBroadcaster, LaneRelayTx};
+    use super::{
+        LANE_RELAY_BROADCAST_CAPACITY, LaneRelayBroadcastError, LaneRelayBroadcaster,
+        LaneRelaySendDisposition, LaneRelayTx,
+    };
 
     #[derive(Clone, Default)]
     struct MockNetwork {
@@ -135,11 +412,18 @@ mod tests {
     }
 
     impl LaneRelayTx for MockNetwork {
-        fn broadcast_relay(&self, envelope: LaneRelayEnvelope) {
+        type RetryToken = ();
+
+        fn try_broadcast_relay(
+            &self,
+            envelope: LaneRelayEnvelope,
+            _retry: Option<Self::RetryToken>,
+        ) -> super::LaneRelaySendDisposition<Self::RetryToken> {
             self.sent
                 .lock()
                 .expect("mock network mutex poisoned")
                 .push(envelope);
+            super::LaneRelaySendDisposition::Accepted
         }
     }
 
@@ -149,6 +433,111 @@ mod tests {
                 .lock()
                 .expect("mock network mutex poisoned")
                 .clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct BackpressureOnceNetwork {
+        attempts: Arc<AtomicUsize>,
+        sent: Arc<Mutex<Vec<LaneRelayEnvelope>>>,
+    }
+
+    impl LaneRelayTx for BackpressureOnceNetwork {
+        type RetryToken = u64;
+
+        fn try_broadcast_relay(
+            &self,
+            envelope: LaneRelayEnvelope,
+            retry: Option<Self::RetryToken>,
+        ) -> LaneRelaySendDisposition<Self::RetryToken> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                assert!(retry.is_none());
+                return LaneRelaySendDisposition::Retry {
+                    envelope,
+                    token: Some(17),
+                };
+            }
+            assert_eq!(retry, Some(17), "retry must retain the actor FIFO token");
+            self.sent
+                .lock()
+                .expect("backpressure mock mutex poisoned")
+                .push(envelope);
+            LaneRelaySendDisposition::Accepted
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct AlwaysBackpressuredNetwork {
+        attempted_heights: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl LaneRelayTx for AlwaysBackpressuredNetwork {
+        type RetryToken = u64;
+
+        fn try_broadcast_relay(
+            &self,
+            envelope: LaneRelayEnvelope,
+            retry: Option<Self::RetryToken>,
+        ) -> LaneRelaySendDisposition<Self::RetryToken> {
+            self.attempted_heights
+                .lock()
+                .expect("attempt history mutex poisoned")
+                .push(envelope.block_height);
+            LaneRelaySendDisposition::Retry {
+                envelope,
+                token: retry.or(Some(1)),
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct FirstLaneBackpressuredNetwork {
+        sent: Arc<Mutex<Vec<LaneRelayEnvelope>>>,
+    }
+
+    impl LaneRelayTx for FirstLaneBackpressuredNetwork {
+        type RetryToken = u64;
+
+        fn try_broadcast_relay(
+            &self,
+            envelope: LaneRelayEnvelope,
+            retry: Option<Self::RetryToken>,
+        ) -> LaneRelaySendDisposition<Self::RetryToken> {
+            if envelope.lane_id == LaneId::new(0) {
+                return LaneRelaySendDisposition::Retry {
+                    envelope,
+                    token: retry.or(Some(1)),
+                };
+            }
+            self.sent
+                .lock()
+                .expect("selective backpressure mock mutex poisoned")
+                .push(envelope);
+            LaneRelaySendDisposition::Accepted
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum TerminalNetwork {
+        Closed,
+        Rejected,
+    }
+
+    impl LaneRelayTx for TerminalNetwork {
+        type RetryToken = ();
+
+        fn try_broadcast_relay(
+            &self,
+            envelope: LaneRelayEnvelope,
+            _retry: Option<Self::RetryToken>,
+        ) -> LaneRelaySendDisposition<Self::RetryToken> {
+            match self {
+                Self::Closed => LaneRelaySendDisposition::Closed { envelope },
+                Self::Rejected => LaneRelaySendDisposition::Rejected {
+                    envelope,
+                    reason: iroha_p2p::network::NetworkActorAdmissionRejection::OutboundDisallowed,
+                },
+            }
         }
     }
 
@@ -230,7 +619,9 @@ mod tests {
 
         let mut envelope = sample_envelope(1, 3);
         attach_qc(&mut envelope);
-        broadcaster.broadcast(vec![envelope.clone(), envelope.clone()]);
+        broadcaster
+            .broadcast(vec![envelope.clone(), envelope.clone()])
+            .expect("mock actor accepts relay");
 
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
@@ -253,7 +644,9 @@ mod tests {
             [0xAB; UntypedHash::LENGTH],
         )));
 
-        broadcaster.broadcast(vec![envelope]);
+        broadcaster
+            .broadcast(vec![envelope])
+            .expect("invalid relays are terminally filtered before actor admission");
 
         assert!(network.sent().is_empty());
         assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
@@ -270,7 +663,9 @@ mod tests {
         let mut missing_proof = envelope.clone();
         missing_proof.fastpq_proof = None;
 
-        broadcaster.broadcast(vec![missing_proof]);
+        broadcaster
+            .broadcast(vec![missing_proof])
+            .expect("mock actor accepts relay");
 
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
@@ -294,7 +689,9 @@ mod tests {
         let mut missing_proof = envelope.clone();
         missing_proof.fastpq_proof = None;
 
-        broadcaster.broadcast(vec![missing_proof]);
+        broadcaster
+            .broadcast(vec![missing_proof])
+            .expect("mock actor accepts pending relay");
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].block_height, 3);
@@ -305,7 +702,9 @@ mod tests {
         assert!(snapshot[0].fastpq_proof.is_none());
         assert!(snapshot[0].qc.is_some());
 
-        broadcaster.broadcast(vec![envelope]);
+        broadcaster
+            .broadcast(vec![envelope])
+            .expect("mock actor accepts upgraded relay");
         let sent = network.sent();
         assert_eq!(sent.len(), 2);
         assert!(sent[1].fastpq_proof.is_some());
@@ -329,12 +728,16 @@ mod tests {
         let mut pending_duplicate = verified.clone();
         pending_duplicate.fastpq_proof = None;
 
-        broadcaster.broadcast(vec![verified]);
+        broadcaster
+            .broadcast(vec![verified])
+            .expect("mock actor accepts verified relay");
         let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_some());
 
-        broadcaster.broadcast(vec![pending_duplicate]);
+        broadcaster
+            .broadcast(vec![pending_duplicate])
+            .expect("pending downgrade is ignored before actor admission");
 
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
@@ -344,5 +747,142 @@ mod tests {
             snapshot[0].fastpq_proof.is_some(),
             "pending duplicate must not replace retained verified proof material"
         );
+    }
+
+    #[test]
+    fn actor_backpressure_retains_exact_relay_and_fifo_ticket() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = BackpressureOnceNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+        let envelope = sample_envelope(5, 7);
+
+        assert_eq!(
+            broadcaster
+                .broadcast([envelope.clone()])
+                .expect("temporary pressure remains internally owned"),
+            0
+        );
+        assert_eq!(broadcaster.pending_len(), 1);
+        assert_eq!(
+            broadcaster
+                .retry_pending()
+                .expect("second actor attempt succeeds"),
+            1
+        );
+        assert_eq!(broadcaster.pending_len(), 0);
+        assert_eq!(
+            network
+                .sent
+                .lock()
+                .expect("backpressure mock mutex poisoned")
+                .as_slice(),
+            &[envelope]
+        );
+    }
+
+    #[test]
+    fn blocked_relay_does_not_starve_a_responsive_relay() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = FirstLaneBackpressuredNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+        let blocked = sample_envelope(6, 0);
+        let responsive = sample_envelope(6, 1);
+
+        assert_eq!(
+            broadcaster
+                .broadcast([blocked])
+                .expect("temporary pressure remains internally owned"),
+            0
+        );
+        assert_eq!(
+            broadcaster
+                .broadcast([responsive.clone()])
+                .expect("independent relay is accepted"),
+            1
+        );
+        assert_eq!(broadcaster.pending_len(), 1);
+        assert_eq!(
+            network
+                .sent
+                .lock()
+                .expect("selective backpressure mock mutex poisoned")
+                .as_slice(),
+            &[responsive]
+        );
+    }
+
+    #[test]
+    fn terminal_actor_failures_return_exact_relay_ownership() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+
+        for terminal in [TerminalNetwork::Closed, TerminalNetwork::Rejected] {
+            let mut broadcaster = LaneRelayBroadcaster::new(terminal);
+            let envelope = sample_envelope(7, 8);
+            let errors = broadcaster
+                .broadcast([envelope.clone()])
+                .expect_err("terminal actor failure must return exact ownership");
+            assert_eq!(errors.len(), 1);
+            match &errors[0] {
+                LaneRelayBroadcastError::Closed { envelope: returned }
+                | LaneRelayBroadcastError::Rejected {
+                    envelope: returned, ..
+                } => assert_eq!(returned, &envelope),
+                LaneRelayBroadcastError::Capacity { .. } => {
+                    panic!("terminal actor failure cannot become local capacity pressure")
+                }
+            }
+            assert_eq!(broadcaster.pending_len(), 0);
+        }
+    }
+
+    #[test]
+    fn saturated_relay_owner_returns_sixty_fifth_exact_envelope() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = AlwaysBackpressuredNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+        for index in 0..LANE_RELAY_BROADCAST_CAPACITY {
+            broadcaster
+                .broadcast([sample_envelope(
+                    u64::try_from(index).expect("small index") + 1,
+                    u32::try_from(index).expect("small index"),
+                )])
+                .expect("the bounded owner has an exact slot");
+        }
+        assert_eq!(broadcaster.pending_len(), LANE_RELAY_BROADCAST_CAPACITY);
+
+        let overflow = sample_envelope(10_000, 10_000);
+        let errors = broadcaster
+            .broadcast([overflow.clone()])
+            .expect_err("all bounded owners are occupied");
+        assert_eq!(errors.len(), 1);
+        let (returned, token) = match errors.into_iter().next().expect("one exact error") {
+            LaneRelayBroadcastError::Capacity { envelope, token } => (envelope, token),
+            other => panic!("expected exact capacity return, got {other:?}"),
+        };
+        assert_eq!(returned, overflow);
+        assert_eq!(token, Some(1));
+        assert!(
+            network
+                .attempted_heights
+                .lock()
+                .expect("attempt history mutex poisoned")
+                .contains(&10_000),
+            "a full local residual set must not suppress targetized network fanout"
+        );
+        let retry = broadcaster
+            .retry_capacity_residual(returned, token)
+            .expect_err("the mock remains backpressured");
+        match retry {
+            LaneRelayBroadcastError::Capacity { envelope, token } => {
+                assert_eq!(envelope.block_height, 10_000);
+                assert_eq!(token, Some(1));
+            }
+            other => panic!("capacity retry must preserve exact ownership, got {other:?}"),
+        }
+        assert_eq!(broadcaster.pending_len(), LANE_RELAY_BROADCAST_CAPACITY);
     }
 }

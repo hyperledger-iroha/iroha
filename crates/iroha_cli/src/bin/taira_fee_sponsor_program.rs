@@ -1,6 +1,9 @@
 //! Provision one exact Taira fee sponsor program revision and isolated vault.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -78,19 +81,44 @@ fn string_at<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str> {
         .ok_or_else(|| eyre::eyre!("missing `{key}`"))
 }
 
-fn taira_profile_signer(path: &PathBuf) -> Result<(String, String)> {
+fn taira_profile_signer(path: &Path) -> Result<(String, String)> {
     let raw = std::fs::read_to_string(path)
         .wrap_err_with(|| format!("read Taira profile {}", path.display()))?;
     let value = toml::from_str::<Value>(&raw).wrap_err("parse Taira profile TOML")?;
     let torii = table(&value, "torii")?;
-    let onboarding_value = torii
-        .get("onboarding")
-        .ok_or_else(|| eyre::eyre!("missing [torii.onboarding] table"))?;
+    let onboarding_value = torii.get("account_onboarding").ok_or_else(|| {
+        eyre::eyre!("missing structurally enabled [torii.account_onboarding] table")
+    })?;
     let onboarding = onboarding_value
         .as_table()
-        .ok_or_else(|| eyre::eyre!("invalid [torii.onboarding] table"))?;
+        .ok_or_else(|| eyre::eyre!("invalid [torii.account_onboarding] table"))?;
     let authority = string_at(onboarding, "authority")?.to_owned();
-    let private_key = string_at(onboarding, "private_key")?.to_owned();
+    if onboarding.contains_key("private_key") {
+        bail!("inline torii.account_onboarding.private_key is forbidden; use private_key_file");
+    }
+    let configured_key_path = PathBuf::from(string_at(onboarding, "private_key_file")?);
+    let key_path = if configured_key_path.is_absolute() {
+        configured_key_path
+    } else {
+        path.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(configured_key_path)
+    };
+    let metadata = std::fs::symlink_metadata(&key_path)
+        .wrap_err_with(|| format!("inspect onboarding signer {}", key_path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("torii.account_onboarding.private_key_file must name a regular non-symlink file");
+    }
+    let raw_private_key = std::fs::read_to_string(&key_path)
+        .wrap_err_with(|| format!("read onboarding signer {}", key_path.display()))?;
+    let private_key = raw_private_key.trim_end_matches(['\r', '\n']);
+    if private_key.is_empty()
+        || private_key.trim() != private_key
+        || private_key.chars().any(char::is_control)
+    {
+        bail!("onboarding signer file must contain one exact private key literal");
+    }
+    let private_key = private_key.to_owned();
     Ok((authority, private_key))
 }
 
@@ -278,7 +306,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, str::FromStr};
+    use std::{fs, num::NonZeroU64, str::FromStr};
 
     use iroha::{
         crypto::{Algorithm, KeyPair},
@@ -359,5 +387,52 @@ mod tests {
                 "nexus::ActivateFeeSponsorProgramRevision",
             ]
         );
+    }
+
+    #[test]
+    fn profile_signer_uses_structural_file_backed_onboarding() {
+        let directory = tempfile::tempdir().expect("temporary profile directory");
+        let signer_path = directory.path().join("onboarding-signer.key");
+        fs::write(&signer_path, "private-key-literal\n").expect("write signer sidecar");
+        let profile_path = directory.path().join("peer.toml");
+        fs::write(
+            &profile_path,
+            r#"
+[torii.account_onboarding]
+authority = "canonical-account"
+private_key_file = "onboarding-signer.key"
+"#,
+        )
+        .expect("write structural profile");
+
+        assert_eq!(
+            taira_profile_signer(&profile_path).expect("read file-backed signer"),
+            (
+                "canonical-account".to_owned(),
+                "private-key-literal".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn profile_signer_rejects_legacy_inline_private_key() {
+        let directory = tempfile::tempdir().expect("temporary profile directory");
+        let profile_path = directory.path().join("peer.toml");
+        fs::write(
+            &profile_path,
+            r#"
+[torii.account_onboarding]
+authority = "canonical-account"
+private_key = "must-not-be-read"
+private_key_file = "unused.key"
+"#,
+        )
+        .expect("write legacy profile");
+
+        let error = taira_profile_signer(&profile_path)
+            .expect_err("inline private key must be rejected")
+            .to_string();
+        assert!(error.contains("inline"));
+        assert!(!error.contains("must-not-be-read"));
     }
 }

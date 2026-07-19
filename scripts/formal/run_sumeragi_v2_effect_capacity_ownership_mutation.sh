@@ -107,6 +107,99 @@ run_case timeout-sign-retained-and-protected "$OWNERSHIP_MODULE" \
   "5 states generated, 5 distinct states found, 0 states left on queue." \
   "depth of the complete state graph search is 5"
 
+readonly CERTIFIED_REQUEST_MODULE="SumeragiV2CertifiedRequestCapacityMutation.tla"
+run_case certified-request-capacity-lost "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_lost_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant CapacityBlockedFetchBRemainsMissing is violated." \
+  "State 2: <EmitHigherAuthorityFetchB" \
+  "retainedFetchB = FALSE" \
+  "missingFetchB = FALSE" \
+  "fatal = FALSE" \
+  "3 states generated, 3 distinct states found, 1 states left on queue."
+
+run_case certified-request-capacity-fatal "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_fatal_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant CertifiedRequestPressureIsNonfatal is violated." \
+  "State 2: <EmitHigherAuthorityFetchB" \
+  "retainedFetchB = FALSE" \
+  "missingFetchB = TRUE" \
+  "fatal = TRUE" \
+  "3 states generated, 3 distinct states found, 1 states left on queue."
+
+run_case certified-response-count-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_response_count_reserve_bug.cfg 13 \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "State 2: <EmitHigherAuthorityFetchB" \
+  "outerGenericCountOwned = TRUE" \
+  "responseAAdmitted = FALSE" \
+  "State 3: Stuttering" \
+  "4 states generated, 4 distinct states found, 0 states left on queue."
+
+run_case certified-response-byte-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_response_byte_reserve_bug.cfg 13 \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "State 2: <EmitHigherAuthorityFetchB" \
+  "outerGenericBytesOwned = TRUE" \
+  "responseAAdmitted = FALSE" \
+  "State 3: Stuttering" \
+  "4 states generated, 4 distinct states found, 0 states left on queue."
+
+run_case certified-response-blocked-by-unrelated-retained-debt "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_response_blocked_bug.cfg 13 \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "State 2: <EmitHigherAuthorityFetchB" \
+  "retainedFetchB = FALSE" \
+  "unrelatedRetainedT = TRUE" \
+  "fatal = FALSE" \
+  "State 3: <AdmitOuterTransportResponseA" \
+  "responseAQueued = TRUE" \
+  "State 4: Stuttering" \
+  "6 states generated, 6 distinct states found, 0 states left on queue."
+
+run_case certified-request-capacity-released-and-retransmitted "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_fixed.cfg 0 \
+  "TLC2 Version 2.19" \
+  "Finished computing initial states: 2 distinct states generated" \
+  "Model checking completed. No error has been found." \
+  "<EmitHigherAuthorityFetchB" \
+  "<AdmitOuterTransportResponseA" \
+  "<ConsumeTransportOnlyResponseA" \
+  "<RetransmitMissingFetchB" \
+  "10 states generated, 10 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 5"
+
+readonly OUTER_TRANSPORT_MODULE="SumeragiV2EffectCapacityOuterTransportMutation.tla"
+run_case outer-certified-response-classification-missing "$OUTER_TRANSPORT_MODULE" \
+  effect_capacity_outer_transport_response_class_bug.cfg 13 \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  'completionKind = "CertifiedBodyResponse"' \
+  "State 2: Stuttering" \
+  "4 states generated, 4 distinct states found, 0 states left on queue."
+
+run_case outer-payload-chunk-classification-missing "$OUTER_TRANSPORT_MODULE" \
+  effect_capacity_outer_transport_chunk_class_bug.cfg 13 \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  'completionKind = "PayloadChunk"' \
+  "State 2: Stuttering" \
+  "4 states generated, 4 distinct states found, 0 states left on queue."
+
+run_case outer-transport-completion-shared-reserve "$OUTER_TRANSPORT_MODULE" \
+  effect_capacity_outer_transport_class_fixed.cfg 0 \
+  "TLC2 Version 2.19" \
+  "Finished computing initial states: 2 distinct states generated" \
+  "Model checking completed. No error has been found." \
+  "<AdmitTransportCompletion" \
+  "<ConsumeTransportCompletion" \
+  "6 states generated, 6 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 3"
+
 readonly RETIREMENT_MODULE="SumeragiV2EffectCapacityRetirementMutation.tla"
 for blocking_kind in decided non-fetch; do
   config_kind="${blocking_kind//-/_}"
@@ -238,6 +331,10 @@ run_case retained-oversize-installed "$BATCH_MODULE" \
 echo "[tlc] a persisted TimeoutVote Sign without a retained owner fails immediately"
 echo "[tlc] fair Fetch retirement plus unprotected refill has a capacity-full lasso"
 echo "[tlc] bounded FIFO priority and deterministic reconstructible-Fetch preemption force rank descent and Sign admission"
+echo "[tlc] Q-full Fetch B remains reconstructible Missing debt without partial P/Q/T ownership"
+echo "[tlc] transport-only response A crosses unrelated retained T and releases exact P/Q ownership"
+echo "[tlc] periodic retransmission atomically installs or upgrades Fetch B after request capacity is released"
+echo "[tlc] certified responses and payload chunks share one independent per-validator outer transport-completion reserve"
 echo "[tlc] decided/non-Fetch terminating owners retire fairly while full-capacity Fetch remains reconstructible Missing debt"
 echo "[tlc] six permutations enforce stable (class, work_id) preemption and decided-owner exclusion"
 echo "[tlc] retained suffix partial drain, source bound, overtaking rejection, and Decision filtering passed their mutation matrix"

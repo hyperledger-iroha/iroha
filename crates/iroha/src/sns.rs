@@ -1,30 +1,17 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
 
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
-
 use eyre::Result;
 
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
-    data_model::{
-        metadata::Metadata,
-        sns::{
-            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
-            FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
-            RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
-            TransferNameRequestV1, UpdateControllersRequestV1,
-        },
-        transaction::FeePaymentIntent,
+    data_model::sns::{
+        ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, NameRecordV1,
+        SuffixId, SuffixPolicyV1,
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
 
 const APPLICATION_JSON: &str = "application/json";
-const COMMITTED_NAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
-const COMMITTED_NAME_READ_INTERVAL: Duration = Duration::from_millis(250);
 
 fn ensure_status(
     response: &Response<Vec<u8>>,
@@ -98,48 +85,9 @@ fn name_path(namespace: SnsNamespacePath, literal: &str) -> String {
     format!("v1/sns/names/{}/{literal}", namespace.as_path())
 }
 
-fn retryable_name_lookup_status(status: StatusCode) -> bool {
-    status == StatusCode::NOT_FOUND
-}
-
 impl<'a> SnsApi<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
-    }
-
-    /// Submit a consensus transaction to register a name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn register(
-        &self,
-        payload: &RegisterNameRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<RegisterNameResponseV1> {
-        self.register_with_metadata(payload, fee_payment, Metadata::default())
-    }
-
-    /// Submit a consensus transaction to register a name with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn register_with_metadata(
-        &self,
-        payload: &RegisterNameRequestV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<RegisterNameResponseV1> {
-        let namespace = SnsNamespacePath::from_suffix_id(payload.selector.suffix_id)?;
-        let literal = payload.selector.normalized_label().to_owned();
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::RegisterSnsName::new(payload.clone()),
-            fee_payment,
-            metadata,
-        )?;
-        let name_record = self.get_committed_name(namespace, &literal)?;
-        Ok(RegisterNameResponseV1 { name_record })
     }
 
     /// GET `/v1/sns/policies/{suffix_id}`.
@@ -194,289 +142,6 @@ impl<'a> SnsApi<'a> {
         )?;
         Ok(norito::json::from_slice(response.body())?)
     }
-
-    fn get_committed_name(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-    ) -> Result<NameRecordV1> {
-        self.get_committed_name_matching(namespace, literal, |_| true, "committed record")
-    }
-
-    fn get_committed_name_matching<F>(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        mut predicate: F,
-        context: &str,
-    ) -> Result<NameRecordV1>
-    where
-        F: FnMut(&NameRecordV1) -> bool,
-    {
-        let deadline = Instant::now() + COMMITTED_NAME_READ_TIMEOUT;
-
-        loop {
-            let response = self.get_name_response(namespace, literal)?;
-            if retryable_name_lookup_status(response.status()) {
-                if Instant::now() >= deadline {
-                    return Self::decode_name_response(&response);
-                }
-            } else {
-                let record = Self::decode_name_response(&response)?;
-                if predicate(&record) {
-                    return Ok(record);
-                }
-                if Instant::now() >= deadline {
-                    return Err(eyre::eyre!(
-                        "timed out waiting for SNS registration `{literal}` to reach {context}; last_record={record:?}"
-                    ));
-                }
-            }
-
-            thread::sleep(COMMITTED_NAME_READ_INTERVAL);
-        }
-    }
-
-    /// Submit a consensus transaction to renew a name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn renew(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &RenewNameRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<NameRecordV1> {
-        self.renew_with_metadata(
-            namespace,
-            literal,
-            payload,
-            fee_payment,
-            Metadata::default(),
-        )
-    }
-
-    /// Submit a consensus transaction to renew a name with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn renew_with_metadata(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &RenewNameRequestV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<NameRecordV1> {
-        let previous = self.get_name(namespace, literal)?;
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::RenewSnsName::new(
-                namespace.suffix_id(),
-                literal,
-                payload.clone(),
-            ),
-            fee_payment,
-            metadata,
-        )?;
-        self.get_committed_name_matching(
-            namespace,
-            literal,
-            |record| record.expires_at_ms > previous.expires_at_ms,
-            "renewed expiry",
-        )
-    }
-
-    /// Submit a consensus transaction to transfer a name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn transfer(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &TransferNameRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<NameRecordV1> {
-        self.transfer_with_metadata(
-            namespace,
-            literal,
-            payload,
-            fee_payment,
-            Metadata::default(),
-        )
-    }
-
-    /// Submit a consensus transaction to transfer a name with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn transfer_with_metadata(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &TransferNameRequestV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<NameRecordV1> {
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::TransferSnsName::new(
-                namespace.suffix_id(),
-                literal,
-                payload.clone(),
-            ),
-            fee_payment,
-            metadata,
-        )?;
-        self.get_committed_name_matching(
-            namespace,
-            literal,
-            |record| record.owner == payload.new_owner,
-            "transferred owner",
-        )
-    }
-
-    /// Submit a consensus transaction to replace name controllers.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn update_controllers(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &UpdateControllersRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<NameRecordV1> {
-        self.update_controllers_with_metadata(
-            namespace,
-            literal,
-            payload,
-            fee_payment,
-            Metadata::default(),
-        )
-    }
-
-    /// Submit a consensus transaction to replace name controllers with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn update_controllers_with_metadata(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &UpdateControllersRequestV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<NameRecordV1> {
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::UpdateSnsNameControllers::new(
-                namespace.suffix_id(),
-                literal,
-                payload.clone(),
-            ),
-            fee_payment,
-            metadata,
-        )?;
-        self.get_committed_name(namespace, literal)
-    }
-
-    /// Submit a consensus transaction to freeze a name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn freeze(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &FreezeNameRequestV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<NameRecordV1> {
-        self.freeze_with_metadata(
-            namespace,
-            literal,
-            payload,
-            fee_payment,
-            Metadata::default(),
-        )
-    }
-
-    /// Submit a consensus transaction to freeze a name with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn freeze_with_metadata(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &FreezeNameRequestV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<NameRecordV1> {
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::FreezeSnsName::new(
-                namespace.suffix_id(),
-                literal,
-                payload.clone(),
-            ),
-            fee_payment,
-            metadata,
-        )?;
-        self.get_committed_name(namespace, literal)
-    }
-
-    /// Submit a consensus transaction to unfreeze a name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn unfreeze(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &GovernanceHookV1,
-        fee_payment: FeePaymentIntent,
-    ) -> Result<NameRecordV1> {
-        self.unfreeze_with_metadata(
-            namespace,
-            literal,
-            payload,
-            fee_payment,
-            Metadata::default(),
-        )
-    }
-
-    /// Submit a consensus transaction to unfreeze a name with transaction metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
-    pub fn unfreeze_with_metadata(
-        &self,
-        namespace: SnsNamespacePath,
-        literal: &str,
-        payload: &GovernanceHookV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<NameRecordV1> {
-        self.client.submit_blocking_with_metadata(
-            crate::data_model::isi::sns::UnfreezeSnsName::new(
-                namespace.suffix_id(),
-                literal,
-                payload.clone(),
-            ),
-            fee_payment,
-            metadata,
-        )?;
-        self.get_committed_name(namespace, literal)
-    }
 }
 
 impl Client {
@@ -519,15 +184,6 @@ mod tests {
             message.contains("invalid JSON body"),
             "expected response body in error message, got: {message}"
         );
-    }
-
-    #[test]
-    fn name_lookup_retry_is_limited_to_not_found() {
-        assert!(retryable_name_lookup_status(StatusCode::NOT_FOUND));
-        assert!(!retryable_name_lookup_status(StatusCode::BAD_REQUEST));
-        assert!(!retryable_name_lookup_status(
-            StatusCode::INTERNAL_SERVER_ERROR
-        ));
     }
 
     #[test]

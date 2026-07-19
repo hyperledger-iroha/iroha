@@ -541,7 +541,6 @@ pub mod genesis_instructions_json {
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
             Transfer, TransferBox,
-            domain_link::SetAccountAliasBinding,
             nexus::{
                 ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
                 EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
@@ -655,9 +654,6 @@ pub mod genesis_instructions_json {
                             "Grant" => try_decode_grant(inner.clone())?,
                             "SetAssetDefinitionAlias" => {
                                 try_decode_set_asset_definition_alias(inner.clone())?
-                            }
-                            "SetAccountAliasBinding" => {
-                                try_decode_set_account_alias_binding(inner.clone())?
                             }
                             "Custom" => try_decode_custom(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
@@ -987,59 +983,6 @@ pub mod genesis_instructions_json {
                 SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
             }
             None => SetAssetDefinitionAlias::clear(asset_definition_id),
-        };
-        Ok(Some(InstructionBox::from(instruction)))
-    }
-
-    fn try_decode_set_account_alias_binding(
-        inner: Value,
-    ) -> Result<Option<InstructionBox>, json::Error> {
-        let mut fields = match inner {
-            Value::Object(map) => map,
-            _ => return Ok(None),
-        };
-        let account = match fields.remove("account") {
-            Some(Value::String(value)) => {
-                parse_account_id(&value, "SetAccountAliasBinding.account")?
-            }
-            Some(other) => {
-                return Err(json::Error::Message(format!(
-                    "expected string for SetAccountAliasBinding.account, found {other:?}"
-                )));
-            }
-            None => {
-                return Err(json::Error::Message(
-                    "missing SetAccountAliasBinding.account".to_string(),
-                ));
-            }
-        };
-
-        let alias = match fields.remove("alias") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(parse_account_alias(value, "SetAccountAliasBinding.alias")?),
-        };
-
-        let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(Number::U64(value))) => Some(value),
-            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
-            Some(other) => {
-                return Err(json::Error::Message(format!(
-                    "expected unsigned integer or null for SetAccountAliasBinding.lease_expiry_ms, found {other:?}"
-                )));
-            }
-        };
-
-        if !fields.is_empty() {
-            return Err(json::Error::Message(format!(
-                "unexpected SetAccountAliasBinding fields: {}",
-                fields.keys().cloned().collect::<Vec<_>>().join(",")
-            )));
-        }
-
-        let instruction = match alias {
-            Some(alias) => SetAccountAliasBinding::bind(account, alias, lease_expiry_ms),
-            None => SetAccountAliasBinding::clear(account),
         };
         Ok(Some(InstructionBox::from(instruction)))
     }
@@ -1518,47 +1461,6 @@ pub mod genesis_instructions_json {
             );
             let mut outer = Map::new();
             outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
-            return Some(Value::Object(outer));
-        }
-
-        if let Some(set_account_alias_binding) = instruction
-            .as_any()
-            .downcast_ref::<SetAccountAliasBinding>()
-        {
-            let mut fields = Map::new();
-            let account = account_literal(set_account_alias_binding.account())?;
-            fields.insert("account".to_string(), Value::String(account));
-            let alias = set_account_alias_binding
-                .alias()
-                .as_ref()
-                .map_or(Value::Null, |alias| {
-                    let mut alias_fields = Map::new();
-                    alias_fields.insert(
-                        "label".to_string(),
-                        Value::String(alias.label.as_ref().to_owned()),
-                    );
-                    alias_fields.insert(
-                        "domain".to_string(),
-                        alias.domain.as_ref().map_or(Value::Null, |domain| {
-                            Value::String(domain.name().as_ref().to_owned())
-                        }),
-                    );
-                    alias_fields.insert(
-                        "dataspace".to_string(),
-                        Value::Number(Number::U64(alias.dataspace.as_u64())),
-                    );
-                    Value::Object(alias_fields)
-                });
-            fields.insert("alias".to_string(), alias);
-            fields.insert(
-                "lease_expiry_ms".to_string(),
-                set_account_alias_binding
-                    .lease_expiry_ms()
-                    .as_ref()
-                    .map_or(Value::Null, |value| Value::Number(Number::U64(*value))),
-            );
-            let mut outer = Map::new();
-            outer.insert("SetAccountAliasBinding".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
 
@@ -2147,65 +2049,6 @@ pub mod genesis_instructions_json {
             }
         }
 
-        #[test]
-        fn deserialize_structured_alias_binding_and_custom_roundtrip() {
-            let account_id = ALICE_ID.clone();
-            let alias = iroha_data_model::account::rekey::AccountAlias::new(
-                "admin1".parse().expect("alias label"),
-                Some("hbl".parse().expect("alias domain")),
-                iroha_data_model::nexus::DataSpaceId::new(10),
-            );
-            let account_literal = account_literal(&account_id).expect("account literal");
-            let custom_payload: Value = norito::json::from_str(&format!(
-                r#"{{
-                    "Register": {{
-                        "account": "{account_literal}",
-                        "home_domain": "hbl.paynet",
-                        "spec": {{
-                            "signatories": ["{account_literal}"],
-                            "quorum": 1,
-                            "transaction_ttl_ms": 3600000
-                        }}
-                    }}
-                }}"#
-            ))
-            .expect("custom payload JSON");
-            let instructions: Vec<InstructionBox> = vec![
-                SetAccountAliasBinding::bind(account_id.clone(), alias.clone(), None).into(),
-                CustomInstruction::new(iroha_primitives::json::Json::new(custom_payload.clone()))
-                    .into(),
-            ];
-
-            let mut json_text = String::new();
-            serialize(&instructions, &mut json_text);
-            let parsed =
-                norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
-            let instructions = from_value(&parsed).expect("deserialize instructions");
-            assert_eq!(instructions.len(), 2);
-
-            match instructions[0]
-                .as_any()
-                .downcast_ref::<SetAccountAliasBinding>()
-            {
-                Some(binding) => {
-                    assert_eq!(binding.account(), &account_id);
-                    assert_eq!(binding.alias().as_ref(), Some(&alias));
-                    assert_eq!(binding.lease_expiry_ms(), &None);
-                }
-                other => panic!("unexpected alias binding instruction: {other:?}"),
-            }
-
-            match instructions[1].as_any().downcast_ref::<CustomInstruction>() {
-                Some(custom) => {
-                    let payload: Value = norito::json::parse_value(custom.payload().get())
-                        .expect("custom payload must parse");
-                    assert_eq!(payload, custom_payload);
-                }
-                other => panic!("unexpected custom instruction: {other:?}"),
-            }
-        }
-
-        #[test]
         fn deserialize_structured_register_account_with_label() {
             let account_id = ALICE_ID.clone();
             let account_literal = account_literal(&account_id).expect("account literal");

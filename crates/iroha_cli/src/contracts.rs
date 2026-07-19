@@ -41,8 +41,7 @@ use ivm::kotodama::driver::{
 use reqwest::StatusCode;
 
 use crate::{
-    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override,
-    wait_for_transaction_status,
+    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
 };
 
 // Canonical argument preparation reserves the bounded 1 MiB HEAP before
@@ -1196,10 +1195,8 @@ impl DevCallArgs {
         let gas_limit = self.gas_limit.unwrap_or_else(|| {
             dev_profile_default_gas_limit(manifest.profiles.get(&self.manifest.profile))
         });
-        let fee_payment = apply_cli_gas_limit_override(
-            context.transaction_fee_payment()?,
-            Some(gas_limit),
-        )?;
+        let fee_payment =
+            apply_cli_gas_limit_override(context.transaction_fee_payment()?, Some(gas_limit))?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -2458,10 +2455,8 @@ impl Run for CallArgs {
         } else {
             None
         };
-        let fee_payment = apply_cli_gas_limit_override(
-            context.transaction_fee_payment()?,
-            Some(self.gas_limit),
-        )?;
+        let fee_payment =
+            apply_cli_gas_limit_override(context.transaction_fee_payment()?, Some(self.gas_limit))?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -5827,8 +5822,7 @@ mod tests {
         let argument_bytes = ivm::encode_argument_record_from_json(
             &argument_schema,
             &iroha_primitives::json::Json::from(
-                norito::json::from_str::<norito::json::Value>(&payload_json)
-                    .expect("payload json"),
+                norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json"),
             ),
         )
         .expect("encode contract arguments");
@@ -5842,10 +5836,9 @@ mod tests {
         )
         .expect("derive contract address");
 
-        let fixture_domain = Domain::new(
-            DomainId::try_new("fixture", "universal").expect("valid fixture domain"),
-        )
-        .build(&authority);
+        let fixture_domain =
+            Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
+                .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([fixture_domain], [account], []);
         let mut permissions = Permissions::new();
@@ -5897,23 +5890,18 @@ mod tests {
         let tx = TransactionBuilder::new(
             ctx.config().chain.clone(),
             authority.clone(),
-            FeePaymentIntent::authority(
-                Vec::new(),
-                NonZeroU64::new(DEFAULT_CONTRACT_GAS_LIMIT),
-            ),
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(DEFAULT_CONTRACT_GAS_LIMIT)),
         )
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: code_hash,
-                entrypoint: "bump".to_owned(),
-                arguments: Some(arguments),
-            }))
-            .sign(authority_key_pair.private_key());
-        let overlay = iroha_core::pipeline::overlay::build_overlay_for_transaction(
-            &tx,
-            &state.view(),
-        )
-        .expect("overlay");
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "bump".to_owned(),
+            arguments: Some(arguments),
+        }))
+        .sign(authority_key_pair.private_key());
+        let overlay =
+            iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx, &state.view())
+                .expect("overlay");
 
         assert_eq!(
             output
@@ -5938,9 +5926,8 @@ mod tests {
         let expected_durable = expected_durable_json
             .as_object()
             .expect("live durable overlay object");
-        let contract_state_digest = hex::encode(
-            iroha_crypto::Hash::new(contract_address.to_string().as_bytes()).as_ref(),
-        );
+        let contract_state_digest =
+            hex::encode(iroha_crypto::Hash::new(contract_address.to_string().as_bytes()).as_ref());
         let debug_durable = output
             .get("durable_state_overlay")
             .and_then(norito::json::Value::as_object)
@@ -6257,10 +6244,10 @@ impl Run for SimulateArgs {
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), Some(gas_limit)),
         )
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(code.clone())))
-            .try_sign(&private_key)
-            .wrap_err("sign simulated contract transaction failed")?;
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(code.clone())))
+        .try_sign(&private_key)
+        .wrap_err("sign simulated contract transaction failed")?;
 
         let decoded = ivm::ivm_cache::IvmCache::decode_stream(&code[summary.code_offset..])
             .map_err(|err| eyre!("instruction decode failed: {err}"))?;

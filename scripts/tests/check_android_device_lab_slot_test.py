@@ -2203,7 +2203,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         cls._authority_directory.cleanup()
 
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
-        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 20)
+        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 21)
 
     def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

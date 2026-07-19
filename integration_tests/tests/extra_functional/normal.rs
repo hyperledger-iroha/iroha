@@ -74,7 +74,7 @@ fn transactions_should_be_applied() -> Result<()> {
             AssetDefinitionId::new(DomainId::try_new("and", "universal")?, "MAY".parse()?);
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
 
-        let create_domain = Register::domain(Domain::new(domain_id.clone()));
+        let create_domain = domain_setup_instruction(&domain_id, &iroha.account)?;
         iroha
             .submit(
                 create_domain,

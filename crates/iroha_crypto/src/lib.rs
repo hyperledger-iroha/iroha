@@ -182,6 +182,16 @@ fn is_all_zero_material(bytes: &[u8]) -> bool {
 const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
 
+/// Protocol-wide ceiling for the raw payload of any canonical public key.
+///
+/// This excludes the one-byte algorithm tag stored by [`PublicKey`]. The
+/// largest accepted payload is an SM2 envelope: a two-byte identifier-length
+/// field, at most `u16::MAX / 8` identifier bytes because SM2 carries that
+/// length in bits, and a 65-byte uncompressed SEC1 point. The ceiling remains
+/// feature-independent so admission and transport geometry cannot vary with
+/// compiled algorithms.
+pub const MAX_PUBLIC_KEY_PAYLOAD_BYTES: usize = 2 + (u16::MAX as usize / 8) + 65;
+
 /// Key pair generation option. Passed to a specific algorithm.
 #[derive(Debug)]
 pub enum KeyGenOption<K> {
@@ -605,7 +615,7 @@ impl PublicKeyFull {
             Algorithm::MlDsa => {
                 use pqcrypto_mldsa::mldsa65;
                 use pqcrypto_traits::sign::PublicKey as _;
-                if payload.len() != mldsa65::public_key_bytes() {
+                if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
                 }
                 if is_all_zero_material(payload) {
@@ -4393,6 +4403,27 @@ mod tests {
         let codec_decoded =
             <PublicKey as Decode>::decode(&mut cursor).expect("codec decode public key");
         assert_eq!(codec_decoded, pk);
+    }
+
+    #[test]
+    fn public_key_payload_ceiling_covers_feature_independent_algorithms() {
+        assert_eq!(MAX_PUBLIC_KEY_PAYLOAD_BYTES, 8_258);
+        assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
+    }
+
+    #[cfg(feature = "sm")]
+    #[test]
+    fn maximum_accepted_sm2_public_key_payload_matches_protocol_ceiling() {
+        let distid = "x".repeat(u16::MAX as usize / 8);
+        let private = Sm2PrivateKey::from_seed(&distid, b"maximum-distid-payload")
+            .expect("maximum SM2 distinguishing identifier is accepted");
+        let payload =
+            sm::encode_sm2_public_key_payload(&distid, &private.public_key().to_sec1_bytes(false))
+                .expect("encode maximum canonical SM2 public key payload");
+
+        assert_eq!(payload.len(), MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        PublicKey::from_bytes(Algorithm::Sm2, &payload)
+            .expect("maximum-size canonical SM2 public key remains decodable");
     }
 
     #[cfg(feature = "sm")]

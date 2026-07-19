@@ -350,7 +350,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease"
+                      "wire_id": "iroha.alias.ensure"
                       }
                     },
                     {
@@ -368,7 +368,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "identity::SetPrimaryAccountAlias"
+                      "wire_id": "iroha.account.alias.primary.compare_and_set"
                       }
                     },
                     {
@@ -537,16 +537,6 @@
               "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanSetParameters"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": {
-                "name": "CanRegisterDomain"
               }
             }
           }

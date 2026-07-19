@@ -318,149 +318,6 @@ pub enum ControllerType {
     ExternalLink,
 }
 
-/// Registrar request for creating a new name.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RegisterNameRequestV1 {
-    /// Selector describing the requested label + suffix.
-    pub selector: NameSelectorV1,
-    /// Owner account.
-    pub owner: AccountId,
-    /// Initial controller list.
-    pub controllers: Vec<NameControllerV1>,
-    /// Registration term in years.
-    pub term_years: u8,
-    /// Optional steward-advertised pricing class identifier.
-    pub pricing_class_hint: Option<u8>,
-    /// Payment evidence submitted alongside the request.
-    pub payment: PaymentProofV1,
-    /// Governance evidence (council vote hashes, steward acknowledgement, etc.).
-    pub governance: Option<GovernanceHookV1>,
-    /// Arbitrary metadata.
-    pub metadata: Metadata,
-}
-
-/// Response emitted after a successful registration.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RegisterNameResponseV1 {
-    /// Canonical name record returned by the registrar.
-    pub name_record: NameRecordV1,
-}
-
-/// Renewal request body.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RenewNameRequestV1 {
-    /// Additional term to purchase (years).
-    pub term_years: u8,
-    /// Payment evidence (covers base + surcharges).
-    pub payment: PaymentProofV1,
-}
-
-/// Transfer request body.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct TransferNameRequestV1 {
-    /// New owner account identifier.
-    pub new_owner: AccountId,
-    /// Governance evidence proving the transfer was approved.
-    pub governance: GovernanceHookV1,
-}
-
-/// Controller update request body.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct UpdateControllersRequestV1 {
-    /// Replacement controller set.
-    pub controllers: Vec<NameControllerV1>,
-}
-
-/// Freeze request body (guardian-issued).
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct FreezeNameRequestV1 {
-    /// Reason captured in the freeze log.
-    pub reason: String,
-    /// Timestamp (ms) when the freeze should auto-expire.
-    pub until_ms: u64,
-    /// Guardian ticket signature proving the freeze approval (base64-encoded JSON).
-    pub guardian_ticket: Json,
-}
-
-/// Reserved label assignment body.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ReservedAssignmentRequestV1 {
-    /// Intended owner account.
-    pub owner: AccountId,
-    /// Governance evidence referencing the reserved label decision.
-    pub governance: GovernanceHookV1,
-    /// Additional metadata captured with the assignment.
-    pub metadata: Metadata,
-}
-
-/// Payment evidence submitted alongside registrar operations.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PaymentProofV1 {
-    /// Asset identifier used for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
-    pub asset_id: String,
-    /// Exact non-negative gross amount paid (base price plus surcharges).
-    pub gross_amount: Quantity,
-    /// Exact non-negative amount forwarded to the registry after referral rebates.
-    pub net_amount: Quantity,
-    /// Settlement transaction hash (canonical hex string or JSON hash encoding).
-    pub settlement_tx: Json,
-    /// Account that authorised the payment.
-    pub payer: AccountId,
-    /// Steward or treasury signature attesting to the settlement (base64-encoded JSON).
-    pub signature: Json,
-}
-
-/// Governance evidence wrapper.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct GovernanceHookV1 {
-    /// Governance proposal identifier.
-    pub proposal_id: String,
-    /// Council vote hash (hex string/JSON blob).
-    pub council_vote_hash: Json,
-    /// DAO vote hash (hex string/JSON blob).
-    pub dao_vote_hash: Json,
-    /// Steward acknowledgement signature.
-    pub steward_ack: Json,
-    /// Optional guardian clearance signature.
-    pub guardian_clearance: Option<Json>,
-}
-
 /// Steward-advertised pricing tier definition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -649,38 +506,23 @@ pub mod fixtures {
 /// Re-export commonly used SNS types.
 pub mod prelude {
     pub use super::{
-        AuctionKind, ControllerType, FreezeNameRequestV1, GovernanceHookV1, NameAuctionStateV1,
-        NameControllerV1, NameRecordV1, NameSelectorError, NameSelectorV1, NameStatus,
-        PaymentProofV1, PriceTierV1, RegisterNameRequestV1, RegisterNameResponseV1,
-        RenewNameRequestV1, ReservedAssignmentRequestV1, ReservedNameV1, SuffixFeeSplitV1,
-        SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue, TransferNameRequestV1,
-        UpdateControllersRequestV1, fixtures,
+        AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
+        NameSelectorError, NameSelectorV1, NameStatus, PriceTierV1, ReservedNameV1,
+        SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue, fixtures,
     };
 }
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
 
-    use super::{PaymentProofV1, TokenValue, fixtures};
-    use crate::account::AccountId;
+    use super::{TokenValue, fixtures};
 
     #[derive(Encode)]
     struct ForgedTokenValue {
         asset_id: String,
         amount: Numeric,
-    }
-
-    #[derive(Encode)]
-    struct ForgedPaymentProof {
-        asset_id: String,
-        gross_amount: Numeric,
-        net_amount: Numeric,
-        settlement_tx: Json,
-        payer: AccountId,
-        signature: Json,
     }
 
     #[test]
@@ -691,30 +533,13 @@ mod tests {
     }
 
     #[test]
-    fn sns_amounts_reject_negative_numeric_payloads() {
+    fn sns_token_values_reject_negative_numeric_payloads() {
         let encoded = ForgedTokenValue {
             asset_id: "xor#universal".to_owned(),
             amount: Numeric::new(-1_i32, 0),
         }
         .encode();
         assert!(TokenValue::decode(&mut encoded.as_slice()).is_err());
-
-        let payer = AccountId::new(
-            KeyPair::try_random()
-                .expect("generate payment fixture key")
-                .public_key()
-                .clone(),
-        );
-        let encoded = ForgedPaymentProof {
-            asset_id: "xor#universal".to_owned(),
-            gross_amount: Numeric::new(-1_i32, 0),
-            net_amount: Numeric::zero(),
-            settlement_tx: Json::from("settlement"),
-            payer,
-            signature: Json::from("signature"),
-        }
-        .encode();
-        assert!(PaymentProofV1::decode(&mut encoded.as_slice()).is_err());
     }
 
     #[test]

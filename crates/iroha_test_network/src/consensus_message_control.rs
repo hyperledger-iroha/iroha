@@ -14,14 +14,22 @@ use std::{
 
 use color_eyre::eyre::{Result, eyre};
 use iroha_crypto::{Hash as CryptoHash, HashOf};
-use iroha_data_model::{block::BlockHeader, peer::PeerId};
+use iroha_data_model::{
+    block::{
+        BlockHeader,
+        consensus_v2::{
+            BlockSubject, ExecutionCommitment, MAX_VALIDATORS_PER_HEIGHT, ValidatorIndex,
+        },
+    },
+    peer::PeerId,
+};
 use norito::json::{Map, Value};
 use tokio::time::sleep;
 
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 1;
+const FORMAT_VERSION: u64 = 2;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -184,6 +192,11 @@ pub struct ConsensusMessageControlHeld {
     pub sequence: u64,
     /// Authenticated transport sender.
     pub sender: PeerId,
+    /// P2P identity that authenticated the retained copy.
+    ///
+    /// The feature-isolated controller rejects the copy unless this equals
+    /// `sender`, so a relay cannot make a sender-based causal schedule ambiguous.
+    pub authenticated_via: PeerId,
     /// Exact v2 payload kind.
     pub kind: ConsensusMessageControlKind,
     /// Message height, absent for compact chunk descriptors.
@@ -192,6 +205,16 @@ pub struct ConsensusMessageControlHeld {
     pub view: Option<u64>,
     /// Proposal block hash, when carried by the message.
     pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Complete block-and-payload subject, when carried by the message.
+    pub subject: Option<BlockSubject>,
+    /// Complete deterministic execution result, when carried by the message.
+    pub execution_commitment: Option<ExecutionCommitment>,
+    /// Inner validator signer/proposer/responder index, when singular.
+    pub signer: Option<ValidatorIndex>,
+    /// Exact signer indices carried by a QC or TC envelope.
+    pub certificate_signers: Vec<ValidatorIndex>,
+    /// Digest of the canonical Sumeragi v2 envelope retained by this receiver.
+    pub envelope_digest: CryptoHash,
     /// Original encoded P2P payload size.
     pub size_bytes: u64,
 }
@@ -800,12 +823,18 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
     let object = exact_object(
         value,
         &[
+            "authenticated_via",
             "block_hash",
+            "certificate_signers",
+            "envelope_digest",
+            "execution_commitment",
             "height",
             "kind",
             "sender",
             "sequence",
+            "signer",
             "size_bytes",
+            "subject",
             "view",
         ],
         "held descriptor",
@@ -835,13 +864,89 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
     } else if height.is_none() || view.is_none() {
         return Err(eyre!("round-carrying held descriptor lacks its round"));
     }
+    let sender = parse_canonical_peer(object, "sender")?;
+    let authenticated_via = parse_canonical_peer(object, "authenticated_via")?;
+    if sender != authenticated_via {
+        return Err(eyre!(
+            "held descriptor has ambiguous semantic and authenticated transport identities"
+        ));
+    }
+    let subject = match object.get("subject") {
+        Some(Value::Null) => None,
+        Some(value) => Some(
+            norito::json::from_value::<BlockSubject>(value.clone())
+                .map_err(|error| eyre!("invalid held-message subject: {error}"))?,
+        ),
+        None => return Err(eyre!("held descriptor lacks `subject`")),
+    };
+    let execution_commitment = match object.get("execution_commitment") {
+        Some(Value::Null) => None,
+        Some(value) => Some(
+            norito::json::from_value::<ExecutionCommitment>(value.clone())
+                .map_err(|error| eyre!("invalid held-message execution commitment: {error}"))?,
+        ),
+        None => return Err(eyre!("held descriptor lacks `execution_commitment`")),
+    };
+    if let Some(commitment) = &execution_commitment {
+        commitment
+            .validate()
+            .map_err(|error| eyre!("invalid held-message execution commitment: {error}"))?;
+    }
+    let block_hash = parse_optional_canonical_hash(object, "block_hash")?;
+    if block_hash != subject.map(|subject| subject.block_hash)
+        || execution_commitment.is_some() && subject.is_none()
+    {
+        return Err(eyre!(
+            "held descriptor has inconsistent subject, block hash, or execution commitment"
+        ));
+    }
+    let signer = optional_u64(object, "signer")?
+        .map(ValidatorIndex::try_from)
+        .transpose()
+        .map_err(|_| eyre!("held descriptor signer exceeds the validator-index range"))?;
+    let requires_single_signer = matches!(
+        kind,
+        ConsensusMessageControlKind::Proposal
+            | ConsensusMessageControlKind::PrepareVote
+            | ConsensusMessageControlKind::CommitVote
+            | ConsensusMessageControlKind::TimeoutVote
+            | ConsensusMessageControlKind::PayloadChunk
+            | ConsensusMessageControlKind::CertifiedBodyResponse
+    );
+    if requires_single_signer != signer.is_some() {
+        return Err(eyre!(
+            "held descriptor disagrees with its payload kind about the inner signer"
+        ));
+    }
+    let certificate_signers =
+        parse_u64_array(object, "certificate_signers", MAX_VALIDATORS_PER_HEIGHT)?
+            .into_iter()
+            .map(|signer| {
+                ValidatorIndex::try_from(signer)
+                    .map_err(|_| eyre!("certificate signer exceeds the validator-index range"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+    if certificate_signers
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(eyre!(
+            "held descriptor certificate signers are not strictly increasing"
+        ));
+    }
     Ok(ConsensusMessageControlHeld {
         sequence,
-        sender: parse_canonical_peer(object, "sender")?,
+        sender,
+        authenticated_via,
         kind,
         height,
         view,
-        block_hash: parse_optional_canonical_hash(object, "block_hash")?,
+        block_hash,
+        subject,
+        execution_commitment,
+        signer,
+        certificate_signers,
+        envelope_digest: parse_canonical_crypto_hash(object, "envelope_digest")?,
         size_bytes,
     })
 }
@@ -970,6 +1075,18 @@ fn parse_optional_canonical_hash(object: &Map, field: &str) -> Result<Option<Has
         return Err(eyre!("message-control hash `{field}` is not canonical"));
     }
     Ok(Some(parsed))
+}
+
+fn parse_canonical_crypto_hash(object: &Map, field: &str) -> Result<CryptoHash> {
+    let literal = object
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("message-control record lacks hash `{field}`"))?;
+    let parsed = literal.parse::<CryptoHash>()?;
+    if parsed.to_string() != literal {
+        return Err(eyre!("message-control hash `{field}` is not canonical"));
+    }
+    Ok(parsed)
 }
 
 fn required_u64(object: &Map, field: &str) -> Result<u64> {
@@ -1414,17 +1531,24 @@ mod tests {
     fn ack_parser_models_chunk_rounds_as_absent_and_rejects_fabrication() {
         let key = KeyPair::try_from_seed(vec![17_u8; 32], Algorithm::Ed25519)
             .expect("deterministic peer key");
+        let sender = PeerId::new(key.public_key().clone()).to_string();
         let digest = CryptoHash::new(b"command");
         let chunk = object_value([
+            ("authenticated_via", Value::from(sender.clone())),
             ("block_hash", Value::Null),
+            ("certificate_signers", Value::Array(Vec::new())),
+            (
+                "envelope_digest",
+                Value::from(CryptoHash::new(b"chunk-envelope").to_string()),
+            ),
+            ("execution_commitment", Value::Null),
             ("height", Value::Null),
             ("kind", Value::from("payload_chunk")),
-            (
-                "sender",
-                Value::from(PeerId::new(key.public_key().clone()).to_string()),
-            ),
+            ("sender", Value::from(sender)),
             ("sequence", Value::from(1_u64)),
+            ("signer", Value::from(0_u64)),
             ("size_bytes", Value::from(64_u64)),
+            ("subject", Value::Null),
             ("view", Value::Null),
         ]);
         let ack = |held: Value| {
@@ -1448,7 +1572,27 @@ mod tests {
                 ("version", Value::from(FORMAT_VERSION)),
             ])
         };
-        assert!(parse_ack(&canonical_json(&ack(chunk.clone())).expect("canonical ack")).is_ok());
+        let parsed =
+            parse_ack(&canonical_json(&ack(chunk.clone())).expect("canonical ack")).expect("ack");
+        assert_eq!(parsed.held[0].sender, parsed.held[0].authenticated_via);
+        assert_eq!(parsed.held[0].signer, Some(0));
+        assert!(parsed.held[0].subject.is_none());
+        assert!(parsed.held[0].execution_commitment.is_none());
+
+        let mut relayed = chunk.clone();
+        relayed.as_object_mut().expect("chunk descriptor").insert(
+            "authenticated_via".to_owned(),
+            Value::from(
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![18_u8; 32], Algorithm::Ed25519)
+                        .expect("second deterministic peer key")
+                        .public_key()
+                        .clone(),
+                )
+                .to_string(),
+            ),
+        );
+        assert!(parse_ack(&canonical_json(&ack(relayed)).expect("canonical relayed ack")).is_err());
 
         let mut fabricated = chunk;
         fabricated

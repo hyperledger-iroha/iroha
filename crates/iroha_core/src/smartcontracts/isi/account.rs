@@ -25,6 +25,10 @@ pub mod isi {
     fn is_idempotent_alias_permission(permission: &Permission) -> bool {
         iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
             .is_ok()
+            || iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution::try_from(
+                permission,
+            )
+            .is_ok()
             || iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
                 permission,
             )
@@ -1251,9 +1255,11 @@ pub mod query {
         owner: &AccountId,
         label: &AccountAlias,
     ) {
-        let selector = crate::sns::selector_for_account_alias(
-            label,
+        let selector = crate::sns::active_account_alias_selector(
+            state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
+            label,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .expect("selector");
         let address =
@@ -1268,6 +1274,40 @@ pub mod query {
             2_000,
             3_000,
             Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    #[cfg(test)]
+    fn seed_dynamic_dataspace_name_lease(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &str,
+        dataspace: iroha_data_model::nexus::DataSpaceId,
+    ) {
+        let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace metadata key"),
+            iroha_primitives::json::Json::new(dataspace.as_u64()),
+        );
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            1_000,
+            2_000,
+            3_000,
+            metadata,
         );
         state_transaction.world.smart_contract_state.insert(
             crate::sns::record_storage_key(&selector),
@@ -1871,14 +1911,17 @@ pub mod query {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(|dataspace| {
-                    state_ro
-                        .nexus()
-                        .dataspace_catalog
-                        .by_alias(dataspace)
-                        .map(|entry| entry.id)
-                        .ok_or_else(|| {
-                            Error::Conversion(format!("unknown dataspace alias: {dataspace}"))
-                        })
+                    crate::sns::resolve_active_dataspace_id_by_alias(
+                        state_ro.world(),
+                        &state_ro.nexus().dataspace_catalog,
+                        dataspace,
+                        now_ms,
+                    )
+                    .map_err(|error| {
+                        Error::Conversion(format!(
+                            "invalid account alias dataspace filter `{dataspace}`: {error}"
+                        ))
+                    })
                 })
                 .transpose()?;
             let domain_filter = self
@@ -1905,62 +1948,71 @@ pub mod query {
                 .get(account_id)
                 .cloned()
                 .unwrap_or_default();
-            labels
-                .into_iter()
-                .filter(|label| {
-                    !dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
-                        && !domain_filter
-                            .as_ref()
-                            .is_some_and(|domain| label.domain.as_ref() != Some(domain))
-                        && crate::sns::resolve_active_account_alias(
-                            state_ro.world(),
-                            &state_ro.nexus().dataspace_catalog,
-                            label,
-                            now_ms,
-                        )
+            let mut records = Vec::with_capacity(labels.len());
+            for label in labels {
+                if dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
+                    || domain_filter
                         .as_ref()
-                            == Some(account_id)
-                })
-                .map(|label| {
-                    let alias = label
-                        .to_literal(&state_ro.nexus().dataspace_catalog)
+                        .is_some_and(|domain| label.domain.as_ref() != Some(domain))
+                {
+                    continue;
+                }
+                let alias = crate::sns::active_account_alias_literal(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias binding: {err}"))
+                })?;
+                if crate::sns::resolve_active_account_alias(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .as_ref()
+                    != Some(account_id)
+                {
+                    continue;
+                }
+                let dataspace = crate::sns::resolve_active_dataspace_alias_by_id(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    label.dataspace,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias dataspace: {err}"))
+                })?;
+                let selector = crate::sns::active_account_alias_selector(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias selector: {err}"))
+                })?;
+                let record =
+                    crate::sns::get_name_record_by_selector(state_ro.world(), &selector, now_ms)
                         .map_err(|err| {
-                            Error::Conversion(format!("invalid account alias binding: {err}"))
+                            Error::Conversion(format!("invalid account alias lease record: {err}"))
                         })?;
-                    let dataspace = state_ro
-                        .nexus()
-                        .dataspace_catalog
-                        .by_id(label.dataspace)
-                        .ok_or_else(|| {
-                            Error::Conversion(
-                                "account alias dataspace is missing from the catalog".to_owned(),
-                            )
-                        })?
-                        .alias
-                        .clone();
-                    let record = crate::sns::get_name_record(
-                        state_ro.world(),
-                        &state_ro.nexus().dataspace_catalog,
-                        crate::sns::SnsNamespace::AccountAlias,
-                        &alias,
-                        now_ms,
-                    )
-                    .map_err(|err| {
-                        Error::Conversion(format!("invalid account alias lease record: {err}"))
-                    })?;
-                    Ok(AccountAliasBindingRecord {
-                        account_id: account_id.clone(),
-                        alias,
-                        dataspace,
-                        domain: label.domain.as_ref().map(ToString::to_string),
-                        is_primary: account.as_ref().label() == Some(&label),
-                        status: record.status,
-                        lease_expiry_ms: Some(record.expires_at_ms),
-                        grace_until_ms: Some(record.grace_expires_at_ms),
-                        bound_at_ms: record.registered_at_ms,
-                    })
-                })
-                .collect()
+                records.push(AccountAliasBindingRecord {
+                    account_id: account_id.clone(),
+                    alias,
+                    dataspace,
+                    domain: label.domain.as_ref().map(ToString::to_string),
+                    is_primary: account.as_ref().label() == Some(&label),
+                    status: record.status,
+                    lease_expiry_ms: Some(record.expires_at_ms),
+                    grace_until_ms: Some(record.grace_expires_at_ms),
+                    bound_at_ms: record.registered_at_ms,
+                });
+            }
+            Ok(records)
         }
     }
 
@@ -3470,6 +3522,38 @@ pub mod query {
             assert_eq!(aliases[0].dataspace, "centralbank");
             assert_eq!(aliases[0].domain.as_deref(), Some("banka"));
             assert!(aliases[0].is_primary);
+        }
+
+        #[test]
+        fn find_aliases_by_account_id_resolves_dynamic_only_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace = iroha_data_model::nexus::DataSpaceId::new(42);
+            seed_dynamic_dataspace_name_lease(&mut stx, &ALICE_ID, "paynet", dataspace);
+            let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
+            stx.world
+                .insert_account_alias_binding(alias, ALICE_ID.clone());
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let aliases =
+                FindAliasesByAccountId::new(ALICE_ID.clone(), Some("paynet".to_owned()), None)
+                    .execute(&state.view())
+                    .expect("dynamic-only dataspace filter should resolve");
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].alias, "merchant@paynet");
+            assert_eq!(aliases[0].dataspace, "paynet");
+            assert_eq!(aliases[0].domain, None);
+            assert!(!aliases[0].is_primary);
         }
 
         #[test]

@@ -4,13 +4,15 @@
 lang: ka
 direction: ltr
 source: docs/source/universal_accounts_guide.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 09a308ecbf07f0293add7f35cf4f1a50b5e6d3630b8b37a8f0f45a7cf82d3924
 source_last_modified: "2026-03-30T18:22:55.987822+00:00"
 translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
+
+> **Localization safety:** This translation predates the declarative alias onboarding flow and is reference material only. Follow the canonical English guide until this copy is regenerated and reviewed.
 
 <!--
   SPDX-License-Identifier: Apache-2.0

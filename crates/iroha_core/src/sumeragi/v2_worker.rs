@@ -7,7 +7,8 @@
 //! correctness-critical collector or global RBC state exists here.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -25,11 +26,22 @@ use super::v2_core::{EquivocationKind, EventTag};
 use super::v2_runtime::RuntimeQueueSnapshot;
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block},
+    block::{
+        CertifiedMergeLedgerReference,
+        consensus::{LaneBlockCertificateV1, NativeAmxAttestationBodyV2, NativeAmxPhase},
+        consensus_v2 as wire, decode_framed_signed_block,
+    },
     merge::MergeCommitteeSignature,
+    nexus::LaneId,
     peer::PeerId,
 };
-use iroha_p2p::{Post, Priority};
+use iroha_p2p::{
+    Post, Priority,
+    network::{
+        NetworkActorAdmissionError, NetworkActorAdmissionTicket,
+        message::{ClassifyTopic as _, ProgressReconstruction},
+    },
+};
 
 use super::{
     message::{BlockMessage, BlockMessageWire},
@@ -45,12 +57,18 @@ use super::{
         EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
         PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
+    v2_lane_work::DurableLaneRolloverAuthority,
     v2_runtime::RuntimeQueueLaneSnapshot,
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
 use crate::{
-    EventsSender, IrohaNetwork, NetworkMessage, kura::KuraV2CommitReceipt,
-    merge_sidecar::CertifiedMergeSidecarMessage,
+    EventsSender, IrohaNetwork, NetworkMessage,
+    kura::{Kura, KuraV2CommitReceipt},
+    merge_sidecar::{
+        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+    },
+    native_amx::NativeAmxMessage,
 };
 
 enum V2IoCommand {
@@ -1894,6 +1912,1119 @@ struct RetainedOutboundPayload {
     messages: Vec<wire::ConsensusMessageV2>,
 }
 
+/// One compact semantic fanout which remains owned until network-actor admission.
+///
+/// Messages and peers are retained once each. Every peer owns one bounded retry
+/// lane so backpressure on that target does not stall the other targets. Only
+/// the exact current [`Post`] returned by recoverable admission is stored in a
+/// lane with its FIFO ticket.
+#[derive(Debug, Default)]
+struct PendingExactTarget {
+    message_index: usize,
+    current: Option<Post<NetworkMessage>>,
+    ticket: Option<NetworkActorAdmissionTicket>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExactOutputCreationScope {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+}
+
+impl ExactOutputCreationScope {
+    fn covers(self, artifact: &wire::finality::V2FinalityArtifact) -> bool {
+        self.context_id == artifact.context_id() && self.height == artifact.height
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CertifiedSidecarTransferIdentity {
+    request_id: Hash,
+    entry_hash: HashOf<iroha_data_model::merge::MergeLedgerEntry>,
+    encoded_len: u64,
+    epoch_id: u64,
+    reference_digest: Hash,
+    requester: PeerId,
+    responder: PeerId,
+}
+
+impl CertifiedSidecarTransferIdentity {
+    fn from_request(request: &CertifiedMergeSidecarRequestV1) -> Self {
+        Self {
+            request_id: request.request_id,
+            entry_hash: request.entry_hash,
+            encoded_len: request.encoded_len,
+            epoch_id: request.epoch_id,
+            reference_digest: request.reference_digest,
+            requester: request.requester.clone(),
+            responder: request.responder.clone(),
+        }
+    }
+
+    fn from_chunk(chunk: &CertifiedMergeSidecarChunkV1) -> Self {
+        Self {
+            request_id: chunk.request_id,
+            entry_hash: chunk.entry_hash,
+            encoded_len: chunk.encoded_len,
+            epoch_id: chunk.epoch_id,
+            reference_digest: chunk.reference_digest,
+            requester: chunk.requester.clone(),
+            responder: chunk.responder.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExactOutputRolloverClaim {
+    /// Manually assembled output has no semantic rollover authority.
+    Exact,
+    GlobalV2(ExactOutputCreationScope),
+    Lane(ExactOutputCreationScope),
+    DurableCommitCertificateResponse {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        responder: PeerId,
+        source_height: wire::Height,
+        source_context_id: wire::HeightContextId,
+        response_hash: HashOf<wire::CommitCertificateResponse>,
+    },
+    DurableCertifiedBodyResponse {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        responder: PeerId,
+        source_round: wire::ConsensusRound,
+        source_subject: wire::BlockSubject,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    },
+    DurableLaneCertificateResponse {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        proposal_height: u64,
+        proposal_hash: Hash,
+        certificate_hash: HashOf<LaneBlockCertificateV1>,
+    },
+    NativeAmx {
+        scope: ExactOutputCreationScope,
+        round: wire::ConsensusRound,
+        message_hash: HashOf<NativeAmxMessage>,
+    },
+    MergeShare {
+        scope: ExactOutputCreationScope,
+        share_hash: HashOf<MergeCommitteeSignature>,
+    },
+    CertifiedSidecarRequest {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        transfer: CertifiedSidecarTransferIdentity,
+        request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
+    },
+    CertifiedSidecarChunk {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        transfer: CertifiedSidecarTransferIdentity,
+        chunk_index: u32,
+        chunk_count: u32,
+        response_hash: HashOf<CertifiedMergeSidecarChunkV1>,
+    },
+}
+
+fn native_amx_message_body(
+    message: &NativeAmxMessage,
+) -> Result<&NativeAmxAttestationBodyV2, String> {
+    let (body, expected_phase) = match message {
+        NativeAmxMessage::PrepareRequest(request) => (&request.body, NativeAmxPhase::Prepare),
+        NativeAmxMessage::PrepareVote(vote) => (&vote.body, NativeAmxPhase::Prepare),
+        NativeAmxMessage::CommitRequest(request) => {
+            request
+                .validate_shape()
+                .map_err(|error| error.to_string())?;
+            (&request.request.body, NativeAmxPhase::Commit)
+        }
+        NativeAmxMessage::CommitVote(vote) => (&vote.body, NativeAmxPhase::Commit),
+    };
+    if body.phase != expected_phase || body.authority_context_height != body.round.height {
+        return Err("Native AMX output has an invalid embedded round".to_owned());
+    }
+    Ok(body)
+}
+
+impl ExactOutputRolloverClaim {
+    fn scope(&self) -> Option<ExactOutputCreationScope> {
+        match self {
+            Self::Exact => None,
+            Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
+            Self::DurableCommitCertificateResponse { scope, .. }
+            | Self::DurableCertifiedBodyResponse { scope, .. }
+            | Self::DurableLaneCertificateResponse { scope, .. }
+            | Self::NativeAmx { scope, .. }
+            | Self::MergeShare { scope, .. }
+            | Self::CertifiedSidecarRequest { scope, .. }
+            | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
+        }
+    }
+
+    fn validate_fanout(&self, messages: &[NetworkMessage], peers: &[PeerId]) -> Result<(), String> {
+        match self {
+            Self::Exact => Ok(()),
+            Self::GlobalV2(_) => {
+                if messages.iter().all(|message| {
+                    matches!(
+                        message,
+                        NetworkMessage::SumeragiBlock(envelope)
+                            if matches!(envelope.as_message(), BlockMessage::V2(_))
+                    )
+                }) {
+                    Ok(())
+                } else {
+                    Err("global-v2 rollover claim covers a different output kind".to_owned())
+                }
+            }
+            Self::Lane(_) => {
+                if messages.iter().all(|message| {
+                    matches!(
+                        message,
+                        NetworkMessage::SumeragiBlock(envelope)
+                            if matches!(
+                                envelope.as_message(),
+                                BlockMessage::LaneBlockProposal(_)
+                                    | BlockMessage::LaneBlockVote(_)
+                                    | BlockMessage::LaneBlockQc(_)
+                                    | BlockMessage::LaneBlockCertificate(_)
+                            )
+                    )
+                }) {
+                    Ok(())
+                } else {
+                    Err("lane rollover claim covers a different output kind".to_owned())
+                }
+            }
+            Self::DurableCommitCertificateResponse {
+                target,
+                responder,
+                source_height,
+                source_context_id,
+                response_hash,
+                ..
+            } => {
+                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                    return Err(
+                        "durable CommitQC response claim requires one exact message".to_owned()
+                    );
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    return Err("durable CommitQC response claim covers a lane message".to_owned());
+                };
+                let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
+                    &message.payload
+                else {
+                    return Err(
+                        "durable CommitQC response claim covers another v2 payload".to_owned()
+                    );
+                };
+                if peers != std::slice::from_ref(target)
+                    || &response.responder != responder
+                    || response.certificate.round.height != *source_height
+                    || response.certificate.round.context_id != *source_context_id
+                    || HashOf::new(response) != *response_hash
+                {
+                    return Err("durable CommitQC response claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::DurableCertifiedBodyResponse {
+                target,
+                source_round,
+                source_subject,
+                response_hash,
+                ..
+            } => {
+                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                    return Err("durable body response claim requires one exact message".to_owned());
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    return Err("durable body response claim covers a lane message".to_owned());
+                };
+                let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
+                    &message.payload
+                else {
+                    return Err("durable body response claim covers another v2 payload".to_owned());
+                };
+                if peers != std::slice::from_ref(target)
+                    || response.manifest.round != *source_round
+                    || response.manifest.subject != *source_subject
+                    || HashOf::new(response) != *response_hash
+                {
+                    return Err("durable body response claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::DurableLaneCertificateResponse {
+                target,
+                lane_id,
+                lane_block_height,
+                proposal_height,
+                proposal_hash,
+                certificate_hash,
+                ..
+            } => {
+                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                    return Err(
+                        "durable lane-certificate claim requires one exact message".to_owned()
+                    );
+                };
+                let BlockMessage::LaneBlockCertificate(certificate) = envelope.as_message() else {
+                    return Err(
+                        "durable lane-certificate claim covers another block payload".to_owned(),
+                    );
+                };
+                let descriptor = &certificate.proposal.descriptor;
+                if peers != std::slice::from_ref(target)
+                    || descriptor.lane_id != *lane_id
+                    || descriptor.lane_block_height != *lane_block_height
+                    || descriptor.proposal_height != *proposal_height
+                    || certificate.proposal.proposal_hash != *proposal_hash
+                    || HashOf::new(certificate.as_ref()) != *certificate_hash
+                {
+                    return Err("durable lane-certificate claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::NativeAmx {
+                scope,
+                round,
+                message_hash,
+            } => {
+                let [NetworkMessage::NativeAmx(message)] = messages else {
+                    return Err("Native AMX rollover claim requires one exact message".to_owned());
+                };
+                let body = native_amx_message_body(message)?;
+                if body.round != *round
+                    || round.context_id != scope.context_id
+                    || round.height != scope.height
+                    || HashOf::new(message.as_ref()) != *message_hash
+                {
+                    return Err("Native AMX rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::MergeShare { share_hash, .. } => {
+                let [NetworkMessage::MergeCommitteeSignature(signature)] = messages else {
+                    return Err("merge-share rollover claim requires one exact share".to_owned());
+                };
+                if HashOf::new(signature.as_ref()) != *share_hash {
+                    return Err("merge-share rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::CertifiedSidecarRequest {
+                target,
+                transfer,
+                request_hash,
+                ..
+            } => {
+                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
+                    return Err(
+                        "sidecar-request rollover claim requires one exact request".to_owned()
+                    );
+                };
+                let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+                    return Err("sidecar-request rollover claim covers a chunk".to_owned());
+                };
+                if peers != std::slice::from_ref(target)
+                    || CertifiedSidecarTransferIdentity::from_request(request) != *transfer
+                    || HashOf::new(request) != *request_hash
+                {
+                    return Err("sidecar-request rollover claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::CertifiedSidecarChunk {
+                target,
+                transfer,
+                chunk_index,
+                chunk_count,
+                response_hash,
+                ..
+            } => {
+                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
+                    return Err(
+                        "sidecar-chunk rollover claim requires one exact response".to_owned()
+                    );
+                };
+                let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
+                    return Err("sidecar-chunk rollover claim covers a request".to_owned());
+                };
+                if peers != std::slice::from_ref(target)
+                    || CertifiedSidecarTransferIdentity::from_chunk(chunk) != *transfer
+                    || chunk.chunk_index != *chunk_index
+                    || chunk.chunk_count != *chunk_count
+                    || HashOf::new(chunk) != *response_hash
+                {
+                    return Err("sidecar-chunk rollover claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingExactFanout {
+    messages: Vec<NetworkMessage>,
+    message_hashes: Vec<HashOf<NetworkMessage>>,
+    peers: Vec<PeerId>,
+    targets: Vec<PendingExactTarget>,
+    next_target_index: usize,
+    rollover_claim: ExactOutputRolloverClaim,
+}
+
+impl PendingExactFanout {
+    fn new(messages: Vec<NetworkMessage>, peers: Vec<PeerId>) -> Option<Self> {
+        if messages.is_empty() || peers.is_empty() {
+            return None;
+        }
+        let message_hashes = messages.iter().map(HashOf::new).collect();
+        let targets = std::iter::repeat_with(PendingExactTarget::default)
+            .take(peers.len())
+            .collect();
+        Some(Self {
+            messages,
+            message_hashes,
+            peers,
+            targets,
+            next_target_index: 0,
+            rollover_claim: ExactOutputRolloverClaim::Exact,
+        })
+    }
+
+    fn claimed(
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        rollover_claim: ExactOutputRolloverClaim,
+    ) -> Result<Option<Self>, String> {
+        let Some(mut fanout) = Self::new(messages, peers) else {
+            return Ok(None);
+        };
+        rollover_claim.validate_fanout(&fanout.messages, &fanout.peers)?;
+        fanout.rollover_claim = rollover_claim;
+        Ok(Some(fanout))
+    }
+
+    fn take_attempt(
+        &mut self,
+        target_index: usize,
+    ) -> Option<(Post<NetworkMessage>, Option<NetworkActorAdmissionTicket>)> {
+        let target = self.targets.get_mut(target_index)?;
+        if let Some(post) = target.current.take() {
+            return Some((post, target.ticket.take()));
+        }
+        let data = self.messages.get(target.message_index)?.clone();
+        let peer_id = self.peers.get(target_index)?.clone();
+        Some((
+            Post {
+                data,
+                peer_id,
+                priority: Priority::High,
+            },
+            None,
+        ))
+    }
+
+    fn mark_admitted(&mut self, target_index: usize) {
+        let target = self
+            .targets
+            .get_mut(target_index)
+            .expect("selected exact-output target must remain present");
+        target.message_index = target
+            .message_index
+            .checked_add(1)
+            .expect("bounded exact-output message index cannot overflow");
+    }
+
+    fn retain_returned(
+        &mut self,
+        target_index: usize,
+        post: Post<NetworkMessage>,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), String> {
+        let target = self
+            .targets
+            .get_mut(target_index)
+            .expect("selected exact-output target must remain present");
+        let expected_hash = self
+            .message_hashes
+            .get(target.message_index)
+            .ok_or_else(|| {
+                "Sumeragi v2 exact-output target has no expected payload identity".to_owned()
+            })?;
+        if HashOf::new(&post.data) != *expected_hash {
+            return Err("Sumeragi v2 network actor changed an exact output payload".to_owned());
+        }
+        debug_assert!(target.current.is_none());
+        debug_assert!(target.ticket.is_none());
+        target.current = Some(post);
+        target.ticket = ticket;
+        Ok(())
+    }
+
+    fn target_is_complete(&self, target_index: usize) -> bool {
+        self.targets
+            .get(target_index)
+            .is_some_and(|target| target.message_index == self.messages.len())
+    }
+
+    fn owns_peer(&self, peer: &PeerId) -> bool {
+        self.peers
+            .iter()
+            .enumerate()
+            .any(|(index, candidate)| candidate == peer && !self.target_is_complete(index))
+    }
+
+    fn target_is_local_head(&self, target_index: usize) -> bool {
+        let Some(peer) = self.peers.get(target_index) else {
+            return false;
+        };
+        !self
+            .peers
+            .iter()
+            .enumerate()
+            .take(target_index)
+            .any(|(index, candidate)| candidate == peer && !self.target_is_complete(index))
+    }
+
+    fn advance_target_cursor(&mut self, target_index: usize) {
+        self.next_target_index = (target_index + 1) % self.targets.len();
+    }
+
+    fn is_complete(&self) -> bool {
+        self.targets
+            .iter()
+            .all(|target| target.message_index == self.messages.len())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExactFanoutOwnership {
+    /// Every post was admitted or the exact unadmitted suffix entered the corridor.
+    Owned,
+    /// The bounded corridor was full; the semantic producer must retain its source.
+    SourceRetained,
+}
+
+/// Bounded per-target FIFO owner for semantic network output awaiting actor admission.
+#[derive(Debug)]
+struct PendingExactOutput {
+    fanouts: VecDeque<PendingExactFanout>,
+    next_fanout_index: usize,
+    fanout_capacity: usize,
+    max_messages_per_fanout: usize,
+    max_peers_per_fanout: usize,
+}
+
+impl PendingExactOutput {
+    fn new(
+        fanout_capacity: usize,
+        max_messages_per_fanout: usize,
+        max_peers_per_fanout: usize,
+    ) -> Result<Self, String> {
+        if fanout_capacity == 0 || max_messages_per_fanout == 0 || max_peers_per_fanout == 0 {
+            return Err("Sumeragi v2 outbound corridor bounds must be non-zero".to_owned());
+        }
+        Ok(Self {
+            fanouts: VecDeque::new(),
+            next_fanout_index: 0,
+            fanout_capacity,
+            max_messages_per_fanout,
+            max_peers_per_fanout,
+        })
+    }
+
+    fn has_capacity(&self) -> bool {
+        self.fanouts.len() < self.fanout_capacity
+    }
+
+    fn is_pending(&self) -> bool {
+        !self.fanouts.is_empty()
+    }
+
+    fn enqueue(&mut self, fanout: PendingExactFanout) -> Result<ExactFanoutOwnership, String> {
+        if fanout.messages.len() > self.max_messages_per_fanout
+            || fanout.peers.len() > self.max_peers_per_fanout
+        {
+            return Err("Sumeragi v2 outbound fanout exceeds its protocol bound".to_owned());
+        }
+        if !self.has_capacity() {
+            return Ok(ExactFanoutOwnership::SourceRetained);
+        }
+        self.fanouts.push_back(fanout);
+        Ok(ExactFanoutOwnership::Owned)
+    }
+
+    fn handoff_applied_height_to_durable_reconstruction(
+        &mut self,
+        artifact: &wire::finality::V2FinalityArtifact,
+        durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
+        durable_history: Option<&Kura>,
+    ) -> Result<usize, String> {
+        let mut remaining_posts = 0usize;
+        for fanout in &self.fanouts {
+            if fanout.message_hashes.len() != fanout.messages.len()
+                || fanout
+                    .messages
+                    .iter()
+                    .zip(&fanout.message_hashes)
+                    .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+            {
+                return Err(
+                    "Sumeragi v2 retained output changed before finality handoff".to_owned(),
+                );
+            }
+            applied_height_reconstruction_covers(
+                &fanout.messages,
+                &fanout.peers,
+                &fanout.rollover_claim,
+                artifact,
+                durable_lane_authority,
+                durable_history,
+            )?;
+            for (target_index, target) in fanout.targets.iter().enumerate() {
+                if target.message_index > fanout.messages.len() {
+                    return Err(
+                        "Sumeragi v2 exact-output target advanced beyond its fanout".to_owned()
+                    );
+                }
+                if target.ticket.is_some() && target.current.is_none() {
+                    return Err("Sumeragi v2 exact-output ticket lost its returned post".to_owned());
+                }
+                if let Some(current) = &target.current {
+                    if fanout.peers.get(target_index) != Some(&current.peer_id) {
+                        return Err(
+                            "Sumeragi v2 exact-output target changed before finality handoff"
+                                .to_owned(),
+                        );
+                    }
+                    let expected_hash = fanout
+                        .message_hashes
+                        .get(target.message_index)
+                        .ok_or_else(|| {
+                            "Sumeragi v2 exact-output target has no expected payload identity"
+                                .to_owned()
+                        })?;
+                    if HashOf::new(&current.data) != *expected_hash {
+                        return Err(
+                            "Sumeragi v2 returned output changed before finality handoff"
+                                .to_owned(),
+                        );
+                    }
+                }
+                for _message in &fanout.messages[target.message_index..] {
+                    remaining_posts = remaining_posts.checked_add(1).ok_or_else(|| {
+                        "Sumeragi v2 applied-height output count overflowed".to_owned()
+                    })?;
+                }
+            }
+        }
+        self.fanouts.clear();
+        self.next_fanout_index = 0;
+        Ok(remaining_posts)
+    }
+
+    fn target_is_global_head(&self, fanout_index: usize, target_index: usize) -> bool {
+        let Some(fanout) = self.fanouts.get(fanout_index) else {
+            return false;
+        };
+        let Some(peer) = fanout.peers.get(target_index) else {
+            return false;
+        };
+        fanout.target_is_local_head(target_index)
+            && !self
+                .fanouts
+                .iter()
+                .take(fanout_index)
+                .any(|older| older.owns_peer(peer))
+    }
+
+    fn next_schedulable_target(&self, blocked_peers: &BTreeSet<PeerId>) -> Option<(usize, usize)> {
+        let fanout_count = self.fanouts.len();
+        for fanout_offset in 0..fanout_count {
+            let fanout_index = (self.next_fanout_index + fanout_offset) % fanout_count;
+            let fanout = self
+                .fanouts
+                .get(fanout_index)
+                .expect("round-robin exact fanout index must be present");
+            for target_offset in 0..fanout.targets.len() {
+                let target_index =
+                    (fanout.next_target_index + target_offset) % fanout.targets.len();
+                let peer = &fanout.peers[target_index];
+                if !fanout.target_is_complete(target_index)
+                    && !blocked_peers.contains(peer)
+                    && self.target_is_global_head(fanout_index, target_index)
+                {
+                    return Some((fanout_index, target_index));
+                }
+            }
+        }
+        None
+    }
+
+    fn advance_after_attempt(&mut self, fanout_index: usize, target_index: usize) {
+        let fanout_complete = {
+            let fanout = self
+                .fanouts
+                .get_mut(fanout_index)
+                .expect("attempted exact fanout must remain present");
+            fanout.advance_target_cursor(target_index);
+            fanout.is_complete()
+        };
+        if fanout_complete {
+            self.fanouts
+                .remove(fanout_index)
+                .expect("completed exact fanout must remain present");
+            self.next_fanout_index = if self.fanouts.is_empty() {
+                0
+            } else {
+                fanout_index % self.fanouts.len()
+            };
+        } else {
+            self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
+        }
+    }
+
+    /// Drive exact output fairly until empty or every remaining target is backpressured.
+    fn drive_with<Attempt>(&mut self, mut attempt: Attempt) -> Result<Option<usize>, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
+    {
+        let mut blocked_peers = BTreeSet::new();
+        let mut closest_backpressure_rank: Option<usize> = None;
+        while !self.fanouts.is_empty() {
+            let Some((fanout_index, target_index)) = self.next_schedulable_target(&blocked_peers)
+            else {
+                return closest_backpressure_rank.map(Some).ok_or_else(|| {
+                    "Sumeragi v2 exact-output scheduler found no per-target FIFO head".to_owned()
+                });
+            };
+            let (post, ticket) = self
+                .fanouts
+                .get_mut(fanout_index)
+                .expect("selected exact fanout must remain present")
+                .take_attempt(target_index)
+                .expect("selected exact-output target must own an attempt");
+            let attempted_peer = post.peer_id.clone();
+            match attempt(post, ticket) {
+                Ok(()) => {
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("admitted exact fanout must remain present")
+                        .mark_admitted(target_index);
+                    self.advance_after_attempt(fanout_index, target_index);
+                }
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message,
+                    ticket,
+                    rank,
+                }) => {
+                    if message.peer_id != attempted_peer {
+                        self.fanouts
+                            .get_mut(fanout_index)
+                            .expect("backpressured exact fanout must remain present")
+                            .retain_returned(target_index, message, ticket)?;
+                        return Err(
+                            "Sumeragi v2 network actor changed an exact output target".to_owned()
+                        );
+                    }
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("backpressured exact fanout must remain present")
+                        .retain_returned(target_index, message, ticket)?;
+                    blocked_peers.insert(attempted_peer);
+                    closest_backpressure_rank =
+                        Some(closest_backpressure_rank.map_or(rank, |current| current.min(rank)));
+                    self.advance_after_attempt(fanout_index, target_index);
+                }
+                Err(NetworkActorAdmissionError::Closed { message }) => {
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("closed exact fanout must remain present")
+                        .retain_returned(target_index, message, None)?;
+                    return Err(
+                        "Sumeragi v2 network actor closed during output admission".to_owned()
+                    );
+                }
+                Err(NetworkActorAdmissionError::Rejected { message, reason }) => {
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("rejected exact fanout must remain present")
+                        .retain_returned(target_index, message, None)?;
+                    return Err(format!(
+                        "Sumeragi v2 network actor permanently rejected output: {reason:?}"
+                    ));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn durable_history_source_covers(
+    messages: &[NetworkMessage],
+    rollover_claim: &ExactOutputRolloverClaim,
+    source_chain_id: &iroha_data_model::ChainId,
+    maximum_source_height: wire::Height,
+    kura: &Kura,
+) -> Result<(), String> {
+    let [message] = messages else {
+        return Err("Sumeragi v2 durable response claim is not a singleton".to_owned());
+    };
+    if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
+        return Err("Sumeragi v2 durable response is not reconstructible traffic".to_owned());
+    }
+    let NetworkMessage::SumeragiBlock(envelope) = message else {
+        return Err("Sumeragi v2 durable response is not block traffic".to_owned());
+    };
+
+    match (rollover_claim, envelope.as_message()) {
+        (
+            ExactOutputRolloverClaim::DurableCommitCertificateResponse {
+                responder: claimed_responder,
+                source_height,
+                source_context_id,
+                ..
+            },
+            BlockMessage::V2(message),
+        ) => {
+            let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
+                &message.payload
+            else {
+                return Err("durable CommitQC response changed payload kind".to_owned());
+            };
+            if *source_height > maximum_source_height {
+                return Err("durable CommitQC response belongs to a future height".to_owned());
+            }
+            let source = kura
+                .v2_finality_artifact(*source_height)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| {
+                    "durable CommitQC response lost its Kura finality source".to_owned()
+                })?;
+            if &source.height_context.chain_id != source_chain_id
+                || source.context_id() != *source_context_id
+                || response.certificate != source.commit_qc
+                || &response.responder != claimed_responder
+            {
+                return Err(
+                    "durable CommitQC response differs from its Kura finality source".to_owned(),
+                );
+            }
+            response
+                .validate(&source.height_context)
+                .map_err(|error| error.to_string())?;
+            Signature::try_from_bytes(&response.signature)
+                .map_err(|error| error.to_string())?
+                .verify(
+                    response.responder.public_key(),
+                    &response.signature_preimage(),
+                )
+                .map_err(|error| error.to_string())
+        }
+        (
+            ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
+                responder: claimed_responder,
+                source_round,
+                source_subject,
+                ..
+            },
+            BlockMessage::V2(message),
+        ) => {
+            let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = &message.payload
+            else {
+                return Err("durable body response changed payload kind".to_owned());
+            };
+            if source_round.height > maximum_source_height {
+                return Err("durable body response belongs to a future height".to_owned());
+            }
+            let source = kura
+                .v2_finality_artifact(source_round.height)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "durable body response lost its Kura finality source".to_owned())?;
+            if &source.height_context.chain_id != source_chain_id
+                || source.context_id() != source_round.context_id
+                || source.subject != *source_subject
+            {
+                return Err(
+                    "durable body response differs from its Kura finality source".to_owned(),
+                );
+            }
+            response
+                .validate(&source.height_context)
+                .map_err(|error| error.to_string())?;
+            let responder_index = usize::try_from(response.responder)
+                .map_err(|_| "durable body responder index is not representable".to_owned())?;
+            let responder = source
+                .height_context
+                .roster
+                .get(responder_index)
+                .ok_or_else(|| {
+                    "durable body responder is outside the historical roster".to_owned()
+                })?;
+            if &responder.validator != claimed_responder {
+                return Err(
+                    "durable body response is not bound to the serving network identity".to_owned(),
+                );
+            }
+            Signature::try_from_bytes(&response.signature)
+                .map_err(|error| error.to_string())?
+                .verify(
+                    responder.validator.public_key(),
+                    &response.signature_preimage(),
+                )
+                .map_err(|error| error.to_string())?;
+
+            let block_height = usize::try_from(source_round.height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| "durable body source height is not representable".to_owned())?;
+            let block = kura
+                .get_block(block_height)
+                .ok_or_else(|| "durable body response lost its canonical Kura block".to_owned())?;
+            let proposal = block.canonical_resultless_proposal();
+            let canonical_wire = proposal.encode_wire().map_err(|error| error.to_string())?;
+            if block.hash() != source_subject.block_hash
+                || canonical_wire != response.body
+                || Hash::new(&canonical_wire) != source_subject.payload_hash
+            {
+                return Err("durable body response differs from its canonical Kura body".to_owned());
+            }
+            let (manifest, _) = encode_payload(
+                &source.height_context,
+                *source_round,
+                *source_subject,
+                &canonical_wire,
+            )
+            .map_err(|error| error.to_string())?
+            .into_parts();
+            if manifest != response.manifest {
+                return Err("durable body response manifest is not Kura-reconstructible".to_owned());
+            }
+            Ok(())
+        }
+        (
+            ExactOutputRolloverClaim::DurableLaneCertificateResponse {
+                lane_id,
+                lane_block_height,
+                proposal_height,
+                proposal_hash,
+                ..
+            },
+            BlockMessage::LaneBlockCertificate(certificate),
+        ) => {
+            if *proposal_height > maximum_source_height {
+                return Err("durable lane certificate belongs to a future height".to_owned());
+            }
+            let source = kura
+                .read_certified_lane_block_artifact(*lane_id, *lane_block_height)
+                .ok_or_else(|| {
+                    "durable lane certificate lost its certified Kura source".to_owned()
+                })?;
+            if source.proposal.descriptor.proposal_height != *proposal_height
+                || source.proposal.proposal_hash != *proposal_hash
+                || certificate.proposal != source.proposal
+                || certificate.prepare_qc != source.prepare_qc
+                || certificate.commit_qc != source.commit_qc
+            {
+                return Err(
+                    "durable lane certificate differs from its certified Kura source".to_owned(),
+                );
+            }
+            Ok(())
+        }
+        _ => Err("Sumeragi v2 durable response claim changed output kind".to_owned()),
+    }
+}
+
+fn applied_height_reconstruction_covers(
+    messages: &[NetworkMessage],
+    peers: &[PeerId],
+    rollover_claim: &ExactOutputRolloverClaim,
+    artifact: &wire::finality::V2FinalityArtifact,
+    durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
+    durable_history: Option<&Kura>,
+) -> Result<(), String> {
+    rollover_claim.validate_fanout(messages, peers)?;
+    let scope = rollover_claim.scope().ok_or_else(|| {
+        "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
+    })?;
+    if !scope.covers(artifact) {
+        return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+    }
+    if matches!(
+        rollover_claim,
+        ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+            | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+            | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+    ) {
+        return durable_history_source_covers(
+            messages,
+            rollover_claim,
+            &artifact.height_context.chain_id,
+            artifact.height,
+            durable_history.ok_or_else(|| {
+                "Sumeragi v2 durable response lacks an independently readable history source"
+                    .to_owned()
+            })?,
+        );
+    }
+    if matches!(
+        rollover_claim,
+        ExactOutputRolloverClaim::NativeAmx { .. }
+            | ExactOutputRolloverClaim::MergeShare { .. }
+            | ExactOutputRolloverClaim::CertifiedSidecarRequest { .. }
+            | ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
+    ) {
+        return Ok(());
+    }
+    let context_id = artifact.context_id();
+    let height = artifact.height;
+    let round_matches =
+        |round: wire::ConsensusRound| round.context_id == context_id && round.height == height;
+    let mut manifest_hashes = BTreeSet::new();
+    for message in messages {
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            return Err(
+                "Sumeragi v2 exact output has no applied-height reconstruction source".to_owned(),
+            );
+        };
+        match envelope.as_message() {
+            BlockMessage::V2(message)
+                if matches!(rollover_claim, ExactOutputRolloverClaim::GlobalV2(_)) =>
+            {
+                message
+                    .validate_version()
+                    .map_err(|error| error.to_string())?;
+                match &message.payload {
+                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                        manifest_hashes.insert(HashOf::new(&proposal.manifest));
+                    }
+                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
+                    | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        wire::CertifiedBodyResponse { manifest, .. },
+                    ) => {
+                        manifest_hashes.insert(HashOf::new(manifest));
+                    }
+                    _ => {}
+                }
+            }
+            lane_message @ (BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+            | BlockMessage::LaneBlockCertificate(_))
+                if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
+            {
+                let authority = durable_lane_authority.ok_or_else(|| {
+                    "Sumeragi v2 lane output lacks a typed durable rollover authority".to_owned()
+                })?;
+                if authority
+                    .covered_source_hash(artifact, lane_message)?
+                    .is_none()
+                {
+                    return Err(
+                        "Sumeragi v2 lane output lacks an exact typed durable rollover witness"
+                            .to_owned(),
+                    );
+                }
+            }
+            _ => {
+                return Err(
+                    "Sumeragi v2 lane or legacy output lacks a typed durable rollover witness"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    for message in messages {
+        if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
+            return Err(
+                "Sumeragi v2 exact output has no applied-height reconstruction source".to_owned(),
+            );
+        }
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            unreachable!("global rollover preflight rejected non-Sumeragi output")
+        };
+        let covered = match envelope.as_message() {
+            BlockMessage::V2(message)
+                if matches!(rollover_claim, ExactOutputRolloverClaim::GlobalV2(_)) =>
+            {
+                match &message.payload {
+                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                        round_matches(proposal.round)
+                    }
+                    wire::ConsensusMessageV2Payload::Vote(vote) => round_matches(vote.round),
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                        round_matches(certificate.round)
+                    }
+                    wire::ConsensusMessageV2Payload::TimeoutVote(vote) => round_matches(vote.round),
+                    wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
+                        round_matches(certificate.round)
+                    }
+                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
+                        round_matches(manifest.round)
+                    }
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
+                        manifest_hashes.contains(&chunk.manifest_hash)
+                    }
+                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
+                        round_matches(request.round)
+                    }
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
+                        round_matches(response.manifest.round)
+                    }
+                    wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
+                        request.context_id == context_id && request.height == height
+                    }
+                    wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+                        round_matches(response.certificate.round)
+                    }
+                }
+            }
+            lane_message @ (BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+            | BlockMessage::LaneBlockCertificate(_))
+                if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
+            {
+                durable_lane_authority
+                    .ok_or_else(|| {
+                        "Sumeragi v2 lane output lacks a typed durable rollover authority"
+                            .to_owned()
+                    })?
+                    .covered_source_hash(artifact, lane_message)?
+                    .is_some()
+            }
+            _ => unreachable!("rollover preflight rejected an untyped block output"),
+        };
+        if !covered {
+            return Err(
+                "Sumeragi v2 output is not bound to the applied height authority".to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+type ExactOutputAdmissionHook = Box<
+    dyn FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>
+        + Send,
+>;
+
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
     context: wire::HeightContext,
@@ -1901,6 +3032,7 @@ pub(crate) struct ProductionV2Services {
     local_validator: Option<wire::ValidatorIndex>,
     key_pair: KeyPair,
     network: IrohaNetwork,
+    kura: Arc<Kura>,
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,
     fetches: BTreeMap<EffectWorkId, FetchSession>,
@@ -1921,6 +3053,9 @@ pub(crate) struct ProductionV2Services {
     validation_rejections: VecDeque<RejectedCandidateBody>,
     merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarWork>,
     outbound_chunks: BTreeMap<HashOf<wire::PayloadManifest>, RetainedOutboundPayload>,
+    pending_exact_output: Mutex<PendingExactOutput>,
+    #[cfg(test)]
+    exact_output_admission_hook: Option<Mutex<ExactOutputAdmissionHook>>,
     active_tag: EventTag,
     last_status: Option<EffectExecutorStatus>,
     fatal_reason: Option<String>,
@@ -1969,7 +3104,25 @@ impl ProductionV2Services {
             .join(hex::encode(context.id().0.as_ref()));
         let max_orphan_chunk_bytes = u64::from(context.da_layout.max_chunk_count)
             .saturating_mul(u64::from(context.da_layout.chunk_size_bytes));
+        let max_messages_per_fanout = usize::try_from(context.da_layout.max_chunk_count)
+            .map_err(|_| "Sumeragi v2 outbound chunk count is not representable".to_owned())?
+            .checked_add(1)
+            .ok_or_else(|| "Sumeragi v2 outbound fanout message bound overflowed".to_owned())?;
+        let max_peers_per_fanout = context.roster.len().max(1);
+        // Every asynchronous completion can produce at most one response fanout,
+        // while one reducer macro-step contributes at most MAX_EFFECTS_PER_STEP
+        // additional semantic effects before the runner regains control.
+        let pending_fanout_capacity = consensus_io_capacity
+            .checked_add(auxiliary_io_capacity)
+            .and_then(|capacity| capacity.checked_add(super::v2_core::MAX_EFFECTS_PER_STEP))
+            .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
+        let pending_exact_output = PendingExactOutput::new(
+            pending_fanout_capacity,
+            max_messages_per_fanout,
+            max_peers_per_fanout,
+        )?;
         std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
+        let durable_history = Arc::clone(&kura);
         let apply_service = V2ApplyService::new(
             state,
             queue,
@@ -2001,6 +3154,7 @@ impl ProductionV2Services {
             local_validator,
             key_pair,
             network,
+            kura: durable_history,
             chunk_root: context_chunk_root,
             io: Some(io),
             fetches: BTreeMap::new(),
@@ -2021,6 +3175,9 @@ impl ProductionV2Services {
             validation_rejections: VecDeque::new(),
             merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
+            pending_exact_output: Mutex::new(pending_exact_output),
+            #[cfg(test)]
+            exact_output_admission_hook: None,
             active_tag: initial_tag,
             last_status: None,
             fatal_reason: None,
@@ -2763,11 +3920,12 @@ impl ProductionV2Services {
 
     /// Drain tagged I/O and reconstruction completions into the reducer owner.
     ///
-    /// The service removes at most one runtime-producing completion per exact
-    /// free FIFO slot and alternates between I/O and local reconstruction. If
-    /// that FIFO is full, one runtime-producing I/O result remains owned while
-    /// bounded auxiliary results behind it continue to drain. A burst therefore
-    /// remains bounded without starving body service or candidate recovery.
+    /// The service alternates between I/O and local reconstruction while the
+    /// runtime completion lane has capacity. Actor-backpressured output does
+    /// not suppress these durable completions: a response either transfers to
+    /// the bounded exact-output corridor or remains reconstructible from its
+    /// authenticated requester. If the runtime FIFO is full, one producing I/O
+    /// result remains owned while bounded auxiliary results behind it drain.
     pub(crate) fn drain_completions<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -2875,12 +4033,16 @@ impl ProductionV2Services {
                                 response,
                             },
                         ..
-                    } => self.post_to_peer(
-                        recipient,
-                        wire::ConsensusMessageV2::new(
-                            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
-                        ),
-                    ),
+                    } => {
+                        if let Err(reason) = self.post_to_peer(
+                            recipient,
+                            wire::ConsensusMessageV2::new(
+                                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                            ),
+                        ) {
+                            return Err(executor.external_service_failed(reason, self));
+                        }
+                    }
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::CertifiedRequestIgnored,
                         ..
@@ -3251,6 +4413,169 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 canonical persistence requires restart recovery".to_owned())
     }
 
+    fn lock_pending_exact_output(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, PendingExactOutput>, String> {
+        self.pending_exact_output
+            .lock()
+            .map_err(|_| "Sumeragi v2 outbound corridor lock was poisoned".to_owned())
+    }
+
+    #[cfg(test)]
+    fn set_exact_output_admission_hook(
+        &mut self,
+        hook: impl FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>
+        + Send
+        + 'static,
+    ) {
+        self.exact_output_admission_hook = Some(Mutex::new(Box::new(hook)));
+    }
+
+    fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
+        let rank = {
+            #[cfg(test)]
+            {
+                if let Some(hook) = &self.exact_output_admission_hook {
+                    let mut hook = hook.lock().map_err(|_| {
+                        "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
+                    })?;
+                    pending.drive_with(|post, ticket| hook(post, ticket))?
+                } else {
+                    pending
+                        .drive_with(|post, ticket| self.network.post_recoverable(post, ticket))?
+                }
+            }
+            #[cfg(not(test))]
+            {
+                pending.drive_with(|post, ticket| self.network.post_recoverable(post, ticket))?
+            }
+        };
+        if let Some(rank) = rank {
+            iroha_logger::debug!(
+                rank,
+                pending_fanouts = pending.fanouts.len(),
+                "retained exact Sumeragi v2 output behind network-actor backpressure"
+            );
+        }
+        Ok(rank.is_some())
+    }
+
+    fn enqueue_exact_fanout_while_guarded(
+        &self,
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        rollover_claim: ExactOutputRolloverClaim,
+        _permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
+            return Ok(ExactFanoutOwnership::Owned);
+        };
+        let mut pending = self.lock_pending_exact_output()?;
+        let ownership = pending.enqueue(fanout)?;
+        if ownership == ExactFanoutOwnership::Owned {
+            let _ = self.drive_pending_exact_output(&mut pending)?;
+        }
+        Ok(ownership)
+    }
+
+    fn exact_output_scope(&self) -> ExactOutputCreationScope {
+        ExactOutputCreationScope {
+            context_id: self.context.id(),
+            height: self.context.height,
+        }
+    }
+
+    /// Retry every currently schedulable exact semantic-output target.
+    ///
+    /// Returns `true` while an exact actor-backpressured target remains owned.
+    pub(crate) fn retry_pending_exact_output(&self) -> Result<bool, String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let pending_remains = {
+            let mut pending = self.lock_pending_exact_output()?;
+            self.drive_pending_exact_output(&mut pending)?
+        };
+        operation.complete();
+        Ok(pending_remains)
+    }
+
+    /// Transfer remaining height-local output to durable reconstruction.
+    ///
+    /// This boundary is valid only after Kura has returned the exact applied
+    /// height receipt and finality artifact. Responsive targets are retried
+    /// before the caller invokes it. Globally scoped v2 output bound to this
+    /// finalized height, lane output covered by the complete durable authority,
+    /// exact Kura-backed global/lane responses, and exact-scope Native
+    /// AMX/merge/sidecar claims may be superseded here. Manually assembled or
+    /// cross-scope output remains exactly owned.
+    pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(
+        &self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+        durable_lane_authority: &DurableLaneRolloverAuthority,
+    ) -> Result<usize, String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        artifact.validate().map_err(|error| error.to_string())?;
+        if artifact.height_context != self.context
+            || receipt.height() != self.context.height
+            || receipt.context_id() != self.context.id()
+            || receipt.subject() != artifact.subject
+            || receipt.block_hash() != artifact.block_hash
+            || receipt.certificate() != artifact.commit_qc.as_ref()
+            || receipt.artifact_hash() != HashOf::new(artifact)
+        {
+            return Err(
+                "Sumeragi v2 applied-height output handoff has mismatched finality authority"
+                    .to_owned(),
+            );
+        }
+        let retired = self
+            .lock_pending_exact_output()?
+            .handoff_applied_height_to_durable_reconstruction(
+                artifact,
+                Some(durable_lane_authority),
+                Some(self.kura.as_ref()),
+            )?;
+        if retired != 0 {
+            iroha_logger::debug!(
+                height = receipt.height(),
+                retired_posts = retired,
+                "handed backpressured finalized-height output to durable reconstruction"
+            );
+        }
+        operation.complete();
+        Ok(retired)
+    }
+
+    /// Return whether the bounded corridor owns an unadmitted exact fanout.
+    pub(crate) fn has_pending_exact_output(&self) -> Result<bool, String> {
+        self.lock_pending_exact_output()
+            .map(|pending| pending.is_pending())
+    }
+
+    /// Return whether one complete semantic fanout can transfer into the corridor.
+    pub(crate) fn can_retain_exact_fanout(&self) -> Result<bool, String> {
+        self.lock_pending_exact_output()
+            .map(|pending| pending.has_capacity())
+    }
+
+    fn remote_voters(&self) -> Vec<PeerId> {
+        self.context
+            .roster
+            .iter()
+            .filter(|entry| entry.validator != self.local_peer)
+            .map(|entry| entry.validator.clone())
+            .collect()
+    }
+
     fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
@@ -3292,24 +4617,97 @@ impl ProductionV2Services {
     }
 
     /// Send one already-versioned v2 transport envelope to a specific peer.
-    pub(crate) fn post_to_peer(&self, peer: PeerId, message: wire::ConsensusMessageV2) {
-        let Ok(permit) = self.output_permit() else {
-            return;
-        };
-        let _ = self.post_block_message_while_guarded(peer, BlockMessage::V2(message), &permit);
+    pub(crate) fn post_to_peer(
+        &self,
+        peer: PeerId,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<(), String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let ownership = self.post_block_message_while_guarded(
+            peer,
+            BlockMessage::V2(message),
+            operation.permit(),
+        )?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                "deferred certified Sumeragi v2 response to requester reconstruction"
+            );
+        }
+        operation.complete();
+        Ok(())
     }
 
-    /// Send one v2 envelope under a caller-owned output operation.
-    pub(crate) fn post_to_peer_with_permit(
+    /// Send one response whose exact payload can be rebuilt from immutable Kura history.
+    pub(crate) fn post_durable_history_response_with_permit(
         &self,
         peer: PeerId,
         message: wire::ConsensusMessageV2,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
-        self.post_block_message_while_guarded(peer, BlockMessage::V2(message), permit)
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        let rollover_claim = match &message.payload {
+            wire::ConsensusMessageV2Payload::CommitCertificateResponse(response)
+                if response.certificate.round.height <= self.context.height
+                    && response.responder == self.local_peer =>
+            {
+                ExactOutputRolloverClaim::DurableCommitCertificateResponse {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    responder: self.local_peer.clone(),
+                    source_height: response.certificate.round.height,
+                    source_context_id: response.certificate.round.context_id,
+                    response_hash: HashOf::new(response),
+                }
+            }
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
+                if response.manifest.round.height <= self.context.height =>
+            {
+                ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    responder: self.local_peer.clone(),
+                    source_round: response.manifest.round,
+                    source_subject: response.manifest.subject,
+                    response_hash: HashOf::new(response),
+                }
+            }
+            _ => {
+                return Err(
+                    "guarded durable-history output is not a non-future Kura response".to_owned(),
+                );
+            }
+        };
+        let block_message = Arc::new(BlockMessage::V2(message));
+        let wire = BlockMessageWire::try_preencoded(block_message).map_err(|error| {
+            format!("failed to encode guarded durable-history response for {peer}: {error}")
+        })?;
+        let messages = vec![NetworkMessage::SumeragiBlock(Box::new(wire))];
+        let peers = vec![peer];
+        rollover_claim.validate_fanout(&messages, &peers)?;
+        durable_history_source_covers(
+            &messages,
+            &rollover_claim,
+            &self.context.chain_id,
+            self.context.height,
+            self.kura.as_ref(),
+        )?;
+        let ownership =
+            self.enqueue_exact_fanout_while_guarded(messages, peers, rollover_claim, permit)?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                "deferred historical Sumeragi v2 response to requester reconstruction"
+            );
+        }
+        Ok(())
     }
 
-    /// Send one retained lane-local proposal, vote, or QC to a committee peer.
+    /// Send one retained lane-local proposal, vote, QC, or atomic certificate
+    /// recovery to a committee peer.
     pub(crate) fn post_lane_block(
         &self,
         peer: PeerId,
@@ -3324,10 +4722,68 @@ impl ProductionV2Services {
             BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
+                | BlockMessage::LaneBlockCertificate(_)
         ) {
             return Err("v2 lane transport rejected a legacy global block message".to_owned());
         }
-        self.post_block_message_while_guarded(peer, message, operation.permit())?;
+        let ownership = self.post_block_message_while_guarded(peer, message, operation.permit())?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            return Err(
+                "Sumeragi v2 lane output reached an unreserved corridor boundary".to_owned(),
+            );
+        }
+        operation.complete();
+        Ok(())
+    }
+
+    /// Send one exact lane certificate reconstructed from its certified Kura artifact.
+    pub(crate) fn post_durable_lane_certificate(
+        &self,
+        peer: PeerId,
+        certificate: LaneBlockCertificateV1,
+    ) -> Result<(), String> {
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let descriptor = &certificate.proposal.descriptor;
+        if descriptor.proposal_height > self.context.height {
+            return Err("durable lane certificate belongs to a future global height".to_owned());
+        }
+        let rollover_claim = ExactOutputRolloverClaim::DurableLaneCertificateResponse {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            lane_id: descriptor.lane_id,
+            lane_block_height: descriptor.lane_block_height,
+            proposal_height: descriptor.proposal_height,
+            proposal_hash: certificate.proposal.proposal_hash,
+            certificate_hash: HashOf::new(&certificate),
+        };
+        let message = Arc::new(BlockMessage::LaneBlockCertificate(Box::new(certificate)));
+        let wire = BlockMessageWire::try_preencoded(message).map_err(|error| {
+            format!("failed to encode guarded durable lane certificate for {peer}: {error}")
+        })?;
+        let messages = vec![NetworkMessage::SumeragiBlock(Box::new(wire))];
+        let peers = vec![peer];
+        rollover_claim.validate_fanout(&messages, &peers)?;
+        durable_history_source_covers(
+            &messages,
+            &rollover_claim,
+            &self.context.chain_id,
+            self.context.height,
+            self.kura.as_ref(),
+        )?;
+        let ownership = self.enqueue_exact_fanout_while_guarded(
+            messages,
+            peers,
+            rollover_claim,
+            operation.permit(),
+        )?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            return Err(
+                "durable lane certificate reached an unreserved corridor boundary".to_owned(),
+            );
+        }
         operation.complete();
         Ok(())
     }
@@ -3339,46 +4795,130 @@ impl ProductionV2Services {
         peer: PeerId,
         message: CertifiedMergeSidecarMessage,
     ) {
-        let Ok(_permit) = self.output_permit() else {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
         };
-        self.network.post(Post {
-            data: NetworkMessage::CertifiedMergeSidecar(Box::new(message)),
-            peer_id: peer,
-            priority: Priority::High,
-        });
+        let rollover_claim = match &message {
+            CertifiedMergeSidecarMessage::Request(request)
+                if request.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                    && request.requester == self.local_peer
+                    && request.responder == peer =>
+            {
+                ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    transfer: CertifiedSidecarTransferIdentity::from_request(request),
+                    request_hash: HashOf::new(request),
+                }
+            }
+            CertifiedMergeSidecarMessage::Chunk(chunk)
+                if chunk.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                    && chunk.responder == self.local_peer
+                    && chunk.requester == peer
+                    && chunk.chunk_count != 0
+                    && chunk.chunk_index < chunk.chunk_count =>
+            {
+                ExactOutputRolloverClaim::CertifiedSidecarChunk {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    transfer: CertifiedSidecarTransferIdentity::from_chunk(chunk),
+                    chunk_index: chunk.chunk_index,
+                    chunk_count: chunk.chunk_count,
+                    response_hash: HashOf::new(chunk),
+                }
+            }
+            _ => {
+                iroha_logger::error!(
+                    "certified merge-sidecar post has no valid semantic rollover claim"
+                );
+                return;
+            }
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::CertifiedMergeSidecar(Box::new(message))],
+            vec![peer],
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "certified merge-sidecar post reached an unreserved outbound corridor boundary"
+                );
+            }
+            Err(error) => {
+                iroha_logger::error!(%error, "certified merge-sidecar output failed closed");
+            }
+        }
     }
 
     /// Send one context-bound Native AMX v2 message to a participant peer.
-    pub(crate) fn post_native_amx(
-        &self,
-        peer: PeerId,
-        message: crate::native_amx::NativeAmxMessage,
-    ) {
-        let Ok(_permit) = self.output_permit() else {
+    pub(crate) fn post_native_amx(&self, peer: PeerId, message: NativeAmxMessage) {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
         };
-        self.network.post(Post {
-            data: NetworkMessage::NativeAmx(Box::new(message)),
-            peer_id: peer,
-            priority: Priority::High,
-        });
+        let body = match native_amx_message_body(&message) {
+            Ok(body)
+                if body.round.context_id == self.context.id()
+                    && body.round.height == self.context.height =>
+            {
+                body
+            }
+            Ok(_) | Err(_) => {
+                iroha_logger::error!("Native AMX post has no valid embedded height round");
+                return;
+            }
+        };
+        let rollover_claim = ExactOutputRolloverClaim::NativeAmx {
+            scope: self.exact_output_scope(),
+            round: body.round,
+            message_hash: HashOf::new(&message),
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::NativeAmx(Box::new(message))],
+            vec![peer],
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "Native AMX post reached an unreserved outbound corridor boundary"
+                );
+            }
+            Err(error) => {
+                iroha_logger::error!(%error, "Native AMX output failed closed");
+            }
+        }
     }
 
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {
-        let Ok(_permit) = self.output_permit() else {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
         };
-        for entry in &self.context.roster {
-            if entry.validator == self.local_peer {
-                continue;
+        let rollover_claim = ExactOutputRolloverClaim::MergeShare {
+            scope: self.exact_output_scope(),
+            share_hash: HashOf::new(&signature),
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::MergeCommitteeSignature(Box::new(signature))],
+            self.remote_voters(),
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "merge-share fanout reached an unreserved outbound corridor boundary"
+                );
             }
-            self.network.post(Post {
-                data: NetworkMessage::MergeCommitteeSignature(Box::new(signature.clone())),
-                peer_id: entry.validator.clone(),
-                priority: Priority::High,
-            });
+            Err(error) => {
+                iroha_logger::error!(%error, "merge-share output failed closed");
+            }
         }
     }
 
@@ -3387,18 +4927,23 @@ impl ProductionV2Services {
         peer: PeerId,
         message: BlockMessage,
         _permit: &ConsensusOutputPermit<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<ExactFanoutOwnership, String> {
+        let rollover_claim = match &message {
+            BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+            | BlockMessage::LaneBlockCertificate(_) => {
+                ExactOutputRolloverClaim::Lane(self.exact_output_scope())
+            }
+            _ => return Err("guarded v2 output has no typed rollover claim".to_owned()),
+        };
         let block_message = Arc::new(message);
         let wire = BlockMessageWire::try_preencoded(block_message).map_err(|error| {
             format!("failed to encode guarded Sumeragi v2 message for {peer}: {error}")
         })?;
         let data = NetworkMessage::SumeragiBlock(Box::new(wire));
-        self.network.post(Post {
-            data,
-            peer_id: peer,
-            priority: Priority::High,
-        });
-        Ok(())
+        self.enqueue_exact_fanout_while_guarded(vec![data], vec![peer], rollover_claim, _permit)
     }
 
     fn preencode_v2_network_message(
@@ -3413,17 +4958,13 @@ impl ProductionV2Services {
         &self,
         data: &NetworkMessage,
         _permit: &ConsensusOutputPermit<'_>,
-    ) {
-        for entry in &self.context.roster {
-            if entry.validator == self.local_peer {
-                continue;
-            }
-            self.network.post(Post {
-                data: data.clone(),
-                peer_id: entry.validator.clone(),
-                priority: Priority::High,
-            });
-        }
+    ) -> Result<ExactFanoutOwnership, String> {
+        self.enqueue_exact_fanout_while_guarded(
+            vec![data.clone()],
+            self.remote_voters(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            _permit,
+        )
     }
 
     /// Broadcast under a caller-owned output permit without reacquiring it.
@@ -3433,7 +4974,11 @@ impl ProductionV2Services {
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
         let data = Self::preencode_v2_network_message(message)?;
-        self.broadcast_preencoded_to_voters_while_guarded(&data, permit);
+        if self.broadcast_preencoded_to_voters_while_guarded(&data, permit)?
+            == ExactFanoutOwnership::SourceRetained
+        {
+            iroha_logger::debug!("deferred block-sync request to its retained discovery source");
+        }
         Ok(())
     }
 }
@@ -3557,8 +5102,14 @@ impl V2EffectServices for ProductionV2Services {
             .into_iter()
             .map(Self::preencode_v2_network_message)
             .collect::<Result<Vec<_>, _>>()?;
-        for data in &encoded {
-            self.broadcast_preencoded_to_voters_while_guarded(data, operation.permit());
+        if self.enqueue_exact_fanout_while_guarded(
+            encoded,
+            self.remote_voters(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            operation.permit(),
+        )? == ExactFanoutOwnership::SourceRetained
+        {
+            iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
         operation.complete();
         Ok(())
@@ -3656,15 +5207,23 @@ impl V2EffectServices for ProductionV2Services {
                     fetch.chunks = Some(chunks);
                 }
                 fetch.task = task;
+                let fetch_work_id = fetch.task.id();
                 if let Some(data) = certified_message {
-                    for peer in certified_sources {
-                        if peer != self.local_peer {
-                            self.network.post(Post {
-                                data: data.clone(),
-                                peer_id: peer,
-                                priority: Priority::High,
-                            });
-                        }
+                    let peers = certified_sources
+                        .into_iter()
+                        .filter(|peer| peer != &self.local_peer)
+                        .collect();
+                    if self.enqueue_exact_fanout_while_guarded(
+                        vec![data],
+                        peers,
+                        ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+                        operation.permit(),
+                    )? == ExactFanoutOwnership::SourceRetained
+                    {
+                        iroha_logger::debug!(
+                            work_id = fetch_work_id.get(),
+                            "deferred certified body request to retained fetch ownership"
+                        );
                     }
                 }
                 operation.complete();
@@ -3704,14 +5263,21 @@ impl V2EffectServices for ProductionV2Services {
         let work_id = task.id();
         self.fetches.insert(work_id, FetchSession { task, chunks });
         if let Some(data) = certified_message {
-            for peer in certified_sources {
-                if peer != self.local_peer {
-                    self.network.post(Post {
-                        data: data.clone(),
-                        peer_id: peer,
-                        priority: Priority::High,
-                    });
-                }
+            let peers = certified_sources
+                .into_iter()
+                .filter(|peer| peer != &self.local_peer)
+                .collect();
+            if self.enqueue_exact_fanout_while_guarded(
+                vec![data],
+                peers,
+                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+                operation.permit(),
+            )? == ExactFanoutOwnership::SourceRetained
+            {
+                iroha_logger::debug!(
+                    work_id = work_id.get(),
+                    "deferred certified body request to retained fetch ownership"
+                );
             }
         }
         operation.complete();
@@ -4056,17 +5622,21 @@ impl V2EffectServices for ProductionV2Services {
     }
 }
 
+/// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::{
         num::NonZeroU64,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId,
-        block::{BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock},
+        ChainId, DataSpaceId, LaneId,
+        block::{
+            BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
+            consensus::{CertPhase, LaneBlockQcV1, LaneBlockVoteBodyV1},
+        },
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
     };
     use tempfile::TempDir;
@@ -4074,9 +5644,11 @@ mod tests {
     use super::*;
     use crate::sumeragi::{
         v2::AdapterEffect,
+        v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
         v2_chunks::encode_payload,
         v2_effects::EffectQueueConfig,
+        v2_lane_work::tests::durable_lane_history_fixture,
         v2_runtime::{
             BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
             RetiredBodyPipelineCompletions, RuntimeStep,
@@ -4346,6 +5918,7 @@ mod tests {
             local_validator: Some(0),
             key_pair: keys[0].clone(),
             network: crate::IrohaNetwork::closed_for_tests(),
+            kura: Kura::blank_kura_for_testing(),
             chunk_root: PathBuf::new(),
             io: None,
             fetches: BTreeMap::new(),
@@ -4366,6 +5939,10 @@ mod tests {
             validation_rejections: VecDeque::new(),
             merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
+            pending_exact_output: Mutex::new(
+                PendingExactOutput::new(16, 5, 4).expect("bounded test output corridor"),
+            ),
+            exact_output_admission_hook: None,
             active_tag,
             last_status: None,
             fatal_reason: None,
@@ -4373,6 +5950,1156 @@ mod tests {
             clean_teardown: true,
         };
         (service, keys)
+    }
+
+    fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
+        let validator_set = vec![validator];
+        let validator_set_hash = HashOf::new(&validator_set);
+        let body = LaneBlockVoteBodyV1 {
+            phase: CertPhase::Commit,
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(1),
+            lane_incarnation: Hash::new(b"outbound corridor lane incarnation"),
+            proposal_height: 1,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"outbound corridor proposal"),
+            descriptor_hash: Hash::new(b"outbound corridor descriptor"),
+            subject_hash: Hash::new(b"outbound corridor subject"),
+            payload_ownership_hash: Hash::new(b"outbound corridor ownership"),
+            rbc_instance_hash: Hash::new(b"outbound corridor RBC"),
+            accepted_candidate_indices: Vec::new(),
+            accepted_transaction_hashes: Vec::new(),
+            validator_set_hash_version: 1,
+            validator_set_hash,
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "outbound-corridor-test".to_owned(),
+        };
+        LaneBlockQcV1 {
+            body,
+            validator_set_hash_version: 1,
+            validator_set_hash,
+            validator_set,
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: vec![1],
+            payload_availability_qc: None,
+        }
+    }
+
+    fn lane_commit_qc_block_message(validator: PeerId) -> BlockMessage {
+        BlockMessage::LaneBlockQc(lane_commit_qc(validator))
+    }
+
+    fn lane_commit_qc_message(validator: PeerId) -> NetworkMessage {
+        let wire =
+            BlockMessageWire::try_preencoded(Arc::new(lane_commit_qc_block_message(validator)))
+                .expect("encode final lane CommitQC");
+        NetworkMessage::SumeragiBlock(Box::new(wire))
+    }
+
+    fn global_commit_qc_message(
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> wire::ConsensusMessageV2 {
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+            artifact.commit_qc.clone(),
+        ))
+    }
+
+    fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
+        MergeCommitteeSignature {
+            epoch_id: 7,
+            view: 11,
+            signer: 0,
+            message_digest: Hash::new(label),
+            bls_sig: vec![9; 48],
+        }
+    }
+
+    fn merge_share_message(label: &[u8]) -> NetworkMessage {
+        NetworkMessage::MergeCommitteeSignature(Box::new(merge_share(label)))
+    }
+
+    fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmxMessage {
+        let validator_set = vec![signer.clone()];
+        NativeAmxMessage::PrepareVote(crate::native_amx::NativeAmxVoteV2 {
+            body: NativeAmxAttestationBodyV2 {
+                round: wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 0,
+                },
+                epoch: context.epoch,
+                chain_id_hash: Hash::new(
+                    norito::to_bytes(&context.chain_id).expect("encode worker chain id"),
+                ),
+                source_id: [0x31; 32],
+                tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"worker Native AMX entrypoint",
+                )),
+                plan_digest: Hash::new(b"worker Native AMX plan"),
+                phase: NativeAmxPhase::Prepare,
+                coordinator_lane_id: LaneId::new(1),
+                coordinator_dataspace_id: DataSpaceId::new(1),
+                coordinator_lane_incarnation: Hash::new(b"worker coordinator incarnation"),
+                participant_lane_id: LaneId::new(2),
+                participant_dataspace_id: DataSpaceId::new(2),
+                participant_lane_incarnation: Hash::new(b"worker participant incarnation"),
+                participant_previous_block_height: 0,
+                participant_previous_block_descriptor_hash: None,
+                participant_lane_block_height: 1,
+                participant_lane_block_view: 0,
+                participant_proposal_hash: Hash::new(b"worker participant proposal"),
+                participant_settlement_commitment: Hash::new(b"worker participant settlement"),
+                participant_validator_set_hash: HashOf::new(&validator_set),
+                participant_validator_count: 1,
+                participant_min_quorum: 1,
+                authority_context_height: context.height,
+                planned_coordinator_block_height: 1,
+                coordinator_lane_block_view: 0,
+                coordinator_proposal_hash: Hash::new(b"worker coordinator proposal"),
+            },
+            signer,
+            bls_signature: vec![0x41; 48],
+        })
+    }
+
+    fn certified_sidecar_outputs(
+        local: &PeerId,
+        peer: &PeerId,
+    ) -> (CertifiedMergeSidecarMessage, CertifiedMergeSidecarMessage) {
+        let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"worker sidecar entry"));
+        let reference_digest = Hash::new(b"worker sidecar reference");
+        let request = CertifiedMergeSidecarRequestV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(b"worker sidecar request"),
+            entry_hash,
+            encoded_len: 4,
+            epoch_id: 7,
+            reference_digest,
+            requester: local.clone(),
+            responder: peer.clone(),
+        };
+        let chunk = CertifiedMergeSidecarChunkV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(b"worker sidecar response request"),
+            entry_hash,
+            encoded_len: 4,
+            epoch_id: 7,
+            reference_digest,
+            requester: peer.clone(),
+            responder: local.clone(),
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![1, 2, 3, 4],
+        };
+        (
+            CertifiedMergeSidecarMessage::Request(request),
+            CertifiedMergeSidecarMessage::Chunk(chunk),
+        )
+    }
+
+    fn merge_share_digest(message: &NetworkMessage) -> Hash {
+        let NetworkMessage::MergeCommitteeSignature(signature) = message else {
+            panic!("expected exact merge-share output");
+        };
+        signature.message_digest
+    }
+
+    #[test]
+    fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let mut pending = PendingExactOutput::new(1, 1, 1).expect("bounded output corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::new(
+                    vec![lane_commit_qc_message(peer.clone())],
+                    vec![peer.clone()],
+                )
+                .expect("non-empty final QC fanout"),
+            )
+            .expect("retain final QC fanout");
+
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                assert!(ticket.is_none());
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 3,
+                })
+            }),
+            Ok(Some(3))
+        );
+        let retained = pending
+            .fanouts
+            .front()
+            .and_then(|fanout| fanout.targets[0].current.as_ref())
+            .expect("actor-returned final QC post remains owned");
+        assert_eq!(retained.peer_id, peer);
+        assert_eq!(retained.priority, Priority::High);
+        let NetworkMessage::SumeragiBlock(wire) = &retained.data else {
+            panic!("retained output must be a lane CommitQC");
+        };
+        let BlockMessage::LaneBlockQc(qc) = wire.as_message() else {
+            panic!("retained Sumeragi output must be a lane CommitQC");
+        };
+        assert_eq!(qc.body.phase, CertPhase::Commit);
+
+        let mut admitted = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                assert!(ticket.is_none());
+                admitted.push(post.peer_id);
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(admitted, vec![peer]);
+        assert!(!pending.is_pending());
+    }
+
+    #[test]
+    fn actor_backpressure_retains_complete_merge_share_fanout() {
+        let (service, _) = fixture();
+        let peers = service.remote_voters();
+        let digest = Hash::new(b"outbound corridor merge share");
+        let message = merge_share_message(b"outbound corridor merge share");
+        let mut pending =
+            PendingExactOutput::new(1, 1, peers.len()).expect("bounded merge output corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::new(vec![message], peers.clone())
+                    .expect("non-empty merge fanout"),
+            )
+            .expect("retain merge fanout");
+
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                assert!(ticket.is_none());
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 2,
+                })
+            }),
+            Ok(Some(2))
+        );
+        let retained = pending
+            .fanouts
+            .front()
+            .and_then(|fanout| fanout.targets[0].current.as_ref())
+            .expect("actor-returned merge post remains owned");
+        assert_eq!(retained.peer_id, peers[0]);
+        let NetworkMessage::MergeCommitteeSignature(signature) = &retained.data else {
+            panic!("retained output must be the merge share");
+        };
+        assert_eq!(signature.message_digest, digest);
+
+        let mut admitted = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                assert!(ticket.is_none());
+                let NetworkMessage::MergeCommitteeSignature(signature) = &post.data else {
+                    panic!("every fanout post must retain the merge share");
+                };
+                assert_eq!(signature.message_digest, digest);
+                admitted.push(post.peer_id);
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(admitted, peers);
+        assert!(!pending.is_pending());
+    }
+
+    #[test]
+    fn backpressured_target_does_not_block_later_targets_or_fanouts() {
+        let (service, _) = fixture();
+        let blocked = service.context.roster[1].validator.clone();
+        let same_fanout_responsive = service.context.roster[2].validator.clone();
+        let later_fanout_responsive = service.context.roster[3].validator.clone();
+        let oldest_first_digest = Hash::new(b"oldest blocked-peer fanout first");
+        let oldest_second_digest = Hash::new(b"oldest blocked-peer fanout second");
+        let responsive_digest = Hash::new(b"later responsive fanout");
+        let later_blocked_digest = Hash::new(b"later blocked-peer fanout");
+        let mut pending = PendingExactOutput::new(3, 2, 2).expect("bounded output corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![
+                            merge_share_message(b"oldest blocked-peer fanout first"),
+                            merge_share_message(b"oldest blocked-peer fanout second"),
+                        ],
+                        vec![blocked.clone(), same_fanout_responsive.clone()],
+                    )
+                    .expect("mixed-target fanout"),
+                )
+                .expect("fanout within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+
+        let mut blocked_attempts = 0usize;
+        let mut admitted = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                if post.peer_id == blocked {
+                    blocked_attempts = blocked_attempts.saturating_add(1);
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 7,
+                    });
+                }
+                assert!(ticket.is_none());
+                admitted.push((post.peer_id, merge_share_digest(&post.data)));
+                Ok(())
+            }),
+            Ok(Some(7))
+        );
+        assert_eq!(blocked_attempts, 1);
+        assert_eq!(
+            admitted,
+            vec![
+                (same_fanout_responsive.clone(), oldest_first_digest),
+                (same_fanout_responsive.clone(), oldest_second_digest),
+            ]
+        );
+
+        for fanout in [
+            PendingExactFanout::new(
+                vec![merge_share_message(b"later responsive fanout")],
+                vec![later_fanout_responsive.clone()],
+            )
+            .expect("later responsive fanout"),
+            PendingExactFanout::new(
+                vec![merge_share_message(b"later blocked-peer fanout")],
+                vec![blocked.clone()],
+            )
+            .expect("later same-target fanout"),
+        ] {
+            assert_eq!(
+                pending.enqueue(fanout).expect("fanout within bounds"),
+                ExactFanoutOwnership::Owned
+            );
+        }
+
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                if post.peer_id == blocked {
+                    blocked_attempts = blocked_attempts.saturating_add(1);
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 7,
+                    });
+                }
+                assert!(ticket.is_none());
+                admitted.push((post.peer_id, merge_share_digest(&post.data)));
+                Ok(())
+            }),
+            Ok(Some(7))
+        );
+        assert_eq!(blocked_attempts, 2);
+        assert_eq!(
+            admitted,
+            vec![
+                (same_fanout_responsive.clone(), oldest_first_digest),
+                (same_fanout_responsive, oldest_second_digest),
+                (later_fanout_responsive, responsive_digest),
+            ]
+        );
+        assert_eq!(pending.fanouts.len(), 2);
+        assert!(pending.fanouts[0].targets[0].current.is_some());
+        assert!(pending.fanouts[0].target_is_complete(1));
+        assert!(pending.fanouts[1].targets[0].current.is_none());
+
+        let mut admitted_to_recovered_target = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket| {
+                assert_eq!(post.peer_id, blocked);
+                assert!(ticket.is_none());
+                admitted_to_recovered_target.push(merge_share_digest(&post.data));
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            admitted_to_recovered_target,
+            vec![
+                oldest_first_digest,
+                oldest_second_digest,
+                later_blocked_digest,
+            ]
+        );
+        assert!(!pending.is_pending());
+    }
+
+    /// Exercise a dead-target output through synthesized durable-height handoff.
+    ///
+    /// The fixture validates the production output/handoff contract only; it
+    /// does not execute the preceding QC-to-application pipeline.
+    pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire::HeightContext {
+        let (mut service, keys) = fixture();
+        let context = service.context.clone();
+        let (receipt, artifact) = durable_finality_fixture(&service, &keys);
+        let blocked = service.context.roster[1].validator.clone();
+        let later_responsive = service.context.roster[3].validator.clone();
+        let lane_qc = lane_commit_qc(blocked.clone());
+        let lane_message = BlockMessage::LaneBlockQc(lane_qc.clone());
+        let lane_authority = DurableLaneRolloverAuthority::for_test(&artifact, &lane_message);
+        let blocked_for_hook = blocked.clone();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_hook = Arc::clone(&attempts);
+        let admitted = Arc::new(Mutex::new(Vec::new()));
+        let admitted_for_hook = Arc::clone(&admitted);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            if post.peer_id == blocked_for_hook {
+                attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 1,
+                });
+            }
+            assert!(ticket.is_none());
+            let kind = match &post.data {
+                NetworkMessage::SumeragiBlock(wire)
+                    if matches!(wire.as_message(), BlockMessage::LaneBlockQc(_)) =>
+                {
+                    "lane-qc"
+                }
+                NetworkMessage::MergeCommitteeSignature(_) => "merge-share",
+                other => panic!("unexpected production output fixture: {other:?}"),
+            };
+            admitted_for_hook
+                .lock()
+                .expect("record admitted production output")
+                .push((post.peer_id, kind));
+            Ok(())
+        });
+
+        service
+            .post_lane_block(blocked.clone(), lane_message.clone())
+            .expect("retain finalized-height lane certificate for blocked target");
+        assert!(
+            service
+                .has_pending_exact_output()
+                .expect("inspect pending production output")
+        );
+
+        service
+            .post_lane_block(later_responsive.clone(), lane_message)
+            .expect("later responsive fanout enters the non-full corridor");
+
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        let admitted = admitted.lock().expect("inspect admitted production output");
+        assert_eq!(
+            admitted
+                .iter()
+                .filter(|(peer, _)| peer == &later_responsive)
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![(later_responsive, "lane-qc")]
+        );
+        drop(admitted);
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect surviving production target");
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.fanouts[0].peers[0], blocked);
+        assert!(pending.fanouts[0].targets[0].current.is_some());
+        drop(pending);
+
+        service.post_native_amx(
+            blocked.clone(),
+            native_amx_output(&service.context, service.local_peer.clone()),
+        );
+        service.broadcast_merge_to_voters(merge_share(b"rollover merge share"));
+        let (sidecar_request, sidecar_chunk) =
+            certified_sidecar_outputs(&service.local_peer, &blocked);
+        service.post_certified_merge_sidecar(blocked.clone(), sidecar_request);
+        service.post_certified_merge_sidecar(blocked.clone(), sidecar_chunk);
+        assert_eq!(
+            service
+                .lock_pending_exact_output()
+                .expect("inspect typed rollover outputs")
+                .fanouts
+                .len(),
+            5,
+            "lane, Native AMX, merge-share, sidecar request, and sidecar chunk stay owned"
+        );
+
+        assert_eq!(
+            service
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &artifact,
+                    &lane_authority,
+                )
+                .expect("durable application supersedes dead-target output"),
+            5
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("inspect applied-height output handoff")
+        );
+        assert!(!service.output_guard.restart_required());
+        context
+    }
+
+    #[test]
+    fn production_output_path_serves_later_fanout_while_target_stays_backpressured() {
+        let _ = production_output_handoff_with_dead_target();
+    }
+
+    #[test]
+    fn actor_backpressure_cannot_change_returned_payload_identity() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let original = merge_share_message(b"original exact output");
+        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::new(vec![original], vec![peer]).expect("original exact fanout"),
+            )
+            .expect("retain original exact fanout");
+
+        let error = pending
+            .drive_with(|mut post, ticket| {
+                post.data = merge_share_message(b"mutated returned output");
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 1,
+                })
+            })
+            .expect_err("the actor cannot substitute a same-target payload");
+
+        assert!(error.contains("changed an exact output payload"));
+        assert!(pending.is_pending());
+        assert!(pending.fanouts[0].targets[0].current.is_none());
+    }
+
+    #[test]
+    fn outbound_corridor_capacity_keeps_the_owned_front_bounded() {
+        let (service, _) = fixture();
+        let first_peer = service.context.roster[1].validator.clone();
+        let second_peer = service.context.roster[2].validator.clone();
+        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(first_peer.clone())],
+                        vec![first_peer],
+                    )
+                    .expect("first final QC fanout"),
+                )
+                .expect("first fanout is within protocol bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(second_peer.clone())],
+                        vec![second_peer],
+                    )
+                    .expect("second final QC fanout"),
+                )
+                .expect("second fanout is within protocol bounds"),
+            ExactFanoutOwnership::SourceRetained
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+    }
+
+    #[test]
+    fn applied_height_handoff_rejects_output_without_reconstruction() {
+        let (service, keys) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::new(vec![NetworkMessage::Health], vec![peer])
+                    .expect("non-empty exact-only fanout"),
+            )
+            .expect("retain exact-only fanout");
+
+        let error = pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("exact-only output cannot enter durable reconstruction handoff");
+
+        assert!(error.contains("no typed applied-height rollover claim"));
+        assert!(pending.is_pending());
+
+        let mut other_context = service.context.clone();
+        other_context.height = other_context.height.saturating_add(1);
+        let native = native_amx_output(&other_context, service.local_peer.clone());
+        let native_hash = HashOf::new(&native);
+        let native_round = native_amx_message_body(&native)
+            .expect("valid Native AMX fixture round")
+            .round;
+        let wrong_scope = ExactOutputCreationScope {
+            context_id: native_round.context_id,
+            height: native_round.height,
+        };
+        let mut wrong = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        wrong
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![NetworkMessage::NativeAmx(Box::new(native))],
+                    vec![service.context.roster[1].validator.clone()],
+                    ExactOutputRolloverClaim::NativeAmx {
+                        scope: wrong_scope,
+                        round: native_round,
+                        message_hash: native_hash,
+                    },
+                )
+                .expect("internally exact wrong-scope claim")
+                .expect("non-empty wrong-scope fanout"),
+            )
+            .expect("retain wrong-scope Native AMX output");
+        let error = wrong
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("another height's typed claim must fail closed");
+        assert!(error.contains("another creation scope"));
+        assert!(wrong.is_pending());
+    }
+
+    #[test]
+    fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
+        let (service, keys) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let mut pending = PendingExactOutput::new(2, 1, 1).expect("two-fanout corridor");
+        let global =
+            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
+                .expect("encode global CommitQC");
+        let lane_output = lane_commit_qc_block_message(peer.clone());
+        let BlockMessage::LaneBlockQc(lane_qc) = &lane_output else {
+            unreachable!("lane output fixture must be a CommitQC")
+        };
+        let lane_message = NetworkMessage::SumeragiBlock(Box::new(
+            BlockMessageWire::try_preencoded(Arc::new(lane_output.clone()))
+                .expect("encode lane CommitQC"),
+        ));
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![global],
+                    vec![peer.clone()],
+                    ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+                )
+                .expect("valid global claim")
+                .expect("global fanout"),
+            )
+            .expect("retain covered global fanout");
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![lane_message],
+                    vec![peer],
+                    ExactOutputRolloverClaim::Lane(service.exact_output_scope()),
+                )
+                .expect("valid lane claim")
+                .expect("unbound lane fanout"),
+            )
+            .expect("retain unbound lane fanout");
+
+        let error = pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("a global finality artifact cannot clear unbound lane output");
+
+        assert!(error.contains("typed durable rollover authority"));
+        assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
+
+        let missing = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &artifact,
+            lane_qc.body.proposal_hash,
+        );
+        let error = pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, Some(&missing), None)
+            .expect_err("a winning lane output requires its durable session witness");
+        assert!(error.contains("lacks its exact durable session witness"));
+        assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
+
+        let mut wrong_qc = lane_qc.clone();
+        wrong_qc.bls_aggregate_signature.push(2);
+        let wrong =
+            DurableLaneRolloverAuthority::for_test(&artifact, &BlockMessage::LaneBlockQc(wrong_qc));
+        let error = pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, Some(&wrong), None)
+            .expect_err("a wrong exact lane witness cannot clear retained output");
+        assert!(error.contains("does not match its exact durable session witness"));
+        assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
+    }
+
+    #[test]
+    fn applied_height_handoff_rejects_wrong_height_global_output() {
+        let (service, keys) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let mut wrong_height = artifact.commit_qc.clone();
+        wrong_height.round.height = wrong_height.round.height.saturating_add(1);
+        let message =
+            ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(wrong_height),
+            ))
+            .expect("encode wrong-height global certificate");
+        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![message],
+                    vec![peer],
+                    ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+                )
+                .expect("valid creation claim")
+                .expect("wrong-height fanout"),
+            )
+            .expect("retain wrong-height fanout");
+
+        let error = pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("wrong-height output has no applied-height witness");
+
+        assert!(error.contains("not bound to the applied height"));
+        assert!(pending.is_pending());
+    }
+
+    #[test]
+    fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
+        let history = durable_history_fixture();
+        let mut service = successor_service_for_history(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+        );
+        let (receipt, applied_artifact) = durable_finality_fixture(&service, &history.validators);
+        let commit_message =
+            ProductionV2Services::preencode_v2_network_message(history.commit_response.clone())
+                .expect("encode historical CommitQC response");
+        let mut manual = PendingExactOutput::new(1, 1, 1).expect("one manual response");
+        manual
+            .enqueue(
+                PendingExactFanout::new(
+                    vec![commit_message.clone()],
+                    vec![history.requester.clone()],
+                )
+                .expect("manual historical response"),
+            )
+            .expect("retain manual historical response");
+        let error = manual
+            .handoff_applied_height_to_durable_reconstruction(
+                &applied_artifact,
+                None,
+                Some(history.kura.as_ref()),
+            )
+            .expect_err("Kura presence cannot authorize an untyped manual response");
+        assert!(error.contains("no typed applied-height rollover claim"));
+        assert!(manual.is_pending());
+
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        for response in [
+            history.commit_response.clone(),
+            history.body_response.clone(),
+        ] {
+            let guard = Arc::clone(&service.output_guard);
+            let operation = guard
+                .begin_fail_stop_operation()
+                .expect("valid historical response operation");
+            service
+                .post_durable_history_response_with_permit(
+                    history.requester.clone(),
+                    response,
+                    operation.permit(),
+                )
+                .expect("live emitter accepts exact Kura response");
+            operation.complete();
+        }
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect live historical output");
+        assert_eq!(
+            pending.fanouts.len(),
+            2,
+            "both live responses remain retained behind target pressure"
+        );
+        assert!(matches!(
+            pending.fanouts[0].rollover_claim,
+            ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+        ));
+        assert!(matches!(
+            pending.fanouts[1].rollover_claim,
+            ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+        ));
+        drop(pending);
+        let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &applied_artifact,
+            Hash::new(b"unused historical global-response lane witness"),
+        );
+        assert_eq!(
+            service
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &applied_artifact,
+                    &lane_authority,
+                )
+                .expect("rollover independently rereads both Kura sources"),
+            2
+        );
+        assert!(!service.has_pending_exact_output().expect("inspect handoff"));
+
+        let wire::ConsensusMessageV2Payload::CommitCertificateResponse(mut substituted_commit) =
+            history.commit_response.payload.clone()
+        else {
+            panic!("history fixture must contain a CommitQC response")
+        };
+        substituted_commit.certificate.aggregate_signature[0] ^= 0x01;
+        substituted_commit.signature = Signature::new(
+            history.validators[0].private_key(),
+            &substituted_commit.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let substituted_message =
+            ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                    substituted_commit.clone(),
+                ),
+            ))
+            .expect("encode substituted historical CommitQC response");
+        let mut mismatched = PendingExactOutput::new(1, 1, 1).expect("one mismatched response");
+        mismatched
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![substituted_message],
+                    vec![history.requester.clone()],
+                    ExactOutputRolloverClaim::DurableCommitCertificateResponse {
+                        scope: service.exact_output_scope(),
+                        target: history.requester.clone(),
+                        responder: substituted_commit.responder.clone(),
+                        source_height: substituted_commit.certificate.round.height,
+                        source_context_id: substituted_commit.certificate.round.context_id,
+                        response_hash: HashOf::new(&substituted_commit),
+                    },
+                )
+                .expect("self-consistent substituted CommitQC claim")
+                .expect("substituted CommitQC fanout"),
+            )
+            .expect("retain substituted CommitQC response");
+        let error = mismatched
+            .handoff_applied_height_to_durable_reconstruction(
+                &applied_artifact,
+                None,
+                Some(history.kura.as_ref()),
+            )
+            .expect_err("handoff must independently reject a non-Kura CommitQC");
+        assert!(error.contains("differs from its Kura finality source"));
+        assert!(mismatched.is_pending(), "failed handoff remains atomic");
+
+        let mut rejected_commit_service = successor_service_for_history(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+        );
+        let commit_attempts = Arc::new(AtomicUsize::new(0));
+        let commit_attempts_for_hook = Arc::clone(&commit_attempts);
+        rejected_commit_service.set_exact_output_admission_hook(move |post, ticket| {
+            commit_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let guard = Arc::clone(&rejected_commit_service.output_guard);
+        let operation = guard
+            .begin_fail_stop_operation()
+            .expect("invalid CommitQC response operation");
+        let error = rejected_commit_service
+            .post_durable_history_response_with_permit(
+                history.requester.clone(),
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CommitCertificateResponse(substituted_commit),
+                ),
+                operation.permit(),
+            )
+            .expect_err("substituted CommitQC must fail before actor admission");
+        drop(operation);
+        assert!(error.contains("differs from its Kura finality source"));
+        assert_eq!(commit_attempts.load(Ordering::Relaxed), 0);
+        assert!(
+            !rejected_commit_service
+                .has_pending_exact_output()
+                .expect("inspect rejected CommitQC response")
+        );
+        assert!(rejected_commit_service.output_guard.restart_required());
+
+        let mut rejected_service = successor_service_for_history(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+        );
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_hook = Arc::clone(&attempts);
+        rejected_service.set_exact_output_admission_hook(move |post, ticket| {
+            attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut wrong_responder) =
+            history.body_response.payload.clone()
+        else {
+            panic!("history fixture must contain a certified body response")
+        };
+        wrong_responder.responder = 1;
+        wrong_responder.signature = Signature::new(
+            history.validators[1].private_key(),
+            &wrong_responder.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let guard = Arc::clone(&rejected_service.output_guard);
+        let operation = guard
+            .begin_fail_stop_operation()
+            .expect("invalid historical response operation");
+        let error = rejected_service
+            .post_durable_history_response_with_permit(
+                history.requester.clone(),
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(wrong_responder),
+                ),
+                operation.permit(),
+            )
+            .expect_err("wrong historical responder must fail before actor admission");
+        drop(operation);
+        assert!(error.contains("serving network identity"));
+        assert_eq!(attempts.load(Ordering::Relaxed), 0);
+        assert!(
+            !rejected_service
+                .has_pending_exact_output()
+                .expect("inspect rejected body response")
+        );
+        assert!(rejected_service.output_guard.restart_required());
+
+        let mut rejected_body_service = successor_service_for_history(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+        );
+        let body_attempts = Arc::new(AtomicUsize::new(0));
+        let body_attempts_for_hook = Arc::clone(&body_attempts);
+        rejected_body_service.set_exact_output_admission_hook(move |post, ticket| {
+            body_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut substituted_body) =
+            history.body_response.payload
+        else {
+            panic!("history fixture must contain a certified body response")
+        };
+        substituted_body.body[0] ^= 0x01;
+        let substituted_subject = wire::BlockSubject {
+            payload_hash: Hash::new(&substituted_body.body),
+            ..substituted_body.manifest.subject
+        };
+        let (substituted_manifest, _) = encode_payload(
+            &history.artifact.height_context,
+            substituted_body.manifest.round,
+            substituted_subject,
+            &substituted_body.body,
+        )
+        .expect("encode self-consistent substituted historical body")
+        .into_parts();
+        substituted_body.manifest = substituted_manifest;
+        substituted_body.signature = Signature::new(
+            history.validators[0].private_key(),
+            &substituted_body.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let guard = Arc::clone(&rejected_body_service.output_guard);
+        let operation = guard
+            .begin_fail_stop_operation()
+            .expect("invalid body response operation");
+        let error = rejected_body_service
+            .post_durable_history_response_with_permit(
+                history.requester,
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(substituted_body),
+                ),
+                operation.permit(),
+            )
+            .expect_err("substituted canonical body must fail before actor admission");
+        drop(operation);
+        assert!(error.contains("differs from its Kura finality source"));
+        assert_eq!(body_attempts.load(Ordering::Relaxed), 0);
+        assert!(
+            !rejected_body_service
+                .has_pending_exact_output()
+                .expect("inspect rejected canonical body response")
+        );
+        assert!(rejected_body_service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() {
+        let lane_history = durable_lane_history_fixture();
+        let lane_kura = lane_history.kura;
+        let certificate = lane_history.certificate;
+        let lane_context = lane_history.context;
+        let lane_validators = lane_history.validators;
+        let parent_service =
+            service_for_history_context(Arc::clone(&lane_kura), lane_context, &lane_validators);
+        let (_, parent_artifact) = durable_finality_fixture(&parent_service, &lane_validators);
+        let mut service = successor_service_for_history(
+            Arc::clone(&lane_kura),
+            &parent_artifact,
+            &lane_validators,
+        );
+        let (receipt, applied_artifact) = durable_finality_fixture(&service, &lane_validators);
+        let target = service.context.roster[1].validator.clone();
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        service
+            .post_durable_lane_certificate(target.clone(), certificate.clone())
+            .expect("live emitter accepts exact certified Kura lane response");
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect live lane response");
+        assert_eq!(pending.fanouts.len(), 1);
+        assert!(matches!(
+            pending.fanouts[0].rollover_claim,
+            ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+        ));
+        drop(pending);
+        let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &applied_artifact,
+            Hash::new(b"unused historical lane-response witness"),
+        );
+        assert_eq!(
+            service
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &applied_artifact,
+                    &lane_authority,
+                )
+                .expect("rollover independently rereads the certified Kura lane artifact"),
+            1
+        );
+
+        let mut substituted = certificate;
+        substituted.commit_qc.bls_aggregate_signature[0] ^= 0x01;
+        let mut rejected_service = successor_service_for_history(
+            Arc::clone(&lane_kura),
+            &parent_artifact,
+            &lane_validators,
+        );
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_hook = Arc::clone(&attempts);
+        rejected_service.set_exact_output_admission_hook(move |post, ticket| {
+            attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let error = rejected_service
+            .post_durable_lane_certificate(target, substituted)
+            .expect_err("a modified lane proof must fail before actor admission");
+        assert!(error.contains("differs from its certified Kura source"));
+        assert_eq!(attempts.load(Ordering::Relaxed), 0);
+        assert!(
+            !rejected_service
+                .has_pending_exact_output()
+                .expect("inspect rejected lane response")
+        );
+        assert!(rejected_service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn closed_network_actor_fails_stop_before_later_output() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        service
+            .lock_pending_exact_output()
+            .expect("lock output corridor")
+            .enqueue(
+                PendingExactFanout::new(vec![lane_commit_qc_message(peer.clone())], vec![peer])
+                    .expect("non-empty final QC fanout"),
+            )
+            .expect("retain final QC before actor admission");
+
+        let error = service
+            .retry_pending_exact_output()
+            .expect_err("a permanently closed network actor must fail stop");
+
+        assert!(error.contains("network actor closed"));
+        assert!(service.output_guard.restart_required());
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect fail-stop output ownership");
+        assert_eq!(pending.fanouts.len(), 1);
+        let retained = pending.fanouts[0].targets[0]
+            .current
+            .as_ref()
+            .expect("closed actor returned the exact final QC post");
+        assert!(matches!(&retained.data, NetworkMessage::SumeragiBlock(_)));
+    }
+
+    #[test]
+    fn permanently_rejected_network_output_fails_stop() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        service
+            .lock_pending_exact_output()
+            .expect("lock output corridor")
+            .enqueue(
+                PendingExactFanout::new(vec![NetworkMessage::Health], vec![peer])
+                    .expect("non-empty rejected fanout"),
+            )
+            .expect("retain output before route validation");
+
+        let error = service
+            .retry_pending_exact_output()
+            .expect_err("a non-progress route must be permanently rejected");
+
+        assert!(error.contains("permanently rejected output"));
+        assert!(service.output_guard.restart_required());
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect rejected output ownership");
+        assert_eq!(pending.fanouts.len(), 1);
+        let retained = pending.fanouts[0].targets[0]
+            .current
+            .as_ref()
+            .expect("permanent rejection returned the exact post");
+        assert!(matches!(&retained.data, NetworkMessage::Health));
     }
 
     fn locked_candidate_subject(label: &[u8]) -> wire::BlockSubject {
@@ -7323,9 +10050,16 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::new(label))
     }
 
-    fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {
+    fn durable_finality_fixture(
+        service: &ProductionV2Services,
+        keys: &[KeyPair],
+    ) -> (KuraV2CommitReceipt, wire::finality::V2FinalityArtifact) {
         let subject = wire::BlockSubject {
-            parent_block_hash: None,
+            parent_block_hash: service
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|parent| parent.subject.block_hash),
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
             payload_hash: Hash::new(b"finalized worker payload"),
         };
@@ -7382,7 +10116,42 @@ mod tests {
                 .collect(),
         );
         artifact.validate().expect("valid worker finality artifact");
-        KuraV2CommitReceipt::for_test(&artifact)
+        (KuraV2CommitReceipt::for_test(&artifact), artifact)
+    }
+
+    fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {
+        durable_finality_fixture(service, keys).0
+    }
+
+    fn service_for_history_context(
+        kura: Arc<Kura>,
+        context: wire::HeightContext,
+        validators: &[KeyPair],
+    ) -> ProductionV2Services {
+        let (mut service, _) = fixture();
+        context.validate().expect("valid history-fixture successor");
+        service.context = context;
+        service.local_peer = PeerId::new(validators[0].public_key().clone());
+        service.local_validator = Some(0);
+        service.key_pair = validators[0].clone();
+        service.kura = kura;
+        service.active_tag = EventTag::new(
+            service.context.height,
+            0,
+            Generation::new(service.context.height),
+        );
+        service
+    }
+
+    fn successor_service_for_history(
+        kura: Arc<Kura>,
+        parent: &wire::finality::V2FinalityArtifact,
+        validators: &[KeyPair],
+    ) -> ProductionV2Services {
+        let mut context = parent.height_context.clone();
+        context.height = parent.height.saturating_add(1);
+        context.parent_commit_qc = Some(parent.commit_qc.clone());
+        service_for_history_context(kura, context, validators)
     }
 
     #[test]

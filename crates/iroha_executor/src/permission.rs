@@ -1544,6 +1544,26 @@ pub mod account {
             AccountAliasPermissionScope::Dataspace(dataspace) => {
                 validate_dataspace_alias_owner(*dataspace, authority, host)
             }
+            AccountAliasPermissionScope::Alias(alias) => {
+                let account = host
+                    .query_single(
+                        crate::smart_contract::data_model::query::account::prelude::FindAccountByAlias::new(
+                            alias.account_alias(),
+                        ),
+                    )
+                    .map_err(|_| {
+                        ValidationFail::NotPermitted(format!(
+                            "Account alias lease for `{alias}` has no active owner"
+                        ))
+                    })?;
+                if account.id() == authority {
+                    Ok(())
+                } else {
+                    Err(ValidationFail::NotPermitted(format!(
+                        "Can't manage exact account alias permissions for `{alias}`"
+                    )))
+                }
+            }
         }
     }
 

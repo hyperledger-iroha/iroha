@@ -457,6 +457,26 @@ ProtectedServiceRankProgressProperty(specification) ==
                 \/ ServiceRankLess(CandidateServiceRank(candidate),
                      <<stage, position>>))
 
+ProtectedStage4RankProgressProperty(specification) ==
+  specification
+    => \A candidate \in AsyncCandidateSet, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedCandidateOwned(candidate)
+           /\ CandidateServiceRank(candidate) = <<4, position>>)
+           ~> (~ResponsiveProtectedCandidateOwned(candidate)
+                \/ ServiceRankLess(CandidateServiceRank(candidate),
+                     <<4, position>>))
+
+ProtectedStage5RankProgressProperty(specification) ==
+  specification
+    => \A candidate \in AsyncCandidateSet, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedCandidateOwned(candidate)
+           /\ CandidateServiceRank(candidate) = <<5, position>>)
+           ~> (~ResponsiveProtectedCandidateOwned(candidate)
+                \/ ServiceRankLess(CandidateServiceRank(candidate),
+                     <<5, position>>))
+
 ProtectedServeRankProgressProperty(specification) ==
   specification
     => \A node \in AsyncCurrentResponsiveVoters,

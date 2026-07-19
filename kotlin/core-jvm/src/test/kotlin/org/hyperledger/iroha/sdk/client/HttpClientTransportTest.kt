@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -11,6 +12,9 @@ import java.security.Signature
 import java.util.Base64
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -20,7 +24,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.alias.*
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -2538,7 +2544,7 @@ class HttpClientTransportTest {
         val parsed = response.get()
         assertEquals("alice@universal", parsed.alias)
         assertEquals("aid:alice-123", parsed.accountId)
-        assertEquals(42L, parsed.index)
+        assertEquals(BigInteger.valueOf(42), parsed.index)
         assertEquals("directory", parsed.source)
 
         val request = executor.lastRequest
@@ -2549,6 +2555,372 @@ class HttpClientTransportTest {
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("alice@universal", payload["alias"])
         assertEquals(1, payload.size)
+    }
+
+    @Test
+    fun resolveRestrictedAccountAliasUsesCanonicalAuthentication() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "alias": "merchant@private",
+                  "account_id": "aid:merchant-123",
+                  "source": "world_state"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-resolve-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.resolveAccountAlias("merchant@private", auth).join()
+
+        assertTrue(response.isPresent)
+        assertEquals("aid:merchant-123", response.get().accountId)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
+        assertEquals("alias-resolve-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-resolve-nonce-1")
+    }
+
+    @Test
+    fun aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan() {
+        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val asset = AssetDefinitionIdEncoder.encodeFromBytes(assetBytes)
+        val alias = ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L)
+        val guard = AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L)
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(
+                alias,
+                authority,
+                AccountProvisionV1.CREATE,
+                AccountAliasRoleV1.PRIMARY,
+            ),
+        )
+        val requestBody = AliasSetupPlanRequestV1(
+            listOf(EnsureAlias(intent, AliasLeaseAcquisitionV1(1), guard)),
+        )
+        val planBody = AliasTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            listOf(
+                AliasPlanResourceV1(
+                    intent,
+                    AliasPlanDispositionV1.CREATE,
+                    AliasLeaseQuoteV1(
+                        AliasTargetV1.AccountAlias(alias),
+                        1,
+                        "3",
+                        guard,
+                        1_800_000_000_000L,
+                        1_800_000_100_000L,
+                        1_800_000_200_000L,
+                    ),
+                    0,
+                ),
+            ),
+            listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(0x4e, 0x52, 0x54, 0x30))),
+            listOf(AliasAssetTotalV1(asset, "3")),
+            emptyList(),
+            emptyList(),
+            1_700_000_100_000L,
+        )
+        val responsePlan = AliasTransactionPlanV1(planBody, "03".repeat(32))
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = JsonEncoder.encode(responsePlan.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            authority,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-plan-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val plan = transport.planAliasSetup(requestBody, auth).join()
+
+        assertEquals(authority, plan.body.authority)
+        assertEquals(AliasPlanDispositionV1.CREATE, plan.body.resources.single().disposition)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("POST", request.method)
+        assertEquals("https://torii.example/api/v1/aliases/setup/plan", request.uri.toString())
+        assertEquals(authority, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        @Suppress("UNCHECKED_CAST")
+        val sent = JsonParser.parse(readBody(request)) as Map<String, Any?>
+        assertEquals(1L, sent["schema_version"])
+        assertEquals(1, (sent["intents"] as List<*>).size)
+        assertFalse(sent.containsKey("private_key"))
+        assertFalse(sent.containsKey("payment_proof"))
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-plan-nonce-1")
+    }
+
+    @Test
+    fun lifecyclePlanningAndSponsoredOnboardingUseOnlySafePlannerRoutes() {
+        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val targetAccount = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val asset = AssetDefinitionIdEncoder.encodeFromBytes(assetBytes)
+        val alias = ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L)
+        val target = AliasTargetV1.AccountAlias(alias)
+        val guard = AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L)
+        val renewal = RenewAliasLease(target, 1_800_000_000_000L, 1_900_000_000_000L, guard)
+        val renewalRequest = AliasLeaseRenewPlanRequestV1(renewal)
+        val lifecycleBody = AliasLifecycleTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            renewalRequest.operation,
+            AliasLifecyclePlanDispositionV1.APPLY,
+            AliasFramedInstructionV1(RenewAliasLease.WIRE_ID, byteArrayOf(1, 2, 3)),
+            AliasLeaseQuoteV1(
+                target,
+                1,
+                "3",
+                guard,
+                1_900_000_000_000L,
+                1_900_000_100_000L,
+                1_900_000_200_000L,
+            ),
+            listOf(AliasAssetTotalV1(asset, "3")),
+            emptyList(),
+            emptyList(),
+            guard.validUntilMs,
+        )
+        val lifecyclePlan = AliasLifecycleTransactionPlanV1(lifecycleBody, "03".repeat(32))
+        val lifecycleExecutor = StubResponseExecutor(
+            200,
+            JsonEncoder.encode(lifecyclePlan.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            authority,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-lifecycle-nonce-1",
+        )
+        val lifecycleTransport = HttpClientTransport.withExecutor(
+            lifecycleExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        lifecycleTransport.planAliasLeaseRenewal(renewalRequest, auth).join()
+
+        val lifecycleHttpRequest = assertNotNull(lifecycleExecutor.lastRequest)
+        assertEquals(
+            "https://torii.example/api/v1/aliases/lease/renew/plan",
+            lifecycleHttpRequest.uri.toString(),
+        )
+        assertEquals(authority, lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        val lifecycleJson = readBody(lifecycleHttpRequest)
+        assertFalse(lifecycleJson.contains("private_key"))
+        assertFalse(lifecycleJson.contains("payment_proof"))
+        assertCanonicalSignature(
+            lifecycleHttpRequest,
+            keyPair.public,
+            1_700_000_000_000L,
+            "alias-lifecycle-nonce-1",
+        )
+
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(alias, targetAccount, AccountProvisionV1.CREATE, AccountAliasRoleV1.PRIMARY),
+        )
+        val onboardingRequest = AccountOnboardingPlanRequestV1(
+            alias.canonicalName.canonicalText(),
+            targetAccount,
+        )
+        val onboardingSigner = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
+        val onboardingAuthority = AccountAddress.fromAccount(
+            onboardingSigner.generatePublicKey().encoded,
+            "ed25519",
+        ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val onboardingBody = AccountOnboardingPlanBodyV1(
+            1,
+            onboardingRequest,
+            onboardingAuthority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
+            AliasLeaseAcquisitionV1(1),
+            guard,
+            listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(4, 5, 6))),
+            null,
+            guard.validUntilMs,
+        )
+        val receipt = signedOnboardingReceipt(onboardingBody, onboardingSigner)
+        val onboardingExecutor = StubResponseExecutor(
+            200,
+            JsonEncoder.encode(receipt.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val onboardingTransport = HttpClientTransport.withExecutor(
+            onboardingExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val token = "onboarding-token-value-1234567890abcd"
+
+        onboardingTransport.planSponsoredAccountOnboarding(
+            onboardingRequest,
+            token,
+            onboardingAuthority,
+        ).join()
+
+        val onboardingHttpRequest = assertNotNull(onboardingExecutor.lastRequest)
+        assertEquals("https://torii.example/api/v1/accounts/onboard/plan", onboardingHttpRequest.uri.toString())
+        assertEquals(token, onboardingHttpRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+        val onboardingJson = readBody(onboardingHttpRequest)
+        assertFalse(onboardingJson.contains(token))
+        assertFalse(onboardingJson.contains("private_key"))
+        assertFalse(onboardingJson.contains("payment_proof"))
+
+        val applyExecutor = StubResponseExecutor(
+            200,
+            """{"account_id":"$targetAccount","alias":"merchant@banka.paynet","status":"Unchanged","disposition":{"kind":"no_op","value":null}}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val applyTransport = HttpClientTransport.withExecutor(
+            applyExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val applyResponse = applyTransport.applySponsoredAccountOnboarding(
+            receipt,
+            token,
+            onboardingAuthority,
+        ).join()
+        assertEquals(AccountOnboardingStatusV1.UNCHANGED, applyResponse.status)
+        val applyHttpRequest = assertNotNull(applyExecutor.lastRequest)
+        assertEquals("https://torii.example/api/v1/accounts/onboard", applyHttpRequest.uri.toString())
+        assertEquals(token, applyHttpRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+        val applyJson = readBody(applyHttpRequest)
+        assertTrue(applyJson.contains("\"receipt\""))
+        assertFalse(applyJson.contains(token))
+        assertFalse(applyJson.contains("private_key"))
+
+        val readinessExecutor = StubResponseExecutor(
+            200,
+            """{"version":1,"status":{"status":"ready","value":null},"diagnostics":[]}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val readinessTransport = HttpClientTransport.withExecutor(
+            readinessExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val readiness = readinessTransport.getAccountOnboardingReadiness(token).join()
+        assertEquals(AliasSetupStatusV1.READY, readiness.status)
+        val readinessRequest = assertNotNull(readinessExecutor.lastRequest)
+        assertEquals("GET", readinessRequest.method)
+        assertEquals(
+            "https://torii.example/api/v1/accounts/onboarding/readiness",
+            readinessRequest.uri.toString(),
+        )
+        assertTrue(readinessRequest.body.isEmpty())
+        assertEquals(token, readinessRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+    }
+
+    @Test
+    fun typedRestrictedAliasListsSendCanonicalRequestHeaders() {
+        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val executor = StubResponseExecutor(
+            200,
+            """{"account_id":"$account","total":1,"items":[{"alias":"merchant@banka.paynet","dataspace":"paynet","domain":"banka","is_primary":true}],"source":"on_chain"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            account,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-list-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.listAccountAliases(
+            AccountAliasesByAccountRequest(account, "paynet", "banka"),
+            auth,
+        ).join()
+
+        assertTrue(response.isPresent)
+        assertEquals("merchant@banka.paynet", response.get().items.single().alias)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("https://torii.example/api/v1/aliases/by-account", request.uri.toString())
+        assertEquals(account, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-list-nonce-1")
+    }
+
+    @Test
+    fun typedAliasReadsRejectSubstitutedSelectors() {
+        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val otherAccount = AccountAddress.fromAccount(ByteArray(32) { 0x46 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+        val indexExecutor = StubResponseExecutor(
+            200,
+            """{"index":8,"alias":"merchant@paynet","account_id":"$account"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val indexTransport = HttpClientTransport.withExecutor(
+            indexExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            indexTransport.resolveAccountAliasIndex(BigInteger.valueOf(7)).join()
+        }
+
+        val accountExecutor = StubResponseExecutor(
+            200,
+            """{"account_id":"$otherAccount","total":0,"items":[]}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val accountTransport = HttpClientTransport.withExecutor(
+            accountExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            accountTransport.listAccountAliases(AccountAliasesByAccountRequest(account)).join()
+        }
+
+        val aliasExecutor = StubResponseExecutor(
+            200,
+            """{"alias":"other@paynet","account_id":"$account"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val aliasTransport = HttpClientTransport.withExecutor(
+            aliasExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            aliasTransport.resolveAccountAlias("merchant@paynet").join()
+        }
     }
 
     @Test
@@ -3212,6 +3584,17 @@ class HttpClientTransportTest {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02X".format(it.toInt() and 0xFF) }
+
+    private fun signedOnboardingReceipt(
+        body: AccountOnboardingPlanBodyV1,
+        privateKey: Ed25519PrivateKeyParameters,
+    ): AccountOnboardingPlanReceiptV1 {
+        val hash = AccountOnboardingReceiptVerifier.canonicalHash(body)
+        val signer = Ed25519Signer()
+        signer.init(true, privateKey)
+        signer.update(hash, 0, hash.size)
+        return AccountOnboardingPlanReceiptV1(body, hex(hash), hex(signer.generateSignature()))
+    }
 
     private fun sha256Hex(bytes: ByteArray): String =
         hex(MessageDigest.getInstance("SHA-256").digest(bytes))

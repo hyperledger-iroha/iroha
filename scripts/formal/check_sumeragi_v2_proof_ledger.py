@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
+import shlex
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,12 +23,15 @@ LEDGER_PATH = FORMAL_DIR / "proof_coverage.json"
 VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "763bf3c1826d77a4cf206f43d5aa16775da1da33"
 EVIDENCE_SCHEMA_VERSION = 1
+CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 1
 
 # Exact source seal for the bounded effect-capacity ownership mutation matrix.
 # This matrix is finite regression evidence only; it is intentionally separate
 # from the deductive release-proof inventory below.
 EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2CertifiedRequestCapacityMutation.tla",
     "SumeragiV2EffectCapacityOwnershipMutation.tla",
+    "SumeragiV2EffectCapacityOuterTransportMutation.tla",
     "SumeragiV2EffectCapacityRetirementMutation.tla",
     "SumeragiV2EffectPreemptionPriorityMutation.tla",
     "SumeragiV2RetainedEffectBatchMutation.tla",
@@ -38,9 +43,18 @@ EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS = (
     "effect_batch_partial_fifo_reverse_bug.cfg",
     "effect_batch_second_accepted_bug.cfg",
     "effect_batch_second_rejected_fixed.cfg",
+    "effect_capacity_certified_request_fatal_bug.cfg",
+    "effect_capacity_certified_request_fixed.cfg",
+    "effect_capacity_certified_request_lost_bug.cfg",
+    "effect_capacity_certified_response_blocked_bug.cfg",
+    "effect_capacity_certified_response_byte_reserve_bug.cfg",
+    "effect_capacity_certified_response_count_reserve_bug.cfg",
     "effect_capacity_decided_retirement_fixed.cfg",
     "effect_capacity_full_fetch_hol_bug.cfg",
     "effect_capacity_non_fetch_retirement_fixed.cfg",
+    "effect_capacity_outer_transport_chunk_class_bug.cfg",
+    "effect_capacity_outer_transport_class_fixed.cfg",
+    "effect_capacity_outer_transport_response_class_bug.cfg",
     "effect_capacity_retirement_disabled_bug.cfg",
     "effect_capacity_timeout_sign_fixed.cfg",
     "effect_capacity_timeout_sign_lost_bug.cfg",
@@ -54,8 +68,14 @@ EFFECT_CAPACITY_MUTATION_RUNNER = (
     "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
 )
 EFFECT_CAPACITY_MUTATION_SHA256 = {
+    "SumeragiV2CertifiedRequestCapacityMutation.tla": (
+        "b1ee5cb369860881b40c53a9802881fbb18919b65d857f8a0d7bdcf11b398251"
+    ),
     "SumeragiV2EffectCapacityOwnershipMutation.tla": (
         "de3b89fc0946f138f3ed9d62505f8aab592b907fd8e97b13f3056086edf051d9"
+    ),
+    "SumeragiV2EffectCapacityOuterTransportMutation.tla": (
+        "488ef5fddf49e97894cf6692ce54cd881aa6323d6bd08275ac752a1233921464"
     ),
     "SumeragiV2EffectCapacityRetirementMutation.tla": (
         "72bdbd0799656e9e5a331adeb356239ca572d7efc25e5c6bf59503831a0733e9"
@@ -90,6 +110,24 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
     "effect_batch_second_rejected_fixed.cfg": (
         "463cc383fe9230f44c7f8d78c13acaa1d31994a797d33a37890167a834bc600e"
     ),
+    "effect_capacity_certified_request_fatal_bug.cfg": (
+        "f94364d791efbd786808764f86af09ff02340c568367a54cea693c4b9f27209c"
+    ),
+    "effect_capacity_certified_request_fixed.cfg": (
+        "8795617fc8854501ffa629b88d1db236636817ab7e0bffb750e41e4c0b39864a"
+    ),
+    "effect_capacity_certified_request_lost_bug.cfg": (
+        "9c2b7b6b11a6a3cffd5a792e9eb3dd15164ac4bd3b1dedcf7772b85327c1f066"
+    ),
+    "effect_capacity_certified_response_blocked_bug.cfg": (
+        "8335391327ffcb099a3bd7cef86e1d21bd61bce71b93e1e4bbe2d6d5a8a16db2"
+    ),
+    "effect_capacity_certified_response_byte_reserve_bug.cfg": (
+        "7322bc6395d64346e463d8c1295d8d9385748d7f78f1f15f8a2aeab8524dd520"
+    ),
+    "effect_capacity_certified_response_count_reserve_bug.cfg": (
+        "388c751955d0aeb4d14517f682b3d591359cd5528dfab7654082cb58e3663d24"
+    ),
     "effect_capacity_decided_retirement_fixed.cfg": (
         "5a340c3f1bfe9b2f626781994e2b449117f02f3f70ef08a42cb132dfa960de8e"
     ),
@@ -98,6 +136,15 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
     ),
     "effect_capacity_non_fetch_retirement_fixed.cfg": (
         "f14d63f9cb0c78b656d77257b609a98fda05e71cf46db588c73180e03a4261b2"
+    ),
+    "effect_capacity_outer_transport_chunk_class_bug.cfg": (
+        "ed3603ca1a3ad860dca48083650c382d811551b7984b3551b712477ec43fcc18"
+    ),
+    "effect_capacity_outer_transport_class_fixed.cfg": (
+        "c0caace3ece90fcd93f3153997945d963dd3259b9422ba30fdcaa194cd5560ba"
+    ),
+    "effect_capacity_outer_transport_response_class_bug.cfg": (
+        "0657a58fb40a3cb694236a497324500f268e2acc8068700d68131271fc220f55"
     ),
     "effect_capacity_retirement_disabled_bug.cfg": (
         "eab66435ee1e925d6943ef9080c1adc079da2db42ff59fdebb43d9b8b1dbd53e"
@@ -124,10 +171,11 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
     ),
     EFFECT_CAPACITY_MUTATION_RUNNER: (
-        "4ea8abe7d8bac89b23f64c4edc95587e6197ba7ebc070aeb95d40f5512b0d082"
+        "e627a84ab35e719670c67a31396c09735886d771b63279c204211255aaba7072"
     ),
 }
 EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
+    "SumeragiV2CertifiedRequestCapacity*.tla",
     "SumeragiV2EffectCapacity*.tla",
     "SumeragiV2EffectPreemption*.tla",
     "SumeragiV2RetainedEffectBatch*.tla",
@@ -144,6 +192,7 @@ POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS = (
     "post_decision_begin_install_tc_guard_bug.cfg",
     "post_decision_begin_timeout_guard_bug.cfg",
     "post_decision_form_tc_guard_bug.cfg",
+    "post_decision_resume_timeout_guard_bug.cfg",
     "post_decision_tc_receive_bug.cfg",
     "post_decision_tc_successor_bug.cfg",
     "post_decision_timeout_fixed.cfg",
@@ -155,7 +204,7 @@ POST_DECISION_TIMEOUT_MUTATION_RUNNER = (
 )
 POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
     "SumeragiV2PostDecisionTimeoutMutation.tla": (
-        "ce6b6879e4e118848577d59de022749636e3469391ab64145af50f0396d0e386"
+        "4a48f9767599aae856142a021f348d876b1c35799c8d3f219bf78ed6d9d8b20b"
     ),
     "post_decision_begin_install_tc_guard_bug.cfg": (
         "815e41cd50d0078be2590574eb9f044d8aff8f808d93d17df4f723f1d1ccf018"
@@ -165,6 +214,9 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
     ),
     "post_decision_form_tc_guard_bug.cfg": (
         "c8e823582dbbbff160eb1406e359cc5c8384d4d4beafeecad5688f220a5c8abd"
+    ),
+    "post_decision_resume_timeout_guard_bug.cfg": (
+        "ca0829121c8670f62dde0e45c66d3f25a29823e11c2a043ad406ab436e3eb471"
     ),
     "post_decision_tc_receive_bug.cfg": (
         "617949a3724958bf59159bdc68c72a80ee8923cc05beccbe8d93001691ebfcdd"
@@ -182,16 +234,375 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
     ),
     POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
-        "28b1ea3541f730d50af9ba9fb69e1df47bc769b5a3d081ffda369fdf4f083423"
+        "256c98c8e3b4f2b2d65da1ddc222234f7e5aaab557116154f4d98b0892c7cad4"
+    ),
+}
+
+# Exact source seal for the finite certified-response registration matrix.
+# This corpus distinguishes requested certified-body responses from valid but
+# unsolicited or replayed responses.  It is bounded regression evidence only.
+CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2CertifiedResponseRegistrationMutation.tla",
+    "certified_response_registration_duplicate_fixed.cfg",
+    "certified_response_registration_duplicate_missing_guard.cfg",
+    "certified_response_registration_historical_fixed.cfg",
+    "certified_response_registration_restart_fixed.cfg",
+    "certified_response_registration_restart_missing_guard.cfg",
+)
+CERTIFIED_RESPONSE_REGISTRATION_RUNNER = (
+    "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh"
+)
+CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
+    "SumeragiV2CertifiedResponseRegistrationMutation.tla": (
+        "7ea5530100512c59bc4af1537725aade91d0e10d39f76c3aff6316fc1323c84f"
+    ),
+    "certified_response_registration_duplicate_fixed.cfg": (
+        "2cea574ca69c20f2562b4133d44b6f83b1040f86a72b98eae284cc471a6656d2"
+    ),
+    "certified_response_registration_duplicate_missing_guard.cfg": (
+        "78dc4167845a9c9eb72a795b8e6cc4b2195b0e8342efe43202d630f307335ee5"
+    ),
+    "certified_response_registration_historical_fixed.cfg": (
+        "c6252f2789604dc20cf3fed5ceee76c4e1f5675478aa41c2239b7c572b3c54ca"
+    ),
+    "certified_response_registration_restart_fixed.cfg": (
+        "2bb9d00faccb2b4ec2dddb7fb65144a78d7b21da623019858beef52823168ca6"
+    ),
+    "certified_response_registration_restart_missing_guard.cfg": (
+        "7a0e118c6418ac644a48a5d2feab3697232b25fa1577e54f35bb93ef8321e2ee"
+    ),
+    CERTIFIED_RESPONSE_REGISTRATION_RUNNER: (
+        "5c616d3692574e014f4ce33068efdb51566c7c57e4ade2eefc579761fa667b10"
+    ),
+}
+
+# Exact source seal for the bounded durable Decision recovery lifecycle matrix.
+# The corpus distinguishes generation-free durable authority from the current
+# executor generation and remains mutation evidence rather than deductive proof.
+DECISION_RECOVERY_LIFECYCLE_FORMAL_ARTIFACTS = (
+    "SumeragiV2DecisionRecoveryLifecycleMutation.tla",
+    "decision_recovery_lifecycle_duplicate_decision_bug.cfg",
+    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg",
+    "decision_recovery_lifecycle_fixed.cfg",
+    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg",
+    "decision_recovery_lifecycle_prepare_authority_bug.cfg",
+    "decision_recovery_lifecycle_registration_generation_bug.cfg",
+    "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg",
+    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg",
+    "decision_recovery_lifecycle_stale_executor_generation_bug.cfg",
+)
+DECISION_RECOVERY_LIFECYCLE_RUNNER = (
+    "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh"
+)
+DECISION_RECOVERY_LIFECYCLE_SHA256 = {
+    "SumeragiV2DecisionRecoveryLifecycleMutation.tla": (
+        "3e6bcfd6fc4fe3a7c0549398ce2ce0831f906a2a38cd8526dc997bb5b3e6369f"
+    ),
+    "decision_recovery_lifecycle_duplicate_decision_bug.cfg": (
+        "cf84f1b001395ccd04d2ac3d548b5a4c292d4afd8cf7877f3acde1c1f5be8758"
+    ),
+    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg": (
+        "f0eaaceb6aeb4e0a0c760eb09787a75b788b9421c94a6f300331a3c4b0744b99"
+    ),
+    "decision_recovery_lifecycle_fixed.cfg": (
+        "92185aaacfc87a130cbfd9bd806a4e254d8cf9aac0ea5fac3485a1faa7480302"
+    ),
+    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg": (
+        "23d168bdba84c6f5ba4cd3fc767cd2062635eec4393f48e3010d87ac5c2dcd6c"
+    ),
+    "decision_recovery_lifecycle_prepare_authority_bug.cfg": (
+        "c5d4d11c03d0dbf2c6bfa8922d9e47ea2f73f0a6b27728c1911158922f1b464b"
+    ),
+    "decision_recovery_lifecycle_registration_generation_bug.cfg": (
+        "be188ce77e7ad8eb4d3db4d09e496c53aecadf2d5aafb8dc3b959783d28c8faf"
+    ),
+    "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg": (
+        "36885c1480da5b885106ef8e05c7ababccfc8fbcf88d320d0c95c9c93c358222"
+    ),
+    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg": (
+        "53723257dac7729b96a454b5f62aa81c3e8a109929463285b5811ebe0be75d0b"
+    ),
+    "decision_recovery_lifecycle_stale_executor_generation_bug.cfg": (
+        "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
+    ),
+    DECISION_RECOVERY_LIFECYCLE_RUNNER: (
+        "d4837ddd87807b853d6f0df64348117268e2f32c49fe86d6f1dec1e144fe740e"
     ),
 }
 
 STATUS_VALUES = (
     "tlaps_proved",
+    "cross_tool_proved",
     "specified_unproved",
     "trusted_contract",
     "out_of_scope",
 )
+
+PROVED_STATUS_VALUES = frozenset({"tlaps_proved", "cross_tool_proved"})
+
+
+@dataclass(frozen=True)
+class CrossToolClaimContract:
+    """One immutable Rust/Verus-to-TLA production refinement claim."""
+
+    constant: str
+    verus_theorem: str
+    verus_source: str
+    production_sources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CrossToolObligationContract:
+    """Canonical cross-tool discharge contract for one ledger obligation."""
+
+    obligation_id: str
+    module: str
+    ledger_symbol: str
+    tla_theorem: str
+    tla_statement: str
+    claims: tuple[CrossToolClaimContract, ...]
+
+
+_EFFECTIVE_LOCK_VERUS_SOURCE = (
+    "crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs"
+)
+_GENERAL_VERUS_SOURCE = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+
+# This inventory is deliberately code-owned rather than evidence-owned.  An
+# evidence writer may record these mappings but may not choose or substitute
+# them.  The 4 + 6 + 6 claim cardinalities are the complete external-constant
+# seam currently declared by the two release proof modules.
+CROSS_TOOL_REFINEMENT_CONTRACTS = (
+    CrossToolObligationContract(
+        obligation_id="effective-lock-body-acquisition-production-refinement",
+        module="SumeragiV2AsyncLivenessProofs",
+        ledger_symbol="EffectiveLockBodyAcquisitionProductionRefinementObligation",
+        tla_theorem="EffectiveLockBodyAcquisitionCrossToolRefinement",
+        tla_statement=(
+            "ProductionEffectiveLockBodyAcquisitionRefinement "
+            "=> ProductionEffectiveLockBodyAcquisitionRefinement"
+        ),
+        claims=(
+            CrossToolClaimContract(
+                constant="ProductionEnterViewUsesPostInstallEffectiveLock",
+                verus_theorem="production_enter_view_uses_post_install_effective_lock",
+                verus_source=_EFFECTIVE_LOCK_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2.rs",
+                    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionBodyOwnershipPreservesEffectiveLock",
+                verus_theorem="production_body_ownership_preserves_effective_lock",
+                verus_source=_EFFECTIVE_LOCK_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionBodyCapacityRetirementPreservesEffectiveLock",
+                verus_theorem=(
+                    "production_body_capacity_retirement_preserves_effective_lock"
+                ),
+                verus_source=_EFFECTIVE_LOCK_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionBodyServiceRefinesAsyncFairness",
+                verus_theorem="production_body_service_refines_async_fairness",
+                verus_source=_EFFECTIVE_LOCK_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+        ),
+    ),
+    CrossToolObligationContract(
+        obligation_id="progress-witness-production-refinement",
+        module="SumeragiV2AsyncLivenessProofs",
+        ledger_symbol="ProgressWitnessProductionRefinementObligation",
+        tla_theorem="ProgressWitnessCrossToolRefinement",
+        tla_statement=(
+            "ProductionProgressWitnessTraceRefinement "
+            "=> ProductionProgressWitnessTraceRefinement"
+        ),
+        claims=(
+            CrossToolClaimContract(
+                constant="ProductionDurableIntentTraceRefinesProgressWitness",
+                verus_theorem="production_durable_intent_trace_refines_progress_witness",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2.rs",
+                    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionDecisionTraceRefinesRecoveryWitness",
+                verus_theorem="production_decision_trace_refines_recovery_witness",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+                    "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionSchedulerTraceRefinesProtectedOwnership",
+                verus_theorem="production_scheduler_trace_refines_protected_ownership",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant=(
+                    "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+                ),
+                verus_theorem=(
+                    "production_ingress_identity_and_class_trace_refines_protected_ownership"
+                ),
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_ingress.rs",
+                    "crates/iroha_core/src/sumeragi/v2_transport.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionReliableFlushTraceRefinesOutboundOwnership",
+                verus_theorem="production_reliable_flush_trace_refines_outbound_ownership",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_transport.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_p2p/src/network.rs",
+                    "crates/iroha_p2p/src/peer.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionApplicationTraceRefinesDecisionCompletion",
+                verus_theorem="production_application_trace_refines_decision_completion",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+        ),
+    ),
+    CrossToolObligationContract(
+        obligation_id=(
+            "successor-activation-exact-recovery-production-refinement"
+        ),
+        module="SumeragiV2ChainEpochRefinement",
+        ledger_symbol=(
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+        ),
+        tla_theorem=(
+            "SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement"
+        ),
+        tla_statement=(
+            "ProductionSuccessorAndExactRecoveryTraceRefinement => "
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
+        ),
+        claims=(
+            CrossToolClaimContract(
+                constant="ProductionAppliedSuccessorTraceRefinesIndexedActivation",
+                verus_theorem="production_applied_successor_trace_refines_indexed_activation",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionRecoveredSuccessorTraceRefinesIndexedActivation",
+                verus_theorem=(
+                    "production_recovered_successor_trace_refines_indexed_activation"
+                ),
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionStartupFailureRefinesFailClosedActivation",
+                verus_theorem="production_startup_failure_refines_fail_closed_activation",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionHistoricalCertificateTraceRefinesIndexedAsync",
+                verus_theorem=(
+                    "production_historical_certificate_trace_refines_indexed_async"
+                ),
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync",
+                verus_theorem=(
+                    "production_historical_body_pipeline_trace_refines_indexed_async"
+                ),
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                    "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+                    "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+                ),
+            ),
+            CrossToolClaimContract(
+                constant="ProductionTerminalApplicationExcludesActivation",
+                verus_theorem="production_terminal_application_excludes_activation",
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+            ),
+        ),
+    ),
+)
+
+CROSS_TOOL_REFINEMENT_BY_ID = {
+    contract.obligation_id: contract for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+}
 
 # These are the deductive release modules.  TLC configurations are deliberately
 # absent: a finite counterexample search can never satisfy a proof obligation.
@@ -214,6 +625,8 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2ServiceRankLemmas",
     "SumeragiV2EffectiveLockAcquisitionProofs",
     "SumeragiV2AsyncFairnessRefinementProofs",
+    "SumeragiV2CertifiedRequestHashAuthorityProofs",
+    "SumeragiV2DurableDecisionRecoveryProofs",
     "SumeragiV2AsyncLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -319,6 +732,10 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
     ),
+    "async-progress-ownership-invariant": (
+        "SumeragiV2AsyncLivenessProofs",
+        "AsyncSpecAlwaysProgressOwnershipInvariant",
+    ),
     "post-decision-timeout-exclusion": (
         "SumeragiV2AsyncLivenessProofs",
         "PostDecisionTimeoutExclusionObligation",
@@ -346,6 +763,18 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "post-gst-deadlock-freedom": (
         "SumeragiV2AsyncLivenessProofs",
         "DeadlockFreedomObligation",
+    ),
+    "protected-service-rank-stage4-ready-causal": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedStage4RankProgressFromFairScheduler",
+    ),
+    "protected-service-rank-serve-fifo": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedServeRankProgressFromFairFifo",
+    ),
+    "protected-service-rank-stage5-consensus-fifo": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedStage5RankProgressFromFairFifo",
     ),
     "protected-service-rank": (
         "SumeragiV2AsyncLivenessProofs",
@@ -429,6 +858,8 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2EffectiveLockAcquisitionProofs",
     "SumeragiV2AsyncNetwork",
     "SumeragiV2AsyncFairnessRefinementProofs",
+    "SumeragiV2CertifiedRequestHashAuthorityProofs",
+    "SumeragiV2DurableDecisionRecoveryProofs",
     "SumeragiV2AsyncLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -521,6 +952,15 @@ ASYNC_LIVENESS_OBLIGATIONS = {
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryObligation",
     "progress-witness-preservation": "ProgressWitnessObligation",
     "post-gst-deadlock-freedom": "DeadlockFreedomObligation",
+    "protected-service-rank-stage4-ready-causal": (
+        "ProtectedStage4RankProgressFromFairScheduler"
+    ),
+    "protected-service-rank-serve-fifo": (
+        "ProtectedServeRankProgressFromFairFifo"
+    ),
+    "protected-service-rank-stage5-consensus-fifo": (
+        "ProtectedStage5RankProgressFromFairFifo"
+    ),
     "protected-service-rank": "ProtectedServiceRankProgressObligation",
     "post-gst-starvation-freedom": "StarvationFreedomObligation",
     "timeout-view-liveness": "TimeoutViewProgressObligation",
@@ -533,6 +973,13 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
     "progress-witness-preservation": "AsyncProgressWitnessProperty",
     "post-gst-deadlock-freedom": "DeadlockFreedomProperty",
+    "protected-service-rank-stage4-ready-causal": (
+        "ProtectedStage4RankProgressProperty"
+    ),
+    "protected-service-rank-serve-fifo": "ProtectedServeRankProgressProperty",
+    "protected-service-rank-stage5-consensus-fifo": (
+        "ProtectedStage5RankProgressProperty"
+    ),
     "protected-service-rank": "ProtectedServiceRanksProgressProperty",
     "post-gst-starvation-freedom": "StarvationFreedomProperty",
     "timeout-view-liveness": "TimeoutViewProgressProperty",
@@ -581,6 +1028,22 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
     ),
+    "async-progress-ownership-invariant": (
+        "SumeragiV2AsyncLivenessProofs",
+        "AsyncSpecAlwaysProgressOwnershipInvariant",
+    ),
+    "protected-service-rank-stage4-ready-causal": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedStage4RankProgressFromFairScheduler",
+    ),
+    "protected-service-rank-serve-fifo": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedServeRankProgressFromFairFifo",
+    ),
+    "protected-service-rank-stage5-consensus-fifo": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedStage5RankProgressFromFairFifo",
+    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -604,9 +1067,19 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
 # prerequisite before the theorem which consumes it.
 PROOF_STATUS_DEPENDENCIES = {
     "timeout-protection": ("historical-tc-lock-commit",),
+    "effective-lock-body-acquisition-production-refinement": (
+        "effective-lock-body-acquisition-model",
+    ),
     "async-type-invariant": ("async-runner-scheduler-preservation",),
-    "post-decision-timeout-exclusion": ("async-type-invariant",),
-    "decision-recovery-across-restart": ("async-type-invariant",),
+    "async-progress-ownership-invariant": ("async-type-invariant",),
+    "progress-witness-production-refinement": (
+        "async-type-invariant",
+        "async-progress-ownership-invariant",
+        "generation-scoped-vote-delivery",
+        "post-decision-timeout-exclusion",
+        "decision-recovery-across-restart",
+        "async-fair-action-refinement",
+    ),
     "progress-witness-preservation": (
         "async-type-invariant",
         "generation-scoped-vote-delivery",
@@ -618,9 +1091,27 @@ PROOF_STATUS_DEPENDENCIES = {
         "async-type-invariant",
         "async-fair-action-refinement",
     ),
-    "protected-service-rank": (
+    "protected-service-rank-stage4-ready-causal": (
+        "async-type-invariant",
+        "async-progress-ownership-invariant",
+        "async-fair-action-refinement",
+    ),
+    "protected-service-rank-serve-fifo": (
         "async-type-invariant",
         "async-fair-action-refinement",
+    ),
+    "protected-service-rank-stage5-consensus-fifo": (
+        "async-type-invariant",
+        "async-progress-ownership-invariant",
+        "async-fair-action-refinement",
+    ),
+    "protected-service-rank": (
+        "async-type-invariant",
+        "async-progress-ownership-invariant",
+        "async-fair-action-refinement",
+        "protected-service-rank-stage4-ready-causal",
+        "protected-service-rank-serve-fifo",
+        "protected-service-rank-stage5-consensus-fifo",
     ),
     "post-gst-starvation-freedom": (
         "async-type-invariant",
@@ -644,6 +1135,11 @@ PROOF_STATUS_DEPENDENCIES = {
         "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
+    ),
+    "successor-activation-exact-recovery-production-refinement": (
+        "epoch-boundary",
+        "decision-recovery-across-restart",
+        "successor-activation-starvation-freedom",
     ),
     "genesis-height-successor-handoff": (
         "rotating-leader-liveness",
@@ -974,17 +1470,142 @@ _PRODUCTION_CAUSAL_FIFO_VERUS_ITEM_SHA256 = {
 }
 
 # Exact comment/literal-free token digests for the production Rust items whose
-# control flow establishes the persisted-continuation and TC recovery seam.
+# control flow establishes the bounded persisted-continuation, one-transition
+# deferred scheduling, and TC recovery seam.
 # These whole-item bindings prevent an attacker from preserving the reviewed
 # snippets in a dead branch while changing the executable path around them.
 _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
+    "from_record": (
+        "399605c9add8c3bf579fc03c6b46b52533c1ca726cc175fcd80cd33536882ce7"
+    ),
+    "budget": (
+        "8da4eaa39048654d522ba93b3549224a5f478a8f5e054956c1f82f4d30d2b697"
+    ),
+    "deferred_work_is_serviceable": (
+        "1036f93b127acad65512fcb095d7f19bdc547f93d22ebebbd227277a0a30405c"
+    ),
+    "ready_to_finish": (
+        "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
+    ),
+    "drain_deferred": (
+        "c2747fff4505193898fb43fd11414c8a0962110f53f76519d6edc432b3e22606"
+    ),
+    "fail_deferred_service_contract": (
+        "b3ca797528869db777b292d74ccba9425cced620e3d56f429ffdeb624b285799"
+    ),
     "drive_effects": (
-        "5c84d120b5e939117355818cf387b3400ab07bd25ebbfda2a8bfb47660febfa2"
+        "a8f7b1b55265fb84ed1c5e4b7d5c90a526fb5480ea8f572e365a998646bd67b5"
+    ),
+    "runtime_step": (
+        "b1225686730d10d91afda44c1bbf303b926a9a762766df1c0409767d84e0cf5c"
+    ),
+    "runtime_step_recovery": (
+        "696162758e414d5efc4c7153acfed2576d88afc47863cb5806fe0fbddf5a1939"
+    ),
+    "dispatch_one_adapter_deferred": (
+        "f18a91fa7f3a36481f622d6649b32e65960aa91d6053949861296735cf4ebc87"
     ),
     "tc_promoted_historical_commit_is_fsynced_before_sign_and_status": (
         "1a7a40ec9ad7773c8a52ab8ac9e8d19b2a64d86109e4ccb314f19df54ff148c0"
     ),
 }
+
+# Exact adversarial integration witnesses for the durable locked-Commit owner
+# alternatives.  These tests are release inventory, not deductive evidence;
+# whole-item seals prevent a renamed or weakened lookalike from satisfying the
+# progress-witness regression contract.
+_LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
+    "locked_commit_progress_witness_rejects_inexact_or_empty_ownership": (
+        "6ff11e7c98fdc0be39ecd88662c4e6b9a2b9930208be27702e5b30c816395cb3"
+    ),
+    "locked_commit_progress_witness_accepts_each_exact_owner": (
+        "243a8035c4249915983abf901d74b2e0acccba5942dba2c8338ddde58f15d3e5"
+    ),
+}
+
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 289
+_PRODUCTION_LIVENESS_RELEASE_MODULES = (
+    "kura::tests",
+    "kura::lane_geometry::tests",
+    "sumeragi::authoritative_runtime_gate_tests",
+    "sumeragi::v2_core::tests",
+    "sumeragi::v2_core::refinement::tests",
+    "sumeragi::v2_core::reducer::source_link_tests",
+    "sumeragi::v2::tests",
+    "sumeragi::v2_block_sync::tests",
+    "sumeragi::v2_apply::tests",
+    "sumeragi::v2_effects::tests",
+    "sumeragi::v2_lane_work::tests",
+    "sumeragi::v2_runtime::tests",
+    "sumeragi::v2_recovery::tests",
+    "sumeragi::v2_runner::tests",
+    "sumeragi::v2_worker::tests",
+    "sumeragi::status::v2_liveness_watchdog_tests",
+    "sumeragi_v2_runner",
+    "peer::run::tests",
+    "network::tests",
+    "tests::relay_fairness",
+)
+_PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
+    "kura::tests::certified_lane_block_encoding_enforces_source_envelope",
+    "sumeragi::authoritative_runtime_gate_tests::direct_and_synthetic_envelopes_keep_identity_roles_consistent",
+    "sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner",
+    "sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly",
+    "sumeragi::authoritative_runtime_gate_tests::relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin",
+    "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_untrusted_count_and_byte_owner",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_untrusted_origins_distinct",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure",
+    "sumeragi::v2_lane_work::tests::durable_lane_certificate_is_one_atomic_kura_backed_response",
+    "sumeragi::v2_lane_work::tests::durable_lane_certificate_serves_rotated_validator_after_pressure",
+    "sumeragi::v2_lane_work::tests::historical_certificate_survives_successor_lock_decision_persistence_and_restart",
+    "sumeragi::v2_lane_work::tests::carrier_replacement_filters_persistence_and_output_sources_together",
+    "sumeragi::v2_lane_work::tests::applied_lane_certificate_retires_alternative_qc_replays_without_weakening_conflicts",
+    "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
+    "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
+    "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
+    "peer::run::tests::coalesced_batch_acknowledges_every_item_only_after_flush",
+    "peer::run::tests::maximum_frame_uses_a_bounded_number_of_source_reservations",
+    "peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting",
+    "peer::run::tests::authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift",
+    "network::tests::authenticated_source_count_share_is_checked_and_never_zero",
+    "network::tests::actor_progress_bypasses_full_deferred_owner_and_waits_for_writer_flush",
+    "network::tests::actor_progress_lease_survives_topology_transition",
+    "network::tests::actor_progress_retries_exactly_once_on_peer_writer_replacement",
+    "network::tests::actor_progress_retry_round_robin_bypasses_partitioned_target",
+    "network::tests::cap_one_blocked_source_cannot_prevent_live_source_service",
+    "network::tests::actor_progress_lease_survives_debug_packet_loss_until_delivery_retries",
+    "network::tests::actor_broadcast_retry_targets_only_failed_peers",
+    "network::tests::reliable_subscriber_is_single_consumer_under_clone_budget_pressure",
+    "network::tests::reconnecting_peer_cannot_multiply_retained_source_credits",
+    "tests::relay_fairness::seventeen_and_thousands_of_origins_cannot_multiply_one_authenticated_via",
+    "sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress",
+    "sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear",
+    "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
+    "sumeragi::v2_worker::tests::backpressured_target_does_not_block_later_targets_or_fanouts",
+    "sumeragi::v2_worker::tests::production_output_path_serves_later_fanout_while_target_stays_backpressured",
+    "sumeragi::v2_worker::tests::actor_backpressure_cannot_change_returned_payload_identity",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
+    "peer::run::tests::dispatch_worker_shutdown_drains_reliable_old_generation_to_actor",
+    "peer::run::tests::full_write_without_flush_ack_closes_actor_witness_and_retries_on_replacement",
+    "network::tests::progress_budget_preserves_fifo_for_three_registered_producers",
+    "network::tests::broadcast_child_handoff_requires_the_same_request_digest",
+    "network::tests::progress_ticket_rejects_a_different_same_length_payload",
+    "network::tests::configured_assist_hub_connection_cannot_overflow_reliable_geometry",
+    "network::tests::topology_larger_than_reliable_target_geometry_is_rejected_atomically",
+    "network::tests::assist_hub_refresh_above_reliable_geometry_is_rejected_atomically",
+    "network::tests::topology_removal_cancels_every_deferred_owner_for_removed_peer",
+    "network::tests::deferred_progress_survives_ttl_but_explicit_peer_removal_cancels_it",
+    "network::tests::outside_topology_retransmit_is_not_misreported_as_delivered",
+    "network::tests::accepted_draining_generation_delivers_reliable_progress_after_replacement",
+    "network::tests::direct_post_owner_forces_cross_kind_broadcast_parent_residual",
+    "network::tests::busy_broadcast_target_coalesces_exact_retry_but_distinct_residual_blocks_next_parent",
+    "network::tests::reliable_delivery_waits_for_its_route_subscriber",
+    "network::tests::closed_reliable_subscriber_transfers_actor_pending_backlog_to_replacement",
+)
 
 # The retained executor queue is the concrete FIFO consumer for reducer
 # batches. Bind the complete reviewed methods, then additionally check the
@@ -997,6 +1618,420 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "42c05e167c74dab0182d52f0ca671c500803f26ff70b2f4870fc20f38ae620b3"
     ),
     "step": "009cdc9058a8577205ea0598d88fb2d1c8257a9de2f7d5a711c280b508bd0e79",
+}
+
+# Exact comment/literal-free token digests for the production exact-output
+# scheduler and applied-height retirement seam.  The scheduler digests bind
+# target-local/global FIFO ownership, round-robin service, and exact returned
+# post retention.  The retirement digests bind the narrow Retransmit whitelist
+# and the Kura receipt/finality-artifact authority checked before output is
+# handed to durable reconstruction.
+_PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
+    "take_attempt": "6f574e489abf2fb95db2f897f2cbe8d09d18dfc03092acc55f8688f19a806de9",
+    "mark_admitted": "81ae0e18ab30dcd3f12e7e4dc4ba1097e18be33775fa2a49a02054efbba1b65b",
+    "retain_returned": "19d116254d4abea0f5d980e950f61313368a86f1d2601f2950151cac7b3081f0",
+    "owns_peer": "679360e96a501a92a78b1fe10ef6fabc1f4e961530e2a4f51d28c0631a640e07",
+    "target_is_local_head": "77e16bf731157cebe2fc1c8d9b5baf0b742f68c05768f10bf23a516512de38ab",
+    "advance_target_cursor": "b16e6854e6b213b04e89a740f8b20f1c00f13ae88e8da38a39faac55ec6b0c26",
+    "handoff_applied_height_to_durable_reconstruction": (
+        "c4da6cd7e44047a68c1e180d81a562812bad40d4fc011520eaae08ca0c12d802"
+    ),
+    "target_is_global_head": (
+        "7cc43778f0579753063d46fe314057e5de6fdd2a4d19b578fce940aa46445328"
+    ),
+    "next_schedulable_target": (
+        "635d2367dfe4b38dd00572ae5b2d2a69564a02cedc5c093b2c3da4f60373ac7d"
+    ),
+    "advance_after_attempt": (
+        "22953c00f4ed30535b5c5633c8b6014bac53160330574b2fb2594b918d052e7a"
+    ),
+    "drive_with": "f175e2adde75dbf634e31afba596aecd48334972588cb8254777d03442773f04",
+    "applied_height_reconstruction_covers": (
+        "591203bbc81290c8e365103be77d6824c4bf93cbac0b7a7bd1b6d069fe45b503"
+    ),
+    "handoff_applied_height_output_to_durable_reconstruction": (
+        "05e4b1a5d6d3f95e50bfd359dccfdd99e555e08ceb893ca686ef5743876a551a"
+    ),
+}
+
+_PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
+    "durable_history_source_covers": (
+        "39c27285a5450f66c9df518fcae6b0706985ef53c927119b05dbbef1967e92f0"
+    ),
+}
+
+# Typed semantic claims are the production authority which lets exact output
+# cross the applied-height boundary.  Seal both the claim validators and every
+# production constructor so an untyped producer cannot hide behind the
+# scheduler/retirement digests above.
+_PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
+    "covers": "48529c793eedab83283aa2d471486e8bbd77ce399c0be52576bc23ee3b8b540c",
+    "from_request": (
+        "8324e701302ae294ba6c1b785ba3722dc976e4bf0ef11d19fb8e26064f5d897f"
+    ),
+    "from_chunk": (
+        "75b82abdb496632074dea4d8c29a3cff294ea6009d8149981bb0503b647b69ad"
+    ),
+    "native_amx_message_body": (
+        "90737e4116833fb086b7c1f3a7a04dbb34fc9157385103f3dc1be6e74c127eae"
+    ),
+    "scope": "152ff92d4a202e21d49ec06eec5d6f62df191bd161235e84bd0da6c0aff047bd",
+    "validate_fanout": (
+        "b253818f33ad39a695f9fb55a6fad744df196df89418235b0f35c2d51a8a6739"
+    ),
+    "claimed": "b59f8efacbfc3dfb8f1ba35b4950ebbb9fa42cfcf878041826664aa6f0ecf313",
+    "enqueue_exact_fanout_while_guarded": (
+        "ea750c0562f04052fefaad867a386eb6a44780ae48e79c93bf9e612b35910dd7"
+    ),
+    "exact_output_scope": (
+        "2c322931cf99b7f7e6484c11c48b4bb570b48bc6a95f240e09fab88eea599be0"
+    ),
+    "post_to_peer": (
+        "3c7147cdd3de1b268463b4fc6cd68c97218e728b3c924e9a872a199d0c2beb95"
+    ),
+    "post_durable_history_response_with_permit": (
+        "8ae203e4243bacded0c2e474f5bbe2dceb8d02028d1c3b38b68f5b497c6295b9"
+    ),
+    "post_lane_block": (
+        "23f0e65f794c42ed8dee7d4da5a14ab5df1f6aa616222d0c354afd7f0ed8a8fb"
+    ),
+    "post_durable_lane_certificate": (
+        "77a4b3ed0075ac3be1ff150683ff5be77429556d5b52894a7a0594ee7223674c"
+    ),
+    "post_certified_merge_sidecar": (
+        "2b294cb92b7ee0b08f3a5e80e4161d9a2f3c6c14871f7d9dcfe1e7066c1aa74b"
+    ),
+    "post_native_amx": (
+        "6eceaf6c5bb4063e941b0cb33b3c111779f813361fcee587cc3865d35ce7703f"
+    ),
+    "broadcast_merge_to_voters": (
+        "bbb3a14f0a9f3f180a6a8b36cb2b09c267137414d54c757643baf6aeb9d1f577"
+    ),
+    "post_block_message_while_guarded": (
+        "0395bfac9673d80cf3ebb6aa78456fb91ee68347395599c4a5e1633c75d0de95"
+    ),
+    "broadcast_preencoded_to_voters_while_guarded": (
+        "1c22c254ba300a86887affe725dd01e126563ac584f791e9da329fe67296bf4f"
+    ),
+    "broadcast_to_voters_while_guarded": (
+        "bbc43f18d7ee7cc95ecfabc70894ae1b82780edab21ebecb8a60445e68113a4d"
+    ),
+}
+
+# The lane authority is the only production witness allowed to supersede or
+# reconstruct lane-local output at global-height retirement.  Bind its exact
+# Kura/application source commitment and its winning/non-winning validators.
+_PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
+    "covered_source_hash": (
+        "a72992ca12a20a2f7ed989229536bc83895cf7deed919643b3479758ca9b34d9"
+    ),
+    "persistent": (
+        "3e865b8a1b9b7136ab2cf81dd6d33fe84ae9e9b14eab2006156ae9cbc29520ff"
+    ),
+    "lane_output_identity": (
+        "df60d606e2439d75858acd1ed1b4457f491f24ac1cc9772601e8cdba5c094d2e"
+    ),
+    "validate_winning_lane_output": (
+        "5944d18c4054801e9d25faed1f67317cfcd9d0fe3e8dea1cb17ba35de5566371"
+    ),
+    "validate_winning_lane_qc": (
+        "345e7f2f2faadd6dc57195390ce8e711549608ba56f1cb01f962250414f4c011"
+    ),
+    "validate_superseded_lane_output": (
+        "ec480ca71d859f5b27fcc31731a1bc2ebb02ee8d5002475d53d3ed14109c94c2"
+    ),
+    "durable_lane_rollover_authority": (
+        "1109194f99b88c00567cde139cbd07ed63513b8540c0ba4e1fb7ec5cb53cd496"
+    ),
+    "serve_durable_lane_certificate": (
+        "65b50a54bd6b7094f134faf2f257006bc4c9ee28c010b89788d9f2a53bead913"
+    ),
+    "lane_work_effect_key": (
+        "ecb54bfc340dc2ea6f39c8c083eaeb1fad8b91b969fa51bb40bdcfceb1b2638d"
+    ),
+}
+
+_PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
+    "run_inner": (
+        "67397db47f9952e2b4e85dcaede32374b253cc6d8dcdeb0834e6e1d6f801d87d"
+    ),
+    "drain_v2_ingress": (
+        "7750146c2bad43d07d6e57419a4f783b1d1cc343d44044686442c6698dfd8b6a"
+    ),
+    "dispatch_lane_work_effects": (
+        "7fa49d4bdc67870edaaab0a9aa07d2a3260d2f9df42f5feaba1b4f2fdf58599a"
+    ),
+}
+
+# Exact comment/literal-free token digests for the allocation-free P2P frame
+# geometry used by Sumeragi height activation.  These helpers are part of the
+# production refinement boundary: replacing checked arithmetic with a shorter
+# estimate can make a locally valid progress envelope impossible to transmit.
+_PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
+    "checked_len_prefixed": (
+        "b6411bf29b1e2517fb2c4151c52634334f712f05127c4efd6440166ee6b65207"
+    ),
+    "peer_id_wire_len_from_raw_key_bytes": (
+        "b13f1926dab04641ff700941aaf854a29a0205e4828831da3f207a0930829844"
+    ),
+    "peer_id_raw_key_bytes": (
+        "8f3464a658389a9eed4a02b26e3117aebe9c11283d825736ea6ef5fe797ec09e"
+    ),
+    "relay_target_wire_len": (
+        "84837f33c9793445071c17cdc11de01ddc1b7b57e061896afd381252743d3c05"
+    ),
+    "relay_message_wire_payload_len": (
+        "10d9aba9d1b59f437beaa2292a03ffb9aaad5e254ec336d1d2f6a8743f237e36"
+    ),
+    "data_frame_wire_len_from_payload_len_with_peer_key_bytes": (
+        "b2068790fd5e3eb3850f89f4d5db9b6876c6c87bbe7b0936a3ab9bc1a0fbdd01"
+    ),
+    "data_frame_wire_len_from_payload_len": (
+        "72a4b6c68092baaae7856ba4d2c3e733cdb9477f25538bcc2c4c7536d783acea"
+    ),
+    "validate_transport_queue_geometry": (
+        "2b43cba3a15fb667169280663e960cb6fabf5ccde7272d4276b6480041c66632"
+    ),
+}
+_PRODUCTION_P2P_PEER_FRAME_ITEM_SHA256 = {
+    "data_message_wire_len_from_payload_len": (
+        "d157ece83c8e700725549e91fcb572b61ebe3d8c3e267e9d3bfe31765ff3310c"
+    ),
+}
+_PRODUCTION_P2P_RUN_FRAME_ITEM_SHA256 = {
+    "frame_plaintext_cap_for": (
+        "4d66d6b2dc3c139c4df54c7c9d7b7640691ce3aa0765a44298b689e63d360e21"
+    ),
+    "checked_encoded_frame_len": (
+        "e7d2ca074d7c7eb85d16608018e4e8d30950bc2278edbe52e3a63e31c2b15935"
+    ),
+}
+_PRODUCTION_P2P_QUIC_FRAME_ITEM_SHA256 = {
+    "try_send": (
+        "bd32ba60bc0de89dc1ac9a7062a69c41df4ff6c72dd5c053550385780510891e"
+    ),
+}
+_PRODUCTION_P2P_RECEIVER_FRAME_ITEM_SHA256 = {
+    "reserve_for_frame": (
+        "cb0e506080c0985c5f81c5c567250e143d072f2f23e06b4072cb3d2b739a8212"
+    ),
+    "parse_next_encrypted_frame": (
+        "5e97b871b18bf572b308816c2ca9c1041296eb82820e7a361c3e34e8dc1ee019"
+    ),
+}
+_PRODUCTION_P2P_SOURCE_OWNERSHIP_ITEM_SHA256 = {
+    "same_owner": (
+        "e6bba8d24c683f3b322752c93d977415e41e8dffcd9221f410d462a4006835db"
+    ),
+    "merge": (
+        "36f4915a83458c73f12ff364ebf4ccdd45e6b826fe305e52429098967d26bb55"
+    ),
+    "source_credits": (
+        "907bd74b8134652be4289585016fcc7644bb5a8faf07b3db6d67724517371145"
+    ),
+    "extend": (
+        "c0d7b44202b40992e33ae23c530fa6c135ff003e23765dde461a044a3a6d8d46"
+    ),
+}
+_PRODUCTION_P2P_SENDER_FRAME_ITEM_SHA256 = {
+    "encrypted_frame_geometry": (
+        "fa320e44681f1928dd862e8f07b1ea3c72b2c409ba58bf88556c2edd6d57b929"
+    ),
+    "prepare_message_with_ownership": (
+        "2d6ef5bd05a9b9ac31e254546f0e10509df5211daae262d8daa38de8049aa441"
+    ),
+    "prepare_encoded_buffer": (
+        "eb243e718f0b02455dcb31f009ea22aca2f33b4c27aaa00cd309846d87a159fb"
+    ),
+    "check_queue_limit": (
+        "097b47794fe8e9d4ded5357204dfe755f99d476323e11d4c50b604efad0dfb48"
+    ),
+    "account_enqueued": (
+        "dc14a3102e45e8487ed71d3cf7c43af270be5bad47b00fe69fac9f85e51dba13"
+    ),
+    "enqueue_encrypted": (
+        "1efc3f5c8f677f117d82e7e1dcec9c489fbddbcf970b3bba74fd184c5f138421"
+    ),
+}
+_PRODUCTION_P2P_START_FRAME_ITEM_SHA256 = {
+    "validate_encrypted_frame_cap": (
+        "5305bae9d0febfc2a1348f8f3b9737fb5155a62084a80f731d75bc372ea3bbcd"
+    ),
+    "start_with_crypto": (
+        "634fcfb604d69431784c6b5e1c0719e078f628de374ce82caaafd80c584c00d1"
+    ),
+}
+_PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
+    "post_recover_with_flush_ack": (
+        "efe28549106501cb539ea51d42e5c318f5c54bfeb8bef94e1cd1a78a85ea499a"
+    ),
+    "post_recover_inner": (
+        "004f480809bdd5e6f456a5da08b2acd192fb817c44606eec5066141aed2f5b7f"
+    ),
+    "acknowledge_flush": (
+        "b2f9e0921009c50799677284aef793d9a76d184db88b24b1b242eb093e8f71cb"
+    ),
+    "prepare_message_with_ownership": (
+        "2d6ef5bd05a9b9ac31e254546f0e10509df5211daae262d8daa38de8049aa441"
+    ),
+    "prepare_or_defer_with_ownership": (
+        "271a4549dc2075166aa9c647a6477f1748f32b536d790dcef967ca9c32087a4d"
+    ),
+    "acknowledge_flushed_batch": (
+        "30d441537005fc905493103db122d17670def105f67d36993341038b674a4c63"
+    ),
+    "fill_batch": (
+        "30bba0f4890fd277ee9b22cd433178d840418dbd22a1a615f2a1153857b09ae7"
+    ),
+    "send": (
+        "a10e589b0e785b9d113d693e7946a35bc1b6dabb7f8f72c59ff713efe3c393e5"
+    ),
+}
+_PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
+    "progress_ticket_request_digest": (
+        "ab51b06be057b794221217b6505e2cd4abbb66c2d7f87504a6f2257c260124c4"
+    ),
+    "try_reserve_broadcast_child": (
+        "09599eeb99c14929d99143cfa8fa43b971237e63d768e7e1ccfbcfab9e05b242"
+    ),
+    "into_dispatch_parts": (
+        "e22061f2df8bbb4e63645ccfe41be10b1cb99c61b9f101095a5081f1bdfc8b1f"
+    ),
+    "from_dispatch_parts": (
+        "a35c12fc07f9f3fc7173189e7e5b05b9d32e9c1304dcc4f47417ab10397d6a66"
+    ),
+    "dispatch_reliable_actor_message": (
+        "026e2dd7c8c95104fb1aef825eaf8b4c0ed66fb9a9e41c51ffdc4a592b7b6d20"
+    ),
+    "post_reliable_actor_frame_to_writer": (
+        "e39ecfdb65d8640a7bfe012f15c23f4a800d23db2762f51884c4ab65291e2bcc"
+    ),
+    "retry_reliable_actor_messages": (
+        "5d59dda16998eea883d6c96f6fedde6fa3f8e35a82f16fff6849d35cd4f3ce7c"
+    ),
+    "split_reliable_actor_broadcast": (
+        "26755317aa6a92cf84720b9c01367c673cc49f7cf696403e73a9b82bb98aef58"
+    ),
+    "accept_reliable_actor_message": (
+        "3e366840c4c2d4bd8b7c5c71364dd86b5e6c3c2cafb6f11de46c1953152fdfb2"
+    ),
+}
+
+_PRODUCTION_P2P_PROGRESS_LEASE_DROP_SHA256 = (
+    "07ce8d705521a5b448511c611c2055c418a0b0559afe3c774a16541e6f11c44c"
+)
+_PRODUCTION_DAEMON_FRAME_VALIDATION_ITEM_SHA256 = {
+    "validate_config": (
+        "39a6c98e410ac1a5ddf8af00fbacf8b1a49c167228bddaacf770f4cca616762c"
+    ),
+    "validate_config_offline": (
+        "7cb189cf3f5ac23ca68098a57c655e7e8808642de1c90d76a4270603b5426ed2"
+    ),
+    "validate_network_frame_runtime_limit": (
+        "551d207e8371c5966274fc759d379f75f281127f668c6555aba347c385066b92"
+    ),
+}
+_PRODUCTION_P2P_CAP_ITEM_SHA256 = {
+    "frame_plaintext_cap": (
+        "d09e8a86d8c9d6d4c3e8a9c9f202debab61e11f3256f2e1361d3895a0dd97b33"
+    ),
+    "frame_queue_charge": (
+        "995d225539dcc72b840fc6c807cf380926b4d552da2da05b022de0eb20f85b5d"
+    ),
+}
+_PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
+    "validate_distid": (
+        "205a20a45faa4455d25b8e9d2501f6ab66a2b069a83b8e358a9645d71c94181d"
+    ),
+}
+
+# Exact pure geometry and admission items connecting the abstract 4N+2 owner
+# model to the authoritative production queue.  Whole-item token seals are
+# intentional here: every numeric term contributes to a progress reservation,
+# and comments or test-only lookalikes cannot satisfy this contract.
+_PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
+    "fair_v2_ingress_required_capacity": (
+        "5d9e1dc21b96084a00fac1be26bc8206b904edbc804c89d65fe0b819bb58c30b"
+    ),
+    "fair_v2_ingress_lane_protected_slots": (
+        "72f36295d28e177033820236bfa01f807904999eb481a2f9faa37e26d2ec161c"
+    ),
+    "fair_v2_ingress_required_byte_capacity": (
+        "7d99e013709df23265aa02f9aee689809187543868637321174f6edc51fadbfe"
+    ),
+    "fair_v2_ingress_compact_len_prefix_bytes": (
+        "50cd13b1d620e26eb0502ae9650b7cb66e489073ab407d95a5217177de517d95"
+    ),
+    "fair_v2_ingress_framed_bytes": (
+        "d311f9815d146c9cc4539653a399152e0b3cf32f3d47060d9af23aa19c04e7c5"
+    ),
+    "fair_v2_ingress_required_manifest_bytes": (
+        "5904b0cb28ad048ab778e75e1f99bc19336b6712d817d33ac7a07e050f25c7e3"
+    ),
+    "fair_v2_ingress_required_quorum_certificate_bytes": (
+        "d0342e9789247b628c2b81178541db8156eee5aa53fe8a19485cea6b88258898"
+    ),
+    "fair_v2_ingress_required_proposal_bytes": (
+        "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
+    ),
+    "fair_v2_ingress_network_message_bytes_from_block_message": (
+        "c92a1c58b6296fd3afb040497b3f971ec509ffa2b5408f7c0cb48c5ec0a5b979"
+    ),
+    "fair_v2_ingress_network_message_bytes": (
+        "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
+    ),
+    "fair_v2_ingress_required_p2p_frame_bytes": (
+        "588dd190373946bb198b0836265a3ef65e847074098b6b507e4e03497bca829c"
+    ),
+    "fair_v2_ingress_required_lane_p2p_frame_bytes": (
+        "404f91aba77f994eb73fd1a0f4a4e6f369108a7893b0c3774c7691534bee4446"
+    ),
+    "fair_v2_ingress_v2_envelope_bytes": (
+        "6a5e066c134eb45a8b64fb5e3b62aab6527ef05f4f6c4459666d56929f13723e"
+    ),
+    "fair_v2_ingress_embedded_peer_id_bytes": (
+        "6a511e21a8e16c6b4db002e3276a5d98d9797249a2d1c3b7549931d6bf24f5bb"
+    ),
+    "fair_v2_ingress_required_recovery_request_bytes_for_key": (
+        "5f0753ed526343afa6f7db6c44b2c6fdeeaa9a036ca9fbd0aeb64d1b3da5437c"
+    ),
+    "fair_v2_ingress_required_recovery_request_bytes": (
+        "56734857457d1be558c8a3e79848cac1dc6745265be2647115ea8fcf818630d9"
+    ),
+    "fair_v2_ingress_required_commit_certificate_response_bytes_for_key": (
+        "f231a220131a213c5bdaae922c075e2f00bae7a39cbfba408ed86149ba42cf14"
+    ),
+    "fair_v2_ingress_required_commit_certificate_response_bytes": (
+        "a799e86fd78987da5fea276ffbda96d6078e628e3943c1edb223aa60c89fb81c"
+    ),
+    "fair_v2_ingress_required_transport_completion_bytes": (
+        "a8816bf106a1a62a8b8c411f5964aeeef1ec14f86d14f2313b5cae353e1b359c"
+    ),
+}
+_PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
+    "classify": (
+        "afbcf3f01384dfdcbfd05ab2cdef991c3d62c052052ca7ad074308f01614f083"
+    ),
+}
+_PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
+    "new_with_transport_frame_caps": (
+        "837b5490248d0a07d9680e40cfc23de2335f8b9fd2e6ed6272f9b3a38adc0825"
+    ),
+    "configure_roster_for_context": (
+        "f8b9331b60f910268d41edcb9570b8019c196a14da5da0d16e2b21d2ec0f9ddc"
+    ),
+    "configure_roster_with_byte_requirements": (
+        "7404b6d5310758761a1d7bd4d0a921a8d31794958dd04abe57673256850cc370"
+    ),
+    "open": (
+        "d289203f86e087dc73e66e4d10be2cf44109d93afb213d729ad0391039cc3fcf"
+    ),
+    "try_push_at": (
+        "f825adca409c199188ed17c9c1afe5c4e79f7a880a39013c791e2d7f49e4f15b"
+    ),
+    "try_recv_if_at": (
+        "5f0b2edb6ec13c1754a99a351b37af075decfcef1ba6423a3a7a449f9d39c7b6"
+    ),
 }
 
 
@@ -1150,14 +2185,31 @@ def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
     structural = mask_rust_comments_and_literals(source)
     declaration = re.compile(
         rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
+        rf"(?:(?:async|const)[ \t]+)*"
         rf"(?:(?:open|closed|broadcast|tracked|exec|spec|proof)[ \t]+)*"
         rf"fn[ \t]+{re.escape(name)}\b"
     )
     items: list[RustItem] = []
     for match in declaration.finditer(structural):
-        body_start = structural.find("{", match.end())
-        semicolon = structural.find(";", match.end())
-        if body_start < 0 or (0 <= semicolon < body_start):
+        paren_depth = 0
+        bracket_depth = 0
+        body_start = -1
+        for index in range(match.end(), len(structural)):
+            char = structural[index]
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char == "{" and paren_depth == 0 and bracket_depth == 0:
+                body_start = index
+                break
+            elif char == ";" and paren_depth == 0 and bracket_depth == 0:
+                break
+        if body_start < 0:
             continue
         depth = 0
         body_end = -1
@@ -1347,6 +2399,27 @@ def _require_rust_token_sequence(
         errors.append(
             f"{path}:{item.line}: {description} must occur exactly {count} "
             f"time(s) in the real {item.name} item; found {observed}"
+        )
+
+
+def _require_rust_source_token_sequence(
+    path: Path,
+    source: str,
+    expected_source: str,
+    description: str,
+    errors: list[str],
+    *,
+    count: int = 1,
+) -> None:
+    """Require one exact token sequence in a regular Rust source file."""
+
+    observed = _token_sequence_count(
+        rust_code_tokens(source), rust_code_tokens(expected_source)
+    )
+    if observed != count:
+        errors.append(
+            f"{path}: {description} must occur exactly {count} time(s) in "
+            f"executable Rust source; found {observed}"
         )
 
 
@@ -2168,6 +3241,17 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         return []
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
+    has_strong_type_architecture = (
+        _top_level_operator_body(source, "AsyncStrongTypeInvariant") is not None
+    )
+    has_transport_content_architecture = (
+        _top_level_operator_body(source, "AsyncTransportContentTypeInvariant")
+        is not None
+        or _top_level_theorem_body(
+            source, "ExecuteCommandPreservesTransportContentType"
+        )
+        is not None
+    )
     expected = {
         "AsyncStepRefinementObligation": "AsyncNext => [Next]_vars",
         "AsyncTypeInvariantObligation": (
@@ -2178,11 +3262,39 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "/\\ AsyncNext => NormalProposalPrepareCandidate(candidate)'"
         ),
     }
+    if has_strong_type_architecture:
+        recovery_preservation_premises = (
+            "/\\ StrongInductiveInvariant /\\ AsyncTypeInvariant "
+            "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
+            "/\\ AsyncRecoveryExecutionInvariant /\\ AsyncNext"
+        )
+        expected.update({
+            "AsyncNextPreservesRecoveryInvariants": (
+                f"{recovery_preservation_premises} "
+                "=> /\\ AsyncRecoveryTypeInvariant' "
+                "/\\ AsyncRestartAuthorityInvariant'"
+            ),
+            "AsyncNextPreservesRecoveryExecutionInvariant": (
+                f"{recovery_preservation_premises} "
+                "=> AsyncRecoveryExecutionInvariant'"
+            ),
+        })
+    if has_transport_content_architecture:
+        expected["ExecuteDecisionFetchPreservesTransportContentType"] = (
+            "\\A command: (/\\ StrongInductiveInvariant "
+            "/\\ AsyncTypeInvariant /\\ AsyncCandidateTyped(command) "
+            "/\\ ExecuteDecisionFetch(command)) "
+            "=> AsyncTransportContentTypeInvariant'"
+        )
     if (
         (formal_dir / "proof_coverage.json").is_file()
         and (formal_dir / "SumeragiV2LivenessProofs.tla").is_file()
     ):
         expected.update({
+            "AsyncSpecAlwaysProgressOwnershipInvariant": (
+                "\\A initialContext: AsyncSpecAt(initialContext) "
+                "=> []AsyncProgressOwnershipInvariant"
+            ),
             "AsyncIngressCapacityGeometry": (
                 "ModelConfiguration => "
                 "/\\ Cardinality(ValidatorIds) = N "
@@ -2229,6 +3341,62 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
         })
     errors: list[str] = []
+    if has_strong_type_architecture:
+        recovery_execution = _top_level_operator_body(
+            source,
+            "AsyncRecoveryExecutionInvariant",
+            preserve_string_contents=True,
+        )
+        expected_recovery_execution = (
+            'asyncRecoveryPhase = "Replaying" => '
+            "/\\ asyncOutstandingTags[asyncRecoveryNode] = {} "
+            "/\\ SequenceHasUniqueValues(asyncRecoveryReplayQueue) "
+            "/\\ SequenceSet(asyncRecoveryReplayQueue) \\cap "
+            "ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}"
+        )
+        if recovery_execution is None:
+            errors.append(f"{path}: missing AsyncRecoveryExecutionInvariant")
+        else:
+            body, line = recovery_execution
+            normalized = " ".join(body.split())
+            if normalized != expected_recovery_execution:
+                errors.append(
+                    f"{path}:{line}: AsyncRecoveryExecutionInvariant must equal "
+                    f"only {expected_recovery_execution!r}; found {normalized!r}"
+                )
+        bad_recovery_prime_scope = re.compile(
+            r"ResponsiveReplayScheduledCandidates\s*\(\s*"
+            r"asyncRecoveryNode\s*'\s*\)"
+        )
+        for match in bad_recovery_prime_scope.finditer(stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{path}:{line}: prime ResponsiveReplayScheduledCandidates as a "
+                "whole state expression; priming asyncRecoveryNode inside the "
+                "call leaves the scheduled-candidate inventory unprimed"
+            )
+        strong_type = _top_level_operator_body(
+            source,
+            "AsyncStrongTypeInvariant",
+            preserve_string_contents=True,
+        )
+        expected_strong_type = (
+            "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
+            "/\\ ReceivedTimeoutVotePoolInvariant "
+            "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
+            "/\\ AsyncRecoveryExecutionInvariant"
+        )
+        if strong_type is None:
+            errors.append(f"{path}: missing AsyncStrongTypeInvariant")
+        else:
+            body, line = strong_type
+            normalized = " ".join(body.split())
+            if normalized != expected_strong_type:
+                errors.append(
+                    f"{path}:{line}: AsyncStrongTypeInvariant must include the "
+                    "exact recovery execution premise; expected "
+                    f"{expected_strong_type!r}; found {normalized!r}"
+                )
     for symbol, exact_statement in expected.items():
         extracted = _top_level_theorem_body(source, symbol)
         if extracted is None:
@@ -2244,6 +3412,108 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{line}: {symbol} must state only "
                 f"{exact_statement!r}; found {normalized!r}"
             )
+    if has_transport_content_architecture:
+        execute_command_preservation = _top_level_theorem_body(
+            source, "ExecuteCommandPreservesTransportContentType"
+        )
+        if execute_command_preservation is None:
+            errors.append(
+                f"{path}: missing release theorem "
+                "ExecuteCommandPreservesTransportContentType"
+            )
+        else:
+            body, line = execute_command_preservation
+            decision_fetch_case = re.search(
+                r"(?ms)^[ \t]*<2>2\.\s*(.*?)(?=^[ \t]*<2>3\.)",
+                body,
+            )
+            expected_decision_fetch_case = (
+                "CASE ExecuteDecisionFetch(command) "
+                "BY <1>1, <2>2, "
+                "ExecuteDecisionFetchPreservesTransportContentType"
+            )
+            normalized_case = (
+                None
+                if decision_fetch_case is None
+                else " ".join(decision_fetch_case.group(1).split())
+            )
+            if normalized_case != expected_decision_fetch_case:
+                errors.append(
+                    f"{path}:{line}: ExecuteCommandPreservesTransportContentType "
+                    "must retain the exact dedicated ExecuteDecisionFetch case; "
+                    f"found {normalized_case!r}"
+                )
+    if has_strong_type_architecture:
+        strong_type_preservation = _top_level_theorem_body(
+            source, "AsyncNextPreservesStrongTypeInvariant"
+        )
+        if strong_type_preservation is None:
+            errors.append(
+                f"{path}: missing release theorem "
+                "AsyncNextPreservesStrongTypeInvariant"
+            )
+        else:
+            body, line = strong_type_preservation
+            expected_core_type_projections = (
+                "<2>1. StrongInductiveInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2. AsyncTypeInvariant "
+                "BY <1>1, AsyncStrongTypeProjectsAsyncType"
+            )
+            expected_recovery_projections = (
+                "<2>2a. AsyncRecoveryTypeInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2b. AsyncRestartAuthorityInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2c. AsyncRecoveryExecutionInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant"
+            )
+            expected_recovery_step = (
+                "<2>6. /\\ AsyncRecoveryTypeInvariant' "
+                "/\\ AsyncRestartAuthorityInvariant' "
+                "BY <1>1, <2>1, <2>2, <2>2a, <2>2b, <2>2c, "
+                "AsyncNextPreservesRecoveryInvariants"
+            )
+            expected_recovery_execution_step = (
+                "<2>7. AsyncRecoveryExecutionInvariant' "
+                "BY <1>1, <2>1, <2>2, <2>2a, <2>2b, <2>2c, "
+                "AsyncNextPreservesRecoveryExecutionInvariant"
+            )
+            expected_recovery_qed = (
+                "<2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7 "
+                "DEF AsyncStrongTypeInvariant"
+            )
+            normalized_body = " ".join(body.split())
+            if normalized_body.count(expected_core_type_projections) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "retain the exact named <2>1 strong-inductive and <2>2 "
+                    "AsyncTypeInvariant projections"
+                )
+            if normalized_body.count(expected_recovery_projections) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "retain the exact named <2>2a recovery-type, <2>2b "
+                    "restart-authority, and <2>2c recovery-execution projections"
+                )
+            if normalized_body.count(expected_recovery_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass every named recovery premise projection to the exact "
+                    "recovery-preservation step"
+                )
+            if normalized_body.count(expected_recovery_execution_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass every named recovery premise projection to the exact "
+                    "AsyncRecoveryExecutionInvariant-prime preservation step"
+                )
+            if normalized_body.count(expected_recovery_qed) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "make the <2>7 recovery-execution prime step an exact QED "
+                    "dependency"
+                )
     universally_quantified = re.compile(
         r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         r"AsyncTypeInvariantObligation\s*==\s*\\A\s+initialContext\s*:"
@@ -2571,23 +3841,63 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "FairNonCompletionCausalCapacityOpens",
                 "FairStage4ActionableProgress",
             ),
+            "ProtectedStage4RankProgressFromFairScheduler": (
+                "FairProtectedStage4RankDescent",
+                "ProtectedStage4RankProgressProperty",
+            ),
             "FairProtectedStage5RankDescent": (
                 "PostGstServiceIoWorker",
                 "ProtectedStage5WorkerStrictlyProgresses",
                 "ProtectedStage5UnlessProgress",
                 "AsyncFairnessAt",
             ),
+            "ProtectedStage5RankProgressFromFairFifo": (
+                "FairProtectedStage5RankDescent",
+                "ProtectedStage5RankProgressProperty",
+            ),
+            "AsyncSpecAlwaysProgressOwnershipInvariant": (
+                "AsyncInitEstablishesStrongTypeInvariant",
+                "AsyncInitEstablishesProgressOwnership",
+                "AsyncBracketNextPreservesStrongTypeInvariant",
+                "AsyncBracketNextPreservesProgressOwnership",
+                "AsyncSpecAt",
+            ),
+            "ProtectedServeStage5CarrierFacts": (
+                "ServeOccurrenceIndexCharacterization",
+                "ServeJobIndexMatchesOccurrenceIndex",
+                "AsyncStrongTypeInvariant",
+            ),
+            "ProtectedServeStage5EnablesFairWorker": (
+                "ProtectedServeStage5CarrierFacts",
+                "AsyncStrongTypeProjectsAsyncType",
+                "QueuedIoEnablesPostGstService",
+                "QueuedIoServiceIsNonstuttering",
+                "ENABLEDaxioms",
+            ),
+            "ProtectedServeStage5WorkerStrictlyProgresses": (
+                "ProtectedServeStage5CarrierFacts",
+                "TailRemovesUniqueServeOccurrence",
+                "ServeOccurrenceIndexAfterNonTargetHead",
+                "ServeJobIndexMatchesOccurrenceIndex",
+                "ServiceRankLess",
+            ),
             "ProtectedServeStage5UnlessProgress": (
+                "AsyncBracketNextPreservesStrongTypeInvariant",
                 "ServeOccurrenceIndexAfterNonTargetHead",
                 "TailRemovesUniqueServeOccurrence",
+                "ServeJobIndexMatchesOccurrenceIndex",
                 "DrainFairIngressSelected",
                 "DrainHistoricalIngressSelected",
                 "ServiceIoWorker",
                 "ServiceHistoricalRecoveryIoWorker",
                 "EnqueueIoLocalControl",
                 "EnqueueHistoricalRecoveryIoLocalControl",
+                "AsyncIoServeNonceOwnership",
             ),
             "FairProtectedServeStage5RankDescent": (
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+                "ProtectedServeStage5EnablesFairWorker",
                 "PostGstServiceIoWorker",
                 "ProtectedServeStage5WorkerStrictlyProgresses",
                 "ProtectedServeStage5UnlessProgress",
@@ -2782,6 +4092,24 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"~> (~ResponsiveProtectedCandidateOwned(candidate) \/ "
                 r"ServiceRankLess(CandidateServiceRank(candidate), "
                 r"<<stage, position>>))"
+              ),
+              "ProtectedStage4RankProgressProperty": (
+                r"specification => \A candidate \in AsyncCandidateSet, "
+                r"position \in Nat: (gst /\ "
+                r"ResponsiveProtectedCandidateOwned(candidate) /\ "
+                r"CandidateServiceRank(candidate) = <<4, position>>) "
+                r"~> (~ResponsiveProtectedCandidateOwned(candidate) \/ "
+                r"ServiceRankLess(CandidateServiceRank(candidate), "
+                r"<<4, position>>))"
+              ),
+              "ProtectedStage5RankProgressProperty": (
+                r"specification => \A candidate \in AsyncCandidateSet, "
+                r"position \in Nat: (gst /\ "
+                r"ResponsiveProtectedCandidateOwned(candidate) /\ "
+                r"CandidateServiceRank(candidate) = <<5, position>>) "
+                r"~> (~ResponsiveProtectedCandidateOwned(candidate) \/ "
+                r"ServiceRankLess(CandidateServiceRank(candidate), "
+                r"<<5, position>>))"
               ),
               "ResponsiveProtectedServeJobOwned": (
                 r"/\ node \in AsyncCurrentResponsiveVoters "
@@ -3392,6 +4720,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
 
     if not (formal_dir / "proof_coverage.json").is_file():
         return []
+    repo_root = formal_dir.parents[2]
     path = formal_dir / "SumeragiV2LivenessProofs.tla"
     if not path.is_file():
         return []
@@ -3485,6 +4814,12 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ NodeIdle(node) "
                 "/\\ NoDecisionForNode(node) "
                 "/\\ pendingInstallTC' = pendingInstallTC \\cup {request}"
+            ),
+            "ResumeTimeout": (
+                "/\\ node \\in up \\cap Honest "
+                "/\\ NodeIdle(node) "
+                "/\\ NoDecisionForNode(node) "
+                "/\\ vote \\in timeoutIntents"
             ),
         }
         for symbol, exact_guard_sequence in guarded_actions.items():
@@ -3597,11 +4932,27 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         return errors
     async_source = async_path.read_text(encoding="utf-8")
 
-    exact_decision_recovery_operators = {
+    hash_path = formal_dir / "SumeragiV2CertifiedRequestHashAuthorityProofs.tla"
+    if not hash_path.is_file():
+        errors.append(f"{hash_path}: missing certified-request hash-authority proof")
+        hash_source = ""
+    else:
+        hash_source = hash_path.read_text(encoding="utf-8")
+
+    recovery_path = formal_dir / "SumeragiV2DurableDecisionRecoveryProofs.tla"
+    if not recovery_path.is_file():
+        errors.append(f"{recovery_path}: missing durable Decision recovery proof")
+        recovery_source = ""
+    else:
+        recovery_source = recovery_path.read_text(encoding="utf-8")
+
+    exact_async_progress_operators = {
         "ProductionProgressWitnessTraceRefinement": (
             "/\\ ProductionDurableIntentTraceRefinesProgressWitness = TRUE "
             "/\\ ProductionDecisionTraceRefinesRecoveryWitness = TRUE "
             "/\\ ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
+            "/\\ ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership = TRUE "
+            "/\\ ProductionReliableFlushTraceRefinesOutboundOwnership = TRUE "
             "/\\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE"
         ),
         "PendingTimeoutExcludesDecision": (
@@ -3624,6 +4975,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ PendingInstallExcludesDecision "
             "/\\ TimeoutSigningExcludesDecision "
             "/\\ PendingDecisionExcludesTimeoutWork"
+        ),
+        "DecisionTimeoutFrontierVars": (
+            "<<context, decisions, pendingTimeout, pendingInstallTC, "
+            "pendingDecision, signTimeouts>>"
         ),
         "PostDecisionTimeoutControlExcluded": (
             "\\A node: ~NoDecisionForNode(node) "
@@ -3670,11 +5025,6 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ decision.qc.context = context) "
             "=> DecisionRecoveryStage(decision.node, decision.qc)"
         ),
-        "DecisionsUniqueByNodeContext": (
-            "\\A left, right \\in decisions: "
-            "/\\ left.node = right.node "
-            "/\\ left.qc.context = right.qc.context => left = right"
-        ),
         "DecisionRecoveryAuthority": (
             "/\\ asyncRecoveryPhase \\in "
             '{"RestartRequired", "ReplayRequired", "Replaying"} '
@@ -3703,36 +5053,14 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ decision.qc.context = context) "
             "=> AsyncDecisionRecoveryStage(decision.node, decision.qc)"
         ),
-        "DecisionRecoveryLifecycleTransition": (
-            "/\\ \\A node, qc: "
-            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node) "
-            "/\\ PreGstResponsiveCrash(node) "
-            "=> DecisionRecoveryAuthority(node, qc)' "
-            "/\\ \\A node, qc: "
-            "/\\ DecisionRecoveryAuthority(node, qc) "
-            "/\\ PreGstResponsiveRestart "
-            "=> /\\ generation'[node] = generation[node] + 1 "
-            "/\\ DecisionRecoveryAuthority(node, qc)' "
-            "/\\ \\A node, qc: "
-            "/\\ DecisionsUniqueByNodeContext "
-            "/\\ DecisionRecoveryAuthority(node, qc) "
-            '/\\ asyncRecoveryPhase = "ReplayRequired" '
-            "/\\ PreGstResponsiveReplay "
-            "=> DecisionRecoveryStage(node, qc)'"
-        ),
-        "DecisionRecoveryAcrossRestartProperty": (
-            "/\\ specification => []AsyncDecisionSourceRetentionInvariant "
-            "/\\ specification "
-            "=> [][DecisionRecoveryLifecycleTransition]_AsyncAllVars"
-        ),
     }
-    for symbol, exact_body in exact_decision_recovery_operators.items():
+    for symbol, exact_body in exact_async_progress_operators.items():
         extracted = _top_level_operator_body(
             async_source, symbol, preserve_string_contents=True
         )
         if extracted is None:
             errors.append(
-                f"{async_path}: missing exact Decision recovery owner {symbol}"
+                f"{async_path}: missing exact asynchronous progress owner {symbol}"
             )
             continue
         body, line = extracted
@@ -3741,6 +5069,605 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{async_path}:{line}: {symbol} must equal only "
                 f"{exact_body!r}; found {normalized!r}"
+            )
+
+    exact_hash_authority_operators = {
+        "DecisionCommitAuthority": (
+            "/\\ qc \\in QcRecordSet "
+            "/\\ qc.context = context "
+            '/\\ qc.phase = "Commit" '
+            "/\\ [node |-> node, qc |-> qc] \\in decisions"
+        ),
+        "DecisionRawRequestPreimage": (
+            "[round |-> [height |-> qc.context.height, view |-> qc.view], "
+            "subject |-> qc.subject, certificate |-> qc, requester |-> node]"
+        ),
+        "DecisionRawRequestSignature": (
+            "[signer |-> node, "
+            "preimage |-> DecisionRawRequestPreimage(node, qc)]"
+        ),
+        "DecisionRawSignedRequest": (
+            "[preimage |-> DecisionRawRequestPreimage(node, qc), "
+            "signature |-> DecisionRawRequestSignature(node, qc)]"
+        ),
+        "DecisionRawRequestHash": (
+            "[exactSignedRequest |-> DecisionRawSignedRequest(node, qc)]"
+        ),
+        "DecisionRequestOccurrences": "CertifiedRequestOutbox(node, qc)",
+        "DecisionRegisteredOccurrences": (
+            "DecisionRequestOccurrences(node, qc) \\cap asyncActiveRequests"
+        ),
+        "DecisionRawHashRegistered": (
+            "/\\ DecisionCommitAuthority(node, qc) "
+            "/\\ DecisionRegisteredOccurrences(node, qc) # {}"
+        ),
+        "CertifiedRequestLogicalIdentity": (
+            "[round |-> [height |-> request.envelope.height, "
+            "view |-> request.envelope.view], "
+            "subject |-> request.envelope.subject, "
+            "requester |-> request.source]"
+        ),
+        "DecisionLogicalRequestIdentity": (
+            "[round |-> [height |-> qc.context.height, view |-> qc.view], "
+            "subject |-> qc.subject, requester |-> node]"
+        ),
+        "DecisionFetchCandidateAt": (
+            'AsyncCandidateAtConsumer( "Completion", "FetchBody", node, '
+            "context.height, qc.view, qc.subject, NoAsyncItem, consumerView, "
+            "consumerGeneration, qc, qc.subject, qc.subject, qc.subject)"
+        ),
+        "DecisionFetchCandidateIdentityAt": (
+            "ExactAsyncCandidateIdentity( DecisionFetchCandidateAt( "
+            "node, qc, consumerView, consumerGeneration))"
+        ),
+    }
+    exact_durable_recovery_operators = {
+        "DecisionsUniqueByNodeContext": (
+            "\\A left, right \\in decisions: "
+            "/\\ left.node = right.node "
+            "/\\ left.qc.context = right.qc.context => left = right"
+        ),
+        "PendingDecisionExcludesDurableDecision": (
+            "\\A request \\in pendingDecision: "
+            "~\\E decision \\in decisions: "
+            "/\\ decision.node = request.node "
+            "/\\ decision.qc.context = request.qc.context"
+        ),
+        "DecisionFrontierUniquenessInvariant": (
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ PendingDecisionExcludesDurableDecision"
+        ),
+        "DecisionCertifiedRequestIdentity": (
+            "[source |-> request.source, "
+            "height |-> request.envelope.height, "
+            "view |-> request.envelope.view, "
+            "subject |-> request.envelope.subject]"
+        ),
+        "DecisionCertifiedRequestIdentityFor": (
+            "[source |-> node, height |-> qc.context.height, "
+            "view |-> qc.view, subject |-> qc.subject]"
+        ),
+        "DecisionCertifiedRequestRegistered": (
+            "DecisionCertifiedRequestIdentityFor(node, qc) \\in "
+            "{DecisionCertifiedRequestIdentity(request): request \\in "
+            '{active \\in asyncActiveRequests: active.kind = "CertifiedRequest"}}'
+        ),
+        "DurableDecisionRecoveryAuthority": (
+            "/\\ asyncRecoveryPhase \\in "
+            '{"RestartRequired", "ReplayRequired"} '
+            "/\\ asyncRecoveryNode = node "
+            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node)"
+        ),
+        "DurableDecisionRecoveryExecutorCurrent": (
+            "/\\ asyncRecoveryNode = node "
+            "/\\ generation[node] = asyncRecoveryGeneration"
+        ),
+        "ExactCurrentDecisionFetchUpdate": (
+            "asyncCausalQueues' = [asyncCausalQueues EXCEPT "
+            "![node] = <<DecisionFetchCandidateAt( "
+            "node, qc, nodeView[node], generation[node])>>]"
+        ),
+        "DurableDecisionRecoveryLifecycleTransition": (
+            "/\\ \\A node, qc: "
+            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node) "
+            "/\\ PreGstResponsiveCrash(node) "
+            "=> /\\ DurableDecisionRecoveryAuthority(node, qc)' "
+            "/\\ DurableDecisionRecoveryExecutorCurrent(node)' "
+            "/\\ (DecisionRawHashRegistered(node, qc) "
+            "<=> DecisionRawHashRegistered(node, qc)') "
+            "/\\ (DecisionCertifiedRequestRegistered(node, qc) "
+            "<=> DecisionCertifiedRequestRegistered(node, qc)') "
+            "/\\ \\A node, qc: "
+            "/\\ DurableDecisionRecoveryAuthority(node, qc) "
+            "/\\ PreGstResponsiveRestart "
+            "=> /\\ generation'[node] = generation[node] + 1 "
+            "/\\ DurableDecisionRecoveryAuthority(node, qc)' "
+            "/\\ DurableDecisionRecoveryExecutorCurrent(node)' "
+            "/\\ (DecisionRawHashRegistered(node, qc) "
+            "<=> DecisionRawHashRegistered(node, qc)') "
+            "/\\ (DecisionCertifiedRequestRegistered(node, qc) "
+            "<=> DecisionCertifiedRequestRegistered(node, qc)') "
+            "/\\ \\A node, qc: "
+            "/\\ StrongInductiveInvariant "
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ DurableDecisionRecoveryAuthority(node, qc) "
+            '/\\ asyncRecoveryPhase = "ReplayRequired" '
+            "/\\ PreGstResponsiveReplay "
+            "=> /\\ ~DurableDecisionRecoveryAuthority(node, qc)' "
+            "/\\ ~DecisionRawHashRegistered(node, qc)' "
+            "/\\ ~DecisionCertifiedRequestRegistered(node, qc)' "
+            "/\\ ExactCurrentDecisionFetchUpdate(node, qc)"
+        ),
+        "DecisionRecoveryAcrossRestartProperty": (
+            "/\\ specification => []DecisionFrontierUniquenessInvariant "
+            "/\\ specification => "
+            "[][DurableDecisionRecoveryLifecycleTransition]_AsyncAllVars"
+        ),
+    }
+    for path, source, description, operators in (
+        (
+            hash_path,
+            hash_source,
+            "certified-request hash authority",
+            exact_hash_authority_operators,
+        ),
+        (
+            recovery_path,
+            recovery_source,
+            "durable Decision recovery",
+            exact_durable_recovery_operators,
+        ),
+    ):
+        for symbol, exact_body in operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{path}: missing exact {description} operator {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{path}:{line}: {symbol} must equal only "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
+
+    post_decision_proof_contracts = {
+        "CoreNextPreservesDecisionTimeoutFrontier": (
+            "DecisionTimeoutFrontierStutteringStepIsStutter",
+            "DecisionTimeoutFrontierStutterPreservesInvariant",
+            "FormCommitQcPreservesDecisionTimeoutFrontier",
+            "BeginDecisionPreservesDecisionTimeoutFrontier",
+            "PersistDecisionPreservesDecisionTimeoutFrontier",
+            "BeginTimeoutPreservesDecisionTimeoutFrontier",
+            "PersistTimeoutPreservesDecisionTimeoutFrontier",
+            "CompleteTimeoutSignaturePreservesDecisionTimeoutFrontier",
+            "FormTcPreservesDecisionTimeoutFrontier",
+            "BeginInstallTcPreservesDecisionTimeoutFrontier",
+            "PersistInstallTcPreservesDecisionTimeoutFrontier",
+            "CrashPreservesDecisionTimeoutFrontier",
+            "ResumeTimeoutPreservesDecisionTimeoutFrontier",
+        ),
+        "DecisionTimeoutFrontierInvariantFromAsyncSpec": (
+            "AsyncInitEstablishesDecisionTimeoutFrontier",
+            "AsyncBracketPreservesDecisionTimeoutFrontier",
+            "AsyncSpecAt",
+        ),
+        "PostDecisionTimeoutExclusionObligation": (
+            "DecisionTimeoutFrontierInvariantFromAsyncSpec",
+            "PostDecisionTimeoutControlGuardsAreStructural",
+            "PostDecisionTimeoutDeliveryIsConsumeOnly",
+            "PostDecisionTimeoutCausalSuccessorsAreEmpty",
+            "PostDecisionTimeoutExclusionProperty",
+        ),
+    }
+    for symbol, required_tokens in post_decision_proof_contracts.items():
+        theorem = _top_level_theorem_body(
+            async_source, symbol, preserve_string_contents=True
+        )
+        if theorem is None:
+            errors.append(
+                f"{async_path}: missing complete post-Decision induction theorem "
+                f"{symbol}"
+            )
+            continue
+        body, line = theorem
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        proof = parts[1] if len(parts) == 2 else ""
+        missing = [
+            token
+            for token in required_tokens
+            if re.search(rf"\b{re.escape(token)}\b", proof) is None
+        ]
+        if missing or "AsyncTypeInvariantObligation" in proof:
+            errors.append(
+                f"{async_path}:{line}: {symbol} must retain the complete "
+                "purpose-built post-Decision induction proof chain without "
+                "depending on AsyncTypeInvariantObligation; "
+                f"missing={missing}"
+            )
+
+    post_decision_obligation = _top_level_theorem_body(
+        async_source,
+        "PostDecisionTimeoutExclusionObligation",
+        preserve_string_contents=True,
+    )
+    if post_decision_obligation is not None:
+        body, line = post_decision_obligation
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        expected = (
+            "\\A initialContext: "
+            "PostDecisionTimeoutExclusionProperty(AsyncSpecAt(initialContext))"
+        )
+        if normalized != expected:
+            errors.append(
+                f"{async_path}:{line}: PostDecisionTimeoutExclusionObligation "
+                f"must state only {expected!r}; found {normalized!r}"
+            )
+
+    def require_proof_contract(
+        path: Path,
+        source: str,
+        symbol: str,
+        *,
+        required_tokens: tuple[str, ...],
+        required_fragments: tuple[str, ...] = (),
+        exact_statement: str | None = None,
+        forbidden_tokens: tuple[str, ...] = (),
+    ) -> None:
+        theorem = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if theorem is None:
+            errors.append(f"{path}: missing reviewed proof theorem {symbol}")
+            return
+        body, line = theorem
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = " ".join(parts[0].split())
+        proof = parts[1] if len(parts) == 2 else ""
+        normalized_proof = " ".join(proof.split())
+        missing = [
+            token
+            for token in required_tokens
+            if re.search(rf"\b{re.escape(token)}\b", proof) is None
+        ]
+        missing_fragments = [
+            fragment
+            for fragment in required_fragments
+            if " ".join(fragment.split()) not in normalized_proof
+        ]
+        forbidden = [
+            token
+            for token in forbidden_tokens
+            if re.search(rf"\b{re.escape(token)}\b", proof) is not None
+        ]
+        if exact_statement is not None and statement != exact_statement:
+            errors.append(
+                f"{path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {statement!r}"
+            )
+        if len(parts) != 2 or missing or missing_fragments or forbidden:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain its complete reviewed "
+                "proof chain; "
+                f"missing={missing}, missing_fragments={missing_fragments}, "
+                f"forbidden={forbidden}, "
+                f"has_proof={len(parts) == 2}"
+            )
+
+    hash_proof_contracts = {
+        "DecisionOutboxHasOneLogicalRegistration": (
+            "DecisionCommitAuthority",
+            "DecisionRequestOccurrences",
+            "CertifiedRequestLogicalIdentity",
+            "DecisionLogicalRequestIdentity",
+        ),
+        "DecisionFetchCandidateIdentityHasExactProductionShape": (
+            "DecisionFetchCandidateAt",
+            "DecisionFetchCandidateIdentityAt",
+            "ExactAsyncCandidateIdentity",
+            "AsyncCandidateAtConsumer",
+            "AsyncCandidateWithIdentity",
+        ),
+        "AuthenticatedRestartRetagsSourceConsumerGeneration": (
+            "RestartIncrementsSelectedGeneration",
+            "CurrentDecisionRequestConsumerGeneration",
+        ),
+        "ResponsiveReplayQueuesFreshGenerationDecisionFetch": (
+            "RestartDecisionReplayHasCurrentGeneration",
+            "PreGstResponsiveReplay",
+            "ResetNodeSchedulerForRestart",
+            "DecisionFetchCandidateAt",
+            "DecisionFetchCandidateIdentityAt",
+        ),
+        "DecisionCertifiedPublishAddsRegistrationOccurrences": (
+            "CertifiedPublishContainsEveryPublishedOccurrence",
+            "DecisionOccurrencesStableWhenContextIsFramed",
+            "DecisionCertifiedPublish",
+            "DecisionRegisteredOccurrences",
+        ),
+        "DecisionCertifiedPublishRegistersExactRawHash": (
+            "DecisionCertifiedPublishRetainsCommitAuthority",
+            "DecisionCertifiedPublishAddsRegistrationOccurrences",
+            "DecisionRawRequestHashIsStateIndependent",
+            "DecisionRawHashRegistered",
+        ),
+    }
+    for symbol, required_tokens in hash_proof_contracts.items():
+        require_proof_contract(
+            hash_path,
+            hash_source,
+            symbol,
+            required_tokens=required_tokens,
+        )
+
+    durable_exact_statements = {
+        "DurableDecisionAuthorityIsCommitOnly": (
+            "\\A node, qc: DurableDecisionRecoveryAuthority(node, qc) "
+            '=> /\\ qc.phase = "Commit" '
+            "/\\ [node |-> node, qc |-> qc] \\in decisions"
+        ),
+        "PrepareCertificateCannotAuthorizeDurableDecisionRecovery": (
+            '\\A node, qc: qc.phase = "Prepare" '
+            "=> ~DurableDecisionRecoveryAuthority(node, qc)"
+        ),
+        "DecisionRegistrationIdentityHasExactGenerationFreeShape": (
+            "\\A node, qc: DecisionCertifiedRequestIdentityFor(node, qc) = "
+            "[source |-> node, height |-> qc.context.height, "
+            "view |-> qc.view, subject |-> qc.subject]"
+        ),
+        "CurrentDecisionFetchCandidateHasExactCurrentFields": (
+            "\\A node, qc: LET candidate == DecisionFetchCandidateAt( "
+            "node, qc, nodeView[node], generation[node]) IN "
+            '/\\ candidate.kind = "FetchBody" '
+            "/\\ candidate.evidence = qc "
+            "/\\ candidate.consumerGeneration = generation[node] "
+            "/\\ CandidateConsumerCurrent(candidate) "
+            "/\\ ExactAsyncCandidateIdentity(candidate) = "
+            "DecisionFetchCandidateIdentityAt( "
+            "node, qc, nodeView[node], generation[node])"
+        ),
+        "ReachableUniqueDecisionRestartReplayIsExactCurrentFetch": (
+            "\\A initialContext: AsyncSpecAt(initialContext) => []\\A node, qc: "
+            "[node |-> node, qc |-> qc] \\in RestartDecisions(node) => "
+            "LET candidate == Head(RestartDecisionReplay(node)) IN "
+            '/\\ candidate.kind = "FetchBody" '
+            "/\\ candidate.evidence = qc "
+            "/\\ candidate.consumerGeneration = generation[node] "
+            "/\\ CandidateConsumerCurrent(candidate)"
+        ),
+        "ResponsiveCrashPreservesExactDecisionRegistrations": (
+            "\\A node, qc: /\\ StrongInductiveInvariant "
+            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node) "
+            "/\\ PreGstResponsiveCrash(node) "
+            "=> /\\ (DecisionRawHashRegistered(node, qc) "
+            "<=> DecisionRawHashRegistered(node, qc)') "
+            "/\\ (DecisionCertifiedRequestRegistered(node, qc) "
+            "<=> DecisionCertifiedRequestRegistered(node, qc)')"
+        ),
+        "ResponsiveRestartPreservesExactDecisionRegistrations": (
+            "\\A node, qc: /\\ StrongInductiveInvariant "
+            "/\\ DurableDecisionRecoveryAuthority(node, qc) "
+            "/\\ PreGstResponsiveRestart "
+            "=> /\\ (DecisionRawHashRegistered(node, qc) "
+            "<=> DecisionRawHashRegistered(node, qc)') "
+            "/\\ (DecisionCertifiedRequestRegistered(node, qc) "
+            "<=> DecisionCertifiedRequestRegistered(node, qc)')"
+        ),
+        "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate": (
+            "\\A node, qc: /\\ StrongInductiveInvariant "
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ DurableDecisionRecoveryAuthority(node, qc) "
+            '/\\ asyncRecoveryPhase = "ReplayRequired" '
+            "/\\ PreGstResponsiveReplay "
+            "=> /\\ ~DurableDecisionRecoveryAuthority(node, qc)' "
+            "/\\ ~DecisionRawHashRegistered(node, qc)' "
+            "/\\ ~DecisionCertifiedRequestRegistered(node, qc)' "
+            "/\\ ExactCurrentDecisionFetchUpdate(node, qc)"
+        ),
+        "ExactDurableDecisionRecoveryLifecycleTransition": (
+            "StrongInductiveInvariant => "
+            "DurableDecisionRecoveryLifecycleTransition"
+        ),
+        "DecisionRecoveryAcrossRestartPropertyFromAsyncSpec": (
+            "\\A initialContext: "
+            "DecisionRecoveryAcrossRestartProperty(AsyncSpecAt(initialContext))"
+        ),
+    }
+    durable_proof_contracts = {
+        "DurableDecisionAuthorityIsCommitOnly": (
+            "DurableDecisionRecoveryAuthority",
+            "RestartDecisions",
+        ),
+        "PrepareCertificateCannotAuthorizeDurableDecisionRecovery": (
+            "DurableDecisionAuthorityIsCommitOnly",
+        ),
+        "DecisionRegistrationIdentityHasExactGenerationFreeShape": (
+            "DecisionCertifiedRequestIdentityFor",
+        ),
+        "DecisionOutboxOccurrencesShareOneRegistrationIdentity": (
+            "DecisionOutboxHasOneLogicalRegistration",
+            "DecisionCertifiedRequestIdentity",
+            "DecisionCertifiedRequestIdentityFor",
+            "CertifiedRequestLogicalIdentity",
+            "DecisionLogicalRequestIdentity",
+        ),
+        "PersistDecisionPreservesDecisionFrontierUniqueness": (
+            "StrongInvariantMakesPendingDecisionsNodeUnique",
+            "PersistPendingDecisionSetUpdatePreservesFrontierUniqueness",
+        ),
+        "CoreNextPreservesDecisionFrontierUniqueness": (
+            "DurableDecisionFrontierStutteringStepIsStutter",
+            "DecisionFrontierStutterPreservesInvariant",
+            "FormCommitQcPreservesDecisionFrontierUniqueness",
+            "BeginDecisionPreservesDecisionFrontierUniqueness",
+            "PersistDecisionPreservesDecisionFrontierUniqueness",
+            "CrashPreservesDecisionFrontierUniqueness",
+        ),
+        "AsyncBracketPreservesStrongDecisionFrontier": (
+            "AsyncBracketProjectsCoreBracket",
+            "CoreStrongInductiveActionPreservation",
+            "CoreBracketPreservesDecisionFrontierUniqueness",
+        ),
+        "StrongInductiveInvariantFromAsyncSpec": (
+            "InitAtEstablishesStrongInductiveInvariant",
+            "AsyncBracketProjectsCoreBracket",
+            "CoreStrongInductiveActionPreservation",
+            "AsyncSpecAt",
+        ),
+        "DecisionFrontierUniquenessInvariantFromAsyncSpec": (
+            "InitAtEstablishesStrongInductiveInvariant",
+            "AsyncInitEstablishesDecisionFrontierUniqueness",
+            "AsyncBracketPreservesStrongDecisionFrontier",
+            "AsyncSpecAt",
+        ),
+        "CurrentDecisionFetchCandidateHasExactCurrentFields": (
+            "DecisionFetchCandidateAt",
+            "DecisionFetchCandidateIdentityAt",
+            "CandidateConsumerCurrent",
+            "AsyncCandidateAtConsumer",
+            "AsyncCandidateWithIdentity",
+        ),
+        "UniqueDecisionRestartDecisionReplayIsExactCurrentFetch": (
+            "UniqueDecisionSelectsExactRestartRecordLocally",
+            "SelectedRestartDecisionReplayHasExactFetchSequence",
+            "CurrentDecisionFetchCandidateHasExactCurrentFields",
+        ),
+        "ReachableUniqueDecisionRestartReplayIsExactCurrentFetch": (
+            "DecisionFrontierUniquenessInvariantFromAsyncSpec",
+            "UniqueDecisionRestartDecisionReplayIsExactCurrentFetch",
+        ),
+        "ResponsiveCrashPreservesExactDecisionRegistrations": (
+            "ResponsiveCrashPreservesDecisionRegistration",
+            "ResponsiveCrashPreservesGenerationFreeDecisionRegistration",
+            "StrongInductiveInvariant",
+            "RestartDecisions",
+        ),
+        "ResponsiveRestartPreservesExactDecisionRegistrations": (
+            "AuthenticatedRestartPreservesRawRegistration",
+            "ResponsiveRestartPreservesGenerationFreeDecisionRegistration",
+            "StrongInductiveInvariant",
+            "DurableDecisionRecoveryAuthority",
+            "RestartDecisions",
+        ),
+        "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate": (
+            "UniqueUnappliedDecisionExcludesNodeApplication",
+            "UniqueDecisionRestartDecisionReplayIsExactCurrentFetch",
+            "ResponsiveReplayClearsRecoveredNodeRegistration",
+            "ResponsiveReplayClearsGenerationFreeDecisionRegistration",
+        ),
+        "ExactDurableDecisionRecoveryLifecycleTransition": (
+            "ResponsiveCrashInstallsExactDurableDecisionAuthority",
+            "ResponsiveCrashPreservesExactDecisionRegistrations",
+            "ResponsiveRestartAdvancesExactDurableDecisionAuthority",
+            "ResponsiveRestartPreservesExactDecisionRegistrations",
+            "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate",
+        ),
+        "DecisionRecoveryAcrossRestartPropertyFromAsyncSpec": (
+            "DecisionFrontierUniquenessInvariantFromAsyncSpec",
+            "StrongInductiveInvariantFromAsyncSpec",
+            "ExactDurableDecisionRecoveryLifecycleTransition",
+        ),
+    }
+    durable_proof_fragments = {
+        "ResponsiveRestartPreservesExactDecisionRegistrations": (
+            "<2>1. asyncRecoveryNode = node "
+            "BY <1>1 DEF DurableDecisionRecoveryAuthority",
+            "<2>2. asyncRecoveryNode' = node "
+            "BY <1>1, <2>1 DEF PreGstResponsiveRestart",
+            "BY <2>1, <2>2, <2>4, SMT",
+        ),
+        "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate": (
+            "<2>1. asyncRecoveryNode = node "
+            "BY <1>1 DEF DurableDecisionRecoveryAuthority",
+            "<2>2. asyncRecoveryNode' = node "
+            "BY <1>1, <2>1 DEF PreGstResponsiveReplay",
+            "BY <2>1, <2>2, <2>4, SMT",
+            "BY <2>1, <2>2, <2>6, SMT",
+        ),
+    }
+    retired_recovery_tokens = (
+        "AsyncTypeInvariantObligation",
+        "DecisionRecoveryStage",
+        "AsyncDecisionRecoveryStage",
+        "DecisionRecoveryLifecycleTransition",
+        "StrongInductiveInvariantProjectsTypeInvariant",
+    )
+    for symbol, required_tokens in durable_proof_contracts.items():
+        forbidden_tokens = (
+            retired_recovery_tokens
+            if symbol
+            in {
+                "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate",
+                "ExactDurableDecisionRecoveryLifecycleTransition",
+                "DecisionRecoveryAcrossRestartPropertyFromAsyncSpec",
+            }
+            else ()
+        )
+        require_proof_contract(
+            recovery_path,
+            recovery_source,
+            symbol,
+            required_tokens=required_tokens,
+            required_fragments=durable_proof_fragments.get(symbol, ()),
+            exact_statement=durable_exact_statements.get(symbol),
+            forbidden_tokens=forbidden_tokens,
+        )
+
+    exact_final_recovery_statement = (
+        "\\A initialContext: "
+        "DecisionRecoveryAcrossRestartProperty(AsyncSpecAt(initialContext))"
+    )
+    require_proof_contract(
+        async_path,
+        async_source,
+        "DecisionRecoveryAcrossRestartObligation",
+        required_tokens=(
+            "DecisionFrontierUniquenessInvariantFromAsyncSpec",
+            "StrongInductiveInvariantFromAsyncSpec",
+            "ExactDurableDecisionRecoveryLifecycleTransition",
+            "DecisionRecoveryAcrossRestartProperty",
+        ),
+        exact_statement=exact_final_recovery_statement,
+        forbidden_tokens=retired_recovery_tokens
+        + ("DecisionRecoveryAcrossRestartPropertyFromAsyncSpec",),
+    )
+    final_recovery = _top_level_theorem_body(
+        async_source,
+        "DecisionRecoveryAcrossRestartObligation",
+        preserve_string_contents=True,
+    )
+    if final_recovery is not None:
+        final_proof = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            final_recovery[0],
+            maxsplit=1,
+        )
+        exact_chain = (
+            "DecisionFrontierUniquenessInvariantFromAsyncSpec",
+            "StrongInductiveInvariantFromAsyncSpec",
+            "ExactDurableDecisionRecoveryLifecycleTransition",
+            "DEF DecisionRecoveryAcrossRestartProperty",
+        )
+        proof = final_proof[1] if len(final_proof) == 2 else ""
+        chain_positions = [proof.find(token) for token in exact_chain]
+        if (
+            len(final_proof) != 2
+            or any(position < 0 for position in chain_positions)
+            or chain_positions != sorted(chain_positions)
+        ):
+            errors.append(
+                f"{async_path}:{final_recovery[1]}: "
+                "DecisionRecoveryAcrossRestartObligation must retain its exact "
+                "ordered durable-recovery proof chain"
             )
 
     persist_decision_theorem = _top_level_theorem_body(
@@ -3922,6 +5849,83 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "crash-aware async property and state only "
                 f"{exact_progress_obligation!r}; found {normalized!r}"
             )
+
+    integration_path = (
+        repo_root / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
+    )
+    integration_source = ""
+    if not integration_path.is_file() or integration_path.is_symlink():
+        errors.append(
+            f"{integration_path}: locked-Commit progress-witness integration "
+            "source must be a regular file"
+        )
+    else:
+        integration_source = integration_path.read_text(encoding="utf-8")
+    integration_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "mod",
+            "prepare_qc_split_tests",
+        ),
+    )
+    for test_name, expected_sha256 in (
+        _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(
+            integration_path, integration_source, test_name, errors
+        )
+        _require_rust_item_context(
+            integration_path,
+            item,
+            integration_context,
+            f"locked-Commit progress-witness regression {test_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{integration_path}:{item.line}: locked-Commit "
+                f"progress-witness regression {test_name} must match exact "
+                f"reviewed token digest {expected_sha256}; found "
+                f"{observed_sha256}"
+            )
+
+    release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    if not release_path.is_file() or release_path.is_symlink():
+        errors.append(
+            f"{release_path}: release runner must be a regular file for "
+            "locked-Commit progress-witness coverage"
+        )
+    else:
+        release_source = release_path.read_text(encoding="utf-8")
+        marker = "required_production_liveness_tests=(\n"
+        if release_source.count(marker) != 1:
+            errors.append(
+                f"{release_path}: release runner must contain one canonical "
+                "production liveness inventory"
+            )
+        else:
+            inventory = release_source.split(marker, 1)[1].split("\n)", 1)[0]
+            prefix = "sumeragi_v2_runner::prepare_qc_split_tests::"
+            for test_name in _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256:
+                occurrences = inventory.splitlines().count(
+                    f"  {prefix}{test_name}"
+                )
+                if occurrences != 1:
+                    errors.append(
+                        f"{release_path}: locked-Commit progress-witness "
+                        f"regression {test_name} must be pinned exactly once; "
+                        f"found {occurrences}"
+                    )
     return errors
 
 
@@ -4145,6 +6149,28 @@ def _effective_lock_acquisition_source_fidelity_errors(
                 errors.append(
                     f"{proof_path}:{line}: EffectiveLockAcquisitionModelObligation "
                     "must state type closure plus both temporal properties"
+                )
+            proof_match = re.search(r"(?m)^[ \t]*PROOF\b", body)
+            expected_proof = (
+                "PROOF "
+                "<1>1. AcquisitionSpec => []AcquisitionTypeInvariant "
+                "BY AcquisitionSpecAlwaysTypeInvariant "
+                "<1>2. AcquisitionSpec => EffectiveLockAcquisitionProgress "
+                "BY AcquisitionSpecProvidesEffectiveLockProgress "
+                "<1>3. AcquisitionSpec => StableEffectiveLockDelivery "
+                "BY AcquisitionSpecProvidesStableEffectiveLockDelivery "
+                "<1> QED BY <1>1, <1>2, <1>3"
+            )
+            normalized_proof = (
+                ""
+                if proof_match is None
+                else " ".join(body[proof_match.start() :].split())
+            )
+            if normalized_proof != expected_proof:
+                errors.append(
+                    f"{proof_path}:{line}: EffectiveLockAcquisitionModelObligation "
+                    "must compose the reviewed type, progress, and stable-delivery "
+                    "proof dependencies"
                 )
 
     acquisition_cfg = formal_dir / "effective_lock_acquisition.cfg"
@@ -4559,6 +6585,2446 @@ def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[
     return errors
 
 
+def _effect_capacity_mutation_runner_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Validate the semantic inventory and outcomes pinned by the TLC runner."""
+
+    path = repo_root / EFFECT_CAPACITY_MUTATION_RUNNER
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: effect-capacity mutation runner must be a regular file"
+        ]
+
+    source = path.read_text(encoding="utf-8")
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    errors: list[str] = []
+
+    expected_models = {
+        name
+        for name in EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        if name.endswith(".tla")
+    }
+    expected_configs = {
+        name
+        for name in EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        if name.endswith(".cfg")
+    }
+    model_names = {
+        "OWNERSHIP_MODULE": "SumeragiV2EffectCapacityOwnershipMutation.tla",
+        "CERTIFIED_REQUEST_MODULE": (
+            "SumeragiV2CertifiedRequestCapacityMutation.tla"
+        ),
+        "OUTER_TRANSPORT_MODULE": (
+            "SumeragiV2EffectCapacityOuterTransportMutation.tla"
+        ),
+        "RETIREMENT_MODULE": "SumeragiV2EffectCapacityRetirementMutation.tla",
+        "PRIORITY_MODULE": "SumeragiV2EffectPreemptionPriorityMutation.tla",
+        "BATCH_MODULE": "SumeragiV2RetainedEffectBatchMutation.tla",
+    }
+    declared_models: dict[str, str] = {}
+    for variable, expected_model in model_names.items():
+        matches = re.findall(
+            rf'(?m)^readonly {re.escape(variable)}="([^"]+)"$', source
+        )
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: runner must declare {variable} exactly once"
+            )
+            continue
+        declared_models[variable] = matches[0]
+        if matches[0] != expected_model:
+            errors.append(
+                f"{path}: {variable} must name {expected_model}; "
+                f"found {matches[0]}"
+            )
+
+    expected_model_by_config: dict[str, str] = {}
+    config_groups = (
+        (
+            "SumeragiV2EffectCapacityOwnershipMutation.tla",
+            {
+                "effect_capacity_timeout_sign_fixed.cfg",
+                "effect_capacity_timeout_sign_lost_bug.cfg",
+                "effect_capacity_timeout_sign_refill_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2CertifiedRequestCapacityMutation.tla",
+            {
+                "effect_capacity_certified_request_fatal_bug.cfg",
+                "effect_capacity_certified_request_fixed.cfg",
+                "effect_capacity_certified_request_lost_bug.cfg",
+                "effect_capacity_certified_response_blocked_bug.cfg",
+                "effect_capacity_certified_response_byte_reserve_bug.cfg",
+                "effect_capacity_certified_response_count_reserve_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectCapacityOuterTransportMutation.tla",
+            {
+                "effect_capacity_outer_transport_chunk_class_bug.cfg",
+                "effect_capacity_outer_transport_class_fixed.cfg",
+                "effect_capacity_outer_transport_response_class_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectCapacityRetirementMutation.tla",
+            {
+                "effect_capacity_decided_retirement_fixed.cfg",
+                "effect_capacity_full_fetch_hol_bug.cfg",
+                "effect_capacity_non_fetch_retirement_fixed.cfg",
+                "effect_capacity_retirement_disabled_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectPreemptionPriorityMutation.tla",
+            {
+                "effect_preemption_decided_victim_bug.cfg",
+                "effect_preemption_priority_fixed.cfg",
+                "effect_preemption_wrong_class_bug.cfg",
+                "effect_preemption_wrong_work_id_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2RetainedEffectBatchMutation.tla",
+            {
+                "effect_batch_bound_fixed.cfg",
+                "effect_batch_decision_filter_fixed.cfg",
+                "effect_batch_decision_no_filter_bug.cfg",
+                "effect_batch_oversize_accepted_bug.cfg",
+                "effect_batch_partial_fifo_fixed.cfg",
+                "effect_batch_partial_fifo_reverse_bug.cfg",
+                "effect_batch_second_accepted_bug.cfg",
+                "effect_batch_second_rejected_fixed.cfg",
+            },
+        ),
+    )
+    for model, configs in config_groups:
+        for config in configs:
+            expected_model_by_config[config] = model
+    if set(expected_model_by_config) != expected_configs:
+        errors.append(
+            f"{path}: semantic config/model inventory differs from the sealed "
+            "twenty-eight-config corpus"
+        )
+    if {model for model, _ in config_groups} != expected_models:
+        errors.append(
+            f"{path}: semantic model inventory differs from the sealed "
+            "six-model corpus"
+        )
+
+    loop_contracts = (
+        "for blocking_kind in decided non-fetch; do",
+        'config_kind="${blocking_kind//-/_}"',
+    )
+    for contract in loop_contracts:
+        if source.count(contract) != 1:
+            errors.append(
+                f"{path}: retirement expansion must contain exactly one "
+                f"{contract!r}"
+            )
+
+    cases: list[dict[str, Any]] = []
+    for line in normalized_source.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("run_case "):
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=False, posix=True)
+        except ValueError as error:
+            errors.append(f"{path}: cannot parse run_case invocation: {error}")
+            continue
+        if len(tokens) < 6 or tokens[0] != "run_case":
+            errors.append(
+                f"{path}: each run_case invocation must name label, model, "
+                "config, status, and outcome markers"
+            )
+            continue
+        label, model_token, config, status_token = tokens[1:5]
+        markers = tuple(tokens[5:])
+        if model_token.startswith("$"):
+            variable = (
+                model_token.removeprefix("$")
+                .removeprefix("{")
+                .removesuffix("}")
+            )
+            model = declared_models.get(variable, model_token)
+        else:
+            model = model_token
+        try:
+            status = int(status_token)
+        except ValueError:
+            errors.append(
+                f"{path}: {label} has non-integer TLC status {status_token!r}"
+            )
+            continue
+
+        expanded = ((label, config),)
+        if (
+            label == "${blocking_kind}-work-fair-retirement"
+            and config
+            == "effect_capacity_${config_kind}_retirement_fixed.cfg"
+        ):
+            expanded = (
+                (
+                    "decided-work-fair-retirement",
+                    "effect_capacity_decided_retirement_fixed.cfg",
+                ),
+                (
+                    "non-fetch-work-fair-retirement",
+                    "effect_capacity_non_fetch_retirement_fixed.cfg",
+                ),
+            )
+        elif "${" in label or "${" in config:
+            errors.append(
+                f"{path}: unreviewed dynamic effect-capacity case "
+                f"{label!r}/{config!r}"
+            )
+            continue
+        for expanded_label, expanded_config in expanded:
+            cases.append(
+                {
+                    "label": expanded_label,
+                    "model": model,
+                    "config": expanded_config,
+                    "status": status,
+                    "markers": markers,
+                }
+            )
+
+    observed_configs = [case["config"] for case in cases]
+    observed_config_set = set(observed_configs)
+    duplicate_configs = sorted(
+        config
+        for config in observed_config_set
+        if observed_configs.count(config) != 1
+    )
+    if (
+        len(cases) != 28
+        or observed_config_set != expected_configs
+        or duplicate_configs
+    ):
+        errors.append(
+            f"{path}: runner must execute each of the twenty-eight sealed "
+            "configurations exactly once; "
+            f"cases={len(cases)}, missing={sorted(expected_configs - observed_config_set)}, "
+            f"extra={sorted(observed_config_set - expected_configs)}, "
+            f"duplicates={duplicate_configs}"
+        )
+
+    repaired_count = sum(case["status"] == 0 for case in cases)
+    mutant_count = sum(case["status"] != 0 for case in cases)
+    if repaired_count != 10 or mutant_count != 18:
+        errors.append(
+            f"{path}: runner must contain exactly 10 repaired cases and 18 "
+            f"mutant cases; found repaired={repaired_count}, mutants={mutant_count}"
+        )
+
+    generated_total = 0
+    distinct_total = 0
+    parsed_state_cases = 0
+    state_marker = re.compile(
+        r"(?P<generated>\d+) states generated, "
+        r"(?P<distinct>\d+) distinct states found, "
+        r"\d+ states left on queue\."
+    )
+    for case in cases:
+        matches = [
+            match
+            for marker in case["markers"]
+            if (match := state_marker.fullmatch(marker)) is not None
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: {case['label']} must pin exactly one complete "
+                "generated/distinct-state marker"
+            )
+            continue
+        parsed_state_cases += 1
+        generated_total += int(matches[0].group("generated"))
+        distinct_total += int(matches[0].group("distinct"))
+    if (
+        parsed_state_cases != 28
+        or generated_total != 161
+        or distinct_total != 160
+    ):
+        errors.append(
+            f"{path}: runner must report exactly 161 generated states and "
+            "160 distinct states across 28 cases; found "
+            f"generated={generated_total}, distinct={distinct_total}, "
+            f"parsed_cases={parsed_state_cases}"
+        )
+
+    by_config = {
+        case["config"]: case
+        for case in cases
+        if observed_configs.count(case["config"]) == 1
+    }
+    for config, expected_model in expected_model_by_config.items():
+        case = by_config.get(config)
+        if case is not None and case["model"] != expected_model:
+            errors.append(
+                f"{path}: {config} must execute with {expected_model}; "
+                f"found {case['model']}"
+            )
+        if case is None:
+            continue
+        if config.endswith("_fixed.cfg") and case["status"] != 0:
+            errors.append(
+                f"{path}: repaired config {config} must expect TLC status 0"
+            )
+        if config.endswith("_bug.cfg") and case["status"] not in {12, 13}:
+            errors.append(
+                f"{path}: mutant config {config} must expect TLC status 12 or 13"
+            )
+
+    certified_roles = {
+        "effect_capacity_certified_request_lost_bug.cfg": (
+            "certified-request-capacity-lost",
+            12,
+            (
+                "Invariant CapacityBlockedFetchBRemainsMissing is violated.",
+                "retainedFetchB = FALSE",
+                "missingFetchB = FALSE",
+                "fatal = FALSE",
+            ),
+        ),
+        "effect_capacity_certified_request_fatal_bug.cfg": (
+            "certified-request-capacity-fatal",
+            12,
+            (
+                "Invariant CertifiedRequestPressureIsNonfatal is violated.",
+                "retainedFetchB = FALSE",
+                "missingFetchB = TRUE",
+                "fatal = TRUE",
+            ),
+        ),
+        "effect_capacity_certified_response_blocked_bug.cfg": (
+            "certified-response-blocked-by-unrelated-retained-debt",
+            13,
+            (
+                "Temporal properties were violated.",
+                "retainedFetchB = FALSE",
+                "unrelatedRetainedT = TRUE",
+                "fatal = FALSE",
+                "State 3: <AdmitOuterTransportResponseA",
+                "responseAQueued = TRUE",
+                "State 4: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_response_count_reserve_bug.cfg": (
+            "certified-response-count-reserve-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                "outerGenericCountOwned = TRUE",
+                "responseAAdmitted = FALSE",
+                "State 3: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_response_byte_reserve_bug.cfg": (
+            "certified-response-byte-reserve-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                "outerGenericBytesOwned = TRUE",
+                "responseAAdmitted = FALSE",
+                "State 3: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_request_fixed.cfg": (
+            "certified-request-capacity-released-and-retransmitted",
+            0,
+            (
+                "Finished computing initial states: 2 distinct states generated",
+                "Model checking completed. No error has been found.",
+                "<EmitHigherAuthorityFetchB",
+                "<AdmitOuterTransportResponseA",
+                "<ConsumeTransportOnlyResponseA",
+                "<RetransmitMissingFetchB",
+            ),
+        ),
+    }
+    for config, (expected_label, expected_status, required_markers) in (
+        certified_roles.items()
+    ):
+        case = by_config.get(config)
+        if case is None:
+            continue
+        missing_markers = [
+            marker for marker in required_markers if marker not in case["markers"]
+        ]
+        if (
+            case["label"] != expected_label
+            or case["status"] != expected_status
+            or missing_markers
+        ):
+            errors.append(
+                f"{path}: certified-request role {config} must remain "
+                f"{expected_label!r} at status {expected_status} with its "
+                f"named witness markers; found label={case['label']!r}, "
+                f"status={case['status']}, missing_markers={missing_markers}"
+            )
+
+    outer_transport_roles = {
+        "effect_capacity_outer_transport_response_class_bug.cfg": (
+            "outer-certified-response-classification-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                'completionKind = "CertifiedBodyResponse"',
+                "State 2: Stuttering",
+            ),
+        ),
+        "effect_capacity_outer_transport_chunk_class_bug.cfg": (
+            "outer-payload-chunk-classification-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                'completionKind = "PayloadChunk"',
+                "State 2: Stuttering",
+            ),
+        ),
+        "effect_capacity_outer_transport_class_fixed.cfg": (
+            "outer-transport-completion-shared-reserve",
+            0,
+            (
+                "Finished computing initial states: 2 distinct states generated",
+                "Model checking completed. No error has been found.",
+                "<AdmitTransportCompletion",
+                "<ConsumeTransportCompletion",
+            ),
+        ),
+    }
+    for config, (expected_label, expected_status, required_markers) in (
+        outer_transport_roles.items()
+    ):
+        case = by_config.get(config)
+        if case is None:
+            continue
+        missing_markers = [
+            marker for marker in required_markers if marker not in case["markers"]
+        ]
+        if (
+            case["label"] != expected_label
+            or case["status"] != expected_status
+            or missing_markers
+        ):
+            errors.append(
+                f"{path}: outer-transport role {config} must remain "
+                f"{expected_label!r} at status {expected_status} with its "
+                f"named witness markers; found label={case['label']!r}, "
+                f"status={case['status']}, missing_markers={missing_markers}"
+            )
+    return errors
+
+
+def _effect_capacity_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind the certified-request mutation repair to production control flow."""
+
+    effects_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_effects.rs"
+    )
+    if not effects_path.is_file() or effects_path.is_symlink():
+        return [
+            f"{effects_path}: production effect executor must be a regular "
+            "source file for certified-request capacity refinement"
+        ]
+
+    source = effects_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    generic_executor_context = (
+        (
+            "impl",
+            "<",
+            "R",
+            ":",
+            "EffectRuntime",
+            ">",
+            "V2EffectExecutor",
+            "<",
+            "R",
+            ">",
+        ),
+    )
+    production_executor_context = (
+        ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
+    )
+
+    drain = _require_rust_item(
+        effects_path,
+        source,
+        "drain_retained_effect_batch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        drain,
+        generic_executor_context,
+        "certified-request retained-effect retry method",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+let pending_work_producer = Self::pending_work_producer(&effect);
+match self.consume_one(effect, services) {
+""",
+        "certified-request retry must classify the exact retained effect before dispatch",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+Err(EffectExecutorError::PendingWorkCapacity { .. }) => {
+    debug_assert!(pending_work_producer.is_some());
+    break;
+}
+Err(error) => return Err(error),
+""",
+        "sole retained-effect PendingWorkCapacity retry with fail-closed fallback",
+        errors,
+    )
+    if drain is not None:
+        certified_capacity_count = _token_sequence_count(
+            rust_code_tokens(drain.source),
+            rust_code_tokens("EffectExecutorError::CertifiedRequestCapacity"),
+        )
+        if certified_capacity_count != 0:
+            errors.append(
+                f"{effects_path}:{drain.line}: retained-effect dispatch may not "
+                "retry CertifiedRequestCapacity; Q-full Fetch remains reducer "
+                f"Missing debt, found {certified_capacity_count} arm(s)"
+            )
+
+    begin_fetch = _require_rust_item(
+        effects_path,
+        source,
+        "begin_fetch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        begin_fetch,
+        generic_executor_context,
+        "source-faithful certified-request capacity deferral method",
+        errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+} else if let Some(certificate) = certificate {
+    let plan = match self.plan_certified_fetch_request(
+        existing_id,
+        round,
+        subject,
+        certificate,
+        services,
+    ) {
+""",
+        "existing ordinary Fetch Q-capacity upgrade planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let request_plan = if let Some(certificate) = certificate {
+    match self.plan_certified_fetch_request(
+        work.id,
+        round,
+        subject,
+        certificate,
+        services
+    ) {
+""",
+        "genuinely new Fetch Q-capacity request planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
+    iroha_logger::debug!(
+        height = round.height,
+        view = round.view,
+        capacity,
+        "Q-full Fetch remains reducer Missing debt"
+    );
+    return Ok(());
+}
+Err(error) => return Err(error),
+""",
+        "new and existing Fetch Q-capacity deferrals must return success "
+        "without partial authority installation",
+        errors,
+        count=2,
+    )
+    if begin_fetch is not None:
+        begin_fetch_tokens = rust_code_tokens(begin_fetch.source)
+        for forbidden_source in (
+            "self.retained_effect_batch",
+            "self.retain_effect_batch",
+        ):
+            retained_count = _token_sequence_count(
+                begin_fetch_tokens,
+                rust_code_tokens(forbidden_source),
+            )
+            if retained_count != 0:
+                errors.append(
+                    f"{effects_path}:{begin_fetch.line}: Q-capacity deferrals "
+                    "must leave no retained effect suffix; "
+                    f"found {retained_count} occurrence(s) of {forbidden_source}"
+                )
+
+    classification = _require_rust_item(
+        effects_path,
+        source,
+        "network_ingress_requires_reducer_order",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        classification,
+        generic_executor_context,
+        "exhaustive retained-ingress reducer-order classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        classification,
+        """
+fn network_ingress_requires_reducer_order(
+    payload: &wire::ConsensusMessageV2Payload
+) -> bool {
+    match payload {
+        wire::ConsensusMessageV2Payload::Proposal(_)
+        | wire::ConsensusMessageV2Payload::Vote(_)
+        | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => true,
+        wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => false,
+    }
+}
+""",
+        "exhaustive transport/reducer ingress classification",
+        errors,
+    )
+
+    retained_dispatch = _require_rust_item(
+        effects_path,
+        source,
+        "retained_dispatch_allows_network_ingress",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        retained_dispatch,
+        generic_executor_context,
+        "retained dispatch transport-completion bypass",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        retained_dispatch,
+        """
+fn retained_dispatch_allows_network_ingress(
+    &self,
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    self.retained_effect_batch.is_none()
+        || !Self::network_ingress_requires_reducer_order(payload)
+}
+""",
+        "retained dispatch transport-completion bypass",
+        errors,
+    )
+
+    public_admission = _require_rust_item(
+        effects_path,
+        source,
+        "can_admit_network_message",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        public_admission,
+        production_executor_context,
+        "public retained-debt network admission method",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        public_admission,
+        """
+pub(crate) fn can_admit_network_message(
+    &self,
+    message: &wire::ConsensusMessageV2
+) -> bool {
+    self.fatal_reason.is_none()
+        && !self.output_guard.restart_required()
+        && self.retained_dispatch_allows_network_ingress(&message.payload)
+        && self.runtime.can_admit_network_message(message)
+}
+""",
+        "public retained-debt network admission path",
+        errors,
+    )
+    return errors
+
+
+def _transport_geometry_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind outer-ingress progress geometry to every production frame cap."""
+
+    errors: list[str] = []
+    paths = {
+        "core": repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs",
+        "daemon": repo_root / "crates" / "irohad" / "src" / "main.rs",
+        "defaults": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "defaults.rs"
+        ),
+        "actual": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "actual.rs"
+        ),
+        "user": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "user.rs"
+        ),
+        "crypto": repo_root / "crates" / "iroha_crypto" / "src" / "lib.rs",
+        "crypto_sm": repo_root / "crates" / "iroha_crypto" / "src" / "sm.rs",
+        "wire": (
+            repo_root
+            / "crates"
+            / "iroha_data_model"
+            / "src"
+            / "block"
+            / "consensus_v2.rs"
+        ),
+        "p2p_lib": repo_root / "crates" / "iroha_p2p" / "src" / "lib.rs",
+        "p2p_network": repo_root / "crates" / "iroha_p2p" / "src" / "network.rs",
+        "p2p_peer": repo_root / "crates" / "iroha_p2p" / "src" / "peer.rs",
+    }
+    sources: dict[str, str] = {}
+    for role, path in paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: {role} transport-geometry source must be a regular file"
+            )
+            sources[role] = ""
+        else:
+            sources[role] = path.read_text(encoding="utf-8")
+
+    core_path = paths["core"]
+    core_source = sources["core"]
+    for digest_inventory, expected_context in (
+        (_PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256, ()),
+        (
+            _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256,
+            (("impl", "FairV2IngressClass"),),
+        ),
+        (
+            _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256,
+            (("impl", "FairV2Ingress"),),
+        ),
+    ):
+        for item_name, expected_sha256 in digest_inventory.items():
+            item = _require_rust_item(core_path, core_source, item_name, errors)
+            _require_rust_item_context(
+                core_path,
+                item,
+                expected_context,
+                f"authoritative fair-v2 ingress geometry {item_name}",
+                errors,
+            )
+            if item is None:
+                continue
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{core_path}:{item.line}: authoritative fair-v2 ingress "
+                    f"geometry {item_name} must match exact reviewed token "
+                    f"digest {expected_sha256}; found {observed_sha256}"
+                )
+
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+enum FairV2IngressClass {
+    Auxiliary,
+    Progress,
+    TransportCompletion,
+}
+""",
+        "closed fair-ingress admission class inventory",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+progress_len: usize,
+timeout_vote_len: usize,
+transport_completion_len: usize,
+bytes: usize,
+timeout_vote_bytes: usize,
+transport_completion_bytes: usize,
+""",
+        "shared per-validator progress and transport-completion owners",
+        errors,
+    )
+
+    push = _require_rust_item(core_path, core_source, "try_push_at", errors)
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let is_validator_origin = inbound
+    .sender()
+    .is_some_and(|peer| state.roster.contains(peer));
+if is_transport_completion && !is_validator_origin {
+    return Err(FairV2IngressPushError::Rejected(inbound));
+}
+""",
+        "roster-origin premise for completion relayed through any authenticated hop",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let wire_key = wire_hash.map(|hash| FairV2IngressWireKey {
+    origin: inbound.sender.clone(),
+    hash,
+});
+""",
+        "semantic-origin delivery deduplication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let source = inbound
+    .via()
+    .filter(|peer| state.roster.contains(*peer))
+    .cloned()
+    .map_or(
+        FairV2IngressSource::Untrusted,
+        FairV2IngressSource::Validator,
+    );
+""",
+        "authenticated-via source ownership separated from semantic origin",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+if is_transport_completion && lane.transport_completion_len != 0 {
+    return Err(FairV2IngressPushError::Full(inbound));
+}
+if is_transport_completion && encoded_len > self.transport_completion_byte_reserve {
+    return Err(FairV2IngressPushError::Rejected(inbound));
+}
+""",
+        "single source-lane transport-completion count and byte owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+lane.bytes
+    .checked_sub(lane.transport_completion_bytes)
+    .expect("untrusted completion bytes are included in the source total"),
+self.source_byte_capacity
+    .saturating_sub(self.transport_completion_byte_reserve),
+""",
+        "untrusted ordinary bytes isolated from its relayed-completion reserve",
+        errors,
+    )
+    receive = _require_rust_item(core_path, core_source, "try_recv_if_at", errors)
+    _require_rust_token_sequence(
+        core_path,
+        receive,
+        """
+if entry.class == FairV2IngressClass::TransportCompletion {
+    lane.transport_completion_len = lane
+        .transport_completion_len
+        .checked_sub(1)
+        .expect("transport-completion count includes every payload completion");
+    lane.transport_completion_bytes = lane
+        .transport_completion_bytes
+        .checked_sub(entry.encoded_len)
+        .expect("transport-completion bytes include every payload completion");
+}
+""",
+        "exact shared transport-completion owner retirement",
+        errors,
+    )
+
+    configure_context = _require_rust_item(
+        core_path, core_source, "configure_roster_for_context", errors
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
+let required_proposal_bytes = fair_v2_ingress_required_proposal_bytes(layout, roster.len());
+let required_commit_certificate_response_bytes =
+    fair_v2_ingress_required_commit_certificate_response_bytes(roster.len());
+let required_control_message_bytes =
+    required_proposal_bytes.max(required_commit_certificate_response_bytes);
+let required_transport_completion_bytes =
+    fair_v2_ingress_required_transport_completion_bytes(layout)
+        .max(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
+let required_recovery_request_bytes =
+    fair_v2_ingress_required_recovery_request_bytes(chain_id, roster.len());
+let required_lane_progress_frame_bytes =
+    fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
+let required_lane_completion_frame_bytes =
+    fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
+""",
+        "exact v2 and lane-local progress/completion/recovery ceilings",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
+let required_consensus_frame_bytes =
+    fair_v2_ingress_required_p2p_frame_bytes(required_recovery_request_bytes)
+        .max(required_lane_progress_frame_bytes);
+let required_control_frame_bytes =
+    fair_v2_ingress_required_p2p_frame_bytes(required_control_message_bytes);
+let required_block_sync_frame_bytes = fair_v2_ingress_required_p2p_frame_bytes(
+    fair_v2_ingress_required_transport_completion_bytes(layout),
+)
+.max(required_lane_completion_frame_bytes);
+let required_outbound_plaintext_frame_bytes = required_consensus_frame_bytes
+    .max(required_control_frame_bytes)
+    .max(required_block_sync_frame_bytes);
+let Some(required_outbound_high_frame_bytes) =
+    iroha_p2p::frame_queue_charge(required_outbound_plaintext_frame_bytes)
+else {
+    return Err(FairV2IngressCapacityError {
+        configured: self.outbound_high_frame_byte_capacity,
+        required: usize::MAX,
+        kind: FairV2IngressCapacityKind::OutboundHighFrameBytes,
+    });
+};
+""",
+        "full unified-lane P2P progress-topic and checked high-queue charge derivation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
+BODY_ENVELOPE_HEADROOM_BYTES
+    .max(required_control_message_bytes)
+    .max(required_recovery_request_bytes)
+    .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES),
+required_transport_completion_bytes,
+required_consensus_frame_bytes,
+required_control_frame_bytes,
+required_block_sync_frame_bytes,
+required_outbound_high_frame_bytes,
+""",
+        "disjoint ordinary/completion and every progress-frame requirement hand-off",
+        errors,
+    )
+
+    configure = _require_rust_item(
+        core_path, core_source, "configure_roster_with_byte_requirements", errors
+    )
+    open_ingress = _require_rust_item(core_path, core_source, "open", errors)
+    for item, stage in ((configure, "configure"), (open_ingress, "open")):
+        for required_field, capacity_field, kind in (
+            (
+                "required_consensus_frame_bytes",
+                "consensus_frame_byte_capacity",
+                "ConsensusFrameBytes",
+            ),
+            (
+                "required_control_frame_bytes",
+                "control_frame_byte_capacity",
+                "ControlFrameBytes",
+            ),
+            (
+                "required_block_sync_frame_bytes",
+                "block_sync_frame_byte_capacity",
+                "BlockSyncFrameBytes",
+            ),
+            (
+                "required_outbound_high_frame_bytes",
+                "outbound_high_frame_byte_capacity",
+                "OutboundHighFrameBytes",
+            ),
+        ):
+            _require_rust_token_sequence(
+                core_path,
+                item,
+                f"""
+if state.{required_field} > self.{capacity_field} {{
+    return Err(FairV2IngressCapacityError {{
+        configured: self.{capacity_field},
+        required: state.{required_field},
+        kind: FairV2IngressCapacityKind::{kind},
+    }});
+}}
+""",
+                f"{stage} recheck for {kind}",
+                errors,
+            )
+
+    for field in (
+        "max_frame_bytes",
+        "max_frame_bytes_consensus",
+        "max_frame_bytes_control",
+        "max_frame_bytes_block_sync",
+        "outbound_frame_queue_max_high_bytes",
+    ):
+        _require_rust_source_token_sequence(
+            core_path,
+            core_source,
+            f"pub {field}: usize,",
+            f"SumeragiStartArgs progress cap field {field}",
+            errors,
+        )
+    start = _require_rust_item(core_path, core_source, "start", errors)
+    _require_rust_item_context(
+        core_path,
+        start,
+        (("impl", "SumeragiStartArgs"),),
+        "authoritative Sumeragi start cap hand-off",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        start,
+        """
+network,
+max_frame_bytes,
+max_frame_bytes_consensus,
+max_frame_bytes_control,
+max_frame_bytes_block_sync,
+outbound_frame_queue_max_high_bytes,
+genesis_network,
+""",
+        "SumeragiStartArgs progress cap destructuring",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        start,
+        """
+let global_plaintext_frame_capacity = iroha_p2p::frame_plaintext_cap(max_frame_bytes);
+let consensus_frame_byte_capacity =
+    global_plaintext_frame_capacity.min(max_frame_bytes_consensus);
+let control_frame_byte_capacity =
+    global_plaintext_frame_capacity.min(max_frame_bytes_control);
+let block_sync_frame_byte_capacity =
+    global_plaintext_frame_capacity.min(max_frame_bytes_block_sync);
+""",
+        "encrypted global and three plaintext progress-topic cap intersection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        start,
+        """
+FairV2Ingress::new_with_transport_frame_caps(
+    block_channel_cap,
+    block_byte_cap,
+    block_source_byte_cap,
+    TIMEOUT_VOTE_RESERVE_BYTES,
+    transport_completion_byte_reserve,
+    consensus_frame_byte_capacity,
+    control_frame_byte_capacity,
+    block_sync_frame_byte_capacity,
+    outbound_frame_queue_max_high_bytes,
+)
+""",
+        "production fair-ingress construction with every progress cap",
+        errors,
+    )
+
+    daemon_path = paths["daemon"]
+    daemon_source = sources["daemon"]
+    daemon_start = _require_rust_item(daemon_path, daemon_source, "start", errors)
+    _require_rust_item_context(
+        daemon_path,
+        daemon_start,
+        (("impl", "Iroha"),),
+        "daemon Sumeragi cap hand-off",
+        errors,
+        expected_attributes=(
+            "#[allow(clippy::too_many_lines)]",
+            '#[iroha_logger::log(name = "start", skip_all)]',
+        ),
+    )
+    _require_rust_token_sequence(
+        daemon_path,
+        daemon_start,
+        """
+max_frame_bytes: config.network.max_frame_bytes,
+max_frame_bytes_consensus: config.network.max_frame_bytes_consensus,
+max_frame_bytes_control: config.network.max_frame_bytes_control,
+max_frame_bytes_block_sync: config.network.max_frame_bytes_block_sync,
+outbound_frame_queue_max_high_bytes: config
+    .network
+    .p2p_outbound_frame_queue_max_high_bytes
+    .get(),
+""",
+        "daemon-to-Sumeragi global/topic/high-queue cap hand-off",
+        errors,
+    )
+
+    crypto_path = paths["crypto"]
+    _require_rust_source_token_sequence(
+        crypto_path,
+        sources["crypto"],
+        "pub const MAX_PUBLIC_KEY_PAYLOAD_BYTES: usize = "
+        "2 + (u16::MAX as usize / 8) + 65;",
+        "protocol-wide maximum public-key payload geometry",
+        errors,
+    )
+    crypto_sm_path = paths["crypto_sm"]
+    crypto_sm_source = sources["crypto_sm"]
+    for item_name, expected_sha256 in (
+        _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(crypto_sm_path, crypto_sm_source, item_name, errors)
+        _require_rust_item_context(
+            crypto_sm_path,
+            item,
+            (),
+            f"SM2 distinguishing-identifier geometry {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{crypto_sm_path}:{item.line}: SM2 distinguishing-identifier "
+                f"geometry {item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    wire_path = paths["wire"]
+    for expected, description in (
+        (
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;",
+            "first-release maximum validator geometry",
+        ),
+        (
+            "pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;",
+            "first-release maximum consensus signature geometry",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            wire_path,
+            sources["wire"],
+            expected,
+            description,
+            errors,
+        )
+
+    for role, digest_inventory, expected_context in (
+        (
+            "p2p_network",
+            _PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256,
+            (),
+        ),
+        (
+            "p2p_peer",
+            _PRODUCTION_P2P_PEER_FRAME_ITEM_SHA256,
+            (("mod", "run"),),
+        ),
+        ("p2p_lib", _PRODUCTION_P2P_CAP_ITEM_SHA256, ()),
+    ):
+        path = paths[role]
+        source = sources[role]
+        for item_name, expected_sha256 in digest_inventory.items():
+            item = _require_rust_item(path, source, item_name, errors)
+            _require_rust_item_context(
+                path,
+                item,
+                expected_context,
+                f"checked P2P transport geometry {item_name}",
+                errors,
+            )
+            if item is None:
+                continue
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{path}:{item.line}: checked P2P transport geometry "
+                    f"{item_name} must match exact reviewed token digest "
+                    f"{expected_sha256}; found {observed_sha256}"
+                )
+
+    p2p_peer_path = paths["p2p_peer"]
+    p2p_peer_source = sources["p2p_peer"]
+    run_context = (("mod", "run"),)
+    run_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in _PRODUCTION_P2P_RUN_FRAME_ITEM_SHA256.items():
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        run_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            run_context,
+            f"generic AEAD P2P preflight {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: generic AEAD P2P preflight "
+                f"{item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        run_items.get("frame_plaintext_cap_for"),
+        """
+max_frame_bytes
+    .min(crate::MAX_ENCRYPTED_FRAME_BYTES)
+    .saturating_sub(core::mem::size_of::<aead::Nonce<E>>())
+    .saturating_sub(core::mem::size_of::<aead::Tag<E>>())
+""",
+        "generic AEAD runtime-clamped plaintext cap",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        run_items.get("checked_encoded_frame_len"),
+        """
+let flags = ncore::default_encode_flags();
+let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+let encoded_len = ncore::encoded_frame_len(message)?;
+if encoded_len > frame_plaintext_cap_for::<E>(max_frame_bytes) {
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "exact Norito counting preflight before P2P allocation",
+        errors,
+    )
+
+    quic_context = (
+        ("mod", "run"),
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "feature",
+            "=",
+            ")",
+            "]",
+            "impl",
+            "<",
+            "E",
+            ":",
+            "Enc",
+            ">",
+            "QuicDatagramSender",
+            "<",
+            "E",
+            ">",
+        ),
+    )
+    quic_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in _PRODUCTION_P2P_QUIC_FRAME_ITEM_SHA256.items():
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        quic_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            quic_context,
+            f"generic AEAD QUIC frame validation {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: generic AEAD QUIC frame validation "
+                f"{item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        quic_items.get("try_send"),
+        """
+let encoded_len = match checked_encoded_frame_len::<T, E>(msg, self.max_frame_bytes) {
+    Ok(encoded_len) => encoded_len,
+    Err(error) => return Err(error),
+};
+encode_wire_message(msg, &mut self.buffer)?;
+if self.buffer.len() != encoded_len {
+    self.buffer.clear();
+    return Err(Error::Format);
+}
+let encrypted = self
+    .cryptographer
+    .encrypt_into(&self.buffer, &mut self.encrypted)?;
+if encrypted.len() > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "QUIC counting preflight and post-encryption runtime-cap check",
+        errors,
+    )
+
+    source_ownership_contexts = {
+        "same_owner": (("impl", "SharedByteLease"),),
+        "merge": (("impl", "SharedByteLease"),),
+        "source_credits": (("impl", "InboundFrameByteBudgets"),),
+        "extend": (("impl", "InboundFrameRetention"),),
+    }
+    source_ownership_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_P2P_SOURCE_OWNERSHIP_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        source_ownership_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            source_ownership_contexts[item_name],
+            f"authenticated-source frame ownership {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: authenticated-source frame "
+                f"ownership {item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        source_ownership_items.get("same_owner"),
+        "self.safety == other.safety && Arc::ptr_eq(&self.budget, &other.budget)",
+        "source-lease owner identity includes class and exact budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        source_ownership_items.get("merge"),
+        """
+if !self.same_owner(&other) {
+    return Err(other);
+}
+let Some(bytes) = self.bytes.checked_add(other.bytes) else {
+    return Err(other);
+};
+self.bytes = bytes;
+other.bytes = 0;
+""",
+        "already-accounted source leases coalesce without release and reacquisition",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        source_ownership_items.get("source_credits"),
+        """
+by_peer.retain(|_, owner| owner.strong_count() != 0);
+if let Some(owner) = by_peer.get(peer_id).and_then(Weak::upgrade) {
+    if owner.per_lane_capacity != per_lane_capacity {
+        return None;
+    }
+    owner
+} else {
+    if by_peer.len() >= self.max_peer_reserves {
+        return None;
+    }
+    let owner = Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity));
+    by_peer.insert(peer_id.clone(), Arc::downgrade(&owner));
+    owner
+}
+""",
+        "bounded weak source-credit registry preserves identity and capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        source_ownership_items.get("extend"),
+        """
+let owned = Arc::get_mut(&mut self.source)?;
+let retained_bytes = owned.retained_bytes.checked_add(source.bytes)?;
+if let Some(existing) = owned
+    .leases
+    .iter_mut()
+    .find(|existing| existing.same_owner(&source))
+{
+    existing.merge(source).ok()?;
+} else {
+    owned.leases.push(source);
+}
+debug_assert!(
+    owned.leases.len() <= SOURCE_RETENTION_MAX_LEASES,
+    "one frame may retain only the shared and PeerId source owners"
+);
+owned.retained_bytes = retained_bytes;
+""",
+        "one frame keeps a bounded set of exact source owners",
+        errors,
+    )
+    for declaration, label in (
+        (
+            "const SOURCE_ADMISSION_CHUNK_BYTES: usize = 64 * 1024;",
+            "bounded incremental authenticated-source reservation chunk",
+        ),
+        (
+            "const SOURCE_RETENTION_MAX_LEASES: usize = 2;",
+            "shared-plus-peer frame source owner bound",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            p2p_peer_path,
+            p2p_peer_source,
+            declaration,
+            label,
+            errors,
+        )
+
+    receiver_context = (
+        ("mod", "run"),
+        (
+            "impl",
+            "<",
+            "E",
+            ":",
+            "Enc",
+            ",",
+            "M",
+            ":",
+            "Pload",
+            "+",
+            "ClassifyTopic",
+            ">",
+            "MessageReader",
+            "<",
+            "E",
+            ",",
+            "M",
+            ">",
+        ),
+    )
+    receiver_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in _PRODUCTION_P2P_RECEIVER_FRAME_ITEM_SHA256.items():
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        receiver_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            receiver_context,
+            f"bounded encrypted receiver geometry {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: bounded encrypted receiver geometry "
+                f"{item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        receiver_items.get("reserve_for_frame"),
+        """
+let retained = self
+    .current_frame_retention
+    .as_ref()
+    .map_or(0, InboundFrameRetention::retained_bytes);
+if retained == self.buffer.len() {
+    let chunk = needed
+        .saturating_sub(retained)
+        .min(SOURCE_ADMISSION_CHUNK_BYTES);
+    let source_lease = self
+        .source_byte_budget
+        .reserve(chunk)
+        .await
+        .ok_or(Error::FrameTooLarge)?;
+    self.current_frame_retention
+        .as_mut()
+        .expect("length prefix must establish frame retention")
+        .extend(source_lease)
+        .ok_or(Error::FrameTooLarge)?;
+}
+let retained = self
+    .current_frame_retention
+    .as_ref()
+    .map_or(0, InboundFrameRetention::retained_bytes);
+let read_limit = retained
+    .checked_sub(self.buffer.len())
+    .ok_or(Error::FrameTooLarge)?
+    .min(needed.saturating_sub(self.buffer.len()));
+""",
+        "runtime-clamped incremental authenticated-source receiver reservation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        receiver_items.get("parse_next_encrypted_frame"),
+        """
+let size = buf.get_u32() as usize;
+if size > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "runtime-clamped receiver parse boundary",
+        errors,
+    )
+
+    sender_context = (
+        ("mod", "run"),
+        ("impl", "<", "E", ":", "Enc", ">", "MessageSender", "<", "E", ">"),
+    )
+    sender_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_P2P_SENDER_FRAME_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        sender_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            sender_context,
+            f"checked encrypted sender geometry {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: checked encrypted sender geometry "
+                f"{item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("encrypted_frame_geometry"),
+        """
+let encrypted_size_u32 =
+    u32::try_from(encrypted_size).map_err(|_| Error::FrameTooLarge)?;
+let queued_size = encrypted_size
+    .checked_add(Self::U32_SIZE)
+    .ok_or(Error::FrameTooLarge)?;
+""",
+        "checked u32 sender body and prefix-inclusive queue geometry",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("prepare_message_with_ownership"),
+        """
+debug_assert!(
+    self.buffer_ownership.is_empty(),
+    "single-message encoding ownership must not overlap"
+);
+self.buffer_ownership = ownership;
+let encoded_len = match checked_encoded_frame_len::<T, E>(msg, self.max_frame_bytes) {
+    Ok(encoded_len) => encoded_len,
+    Err(error) => {
+        self.buffer_ownership.clear();
+        return Err(error);
+    }
+};
+if let Err(error) = encode_wire_message(msg, &mut self.buffer) {
+    self.buffer_ownership.clear();
+    return Err(Error::NoritoCodec(error));
+}
+if self.buffer.len() != encoded_len {
+    self.buffer.clear();
+    self.buffer_ownership.clear();
+    self.shrink_idle_buffers();
+    return Err(Error::Format);
+}
+""",
+        "ownership-bearing counting sender preflight before material encoding",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("prepare_encoded_buffer"),
+        """
+let max_plaintext = frame_plaintext_cap_for::<E>(self.max_frame_bytes);
+let msg_len = self.buffer.len();
+if msg_len > max_plaintext {
+    self.buffer.clear();
+    self.buffer_ownership.clear();
+    self.shrink_idle_buffers();
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "generic AEAD cap before sender batching",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("check_queue_limit"),
+        """
+if queued_bytes
+    .and_then(|queued| queued.checked_add(frame_len))
+    .is_none_or(|next| next > max_bytes)
+    || queued_frames
+        .and_then(|queued| queued.checked_add(1))
+        .is_none_or(|next| next > max_frames)
+{
+    return Err(Error::OutboundFrameQueueFull {
+        priority: label,
+        queued_bytes: queued_bytes.unwrap_or(usize::MAX),
+        max_bytes,
+        queued_frames: queued_frames.unwrap_or(usize::MAX),
+        max_frames,
+    });
+}
+""",
+        "checked byte/frame queue admission and overflow rejection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("account_enqueued"),
+        """
+.checked_add(frame_len)
+.expect("queue-byte admission was checked before accounting")
+""",
+        "checked admitted queue-byte accounting",
+        errors,
+        count=3,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        sender_items.get("account_enqueued"),
+        """
+.checked_add(1)
+.expect("queue-frame admission was checked before accounting")
+""",
+        "checked admitted queue-frame accounting",
+        errors,
+        count=3,
+    )
+    enqueue = sender_items.get("enqueue_encrypted")
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        enqueue,
+        """
+let (encrypted_size, encrypted_size_u32, needed) =
+    Self::encrypted_frame_geometry(plaintext.len())?;
+if encrypted_size > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
+    return Err(Error::FrameTooLarge);
+}
+self.check_queue_limit(priority, high_class, needed)?;
+""",
+        "checked runtime-clamped encrypted geometry before cap/queue admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        enqueue,
+        """
+self.cryptographer
+    .encrypt_into(plaintext, &mut self.encrypted)?;
+if self.encrypted.len() != encrypted_size {
+    self.clear_encrypted_buffer();
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "post-encryption sender geometry agreement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        enqueue,
+        """
+let frame = OwnedOutboundFrame {
+    bytes: frame,
+    ownership: core::mem::take(ownership),
+};
+""",
+        "encrypted frame retains exact post lease and flush acknowledgement ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        enqueue,
+        "frame.put_u32(encrypted_size_u32);",
+        "checked u32 frame length publication",
+        errors,
+    )
+    if enqueue is not None and _token_sequence_count(
+        rust_code_tokens(enqueue.source), ("as", "u32")
+    ):
+        errors.append(
+            f"{p2p_peer_path}:{enqueue.line}: encrypted sender must not truncate "
+            "a frame length with `as u32`"
+        )
+
+    p2p_start_path = paths["p2p_network"]
+    p2p_start_source = sources["p2p_network"]
+    p2p_cap_validator = _require_rust_item(
+        p2p_start_path,
+        p2p_start_source,
+        "validate_encrypted_frame_cap",
+        errors,
+    )
+    _require_rust_item_context(
+        p2p_start_path,
+        p2p_cap_validator,
+        (),
+        "P2P deterministic encrypted-frame cap validator",
+        errors,
+    )
+    if p2p_cap_validator is not None:
+        expected_sha256 = _PRODUCTION_P2P_START_FRAME_ITEM_SHA256[
+            "validate_encrypted_frame_cap"
+        ]
+        observed_sha256 = _rust_item_token_sha256(p2p_cap_validator)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_start_path}:{p2p_cap_validator.line}: P2P deterministic "
+                "encrypted-frame cap validator must match exact reviewed token "
+                f"digest {expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        p2p_start_path,
+        p2p_cap_validator,
+        """
+if max_frame_bytes > crate::MAX_ENCRYPTED_FRAME_BYTES {
+    return Err(Error::FrameTooLarge);
+}
+""",
+        "inclusive deterministic encrypted-frame runtime limit",
+        errors,
+    )
+    p2p_start = _require_rust_item(
+        p2p_start_path, p2p_start_source, "start_with_crypto", errors
+    )
+    _require_rust_item_context(
+        p2p_start_path,
+        p2p_start,
+        (
+            (
+                "impl",
+                "<",
+                "T",
+                ":",
+                "Pload",
+                "+",
+                "message",
+                "::",
+                "ClassifyTopic",
+                ",",
+                "K",
+                ":",
+                "Kex",
+                "+",
+                "Sync",
+                ",",
+                "E",
+                ":",
+                "Enc",
+                "+",
+                "Sync",
+                ">",
+                "NetworkBaseHandle",
+                "<",
+                "T",
+                ",",
+                "K",
+                ",",
+                "E",
+                ">",
+            ),
+        ),
+        "P2P pre-bind encrypted-frame cap validation",
+        errors,
+        expected_attributes=(
+            "#[log(skip(key_pair, shutdown_signal))]",
+            "#[allow(clippy::too_many_lines, clippy::used_underscore_binding)]",
+        ),
+    )
+    if p2p_start is not None:
+        expected_sha256 = _PRODUCTION_P2P_START_FRAME_ITEM_SHA256[
+            "start_with_crypto"
+        ]
+        observed_sha256 = _rust_item_token_sha256(p2p_start)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_start_path}:{p2p_start.line}: P2P pre-bind encrypted-frame "
+                "cap validation must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+        expected_first_guard = rust_code_tokens(
+            """
+let topic_frame_caps = TopicFrameCaps {
+    consensus: max_frame_bytes_consensus,
+    control: max_frame_bytes_control,
+    block_sync: max_frame_bytes_block_sync,
+    tx_gossip: max_frame_bytes_tx_gossip,
+    peer_gossip: max_frame_bytes_peer_gossip,
+    health: max_frame_bytes_health,
+    other: max_frame_bytes_other,
+};
+let transport_geometry = validate_transport_queue_geometry::<E>(
+    max_frame_bytes,
+    topic_frame_caps,
+"""
+        )
+        body_tokens = rust_code_tokens(p2p_start.body)
+        if body_tokens[: len(expected_first_guard)] != expected_first_guard:
+            errors.append(
+                f"{p2p_start_path}:{p2p_start.line}: complete transport geometry "
+                "validation must be the first P2P startup action before any listener bind"
+            )
+
+    for expected, description in (
+        (
+            "pub const MAX_WIRE_ENCRYPTED_FRAME_BYTES: usize = u32::MAX as usize;",
+            "exact u32 encrypted-frame wire-body ceiling",
+        ),
+        (
+            "pub const MAX_ENCRYPTED_FRAME_BYTES: usize = 2_147_483_643;",
+            "deterministic cross-platform encrypted-frame runtime ceiling",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            paths["p2p_lib"],
+            sources["p2p_lib"],
+            expected,
+            description,
+            errors,
+        )
+
+    daemon_validation_path = paths["daemon"]
+    daemon_validation_source = sources["daemon"]
+    daemon_validation_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_DAEMON_FRAME_VALIDATION_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(
+            daemon_validation_path,
+            daemon_validation_source,
+            item_name,
+            errors,
+        )
+        daemon_validation_items[item_name] = item
+        _require_rust_item_context(
+            daemon_validation_path,
+            item,
+            (),
+            f"daemon encrypted-frame validation {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{daemon_validation_path}:{item.line}: daemon encrypted-frame "
+                f"validation {item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    _require_rust_token_sequence(
+        daemon_validation_path,
+        daemon_validation_items.get("validate_network_frame_runtime_limit"),
+        """
+let configured = config.network.max_frame_bytes;
+if configured > iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES {
+    return Err(Report::new(
+        ConfigError::NetworkFrameSizeExceedsRuntimeLimit { configured },
+    ));
+}
+""",
+        "inclusive daemon deterministic encrypted-frame runtime limit",
+        errors,
+    )
+    for item_name, next_probe in (
+        ("validate_config", "validate_config_io(&mut emitter, config);"),
+        (
+            "validate_config_offline",
+            "validate_config_static_io(&mut emitter, config);",
+        ),
+    ):
+        item = daemon_validation_items.get(item_name)
+        _require_rust_token_sequence(
+            daemon_validation_path,
+            item,
+            f"""
+validate_network_frame_runtime_limit(config)?;
+let mut emitter = Emitter::new();
+{next_probe}
+""",
+            f"{item_name} deterministic frame ceiling before IO/runtime probes",
+            errors,
+        )
+
+    defaults_path = paths["defaults"]
+    defaults_source = sources["defaults"]
+    reviewed_defaults = (
+        (
+            "pub const MAX_PLAINTEXT_FRAME_BYTES: NonZeroUsize = "
+            "nonzero!(17 * 1024 * 1024_usize);",
+            "reviewed plaintext progress-frame ceiling",
+        ),
+        (
+            "pub const DEFAULT_AEAD_FRAME_OVERHEAD_BYTES: usize = 12 + 16;",
+            "reviewed first-release AEAD frame expansion",
+        ),
+        (
+            "pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES: NonZeroUsize = "
+            "nonzero!(128 * 1024 * 1024_usize);",
+            "reviewed high-priority encrypted-frame byte reserve",
+        ),
+        (
+            "pub const MAX_FRAME_BYTES: NonZeroUsize = "
+            "nonzero!(17 * 1024 * 1024_usize + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES);",
+            "reviewed encrypted global consensus frame ceiling",
+        ),
+        (
+            "pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = "
+            "MAX_PLAINTEXT_FRAME_BYTES;",
+            "reviewed consensus-recovery frame ceiling",
+        ),
+        (
+            "pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = "
+            "nonzero!(2 * 1024 * 1024_usize);",
+            "reviewed consensus-safety frame ceiling",
+        ),
+        (
+            "pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = "
+            "MAX_PLAINTEXT_FRAME_BYTES;",
+            "reviewed payload-completion frame ceiling",
+        ),
+        (
+            "pub const QUEUE_BODY_CAPACITY: NonZeroUsize = "
+            "nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2);",
+            "exact default 4N+2 outer-ingress message geometry",
+        ),
+        (
+            "pub const QUEUE_BODY_BYTES: NonZeroUsize = "
+            "nonzero!(165_usize * 1024 * 1024);",
+            "reviewed aggregate outer-ingress byte reserve",
+        ),
+        (
+            "pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = "
+            "nonzero!(33_usize * 1024 * 1024);",
+            "reviewed per-source outer-ingress byte reserve",
+        ),
+    )
+    for expected, description in reviewed_defaults:
+        _require_rust_source_token_sequence(
+            defaults_path,
+            defaults_source,
+            expected,
+            description,
+            errors,
+        )
+
+    actual_path = paths["actual"]
+    actual_source = sources["actual"]
+    user_path = paths["user"]
+    user_source = sources["user"]
+    for field in (
+        "max_frame_bytes",
+        "max_frame_bytes_consensus",
+        "max_frame_bytes_control",
+        "max_frame_bytes_block_sync",
+    ):
+        _require_rust_source_token_sequence(
+            actual_path,
+            actual_source,
+            f"pub {field}: usize,",
+            f"actual network config field {field}",
+            errors,
+        )
+        _require_rust_source_token_sequence(
+            user_path,
+            user_source,
+            f"{field}: {field}.get(),",
+            f"user-to-actual network config mapping {field}",
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        "pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,",
+        "actual high-priority outbound frame byte cap",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        "p2p_outbound_frame_queue_max_high_bytes,",
+        "user parse destructuring and actual high-priority frame byte cap mapping",
+        errors,
+        count=2,
+    )
+
+    p2p_network_path = paths["p2p_network"]
+    p2p_network_source = sources["p2p_network"]
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+let outbound_frame_queue_limits = OutboundFrameQueueLimits::new_with_progress_reserve(
+    p2p_outbound_frame_queue_max_high_bytes.get(),
+    p2p_outbound_frame_queue_max_low_bytes.get(),
+    progress_reserve_bytes,
+    p2p_outbound_frame_queue_max_high_frames.get(),
+    p2p_outbound_frame_queue_max_low_frames.get(),
+);
+""",
+        "P2P outbound byte/frame queue limit construction",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+max_frame_bytes,
+cap_consensus: max_frame_bytes_consensus,
+cap_control: max_frame_bytes_control,
+cap_block_sync: max_frame_bytes_block_sync,
+""",
+        "P2P global and progress-topic frame cap installation",
+        errors,
+    )
+
+    peer_reliable_contexts = {
+        "post_recover_with_flush_ack": (
+            ("pub", "mod", "handles"),
+            ("impl", "<", "T", ":", "Pload", ">", "PeerHandle", "<", "T", ">"),
+        ),
+        "post_recover_inner": (
+            ("pub", "mod", "handles"),
+            ("impl", "<", "T", ":", "Pload", ">", "PeerHandle", "<", "T", ">"),
+        ),
+        "acknowledge_flush": (("impl", "OutboundPostOwnership"),),
+    }
+    peer_sender_context = (
+        ("mod", "run"),
+        ("impl", "<", "E", ":", "Enc", ">", "MessageSender", "<", "E", ">"),
+    )
+    peer_reliable_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(p2p_peer_path, p2p_peer_source, item_name, errors)
+        peer_reliable_items[item_name] = item
+        _require_rust_item_context(
+            p2p_peer_path,
+            item,
+            peer_reliable_contexts.get(item_name, peer_sender_context),
+            f"reliable peer flush ownership {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_peer_path}:{item.line}: reliable peer flush ownership "
+                f"{item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        peer_reliable_items.get("post_recover_with_flush_ack"),
+        """
+let (flush_ack, receiver) = oneshot::channel();
+self.post_recover_inner(msg, Some(flush_ack))?;
+Ok(receiver)
+""",
+        "peer flush receiver is created only with its retained post owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        peer_reliable_items.get("post_recover_inner"),
+        """
+let retained =
+    RetainedPost::new(msg, OutboundPostOwnership::new(byte_lease, flush_ack));
+sender.try_send(retained).map_err(|error| match error {
+    TrySendError::Full(retained) => {
+        let (message, _released_lease) = retained.into_parts();
+        RecoverPostError::Full(message)
+    }
+    TrySendError::Closed(retained) => {
+        let (message, _released_lease) = retained.into_parts();
+        RecoverPostError::Closed(message)
+    }
+})
+""",
+        "peer mailbox transfers or returns the exact post and flush ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        peer_reliable_items.get("prepare_or_defer_with_ownership"),
+        """
+let bytes = core::mem::take(&mut self.buffer);
+let ownership = core::mem::take(&mut self.buffer_ownership);
+debug_assert!(
+    !bytes.is_empty(),
+    "a queue-full prepare must retain the current encoded message"
+);
+*self.deferred_mut(pool) = Some(DeferredPlaintext {
+    bytes,
+    ownership,
+    priority,
+    high_class,
+});
+""",
+        "deferred plaintext retains the exact lease and flush sender",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        peer_reliable_items.get("fill_batch"),
+        """
+self.batch.extend_from_slice(&frame.bytes);
+self.batch_ownership.append(&mut frame.ownership);
+self.recycle_frame_buffer(frame.bytes);
+""",
+        "coalesced writer batch carries every exact frame owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        peer_reliable_items.get("send"),
+        """
+self.write.flush().await?;
+self.batch.clear();
+self.acknowledge_flushed_batch();
+""",
+        "successful full write flushes before acknowledging its owners",
+        errors,
+        count=2,
+    )
+
+    network_reliable_contexts = {
+        "progress_ticket_request_digest": (),
+        "try_reserve_broadcast_child": (
+            ("impl", "NetworkActorProgressBudget"),
+        ),
+        "into_dispatch_parts": (
+            ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
+        ),
+        "from_dispatch_parts": (
+            ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
+        ),
+    }
+    network_actor_context = (
+        (
+            "impl", "<", "T", ":", "Pload", "+", "message", "::",
+            "ClassifyTopic", ",", "K", ":", "Kex", ",", "E", ":", "Enc",
+            ">", "NetworkBase", "<", "T", ",", "K", ",", "E", ">",
+        ),
+    )
+    network_reliable_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(
+            p2p_network_path, p2p_network_source, item_name, errors
+        )
+        network_reliable_items[item_name] = item
+        _require_rust_item_context(
+            p2p_network_path,
+            item,
+            network_reliable_contexts.get(item_name, network_actor_context),
+            f"reliable network actor ownership {item_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{p2p_network_path}:{item.line}: reliable network actor "
+                f"ownership {item_name} must match exact reviewed token digest "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+
+    progress_lease_drop_items = tuple(
+        item
+        for item in rust_items(p2p_network_source, "drop")
+        if item.brace_context
+        == (("impl", "Drop", "for", "NetworkActorProgressLease"),)
+    )
+    if len(progress_lease_drop_items) != 1:
+        errors.append(
+            f"{p2p_network_path}: require exactly one production Drop item for "
+            "NetworkActorProgressLease; found "
+            f"{len(progress_lease_drop_items)}"
+        )
+        progress_lease_drop = None
+    else:
+        progress_lease_drop = progress_lease_drop_items[0]
+        observed_sha256 = _rust_item_token_sha256(progress_lease_drop)
+        if observed_sha256 != _PRODUCTION_P2P_PROGRESS_LEASE_DROP_SHA256:
+            errors.append(
+                f"{p2p_network_path}:{progress_lease_drop.line}: progress lease "
+                "drop ownership must match exact reviewed token digest "
+                f"{_PRODUCTION_P2P_PROGRESS_LEASE_DROP_SHA256}; found "
+                f"{observed_sha256}"
+            )
+
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+enum BroadcastChildLeaseAttempt {
+    Ready(NetworkActorProgressLease),
+    SameRequestAlreadyOwned,
+    DifferentRequestAlreadyOwned,
+    Unavailable,
+}
+""",
+        "broadcast child ownership distinguishes exact coalescing, distinct residuals, and unavailable geometry",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("try_reserve_broadcast_child"),
+        """
+if let Some(retained) = state.retained_by_source.get(&source) {
+    return if retained.request_digest == parent.request_digest {
+        BroadcastChildLeaseAttempt::SameRequestAlreadyOwned
+    } else {
+        BroadcastChildLeaseAttempt::DifferentRequestAlreadyOwned
+    };
+}
+""",
+        "busy broadcast targets may coalesce only the same canonical request digest",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("try_reserve_broadcast_child"),
+        """
+if state.retained_by_source.len() >= self.max_sources
+    || state.retained_sources_by_class[class_index] >= self.max_sources_per_class
+{
+    return BroadcastChildLeaseAttempt::Unavailable;
+}
+""",
+        "unavailable broadcast-child geometry remains distinct from an already-owned target",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("split_reliable_actor_broadcast"),
+        """
+BroadcastChildLeaseAttempt::SameRequestAlreadyOwned => {
+}
+BroadcastChildLeaseAttempt::DifferentRequestAlreadyOwned => {
+    exact_residual.push_back(target);
+}
+BroadcastChildLeaseAttempt::Unavailable => {
+    exact_residual.push_back(target);
+}
+""",
+        (
+            "same-digest broadcast retries coalesce while distinct requests and unavailable "
+            "children retain exact residuals; this is not a starvation or end-to-end delivery claim"
+        ),
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("progress_ticket_request_digest"),
+        """
+NetworkMessage::Post(post) => {
+    let metadata = [0_u8, priority_tag(post.priority)];
+    let target = post.peer_id.encode();
+    let payload = post.data.encode();
+    Hash::new_from_chunks(&[DOMAIN, &metadata, &target, &payload])
+}
+NetworkMessage::Broadcast(broadcast) => {
+    let metadata = [1_u8, priority_tag(broadcast.priority)];
+    let payload = broadcast.data.encode();
+    Hash::new_from_chunks(&[DOMAIN, &metadata, &payload])
+}
+""",
+        "canonical progress digest keeps Post and Broadcast request identities disjoint",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        progress_lease_drop,
+        """
+assert_eq!(
+    retained.request_digest,
+    self.request_digest,
+    "progress actor source lease must retain its canonical request identity"
+);
+retained.bytes = retained
+    .bytes
+    .checked_sub(self.bytes)
+""",
+        "progress lease drop must release only the source with the same canonical request digest",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("accept_reliable_actor_message"),
+        """
+if unsplit_broadcast {
+    self.split_reliable_actor_broadcast(pending, message);
+} else {
+    pending.push_back(message);
+}
+self.retry_reliable_actor_messages(pending, 2);
+""",
+        (
+            "fresh broadcast acceptance delegates to sealed fail-closed local "
+            "ownership only; this is not a starvation or end-to-end delivery claim"
+        ),
+        errors,
+    )
+
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+struct ActorProgressSource {
+    target: Option<PeerId>,
+    class: ActorProgressClass,
+}
+""",
+        "reliable actor source and logical target identity",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+struct AdmittedNetworkMessage<T> {
+    message: Option<NetworkMessage<T>>,
+    byte_lease: NetworkActorLease,
+    remaining_broadcast_targets: Option<VecDeque<PeerId>>,
+    pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
+}
+""",
+        "single actor owner carries message, bytes, target cursor, and flush receivers",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("dispatch_reliable_actor_message"),
+        """
+Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+    pending_flush_acks.remove(&target);
+    retry_targets.push(target);
+}
+Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+""",
+        "closed writer acknowledgement restores the exact retry target",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("dispatch_reliable_actor_message"),
+        """
+if transferred {
+    drop(actor_lease);
+    Ok(())
+} else {
+    Err(AdmittedNetworkMessage::from_dispatch_parts(
+        message,
+        actor_lease,
+        remaining_broadcast_targets,
+        pending_flush_acks,
+    ))
+}
+""",
+        "actor bytes retire only after all exact writer flushes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("post_reliable_actor_frame_to_writer"),
+        """
+match ref_peer.handle.post_recover_with_flush_ack(frame) {
+    Ok(receiver) => {
+""",
+        "reliable actor dispatch enters the ownership-bearing peer writer",
+        errors,
+    )
+    for item_name in (
+        "dispatch_reliable_actor_message",
+        "post_reliable_actor_frame_to_writer",
+    ):
+        item = network_reliable_items.get(item_name)
+        if item is not None and _token_sequence_count(
+            rust_code_tokens(item.source), ("DeferredPeerFrameQueue",)
+        ):
+            errors.append(
+                f"{p2p_network_path}:{item.line}: reliable actor ownership "
+                f"{item_name} must bypass DeferredPeerFrameQueue"
+            )
+
+    # The Sumeragi-specific ownership, exact envelope sizing, activation
+    # rechecks, and daemon hand-off are checked below. Keeping this function a
+    # single cross-layer source-fidelity gate prevents a proof fixture from
+    # copying only the reducer while silently omitting a shorter transport or
+    # config layer. It does not prove starvation freedom or end-to-end
+    # relay/application delivery.
+    return errors
+
+
 def _effect_capacity_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
@@ -4572,20 +9038,20 @@ def _effect_capacity_mutation_source_fidelity_errors(
     model_count = sum(name.endswith(".tla") for name in expected_formal)
     config_count = sum(name.endswith(".cfg") for name in expected_formal)
     if (
-        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 23
-        or model_count != 4
-        or config_count != 19
+        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 34
+        or model_count != 6
+        or config_count != 28
     ):
         errors.append(
-            "effect-capacity mutation source seal must name exactly four models "
-            "and nineteen configurations; found "
+            "effect-capacity mutation source seal must name exactly six models "
+            "and twenty-eight configurations; found "
             f"models={model_count}, configurations={config_count}, "
             f"total={len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS)}"
         )
     if digest_names != expected_all:
         errors.append(
             "effect-capacity mutation digest inventory must equal the exact "
-            f"24-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"35-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -4632,6 +9098,8 @@ def _effect_capacity_mutation_source_fidelity_errors(
                 f"{path}: effect-capacity mutation artifact must match exact "
                 f"reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
             )
+    errors.extend(_effect_capacity_mutation_runner_errors(repo_root))
+    errors.extend(_effect_capacity_production_source_fidelity_errors(repo_root))
     return errors
 
 
@@ -4648,20 +9116,20 @@ def _post_decision_timeout_mutation_source_fidelity_errors(
     model_count = sum(name.endswith(".tla") for name in expected_formal)
     config_count = sum(name.endswith(".cfg") for name in expected_formal)
     if (
-        len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) != 9
+        len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) != 10
         or model_count != 1
-        or config_count != 8
+        or config_count != 9
     ):
         errors.append(
             "post-Decision timeout mutation source seal must name exactly one "
-            "model and eight configurations; found "
+            "model and nine configurations; found "
             f"models={model_count}, configurations={config_count}, "
             f"total={len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS)}"
         )
     if digest_names != expected_all:
         errors.append(
             "post-Decision timeout mutation digest inventory must equal the "
-            f"exact 10-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 11-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -4717,6 +9185,731 @@ def _post_decision_timeout_mutation_source_fidelity_errors(
     return errors
 
 
+def _certified_response_registration_runner_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the five certified-response registration mutation outcomes."""
+
+    path = repo_root / CERTIFIED_RESPONSE_REGISTRATION_RUNNER
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: certified-response registration runner must be a regular file"
+        ]
+
+    source = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    structural_contracts = (
+        (
+            'readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"',
+            "repository-relative formal directory",
+            1,
+        ),
+        (
+            'readonly MODEL="SumeragiV2CertifiedResponseRegistrationMutation.tla"',
+            "sealed mutation model",
+            1,
+        ),
+        ("if (($#)); then", "argument rejection", 1),
+        ('cd "$FORMAL_DIR"', "formal-directory execution", 2),
+        (
+            "Semantic processing of module "
+            "SumeragiV2CertifiedResponseRegistrationMutation",
+            "frozen SANY semantic-processing marker",
+            1,
+        ),
+        (
+            "[tlc] certified-response registration mutation matrix passed",
+            "successful matrix terminator",
+            1,
+        ),
+    )
+    for token, description, expected_count in structural_contracts:
+        observed_count = source.count(token)
+        if observed_count != expected_count:
+            errors.append(
+                f"{path}: runner must contain {description} exactly "
+                f"{expected_count} time(s); found {observed_count}"
+            )
+
+    expected_cases = (
+        (
+            "duplicate-fixed",
+            "certified_response_registration_duplicate_fixed.cfg",
+            0,
+            (
+                "Model checking completed. No error has been found.",
+                "5 states generated, 5 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 5",
+            ),
+        ),
+        (
+            "restart-fixed",
+            "certified_response_registration_restart_fixed.cfg",
+            0,
+            (
+                "Model checking completed. No error has been found.",
+                "11 states generated, 11 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 11",
+            ),
+        ),
+        (
+            "historical-fixed",
+            "certified_response_registration_historical_fixed.cfg",
+            0,
+            (
+                "Model checking completed. No error has been found.",
+                "8 states generated, 8 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 8",
+            ),
+        ),
+        (
+            "duplicate-missing-guard",
+            "certified_response_registration_duplicate_missing_guard.cfg",
+            12,
+            (
+                "Invariant AcceptedOnlyWhileOutstanding is violated.",
+                "5 states generated, 5 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 5",
+            ),
+        ),
+        (
+            "restart-missing-guard",
+            "certified_response_registration_restart_missing_guard.cfg",
+            12,
+            (
+                "Invariant AcceptedOnlyWhileOutstanding is violated.",
+                "7 states generated, 7 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 7",
+            ),
+        ),
+    )
+    expected_by_label = {case[0]: case[1:] for case in expected_cases}
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    cases: list[tuple[str, str, int, tuple[str, ...]]] = []
+    for line in normalized_source.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("run_case "):
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=False, posix=True)
+        except ValueError as error:
+            errors.append(f"{path}: cannot parse run_case invocation: {error}")
+            continue
+        if len(tokens) != 7:
+            errors.append(
+                f"{path}: each certified-response run_case must name label, "
+                "config, status, and exactly three outcome markers"
+            )
+            continue
+        label, config, status_token = tokens[1:4]
+        try:
+            status = int(status_token)
+        except ValueError:
+            errors.append(
+                f"{path}: {label} has non-integer TLC status {status_token!r}"
+            )
+            continue
+        cases.append((label, config, status, tuple(tokens[4:])))
+
+    expected_order = tuple(case[0] for case in expected_cases)
+    observed_order = tuple(case[0] for case in cases)
+    if len(cases) != 5 or observed_order != expected_order:
+        errors.append(
+            f"{path}: runner must execute exactly five sealed cases in order "
+            f"{expected_order!r}; found {observed_order!r}"
+        )
+
+    for label, config, status, markers in cases:
+        expected = expected_by_label.get(label)
+        if expected is None:
+            errors.append(f"{path}: runner contains unreviewed case {label!r}")
+            continue
+        expected_config, expected_status, expected_markers = expected
+        if (config, status, markers) != expected:
+            errors.append(
+                f"{path}: {label} must use config {expected_config}, status "
+                f"{expected_status}, and exact markers {expected_markers!r}; "
+                f"found config={config}, status={status}, markers={markers!r}"
+            )
+
+    repaired_count = sum(case[2] == 0 for case in cases)
+    mutant_count = sum(case[2] == 12 for case in cases)
+    if repaired_count != 3 or mutant_count != 2:
+        errors.append(
+            f"{path}: runner must contain exactly three repaired cases and two "
+            f"status-12 mutants; found repaired={repaired_count}, "
+            f"mutants={mutant_count}"
+        )
+
+    state_marker = re.compile(
+        r"(?P<generated>\d+) states generated, "
+        r"(?P<distinct>\d+) distinct states found, "
+        r"0 states left on queue\."
+    )
+    depth_marker = re.compile(
+        r"depth of the complete state graph search is (?P<depth>\d+)"
+    )
+    generated_total = 0
+    distinct_total = 0
+    depth_total = 0
+    parsed_state_cases = 0
+    parsed_depth_cases = 0
+    for label, _config, _status, markers in cases:
+        state_matches = [
+            match
+            for marker in markers
+            if (match := state_marker.fullmatch(marker)) is not None
+        ]
+        depth_matches = [
+            match
+            for marker in markers
+            if (match := depth_marker.fullmatch(marker)) is not None
+        ]
+        if len(state_matches) != 1:
+            errors.append(
+                f"{path}: {label} must pin exactly one complete state-count marker"
+            )
+        else:
+            parsed_state_cases += 1
+            generated_total += int(state_matches[0].group("generated"))
+            distinct_total += int(state_matches[0].group("distinct"))
+        if len(depth_matches) != 1:
+            errors.append(
+                f"{path}: {label} must pin exactly one complete search-depth marker"
+            )
+        else:
+            parsed_depth_cases += 1
+            depth_total += int(depth_matches[0].group("depth"))
+    if (
+        parsed_state_cases != 5
+        or parsed_depth_cases != 5
+        or generated_total != 36
+        or distinct_total != 36
+        or depth_total != 36
+    ):
+        errors.append(
+            f"{path}: runner must report exactly 36 generated states, 36 "
+            "distinct states, and aggregate depth 36 across five cases; found "
+            f"generated={generated_total}, distinct={distinct_total}, "
+            f"depth={depth_total}, state_cases={parsed_state_cases}, "
+            f"depth_cases={parsed_depth_cases}"
+        )
+    return errors
+
+
+def _decision_recovery_lifecycle_runner_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the fixed lifecycle trace and all eight targeted mutants."""
+
+    path = repo_root / DECISION_RECOVERY_LIFECYCLE_RUNNER
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: Decision recovery lifecycle runner must be a regular file"
+        ]
+
+    source = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    structural_contracts = (
+        (
+            'readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"',
+            "repository-relative formal directory",
+            1,
+        ),
+        (
+            'readonly MODEL="SumeragiV2DecisionRecoveryLifecycleMutation.tla"',
+            "sealed mutation model",
+            1,
+        ),
+        ("if (($#)); then", "argument rejection", 1),
+        ('cd "$FORMAL_DIR"', "formal-directory execution", 2),
+        (
+            "Semantic processing of module "
+            "SumeragiV2DecisionRecoveryLifecycleMutation",
+            "frozen SANY semantic-processing marker",
+            1,
+        ),
+        (
+            "[tlc] exact durable Decision recovery lifecycle fixed case passed",
+            "fixed-case terminator",
+            1,
+        ),
+        (
+            "[tlc] all 8 targeted lifecycle mutants failed their named invariants",
+            "complete mutant-matrix terminator",
+            1,
+        ),
+    )
+    for token, description, expected_count in structural_contracts:
+        observed_count = source.count(token)
+        if observed_count != expected_count:
+            errors.append(
+                f"{path}: runner must contain {description} exactly "
+                f"{expected_count} time(s); found {observed_count}"
+            )
+
+    expected_cases = (
+        (
+            "fixed",
+            "decision_recovery_lifecycle_fixed.cfg",
+            0,
+            (
+                "TLC2 Version 2.19",
+                "Model checking completed. No error has been found.",
+                "7 states generated, 7 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 7.",
+            ),
+        ),
+        (
+            "duplicate-same-node-context",
+            "decision_recovery_lifecycle_duplicate_decision_bug.cfg",
+            12,
+            (
+                "Invariant DecisionsUniqueByNodeContext is violated.",
+                "2 states generated, 2 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 2.",
+            ),
+        ),
+        (
+            "generation-in-logical-registration",
+            "decision_recovery_lifecycle_registration_generation_bug.cfg",
+            12,
+            (
+                "Invariant LogicalRegistrationGenerationFree is violated.",
+                "3 states generated, 3 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 3.",
+            ),
+        ),
+        (
+            "recipient-fanout-split-registration",
+            "decision_recovery_lifecycle_fanout_split_registration_bug.cfg",
+            12,
+            (
+                "Invariant RecipientFanoutSharesOneLogicalRegistration is violated.",
+                "3 states generated, 3 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 3.",
+            ),
+        ),
+        (
+            "replay-retains-registration",
+            "decision_recovery_lifecycle_replay_retains_registration_bug.cfg",
+            12,
+            (
+                "Invariant ReplayClearsLogicalRegistration is violated.",
+                "6 states generated, 6 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 6.",
+            ),
+        ),
+        (
+            "replay-drops-fetch-body",
+            "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg",
+            12,
+            (
+                "Invariant RecoveredHasExactFetchBody is violated.",
+                "6 states generated, 6 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 6.",
+            ),
+        ),
+        (
+            "stale-executor-generation",
+            "decision_recovery_lifecycle_stale_executor_generation_bug.cfg",
+            12,
+            (
+                "Invariant RecoveryExecutorUsesCurrentGeneration is violated.",
+                "5 states generated, 5 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 5.",
+            ),
+        ),
+        (
+            "prepare-certificate-authority",
+            "decision_recovery_lifecycle_prepare_authority_bug.cfg",
+            12,
+            (
+                "Invariant RecoveryAuthorityIsExactCommitDecision is violated.",
+                "4 states generated, 4 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 4.",
+            ),
+        ),
+        (
+            "non-singleton-replay",
+            "decision_recovery_lifecycle_non_singleton_replay_bug.cfg",
+            12,
+            (
+                "Invariant RecoveredReplayIsExactSingleton is violated.",
+                "6 states generated, 6 distinct states found, 0 states left on queue.",
+                "The depth of the complete state graph search is 6.",
+            ),
+        ),
+    )
+    expected_by_label = {case[0]: case[1:] for case in expected_cases}
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    cases: list[tuple[str, str, int, tuple[str, ...]]] = []
+    for line in normalized_source.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("run_case "):
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=False, posix=True)
+        except ValueError as error:
+            errors.append(f"{path}: cannot parse run_case invocation: {error}")
+            continue
+        if len(tokens) < 5:
+            errors.append(
+                f"{path}: each Decision recovery lifecycle run_case must name "
+                "a label, config, status, and reviewed outcome markers"
+            )
+            continue
+        label, config, status_token = tokens[1:4]
+        try:
+            status = int(status_token)
+        except ValueError:
+            errors.append(
+                f"{path}: {label} has non-integer TLC status {status_token!r}"
+            )
+            continue
+        cases.append((label, config, status, tuple(tokens[4:])))
+
+    expected_order = tuple(case[0] for case in expected_cases)
+    observed_order = tuple(case[0] for case in cases)
+    if len(cases) != 9 or observed_order != expected_order:
+        errors.append(
+            f"{path}: runner must execute exactly nine sealed cases in order "
+            f"{expected_order!r}; found {observed_order!r}"
+        )
+
+    for label, config, status, markers in cases:
+        expected = expected_by_label.get(label)
+        if expected is None:
+            errors.append(f"{path}: runner contains unreviewed case {label!r}")
+            continue
+        expected_config, expected_status, expected_markers = expected
+        if (config, status, markers) != expected:
+            errors.append(
+                f"{path}: {label} must use config {expected_config}, status "
+                f"{expected_status}, and exact markers {expected_markers!r}; "
+                f"found config={config}, status={status}, markers={markers!r}"
+            )
+
+    repaired_count = sum(case[2] == 0 for case in cases)
+    mutant_count = sum(case[2] == 12 for case in cases)
+    if repaired_count != 1 or mutant_count != 8:
+        errors.append(
+            f"{path}: runner must contain exactly one fixed case and eight "
+            f"status-12 mutants; found fixed={repaired_count}, "
+            f"mutants={mutant_count}"
+        )
+
+    state_marker = re.compile(
+        r"(?P<generated>\d+) states generated, "
+        r"(?P<distinct>\d+) distinct states found, "
+        r"0 states left on queue\."
+    )
+    depth_marker = re.compile(
+        r"The depth of the complete state graph search is (?P<depth>\d+)\."
+    )
+    generated_total = 0
+    distinct_total = 0
+    depth_total = 0
+    parsed_state_cases = 0
+    parsed_depth_cases = 0
+    for label, _config, _status, markers in cases:
+        state_matches = [
+            match
+            for marker in markers
+            if (match := state_marker.fullmatch(marker)) is not None
+        ]
+        depth_matches = [
+            match
+            for marker in markers
+            if (match := depth_marker.fullmatch(marker)) is not None
+        ]
+        if len(state_matches) != 1:
+            errors.append(
+                f"{path}: {label} must pin exactly one complete state-count marker"
+            )
+        else:
+            parsed_state_cases += 1
+            generated_total += int(state_matches[0].group("generated"))
+            distinct_total += int(state_matches[0].group("distinct"))
+        if len(depth_matches) != 1:
+            errors.append(
+                f"{path}: {label} must pin exactly one complete search-depth marker"
+            )
+        else:
+            parsed_depth_cases += 1
+            depth_total += int(depth_matches[0].group("depth"))
+    if (
+        parsed_state_cases != 9
+        or parsed_depth_cases != 9
+        or generated_total != 42
+        or distinct_total != 42
+        or depth_total != 42
+    ):
+        errors.append(
+            f"{path}: runner must report exactly 42 generated states, 42 "
+            "distinct states, and aggregate depth 42 across nine cases; found "
+            f"generated={generated_total}, distinct={distinct_total}, "
+            f"depth={depth_total}, state_cases={parsed_state_cases}, "
+            f"depth_cases={parsed_depth_cases}"
+        )
+    return errors
+
+
+def _certified_response_registration_production_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+) -> list[str]:
+    """Require exact live-request registration before response acceptance."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: certified-response production model must be a regular file"
+        ]
+    source = path.read_text(encoding="utf-8")
+    stripped = strip_tla_comments(source, preserve_string_contents=True)
+    errors: list[str] = []
+    declarations: dict[str, re.Match[str]] = {}
+    for symbol in ("MatchingCertifiedRequests", "CertifiedResponseAuthorized"):
+        matches = list(
+            re.finditer(
+                rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+                stripped,
+            )
+        )
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: production model must define {symbol} exactly once; "
+                f"found {len(matches)}"
+            )
+        else:
+            declarations[symbol] = matches[0]
+    if len(declarations) == 2 and not (
+        declarations["MatchingCertifiedRequests"].start()
+        < declarations["CertifiedResponseAuthorized"].start()
+    ):
+        errors.append(
+            f"{path}: MatchingCertifiedRequests must be defined before "
+            "CertifiedResponseAuthorized so response authorization cannot bind "
+            "to an imported or later shadow definition"
+        )
+
+    expected_bodies = {
+        "MatchingCertifiedRequests": (
+            "{request \\in asyncActiveRequests: "
+            '/\\ request.kind = "CertifiedRequest" '
+            "/\\ request.source = response.envelope.recipient "
+            "/\\ request.envelope.height = response.envelope.height "
+            "/\\ request.envelope.view = response.envelope.view "
+            "/\\ request.envelope.subject = response.envelope.subject}"
+        ),
+        "CertifiedResponseAuthorized": (
+            '/\\ item.kind = "CertifiedResponse" '
+            "/\\ MatchingCertifiedRequests(item) # {} "
+            "/\\ \\E decision \\in decisions: "
+            "/\\ decision.node = item.envelope.recipient "
+            "/\\ decision.qc.context = context "
+            "/\\ decision.qc.view = item.envelope.view "
+            "/\\ decision.qc.subject = item.envelope.subject "
+            '/\\ decision.qc.phase = "Commit" '
+            "/\\ item.source \\in decision.qc.signers"
+        ),
+    }
+    for symbol, expected in expected_bodies.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            if symbol not in declarations:
+                continue
+            errors.append(f"{path}: cannot extract production operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            description = (
+                "must require one exact live matching certified request before "
+                "Decision/signer authorization"
+                if symbol == "CertifiedResponseAuthorized"
+                else "must retain exact outstanding-request identity"
+            )
+            errors.append(
+                f"{path}:{line}: {symbol} {description}; expected "
+                f"{expected!r}, found {normalized!r}"
+            )
+    return errors
+
+
+def _certified_response_registration_mutation_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the exact certified-response registration mutation corpus."""
+
+    errors: list[str] = []
+    expected_formal = set(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS)
+    expected_all = expected_formal | {CERTIFIED_RESPONSE_REGISTRATION_RUNNER}
+    digest_names = set(CERTIFIED_RESPONSE_REGISTRATION_SHA256)
+    model_count = sum(name.endswith(".tla") for name in expected_formal)
+    config_count = sum(name.endswith(".cfg") for name in expected_formal)
+    if (
+        len(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) != 6
+        or model_count != 1
+        or config_count != 5
+    ):
+        errors.append(
+            "certified-response registration source seal must name exactly one "
+            "model and five configurations; found "
+            f"models={model_count}, configurations={config_count}, "
+            f"total={len(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS)}"
+        )
+    if digest_names != expected_all:
+        errors.append(
+            "certified-response registration digest inventory must equal the "
+            f"exact seven-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"extra={sorted(digest_names - expected_all)}"
+        )
+
+    observed_formal = {
+        path.name
+        for pattern in (
+            "SumeragiV2CertifiedResponseRegistration*.tla",
+            "certified_response_registration_*.cfg",
+        )
+        for path in formal_dir.glob(pattern)
+    }
+    for name in sorted(expected_formal - observed_formal):
+        errors.append(
+            f"{formal_dir / name}: missing certified-response registration artifact"
+        )
+    for name in sorted(observed_formal - expected_formal):
+        errors.append(
+            f"{formal_dir / name}: extra certified-response registration artifact"
+        )
+
+    runner_dir = repo_root / "scripts" / "formal"
+    observed_runners = {
+        path.relative_to(repo_root).as_posix()
+        for path in runner_dir.glob(
+            "run_sumeragi_v2_certified_response_registration*_mutation.sh"
+        )
+    }
+    expected_runners = {CERTIFIED_RESPONSE_REGISTRATION_RUNNER}
+    for name in sorted(expected_runners - observed_runners):
+        errors.append(
+            f"{repo_root / name}: missing certified-response registration runner"
+        )
+    for name in sorted(observed_runners - expected_runners):
+        errors.append(
+            f"{repo_root / name}: extra certified-response registration runner"
+        )
+
+    for name, expected_sha256 in CERTIFIED_RESPONSE_REGISTRATION_SHA256.items():
+        path = repo_root / name if "/" in name else formal_dir / name
+        if not path.is_file() or path.is_symlink():
+            if path.exists() or path.is_symlink():
+                errors.append(
+                    f"{path}: certified-response registration artifact must be "
+                    "a regular file"
+                )
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: certified-response registration artifact must match "
+                f"exact reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+    errors.extend(_certified_response_registration_runner_errors(repo_root))
+    errors.extend(
+        _certified_response_registration_production_source_fidelity_errors(
+            formal_dir
+        )
+    )
+    return errors
+
+
+def _decision_recovery_lifecycle_mutation_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the exact durable Decision recovery lifecycle mutation corpus."""
+
+    errors: list[str] = []
+    expected_formal = set(DECISION_RECOVERY_LIFECYCLE_FORMAL_ARTIFACTS)
+    expected_all = expected_formal | {DECISION_RECOVERY_LIFECYCLE_RUNNER}
+    digest_names = set(DECISION_RECOVERY_LIFECYCLE_SHA256)
+    model_count = sum(name.endswith(".tla") for name in expected_formal)
+    config_count = sum(name.endswith(".cfg") for name in expected_formal)
+    if (
+        len(DECISION_RECOVERY_LIFECYCLE_FORMAL_ARTIFACTS) != 10
+        or model_count != 1
+        or config_count != 9
+    ):
+        errors.append(
+            "Decision recovery lifecycle source seal must name exactly one "
+            "model and nine configurations; found "
+            f"models={model_count}, configurations={config_count}, "
+            f"total={len(DECISION_RECOVERY_LIFECYCLE_FORMAL_ARTIFACTS)}"
+        )
+    if digest_names != expected_all:
+        errors.append(
+            "Decision recovery lifecycle digest inventory must equal the "
+            f"exact 11-file corpus; missing={sorted(expected_all - digest_names)}, "
+            f"extra={sorted(digest_names - expected_all)}"
+        )
+
+    observed_formal = {
+        path.name
+        for pattern in (
+            "SumeragiV2DecisionRecoveryLifecycle*.tla",
+            "decision_recovery_lifecycle_*.cfg",
+        )
+        for path in formal_dir.glob(pattern)
+    }
+    for name in sorted(expected_formal - observed_formal):
+        errors.append(
+            f"{formal_dir / name}: missing Decision recovery lifecycle artifact"
+        )
+    for name in sorted(observed_formal - expected_formal):
+        errors.append(
+            f"{formal_dir / name}: extra Decision recovery lifecycle artifact"
+        )
+
+    runner_dir = repo_root / "scripts" / "formal"
+    observed_runners = {
+        path.relative_to(repo_root).as_posix()
+        for path in runner_dir.glob(
+            "run_sumeragi_v2_decision_recovery_lifecycle*_mutation.sh"
+        )
+    }
+    expected_runners = {DECISION_RECOVERY_LIFECYCLE_RUNNER}
+    for name in sorted(expected_runners - observed_runners):
+        errors.append(
+            f"{repo_root / name}: missing Decision recovery lifecycle runner"
+        )
+    for name in sorted(observed_runners - expected_runners):
+        errors.append(
+            f"{repo_root / name}: extra Decision recovery lifecycle runner"
+        )
+
+    for name, expected_sha256 in DECISION_RECOVERY_LIFECYCLE_SHA256.items():
+        path = repo_root / name if "/" in name else formal_dir / name
+        if not path.is_file() or path.is_symlink():
+            if path.exists() or path.is_symlink():
+                errors.append(
+                    f"{path}: Decision recovery lifecycle artifact must be "
+                    "a regular file"
+                )
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: Decision recovery lifecycle artifact must match "
+                f"exact reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+    errors.extend(_decision_recovery_lifecycle_runner_errors(repo_root))
+    return errors
+
+
 def _production_causal_fifo_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
 ) -> list[str]:
@@ -4730,6 +9923,82 @@ def _production_causal_fifo_source_fidelity_errors(
         errors.append(f"{adapter_path}: production adapter source is required")
     else:
         adapter_source = adapter_path.read_text(encoding="utf-8")
+        adapter_bound_items = (
+            (
+                "from_record",
+                (("impl", "PersistenceMacroStepClass"),),
+                "exhaustive WAL-record macro-step classifier",
+            ),
+            (
+                "budget",
+                (("impl", "PersistenceMacroStepClass"),),
+                "record-specific persistence macro-step budget",
+            ),
+            (
+                "deferred_work_is_serviceable",
+                (("impl", "SumeragiV2Adapter"),),
+                "adapter deferred-work serviceability fence",
+            ),
+            (
+                "ready_to_finish",
+                (("impl", "SumeragiV2Adapter"),),
+                "terminal adapter deferred-debt readiness fence",
+            ),
+            (
+                "drain_deferred",
+                (("impl", "SumeragiV2Adapter"),),
+                "single-transition adapter deferred dispatcher",
+            ),
+            (
+                "fail_deferred_service_contract",
+                (("impl", "SumeragiV2Adapter"),),
+                "terminal deferred-service contract failure",
+            ),
+        )
+        for item_name, context, description in adapter_bound_items:
+            item = _require_rust_item(
+                adapter_path, adapter_source, item_name, errors
+            )
+            _require_rust_item_context(
+                adapter_path,
+                item,
+                context,
+                description,
+                errors,
+            )
+            if item is not None:
+                expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
+                    item_name
+                ]
+                observed_sha256 = _rust_item_token_sha256(item)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{adapter_path}:{item.line}: {description} declaration, "
+                        "contract, and complete control flow must match the exact "
+                        f"reviewed token digest {expected_sha256}; found "
+                        f"{observed_sha256}"
+                    )
+        adapter_macro_bound = rust_code_tokens(
+            """
+const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize =
+    reducer::MAX_EFFECTS_PER_STEP;
+const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
+const _: () = assert!(
+    MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP
+        <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP
+);
+"""
+        )
+        adapter_tokens = rust_code_tokens(adapter_source)
+        macro_bound_count = _token_sequence_count(
+            adapter_tokens, adapter_macro_bound
+        )
+        if macro_bound_count != 1:
+            errors.append(
+                f"{adapter_path}: the adapter macro-step bound must remain the "
+                "reducer source bound with the exact reviewed five-effect "
+                f"persistence witness; found {macro_bound_count} contracts"
+            )
         drive = _require_rust_item(
             adapter_path, adapter_source, "drive_effects", errors
         )
@@ -4756,8 +10025,9 @@ def _production_causal_fifo_source_fidelity_errors(
             "self.wal.append(&payload)",
             "let persisted = reducer::Event::Persisted { tag, id };",
             "let continuation = match self.reducer.step(persisted.clone())",
+            "let continuation = continuation.into_effects();",
             "reducer::prepend_causal_continuation("
-            "&mut pending, continuation.into_effects());",
+            "&mut pending, continuation);",
         )
         drive_tokens = () if drive is None else rust_code_tokens(drive.source)
         drive_positions: list[int] = []
@@ -4966,6 +10236,163 @@ assert!(status.liveness.outbound_intents.iter().any(|intent| {
                 f"{adapter_path}: strengthened TC regression must recover, store, "
                 "and validate the protected body in order"
             )
+
+    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    if not runtime_path.is_file():
+        errors.append(
+            f"{runtime_path}: serialized deferred-work runtime source is required"
+        )
+    else:
+        runtime_source = runtime_path.read_text(encoding="utf-8")
+        runtime_tokens = rust_code_tokens(runtime_source)
+        production_progress_trait_contract = rust_code_tokens(
+            """
+fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
+fn wire_ingress_may_use_progress(
+    &self,
+    payload: &wire::ConsensusMessageV2Payload
+) -> bool;
+"""
+        )
+        progress_trait_contract_count = _token_sequence_count(
+            runtime_tokens, production_progress_trait_contract
+        )
+        if progress_trait_contract_count != 1:
+            errors.append(
+                f"{runtime_path}: RuntimeDriver progress-capacity method must be "
+                "part of the production trait surface immediately after the "
+                "timer-effect classifier; found "
+                f"{progress_trait_contract_count} reviewed contracts"
+            )
+
+        progress_bridge_context = (
+            ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
+        )
+        progress_bridges = tuple(
+            item
+            for item in rust_items(runtime_source, "wire_ingress_may_use_progress")
+            if item.brace_context == progress_bridge_context
+        )
+        if len(progress_bridges) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one production "
+                "RuntimeDriver progress-capacity adapter bridge; found "
+                f"{len(progress_bridges)}"
+            )
+        else:
+            progress_bridge = progress_bridges[0]
+            _require_rust_item_context(
+                runtime_path,
+                progress_bridge,
+                progress_bridge_context,
+                "production progress-capacity adapter bridge",
+                errors,
+            )
+            _require_exact_rust_tokens(
+                runtime_path,
+                progress_bridge,
+                """
+fn wire_ingress_may_use_progress(
+    &self,
+    payload: &wire::ConsensusMessageV2Payload
+) -> bool {
+    SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
+}
+""",
+                "production progress-capacity adapter bridge",
+                errors,
+            )
+
+        runtime_context = (
+            (
+                "impl",
+                "<",
+                "D",
+                ":",
+                "RuntimeDriver",
+                ">",
+                "SerializedV2Runtime",
+                "<",
+                "D",
+                ">",
+            ),
+        )
+        runtime_items = (
+            ("step", "runtime_step", "live serialized runtime step"),
+            (
+                "step_recovery",
+                "runtime_step_recovery",
+                "recovery serialized runtime step",
+            ),
+            (
+                "dispatch_one_adapter_deferred",
+                "dispatch_one_adapter_deferred",
+                "single adapter-deferred runtime dispatcher",
+            ),
+        )
+        observed_runtime_items: dict[str, RustItem | None] = {}
+        for item_name, digest_name, description in runtime_items:
+            item = _require_rust_item(
+                runtime_path, runtime_source, item_name, errors
+            )
+            observed_runtime_items[item_name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_context,
+                description,
+                errors,
+            )
+            if item is not None:
+                expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
+                    digest_name
+                ]
+                observed_sha256 = _rust_item_token_sha256(item)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{runtime_path}:{item.line}: {description} declaration, "
+                        "contract, and complete control flow must match the exact "
+                        f"reviewed token digest {expected_sha256}; found "
+                        f"{observed_sha256}"
+                    )
+        for item_name, later_contract in (
+            ("step", "let round_timeout = round_timeout_for_view"),
+            (
+                "step_recovery",
+                "let Some(command) = self.ingress.pop_next() else",
+            ),
+        ):
+            item = observed_runtime_items.get(item_name)
+            if item is None:
+                continue
+            item_tokens = rust_code_tokens(item.source)
+            dispatch_tokens = rust_code_tokens(
+                "self.dispatch_one_adapter_deferred(now)?"
+            )
+            later_tokens = rust_code_tokens(later_contract)
+            dispatch_positions = [
+                index
+                for index in range(
+                    len(item_tokens) - len(dispatch_tokens) + 1
+                )
+                if item_tokens[index : index + len(dispatch_tokens)]
+                == dispatch_tokens
+            ]
+            later_positions = [
+                index
+                for index in range(len(item_tokens) - len(later_tokens) + 1)
+                if item_tokens[index : index + len(later_tokens)] == later_tokens
+            ]
+            if (
+                len(dispatch_positions) != 1
+                or len(later_positions) != 1
+                or dispatch_positions[0] >= later_positions[0]
+            ):
+                errors.append(
+                    f"{runtime_path}:{item.line}: {item_name} must schedule "
+                    "exactly one serviceable adapter-deferred transition before "
+                    f"{later_contract!r}"
+                )
 
     refinement_path = (
         repo_root / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
@@ -5637,6 +11064,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ (NodeIdle(command.node) "
             "\\/ command.class = \"Completion\")"
         ),
+        "CandidateScheduled": (
+            "candidate \\in QueuedCandidates \\cup DeferredCandidates "
+            "\\cup CausalCandidates \\cup TrackedWorkCandidates"
+        ),
         "FreshCandidateSequence": (
             "IF CandidateScheduled(candidate) THEN <<>> ELSE <<candidate>>"
         ),
@@ -5778,16 +11209,28 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     }
     if (formal_dir / "proof_coverage.json").is_file():
         exact.update({
+            "IngressTransportCompletionKinds": (
+                '{"Chunk", "CertifiedResponse"}'
+            ),
             "IngressProgressKinds": (
                 '{"CommitVote", "PrepareQC", "CommitQC", "TimeoutVote", '
-                '"TimeoutCertificate", "Chunk", "CertifiedRequest", '
-                '"CertifiedResponse", "CommitCertificateRequest", '
+                '"TimeoutCertificate", "CertifiedRequest", '
+                '"CommitCertificateRequest", '
                 '"CommitCertificateResponse"}'
+            ),
+            "IngressAdmissionClass": (
+                "IF item.kind \\in IngressTransportCompletionKinds "
+                'THEN "TransportCompletion" ELSE IF item.kind \\in '
+                'IngressProgressKinds THEN "Progress" ELSE "Auxiliary"'
             ),
             "IngressLaneHasNonTimeoutProgressIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
                 '/\\ IngressAdmissionClass(queued) = "Progress" '
                 '/\\ queued.kind # "TimeoutVote"'
+            ),
+            "IngressLaneHasTransportCompletionIn": (
+                "\\E queued \\in SequenceSet(lanes[recipient][source]): "
+                'IngressAdmissionClass(queued) = "TransportCompletion"'
             ),
             "IngressProtectedSourcesFor": (
                 "{source \\in AsyncIngressSources: "
@@ -5800,23 +11243,52 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "{source \\in ValidatorIds: "
                 "~IngressLaneHasTimeoutVoteIn(lanes, recipient, source)}"
             ),
+            "IngressTransportCompletionProtectedSourcesFor": (
+                "{source \\in AsyncIngressSources: "
+                "~IngressLaneHasTransportCompletionIn("
+                "lanes, recipient, source)}"
+            ),
             "IngressContinuationProtectedSourcesFor": (
-                "{source \\in ValidatorIds: "
-                "\\/ Len(lanes[recipient][source]) = 0 "
+                "{source \\in AsyncIngressSources: "
+                "\\/ /\\ source \\in ValidatorIds "
+                "/\\ \\/ Len(lanes[recipient][source]) = 0 "
                 "\\/ /\\ Len(lanes[recipient][source]) = 1 "
                 "/\\ (IngressLaneHasNonTimeoutProgressIn( "
                 "lanes, recipient, source) "
                 "\\/ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source) "
+                "\\/ IngressLaneHasTransportCompletionIn( "
                 "lanes, recipient, source)) "
                 "\\/ /\\ Len(lanes[recipient][source]) = 2 "
+                "/\\ \\/ /\\ IngressLaneHasNonTimeoutProgressIn( "
+                "lanes, recipient, source) "
+                "/\\ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source) "
+                "\\/ /\\ IngressLaneHasNonTimeoutProgressIn( "
+                "lanes, recipient, source) "
+                "/\\ IngressLaneHasTransportCompletionIn( "
+                "lanes, recipient, source) "
+                "\\/ /\\ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source) "
+                "/\\ IngressLaneHasTransportCompletionIn( "
+                "lanes, recipient, source) "
+                "\\/ /\\ Len(lanes[recipient][source]) = 3 "
                 "/\\ IngressLaneHasNonTimeoutProgressIn( "
                 "lanes, recipient, source) "
                 "/\\ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source) "
+                "/\\ IngressLaneHasTransportCompletionIn( "
+                "lanes, recipient, source) "
+                "\\/ /\\ source \\notin ValidatorIds "
+                "/\\ Len(lanes[recipient][source]) = 1 "
+                "/\\ IngressLaneHasTransportCompletionIn( "
                 "lanes, recipient, source)}"
             ),
             "IngressProtectedSlotCountFor": (
                 "Cardinality(IngressProtectedSourcesFor(lanes, recipient)) + "
                 "Cardinality( IngressTimeoutVoteProtectedSourcesFor("
+                "lanes, recipient)) + "
+                "Cardinality( IngressTransportCompletionProtectedSourcesFor("
                 "lanes, recipient)) + "
                 "Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))"
             ),
@@ -5846,9 +11318,20 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes, "
                 "item.envelope.recipient, item.source)"
             ),
+            "AsyncTransportCompletionOwnerGateAllows": (
+                '\\/ IngressAdmissionClass(item) # "TransportCompletion" '
+                "\\/ ~IngressLaneHasTransportCompletionIn("
+                " asyncIngressLanes, item.envelope.recipient, item.source)"
+            ),
             "IngressLaneHasTimeoutVoteIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
                 'queued.kind = "TimeoutVote"'
+            ),
+            "CanAdmitIngressItem": (
+                "/\\ IngressDepth(item.envelope.recipient) < "
+                "IngressUsableCapacityAfterAdmission(item) "
+                "/\\ AsyncTimeoutVoteByteGateAllows(item) "
+                "/\\ AsyncTransportCompletionOwnerGateAllows(item)"
             ),
             "ProtectedProgressCommand": (
                 'CASE command.kind = "DeliverVote" -> '
@@ -5922,11 +11405,6 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "asyncIoQueues, asyncIoReadyCompletions, "
                 "asyncLocalReadyCompletions)"
             ),
-            "CanAdmitIngressItem": (
-                "/\\ IngressDepth(item.envelope.recipient) < "
-                "IngressUsableCapacityAfterAdmission(item) "
-                "/\\ AsyncTimeoutVoteByteGateAllows(item)"
-            ),
         })
 
     fair_action_frames = {
@@ -5973,6 +11451,75 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
             )
+
+    ingress_item_can_drain = _top_level_operator_body(
+        source, "IngressItemCanDrain", preserve_string_contents=True
+    )
+    if ingress_item_can_drain is not None:
+        ingress_body, ingress_line = ingress_item_can_drain
+        normalized_ingress = " ".join(ingress_body.split())
+        reviewed_response_branches = {
+            "CertifiedResponse": (
+                'ELSE IF item.kind = "CertifiedResponse" '
+                "THEN \\/ ~CertifiedResponseAuthorized(item) "
+                "\\/ CandidateScheduled( CertifiedResponseCandidate(item)) "
+                "\\/ /\\ ~CompletionCausalAdmissionDebt(node) "
+                "/\\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity "
+                "/\\ ~CandidateScheduled( CertifiedResponseCandidate(item)) "
+                'ELSE IF item.kind = "CommitCertificateResponse"'
+            ),
+            "CommitCertificateResponse": (
+                'ELSE IF item.kind = "CommitCertificateResponse" '
+                "THEN \\/ ~CommitCertificateResponseAuthorized(item) "
+                "\\/ CandidateScheduled( "
+                "CommitCertificateResponseCandidate(item)) "
+                "\\/ /\\ ~NonCompletionCausalAdmissionDebt(node) "
+                '/\\ CanEnqueueClass(node, "Progress") '
+                "/\\ ~CandidateScheduled( "
+                "CommitCertificateResponseCandidate(item)) "
+                "ELSE \\/ CandidateScheduled(candidate)"
+            ),
+        }
+        for response_kind, reviewed_branch in reviewed_response_branches.items():
+            branch_count = normalized_ingress.count(reviewed_branch)
+            if branch_count != 1:
+                errors.append(
+                    f"{path}:{ingress_line}: IngressItemCanDrain "
+                    f"{response_kind} branch must use exactly one "
+                    "scheduler-wide CandidateScheduled coalescing arm and "
+                    "exactly one negated fresh-admission arm; "
+                    f"found {branch_count} reviewed branches"
+                )
+
+    drain_fair_ingress = _top_level_operator_body(
+        source, "DrainFairIngressSelected", preserve_string_contents=True
+    )
+    if drain_fair_ingress is not None:
+        drain_body, drain_line = drain_fair_ingress
+        normalized_drain = " ".join(drain_body.split())
+        response_coalescing_actions = {
+            "CertifiedResponse": (
+                "IF CandidateScheduled(completion) THEN UNCHANGED "
+                "<<AsyncIoVars, asyncCommandQueues, asyncNextCommandClass>> "
+                "ELSE /\\ asyncLocalReadyCompletions' = "
+                "[asyncLocalReadyCompletions EXCEPT "
+                "![node] = Append(@, completion)]"
+            ),
+            "CommitCertificateResponse": (
+                "IF CandidateScheduled( discoveredCandidate) THEN UNCHANGED "
+                "<<asyncCommandQueues, asyncNextCommandClass>> "
+                "ELSE EnqueueCandidate( discoveredCandidate)"
+            ),
+        }
+        for response_kind, reviewed_action in response_coalescing_actions.items():
+            action_count = normalized_drain.count(reviewed_action)
+            if action_count != 1:
+                errors.append(
+                    f"{path}:{drain_line}: DrainFairIngressSelected "
+                    f"{response_kind} branch must consume an exact scheduled "
+                    "response without creating another scheduler owner; "
+                    f"found {action_count} reviewed actions"
+                )
 
     fair_refinement = _top_level_operator_body(
         source,
@@ -6392,6 +11939,21 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     )
 
         theorem_transition_coverage = {
+            "AsyncFaultStepKeepsTimeoutPool": (
+                "InjectUntrustedTransportCompletion",
+            ),
+            "AsyncFaultStepPreservesSchedulerType": (
+                "InjectUntrustedTransportCompletionPreservesSchedulerType",
+            ),
+            "AsyncFaultStepLeavesDiscoveryClock": (
+                "InjectUntrustedTransportCompletion",
+            ),
+            "AsyncFaultPreservesProgressOwnership": (
+                "InjectUntrustedTransportCompletion",
+            ),
+            "AsyncFaultStepLeavesProgressCarriers": (
+                "InjectUntrustedTransportCompletion",
+            ),
             "ChangedRunNodeWorkExecutesCommand": ("RunNodeWork",),
             "ChangedAsyncRunnerExecutesCommand": (
                 "RunHistoricalRecoveryNode",
@@ -6583,6 +12145,23 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncItemTyped": (
             'item.kind = "TimeoutCertificate"',
             "AsyncTcEnvelopeTyped(item.envelope)",
+            'item.kind \\notin {"Noise", "Chunk", "CertifiedResponse"}',
+            "item.source \\in ValidatorIds",
+        ),
+        "AsyncNetworkItems": (
+            'kind \\in {"Chunk", "CertifiedResponse"}, '
+            "source \\in AsyncIngressSources",
+        ),
+        "InjectUntrustedTransportCompletion": (
+            "kind \\in IngressTransportCompletionKinds",
+            "AsyncUntrustedSource",
+            "nonce = 0",
+            "~ItemScheduled(item)",
+            "asyncTransport' = asyncTransport \\cup {packet}",
+            "asyncSentItems, asyncRetainedControl,",
+        ),
+        "AsyncFaultStep": (
+            "InjectUntrustedTransportCompletion(kind, recipient, nonce)",
         ),
         "AsyncCandidateTyped": (
             "AsyncEvidenceTyped(candidate.evidence)",
@@ -6734,7 +12313,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "ImportAuthenticatedCommitCertificate(item.envelope)",
             "ELSE UNCHANGED vars",
             "CommitCertificateResponseCandidate(item)",
-            "EnqueueCandidate(discoveredCandidate)",
+            "EnqueueCandidate( discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
             "CandidateScheduled(candidate)",
             "AsyncIoCertifiedServeJob(",
@@ -7052,7 +12631,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "AsyncConfiguration": (
                 "AsyncDeferredProgressCapacity >= 2 * N + 3",
-                "AsyncIngressCapacity >= 3 * N + 1",
+                "AsyncIngressCapacity >= 4 * N + 2",
                 "AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve",
             ),
         })
@@ -8074,6 +13653,14 @@ if self.retained_effect_batch.is_some() {
                 f"its current-view semantic-capacity bypass; missing {missing}"
             )
 
+    transport_geometry_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
+    )
+    if transport_geometry_path.exists() or transport_geometry_path.is_symlink():
+        errors.extend(
+            _transport_geometry_production_source_fidelity_errors(repo_root)
+        )
+
     liveness_cfg = formal_dir / "liveness.cfg"
     if liveness_cfg.is_file():
         cfg_source = liveness_cfg.read_text(encoding="utf-8")
@@ -8160,11 +13747,11 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
     if validator_count is not None and validator_count != 1:
         errors.append(f"{path}: ownership search must remain the N=1 boundary")
     if validator_count is not None and ingress_capacity is not None:
-        exact_ingress_capacity = 3 * validator_count + 1
-        if ingress_capacity != exact_ingress_capacity or ingress_capacity != 4:
+        exact_ingress_capacity = 4 * validator_count + 2
+        if ingress_capacity != exact_ingress_capacity or ingress_capacity != 6:
             errors.append(
-                f"{path}: N=1 AsyncIngressCapacity must equal exact 3 * N + 1 "
-                f"geometry (4), found {ingress_capacity}"
+                f"{path}: N=1 AsyncIngressCapacity must equal exact 4 * N + 2 "
+                f"geometry (6), found {ingress_capacity}"
             )
     if validator_count is not None and deferred_progress_capacity is not None:
         exact_deferred_capacity = 2 * validator_count + 3
@@ -8176,6 +13763,1098 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
                 f"{path}: N=1 AsyncDeferredProgressCapacity must equal exact "
                 f"2 * N + 3 geometry (5), found {deferred_progress_capacity}"
             )
+    for refinement_constant in (
+        "ProductionEnterViewUsesPostInstallEffectiveLock",
+        "ProductionBodyOwnershipPreservesEffectiveLock",
+        "ProductionBodyCapacityRetirementPreservesEffectiveLock",
+        "ProductionBodyServiceRefinesAsyncFairness",
+        "ProductionDurableIntentTraceRefinesProgressWitness",
+        "ProductionDecisionTraceRefinesRecoveryWitness",
+        "ProductionSchedulerTraceRefinesProtectedOwnership",
+        "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+        "ProductionReliableFlushTraceRefinesOutboundOwnership",
+        "ProductionApplicationTraceRefinesDecisionCompletion",
+    ):
+        if source.count(f"  {refinement_constant} = TRUE\n") != 1:
+            errors.append(
+                f"{path}: ownership search must assign "
+                f"{refinement_constant} = TRUE exactly once"
+            )
+    return errors
+
+
+def _exact_output_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind fair exact output and applied-height retirement to production."""
+
+    worker_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_worker.rs"
+    )
+    runner_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_runner.rs"
+    )
+    lane_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_lane_work.rs"
+    )
+    errors: list[str] = []
+    if not worker_path.is_file() or worker_path.is_symlink():
+        return [
+            f"{worker_path}: production exact-output source must be a regular file"
+        ]
+    worker_source = worker_path.read_text(encoding="utf-8")
+    fanout_items = {
+        "take_attempt",
+        "mark_admitted",
+        "retain_returned",
+        "owns_peer",
+        "target_is_local_head",
+        "advance_target_cursor",
+    }
+    output_items = {
+        "handoff_applied_height_to_durable_reconstruction",
+        "target_is_global_head",
+        "next_schedulable_target",
+        "advance_after_attempt",
+        "drive_with",
+    }
+    exact_output_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256.items():
+        item = _require_rust_item(worker_path, worker_source, item_name, errors)
+        exact_output_items[item_name] = item
+        if item_name in fanout_items:
+            expected_context = (("impl", "PendingExactFanout"),)
+        elif item_name in output_items:
+            expected_context = (("impl", "PendingExactOutput"),)
+        elif item_name == "applied_height_reconstruction_covers":
+            expected_context = ()
+        else:
+            expected_context = (("impl", "ProductionV2Services"),)
+        _require_rust_item_context(
+            worker_path,
+            item,
+            expected_context,
+            f"exact-output {item_name} production item",
+            errors,
+        )
+        if item is not None:
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{worker_path}:{item.line}: exact-output {item_name} "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found "
+                    f"{observed_sha256}"
+                )
+
+    durable_history_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(worker_path, worker_source, item_name, errors)
+        durable_history_items[item_name] = item
+        _require_rust_item_context(
+            worker_path,
+            item,
+            (),
+            f"durable-history {item_name} production item",
+            errors,
+        )
+        if item is not None:
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{worker_path}:{item.line}: durable-history {item_name} "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found "
+                    f"{observed_sha256}"
+                )
+
+    exact_output_claim_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(worker_path, worker_source, item_name, errors)
+        exact_output_claim_items[item_name] = item
+        if item_name == "covers":
+            expected_context = (("impl", "ExactOutputCreationScope"),)
+        elif item_name in {"from_request", "from_chunk"}:
+            expected_context = (("impl", "CertifiedSidecarTransferIdentity"),)
+        elif item_name in {"scope", "validate_fanout"}:
+            expected_context = (("impl", "ExactOutputRolloverClaim"),)
+        elif item_name == "claimed":
+            expected_context = (("impl", "PendingExactFanout"),)
+        elif item_name == "native_amx_message_body":
+            expected_context = ()
+        else:
+            expected_context = (("impl", "ProductionV2Services"),)
+        _require_rust_item_context(
+            worker_path,
+            item,
+            expected_context,
+            f"exact-output claim {item_name} production item",
+            errors,
+        )
+        if item is not None:
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{worker_path}:{item.line}: exact-output claim {item_name} "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found "
+                    f"{observed_sha256}"
+                )
+
+    lane_items: dict[str, RustItem | None] = {}
+    if not lane_path.is_file() or lane_path.is_symlink():
+        errors.append(
+            f"{lane_path}: production lane rollover authority must be a regular file"
+        )
+        lane_source = ""
+    else:
+        lane_source = lane_path.read_text(encoding="utf-8")
+    for item_name, expected_sha256 in (
+        _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(lane_path, lane_source, item_name, errors)
+        lane_items[item_name] = item
+        if item_name == "covered_source_hash":
+            expected_context = (("impl", "DurableLaneRolloverAuthority"),)
+        elif item_name == "persistent":
+            expected_context = (("impl", "DurableLaneSessionSource"),)
+        elif item_name in {
+            "durable_lane_rollover_authority",
+            "serve_durable_lane_certificate",
+        }:
+            expected_context = (("impl", "V2LaneWorkAdapter"),)
+        else:
+            expected_context = ()
+        _require_rust_item_context(
+            lane_path,
+            item,
+            expected_context,
+            f"lane rollover authority {item_name} production item",
+            errors,
+        )
+        if item is not None:
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{lane_path}:{item.line}: lane rollover authority {item_name} "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found "
+                    f"{observed_sha256}"
+                )
+
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("retain_returned"),
+        """
+let expected_hash = self
+    .message_hashes
+    .get(target.message_index)
+    .ok_or_else(|| {
+        "Sumeragi v2 exact-output target has no expected payload identity".to_owned()
+    })?;
+if HashOf::new(&post.data) != *expected_hash {
+    return Err("Sumeragi v2 network actor changed an exact output payload".to_owned());
+}
+debug_assert!(target.current.is_none());
+debug_assert!(target.ticket.is_none());
+target.current = Some(post);
+target.ticket = ticket;
+""",
+        "returned actor post must retain the exact pinned payload identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("handoff_applied_height_to_durable_reconstruction"),
+        """
+if fanout.message_hashes.len() != fanout.messages.len()
+    || fanout
+        .messages
+        .iter()
+        .zip(&fanout.message_hashes)
+        .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+{
+    return Err(
+        "Sumeragi v2 retained output changed before finality handoff".to_owned(),
+    );
+}
+applied_height_reconstruction_covers(
+    &fanout.messages,
+    &fanout.peers,
+    &fanout.rollover_claim,
+    artifact,
+    durable_lane_authority,
+    durable_history,
+)?;
+""",
+        "applied-height handoff must preflight every pinned payload before classification",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("drive_with"),
+        """
+if message.peer_id != attempted_peer {
+    self.fanouts
+        .get_mut(fanout_index)
+        .expect("backpressured exact fanout must remain present")
+        .retain_returned(target_index, message, ticket)?;
+    return Err(
+        "Sumeragi v2 network actor changed an exact output target".to_owned()
+    );
+}
+self.fanouts
+    .get_mut(fanout_index)
+    .expect("backpressured exact fanout must remain present")
+    .retain_returned(target_index, message, ticket)?;
+""",
+        "actor backpressure must preserve both exact target and payload ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+rollover_claim.validate_fanout(messages, peers)?;
+let scope = rollover_claim.scope().ok_or_else(|| {
+    "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
+})?;
+if !scope.covers(artifact) {
+    return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+}
+""",
+        "durable rollover requires a validated typed claim in the exact creation scope",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+if matches!(
+    rollover_claim,
+    ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+        | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+        | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+) {
+    return durable_history_source_covers(
+        messages,
+        rollover_claim,
+        &artifact.height_context.chain_id,
+        artifact.height,
+        durable_history.ok_or_else(|| {
+            "Sumeragi v2 durable response lacks an independently readable history source"
+                .to_owned()
+        })?,
+    );
+}
+""",
+        "applied-height handoff must independently reread every durable Kura response source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_claim_items.get("enqueue_exact_fanout_while_guarded"),
+        """
+let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
+    return Ok(ExactFanoutOwnership::Owned);
+};
+let mut pending = self.lock_pending_exact_output()?;
+let ownership = pending.enqueue(fanout)?;
+""",
+        "every production exact fanout must enter the corridor with its typed claim",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        durable_history_items.get("durable_history_source_covers"),
+        """
+let source = kura
+    .v2_finality_artifact(*source_height)
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| {
+        "durable CommitQC response lost its Kura finality source".to_owned()
+    })?;
+if &source.height_context.chain_id != source_chain_id
+    || source.context_id() != *source_context_id
+    || response.certificate != source.commit_qc
+    || &response.responder != claimed_responder
+{
+""",
+        "durable CommitQC response must match its exact Kura finality source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        durable_history_items.get("durable_history_source_covers"),
+        """
+let block = kura
+    .get_block(block_height)
+    .ok_or_else(|| "durable body response lost its canonical Kura block".to_owned())?;
+let proposal = block.canonical_resultless_proposal();
+let canonical_wire = proposal.encode_wire().map_err(|error| error.to_string())?;
+if block.hash() != source_subject.block_hash
+    || canonical_wire != response.body
+    || Hash::new(&canonical_wire) != source_subject.payload_hash
+{
+""",
+        "durable body response must match its exact canonical Kura block",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        durable_history_items.get("durable_history_source_covers"),
+        """
+let source = kura
+    .read_certified_lane_block_artifact(*lane_id, *lane_block_height)
+    .ok_or_else(|| {
+        "durable lane certificate lost its certified Kura source".to_owned()
+    })?;
+if source.proposal.descriptor.proposal_height != *proposal_height
+    || source.proposal.proposal_hash != *proposal_hash
+    || certificate.proposal != source.proposal
+    || certificate.prepare_qc != source.prepare_qc
+    || certificate.commit_qc != source.commit_qc
+{
+""",
+        "durable lane certificate must match its exact certified Kura source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+let context_id = artifact.context_id();
+let height = artifact.height;
+let round_matches =
+    |round: wire::ConsensusRound| round.context_id == context_id && round.height == height;
+""",
+        "durable rollover classification must bind the exact artifact context and height",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
+    return Err(
+        "Sumeragi v2 exact output has no applied-height reconstruction source".to_owned(),
+    );
+}
+let NetworkMessage::SumeragiBlock(envelope) = message else {
+    unreachable!("global rollover preflight rejected non-Sumeragi output")
+};
+let covered = match envelope.as_message() {
+    BlockMessage::V2(message)
+        if matches!(rollover_claim, ExactOutputRolloverClaim::GlobalV2(_)) =>
+    {
+        match &message.payload {
+""",
+        "durable rollover accepts only retransmittable output under its typed class",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+lane_message @ (BlockMessage::LaneBlockProposal(_)
+| BlockMessage::LaneBlockVote(_)
+| BlockMessage::LaneBlockQc(_)
+| BlockMessage::LaneBlockCertificate(_))
+    if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
+{
+    durable_lane_authority
+        .ok_or_else(|| {
+            "Sumeragi v2 lane output lacks a typed durable rollover authority".to_owned()
+        })?
+        .covered_source_hash(artifact, lane_message)?
+        .is_some()
+}
+""",
+        "lane output retirement must use the exact typed durable lane authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get(
+            "handoff_applied_height_output_to_durable_reconstruction"
+        ),
+        """
+artifact.validate().map_err(|error| error.to_string())?;
+if artifact.height_context != self.context
+    || receipt.height() != self.context.height
+    || receipt.context_id() != self.context.id()
+    || receipt.subject() != artifact.subject
+    || receipt.block_hash() != artifact.block_hash
+    || receipt.certificate() != artifact.commit_qc.as_ref()
+    || receipt.artifact_hash() != HashOf::new(artifact)
+{
+    return Err(
+        "Sumeragi v2 applied-height output handoff has mismatched finality authority"
+            .to_owned(),
+    );
+}
+""",
+        "applied-height handoff requires the exact Kura receipt and finality artifact",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get(
+            "handoff_applied_height_output_to_durable_reconstruction"
+        ),
+        """
+let retired = self
+    .lock_pending_exact_output()?
+    .handoff_applied_height_to_durable_reconstruction(
+        artifact,
+        Some(durable_lane_authority),
+        Some(self.kura.as_ref()),
+    )?;
+""",
+        "production handoff must pass exact lane and Kura authorities into retirement",
+        errors,
+    )
+    for item_name, description in (
+        (
+            "post_durable_history_response_with_permit",
+            "global historical response must validate Kura before exact-output admission",
+        ),
+        (
+            "post_durable_lane_certificate",
+            "historical lane response must validate Kura before exact-output admission",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            exact_output_claim_items.get(item_name),
+            """
+rollover_claim.validate_fanout(&messages, &peers)?;
+durable_history_source_covers(
+    &messages,
+    &rollover_claim,
+    &self.context.chain_id,
+    self.context.height,
+    self.kura.as_ref(),
+)?;
+""",
+            description,
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("covered_source_hash"),
+        """
+if self.finality_artifact_hash != HashOf::new(finality_artifact)
+    || self.height != finality_artifact.height
+{
+    return Ok(None);
+}
+let Some((proposal_height, proposal_hash)) = lane_output_identity(message) else {
+    return Ok(None);
+};
+if proposal_height != self.height {
+    return Ok(None);
+}
+""",
+        "lane rollover authority must bind the exact finality artifact and height",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("covered_source_hash"),
+        """
+if self.winning_proposal_hashes.contains(&proposal_hash) {
+    let source = self.durable_sessions.get(&proposal_hash).ok_or_else(|| {
+        "winning Sumeragi v2 lane output lacks its exact durable session witness".to_owned()
+    })?;
+    let covered = match source {
+        DurableLaneSessionSource::Persistent {
+            proposal,
+            signer_pops,
+            durable_source_hash,
+        } => {
+            validate_winning_lane_output(message, proposal, signer_pops)?;
+            Some(*durable_source_hash)
+        }
+""",
+        "winning lane output must use its proposal-keyed durable session witness",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("covered_source_hash"),
+        """
+validate_superseded_lane_output(message)?;
+let message_hash = HashOf::new(message);
+Ok(Some(Hash::new_from_chunks(&[
+    b"iroha:sumeragi:v2:lane-rollover-superseded:v1\0",
+    self.finality_artifact_hash.as_ref(),
+    message_hash.as_ref(),
+])))
+""",
+        "non-winning lane output must be validated before artifact-bound supersession",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("persistent"),
+        """
+let finality_artifact_hash = HashOf::new(finality_artifact);
+let durable_artifact_hash = HashOf::new(durable_artifact);
+let application_receipt_hash = HashOf::new(application_receipt);
+let durable_source_hash = Hash::new_from_chunks(&[
+    b"iroha:sumeragi:v2:lane-rollover-source:v1\0",
+    finality_artifact_hash.as_ref(),
+    durable_artifact_hash.as_ref(),
+    application_receipt_hash.as_ref(),
+]);
+""",
+        "lane durable source must commit finality, certificate, and application receipt",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+finality_artifact
+    .validate()
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+if finality_artifact.height_context != self.context {
+    return Err(V2LaneWorkError::Persistence(
+        "lane rollover finality authority differs from the frozen height context".to_owned(),
+    ));
+}
+
+let winning_proposal_hashes = self
+    .committed_lane_outputs
+    .iter()
+    .map(|output| output.session.proposal.proposal_hash)
+    .collect::<BTreeSet<_>>();
+""",
+        "lane authority builder must use the validated exact finality context and full winner set",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let durable = self
+    .kura
+    .read_certified_lane_block_artifact(
+        descriptor.lane_id,
+        descriptor.lane_block_height,
+    )
+    .ok_or_else(|| {
+        V2LaneWorkError::Persistence(
+            "retained lane CommitQC has no durable certified artifact".to_owned(),
+        )
+    })?;
+let application_receipt = self
+    .kura
+    .read_lane_block_application_receipt(
+        descriptor.lane_id,
+        descriptor.lane_block_height,
+    )
+""",
+        "lane authority builder must read both exact Kura certificate and application witnesses",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+if durable.proposal != session.proposal
+    || !same_commit_decision
+    || application_receipt.proposal != session.proposal
+    || descriptor.proposal_height != finality_artifact.height
+    || hint.proposal_height != finality_artifact.height
+    || hint.proposal_block_hash != finality_artifact.block_hash
+    || application_receipt.application_block_height != finality_artifact.height
+    || application_receipt.application_block_hash != finality_artifact.block_hash
+{
+    return Err(V2LaneWorkError::Persistence(
+        "retained lane CommitQC is not bound to the exact applied global artifact".to_owned(),
+    ));
+}
+""",
+        "lane authority builder must bind every winner to the exact applied artifact",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let source = DurableLaneSessionSource::persistent(
+    finality_artifact,
+    &durable,
+    &application_receipt,
+    signer_pops,
+);
+if durable_sessions
+    .insert(session.proposal.proposal_hash, source)
+    .is_some()
+{
+    return Err(V2LaneWorkError::Persistence(
+        "duplicate winning lane proposal in rollover authority".to_owned(),
+    ));
+}
+""",
+        "lane authority builder must preserve one exact persistent witness per winner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("serve_durable_lane_certificate"),
+        """
+let artifact = self.kura.read_certified_lane_block_artifact(
+    proposal.descriptor.lane_id,
+    proposal.descriptor.lane_block_height,
+)?;
+if artifact.proposal != *proposal {
+    return None;
+}
+""",
+        "lane recovery emitter must begin from the exact certified Kura artifact",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("serve_durable_lane_certificate"),
+        """
+let queued = self.push_effect(V2LaneWorkEffect::PostDurableLaneCertificate {
+    peer: sender.clone(),
+    certificate,
+});
+Some(if queued {
+    V2LaneIngressOutcome::Inserted
+} else {
+    V2LaneIngressOutcome::Duplicate
+})
+""",
+        "lane recovery emitter must retain one typed durable-certificate effect",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("lane_work_effect_key"),
+        """
+V2LaneWorkEffect::PostDurableLaneCertificate { peer, certificate } => {
+    encoded.push(4);
+    encoded.extend(peer.encode());
+    encoded.extend(certificate.encode());
+}
+""",
+        "durable lane response effect identity must include its distinct tag, peer, and certificate",
+        errors,
+    )
+
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: production exact-output rollover source must be a "
+            "regular file"
+        )
+        return errors
+    runner_source = runner_path.read_text(encoding="utf-8")
+    runner_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(runner_path, runner_source, item_name, errors)
+        runner_items[item_name] = item
+        _require_rust_item_context(
+            runner_path,
+            item,
+            (),
+            f"exact-output {item_name} runner item",
+            errors,
+            expected_attributes=("#[allow(clippy::too_many_lines)]",)
+            if item_name == "run_inner"
+            else (),
+        )
+        if item is not None:
+            observed_sha256 = _rust_item_token_sha256(item)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{runner_path}:{item.line}: exact-output {item_name} "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found "
+                    f"{observed_sha256}"
+                )
+    runner = runner_items.get("run_inner")
+    _require_rust_token_sequence(
+        runner_path,
+        runner,
+        """
+let (durable_receipt, durable_artifact) = executor
+    .durable_finality()
+    .map(|(receipt, artifact)| (receipt.clone(), artifact.clone()))
+    .ok_or_else(|| {
+        V2RunnerError::Service(
+            "ready Sumeragi v2 executor has no durable finality authority".to_owned(),
+        )
+    })?;
+close_ingress_for_rollover(&ingress_ready, &block_rx);
+lane_work.persist_anchored_sessions()?;
+let durable_lane_authority =
+    lane_work.durable_lane_rollover_authority(&durable_artifact)?;
+lane_work.prune_finalized_merge_sidecars()?;
+services
+    .handoff_applied_height_output_to_durable_reconstruction(
+        &durable_receipt,
+        &durable_artifact,
+        &durable_lane_authority,
+    )
+    .map_err(V2RunnerError::Service)?;
+if !recovering_interrupted_tip {
+    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+}
+let _ = services
+    .retry_pending_exact_output()
+    .map_err(V2RunnerError::Service)?;
+services
+    .handoff_applied_height_output_to_durable_reconstruction(
+        &durable_receipt,
+        &durable_artifact,
+        &durable_lane_authority,
+    )
+    .map_err(V2RunnerError::Service)?;
+if lane_work.has_pending_committed_output_handoff() {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+if services
+    .has_pending_exact_output()
+    .map_err(V2RunnerError::Service)?
+{
+    return Err(V2RunnerError::Service(
+        "applied-height output remained after durable reconstruction handoff".to_owned(),
+    ));
+}
+""",
+        "durable finality must retire the old exact-output corridor before "
+        "successor activation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+block_sync_server.serve_historical_body(
+    kura,
+    context_store,
+    request,
+    &sender,
+    local_key,
+)
+""",
+        "historical body route must reconstruct from Kura under the output guard",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+services.post_durable_history_response_with_permit(
+    response_peer,
+    response,
+    permit,
+)
+""",
+        "historical global routes must use the prevalidated durable-response emitter",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("dispatch_lane_work_effects"),
+        """
+V2LaneWorkEffect::PostDurableLaneCertificate { peer, certificate } => services
+    .post_durable_lane_certificate(peer, certificate)
+    .map_err(V2RunnerError::Service)?,
+""",
+        "historical lane effects must use the prevalidated durable-certificate emitter",
+        errors,
+    )
+    return errors
+
+
+def _kura_application_receipt_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind application-receipt observation to the locked durability owner."""
+
+    kura_path = repo_root / "crates" / "iroha_core" / "src" / "kura.rs"
+    release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    errors: list[str] = []
+    if not kura_path.is_file() or kura_path.is_symlink():
+        errors.append(
+            f"{kura_path}: Kura application-receipt production source must be "
+            "a regular file"
+        )
+        kura_source = ""
+    else:
+        kura_source = kura_path.read_text(encoding="utf-8")
+
+    kura_context = (("impl", "Kura"),)
+    observation = _require_rust_item(
+        kura_path,
+        kura_source,
+        "read_active_lane_block_application_receipt_for_write_observation",
+        errors,
+    )
+    _require_rust_item_context(
+        kura_path,
+        observation,
+        kura_context,
+        "non-attesting application-receipt writer observation",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        kura_path,
+        observation,
+        """
+fn read_active_lane_block_application_receipt_for_write_observation(
+    &self,
+    lane_id: LaneId,
+    lane_block_height: u64,
+) -> Option<LaneBlockApplicationReceiptArtifact> {
+    let _geometry_guard = self.lane_geometry_lock.lock();
+    let entry = self.lane_storage_entry(lane_id).ok()?;
+    let (data_path, index_path) =
+        Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+    let _guard = self.sidecar_lock.lock();
+    if self.prune_recovery_is_required() {
+        return None;
+    }
+    let mut bound = self
+        .open_bound_progress_sidecar(&data_path, &index_path)
+        .ok()?;
+    let artifact = self.read_lane_block_application_receipt_from_bound_locked(
+        lane_id,
+        lane_block_height,
+        &mut bound,
+    )?;
+    if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor) {
+        iroha_logger::warn!(
+            ?error,
+            lane = %entry.lane_id.as_u32(),
+            lane_block_height,
+            "observed lane application receipt targets stale lane geometry"
+        );
+        return None;
+    }
+    Some(artifact)
+}
+""",
+        "application-receipt writer observation control flow",
+        errors,
+    )
+    _require_rust_token_sequence(
+        kura_path,
+        observation,
+        """
+let mut bound = self
+    .open_bound_progress_sidecar(&data_path, &index_path)
+    .ok()?;
+let artifact = self.read_lane_block_application_receipt_from_bound_locked(
+    lane_id,
+    lane_block_height,
+    &mut bound,
+)?;
+""",
+        "application-receipt writer observation must use the structural bound open/read path",
+        errors,
+    )
+    for prohibited, description in (
+        (
+            "recover_bound_progress_sidecar_artifacts(",
+            "application-receipt writer observation may not execute sidecar recovery",
+        ),
+        (
+            "read_lane_block_application_receipt_from_paths_durability_attested_locked(",
+            "application-receipt writer observation may not use an attesting reader",
+        ),
+        (
+            "read_active_lane_block_application_receipt_durability_attested(",
+            "application-receipt writer observation may not use an attesting reader",
+        ),
+        (
+            "sync_bound_progress_sidecar(",
+            "application-receipt writer observation may not sync a sidecar",
+        ),
+        (
+            "sync_bound_progress_absence(",
+            "application-receipt writer observation may not sync absence",
+        ),
+        (
+            "sync_bound_progress_namespace(",
+            "application-receipt writer observation may not sync a namespace",
+        ),
+        (
+            "sync_data(",
+            "application-receipt writer observation may not issue a data sync",
+        ),
+        (
+            "sync_all(",
+            "application-receipt writer observation may not issue a full sync",
+        ),
+    ):
+        _require_rust_token_sequence(
+            kura_path,
+            observation,
+            prohibited,
+            description,
+            errors,
+            count=0,
+        )
+
+    writer = _require_rust_item(
+        kura_path,
+        kura_source,
+        "write_lane_block_application_receipt_artifact",
+        errors,
+    )
+    _require_rust_item_context(
+        kura_path,
+        writer,
+        kura_context,
+        "locked application-receipt durability writer",
+        errors,
+    )
+    if writer is not None:
+        ordered_fragments = (
+            (
+                "optimistic structural observation",
+                """
+let observed_existing = self
+    .read_active_lane_block_application_receipt_for_write_observation(
+        lane_id,
+        lane_block_height,
+    );
+""",
+            ),
+            (
+                "geometry lock",
+                "let _geometry_guard = self.lane_geometry_lock.lock();",
+            ),
+            (
+                "sidecar lock and recovery",
+                """
+let _guard = self.sidecar_lock.lock();
+if !self.recover_bound_progress_sidecar_artifacts(
+    &data_path,
+    &index_path,
+    "lane block application receipt",
+)
+""",
+            ),
+            (
+                "exact-existing strict barrier reissue",
+                """
+if existing == *artifact {
+    if !self
+        .sync_bound_progress_sidecar(&existing_bound, "lane block application receipt")
+    {
+        return Err(Error::IO(
+            std::io::Error::other(
+                "failed to make existing lane application receipt durable",
+            ),
+            data_path,
+        ));
+    }
+    return Ok(());
+}
+""",
+            ),
+        )
+        writer_tokens = rust_code_tokens(writer.source)
+        positions: list[int] = []
+        complete_order = True
+        for label, fragment in ordered_fragments:
+            fragment_tokens = rust_code_tokens(fragment)
+            occurrences = [
+                index
+                for index in range(len(writer_tokens) - len(fragment_tokens) + 1)
+                if writer_tokens[index : index + len(fragment_tokens)]
+                == fragment_tokens
+            ]
+            if len(occurrences) != 1:
+                errors.append(
+                    f"{kura_path}:{writer.line}: locked application-receipt "
+                    f"writer must contain exactly one {label}; found "
+                    f"{len(occurrences)}"
+                )
+                complete_order = False
+            else:
+                positions.append(occurrences[0])
+        if complete_order and positions != sorted(positions):
+            errors.append(
+                f"{kura_path}:{writer.line}: application-receipt observation, "
+                "geometry lock, sidecar recovery, and exact-existing barrier "
+                "reissue must retain their reviewed production order"
+            )
+        _require_rust_token_sequence(
+            kura_path,
+            writer,
+            "if existing == *artifact",
+            "locked application-receipt writer exact-existing condition",
+            errors,
+            count=1,
+        )
+        _require_rust_token_sequence(
+            kura_path,
+            writer,
+            "return Ok(())",
+            "locked application-receipt writer success return",
+            errors,
+            count=1,
+        )
+
+    release_test = (
+        "kura::tests::progress_witness_durability::"
+        "lane_block_application_receipt_strict_retry_reissues_every_barrier"
+    )
+    if not release_path.is_file() or release_path.is_symlink():
+        errors.append(
+            f"{release_path}: Sumeragi v2 release runner must be a regular file "
+            "for Kura application-receipt source fidelity"
+        )
+    else:
+        release_source = release_path.read_text(encoding="utf-8")
+        marker = "required_production_liveness_tests=(\n"
+        if release_source.count(marker) != 1:
+            errors.append(
+                f"{release_path}: release runner must contain one canonical "
+                "production liveness inventory"
+            )
+        else:
+            inventory = release_source.split(marker, 1)[1].split("\n)", 1)[0]
+            occurrences = inventory.splitlines().count(f"  {release_test}")
+            if occurrences != 1:
+                errors.append(
+                    f"{release_path}: strict application-receipt retry regression "
+                    f"must be pinned exactly once; found {occurrences}"
+                )
     return errors
 
 
@@ -10566,6 +17245,150 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     return errors
 
 
+def _production_liveness_release_inventory_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the production-regression inventory and its default-feature scope."""
+
+    errors: list[str] = []
+    release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    if not release_path.is_file() or release_path.is_symlink():
+        return [
+            f"{release_path}: production liveness release runner must be a regular file"
+        ]
+    source = release_path.read_text(encoding="utf-8")
+
+    def shell_array(name: str) -> list[str]:
+        marker = f"{name}=(\n"
+        if source.count(marker) != 1:
+            errors.append(
+                f"{release_path}: release runner must contain one canonical {name} array"
+            )
+            return []
+        tail = source.split(marker, 1)[1]
+        if "\n)" not in tail:
+            errors.append(f"{release_path}: release runner has unterminated {name} array")
+            return []
+        body = tail.split("\n)", 1)[0]
+        return [
+            line.strip()
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    inventory = shell_array("required_production_liveness_tests")
+    if len(inventory) != _PRODUCTION_LIVENESS_RELEASE_COUNT:
+        errors.append(
+            f"{release_path}: production liveness inventory must contain exactly "
+            f"{_PRODUCTION_LIVENESS_RELEASE_COUNT} tests; found {len(inventory)}"
+        )
+    if len(set(inventory)) != len(inventory):
+        duplicates = sorted(
+            name for name in set(inventory) if inventory.count(name) != 1
+        )
+        errors.append(
+            f"{release_path}: production liveness inventory repeats tests {duplicates}"
+        )
+    expected_count_line = (
+        "readonly expected_production_liveness_test_count="
+        f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
+    )
+    if source.splitlines().count(expected_count_line) != 1:
+        errors.append(
+            f"{release_path}: production liveness source count must be sealed as "
+            f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
+        )
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 58:
+        errors.append("internal release-regression seal must contain exactly 58 names")
+    for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
+        occurrences = inventory.count(test_name)
+        if occurrences != 1:
+            errors.append(
+                f"{release_path}: production ownership regression {test_name} "
+                f"must be pinned exactly once; found {occurrences}"
+            )
+
+    modules = shell_array("production_liveness_modules")
+    if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
+        errors.append(
+            f"{release_path}: production liveness modules must equal the reviewed "
+            f"ordered twenty-module inventory; found {modules}"
+        )
+    leg_ids = shell_array("production_liveness_leg_ids")
+    if len(leg_ids) != len(_PRODUCTION_LIVENESS_RELEASE_MODULES) or len(
+        set(leg_ids)
+    ) != len(leg_ids):
+        errors.append(
+            f"{release_path}: production module leg IDs must be twenty unique "
+            f"entries; found total={len(leg_ids)}, unique={len(set(leg_ids))}"
+        )
+    if source.splitlines().count("  readonly expected_corridor_leg_count=40") != 1:
+        errors.append(
+            f"{release_path}: complete pre-network release corridor must remain "
+            "sealed at forty legs"
+        )
+
+    p2p_region_start = source.find("production_p2p_unit_list=")
+    p2p_region_end = source.find("required_data_model_status_test=", p2p_region_start)
+    if p2p_region_start < 0 or p2p_region_end < 0:
+        errors.append(f"{release_path}: missing default-feature P2P corridor region")
+    else:
+        p2p_region = source[p2p_region_start:p2p_region_end]
+        for forbidden in ("--features", "--all-features"):
+            if forbidden in p2p_region:
+                errors.append(
+                    f"{release_path}: reviewed P2P corridor must use default features; "
+                    f"found {forbidden}"
+                )
+    expected_p2p_list = (
+        'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p '
+        '--lib -- --list)"'
+    )
+    if source.count(expected_p2p_list) != 1:
+        errors.append(
+            f"{release_path}: default-feature iroha_p2p test discovery must be exact"
+        )
+
+    for assignment in (
+        'required_data_model_status_test="block::consensus_v2::tests::'
+        'status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry"',
+        'required_data_model_lane_certificate_test="block::consensus::tests::'
+        'lane_block_certificate_decodes_atomically_from_slice"',
+    ):
+        if source.splitlines().count(assignment) != 1:
+            errors.append(
+                f"{release_path}: required data-model contract must be pinned exactly: "
+                f"{assignment}"
+            )
+    if source.count("lane-certificate-rust cargo-exact 1") != 1:
+        errors.append(
+            f"{release_path}: atomic lane-certificate decode must retain one exact leg"
+        )
+
+    documentation_claims = {
+        repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
+            "inventories 289 named tests\nacross 20 Rust modules",
+            "all 40 pre-network legs and the exact\n289-test inventory",
+        ),
+        repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
+            "release inventory names 289 tests across twenty Rust\nmodules",
+            "pre-network corridor\nnow has 40 legs",
+        ),
+    }
+    for path, claims in documentation_claims.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: release inventory documentation must be regular")
+            continue
+        documentation = path.read_text(encoding="utf-8")
+        for claim in claims:
+            if documentation.count(claim) != 1:
+                errors.append(
+                    f"{path}: release inventory documentation must contain exact "
+                    f"claim {claim!r}"
+                )
+    return errors
+
+
 def _release_evidence_errors(
     ledger: dict[str, Any],
     evidence: dict[str, Any] | None,
@@ -10767,13 +17590,28 @@ def validate_ledger(
             formal_dir, ROOT_DIR
         )
     )
+    errors.extend(
+        _certified_response_registration_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
+    )
+    errors.extend(
+        _decision_recovery_lifecycle_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
+    )
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
+    errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
+    errors.extend(
+        _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)
+    )
     errors.extend(_chain_source_fidelity_errors(formal_dir))
     errors.extend(
         _successor_stale_token_mutation_source_fidelity_errors(formal_dir)
     )
     errors.extend(_nightly_chaos_cold_cache_errors(ROOT_DIR))
+    errors.extend(_production_liveness_release_inventory_errors(ROOT_DIR))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name
         if not cfg.is_file():

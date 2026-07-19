@@ -29,14 +29,42 @@ before the temporal theorem applies to a deployment.
 The hidden transport carries actual Core network envelopes into a distinct
 model of `FairV2Ingress`.  Every recipient has one lane for each frozen-roster
 validator plus one aggregate untrusted lane.  Admission is bounded by one
-total capacity while preserving the empty-lane, progress, and post-service
-continuation potential; non-empty lanes are serviced by the exact ready-queue
-rotation used in Rust.  A source may borrow idle message capacity but cannot
-consume another source's reservations.  Each validator source also isolates
-the fixed valid-timeout-vote byte reserve from all other wire traffic.  An
-emitted Core envelope remains in immutable authentication history when a
+total capacity while preserving the empty-lane, Progress, TimeoutVote, shared
+TransportCompletion, and post-service continuation potential; non-empty lanes
+are serviced by the exact ready-queue rotation used in Rust.  `Chunk` and
+`CertifiedResponse` share one TransportCompletion owner per authenticated
+resource hop.  A non-roster hop may carry a completion whose semantic origin is
+in the roster, so the aggregate untrusted lane owns its own completion slot and
+a separate generic continuation without borrowing any validator's owners.  A
+source may borrow idle message capacity but cannot consume another source's
+reservations.  Each validator source also isolates the fixed valid-timeout-vote
+byte reserve from all other wire traffic.
+The full canonical-wire TransportCompletion byte ceiling is intentionally
+abstract here and is linked to the exact count/byte mutation refinement in
+`SumeragiV2EffectCapacityOuterTransportMutation`; this module makes no byte
+claim for that class.  `Chunk`/`CertifiedResponse` and `ProgressJunk` are also
+the finite representatives for production lane-local completion and progress
+traffic, respectively.  The production path admits both V2 and lane-local
+messages through the same owner and separately enforces one- and four-MiB
+lane-local wire ceilings; that class/byte correspondence is an explicit
+production-refinement premise rather than a theorem of this byte-abstract
+module.
+
+`AsyncNetworkItem.source` is the authenticated resource-owning hop in this
+direct-origin abstraction.  Production additionally carries a possibly
+different semantic origin for validation, response routing, and exact-wire
+coalescing.  Establishing that relay-controlled origin churn cannot multiply
+source count/byte ownership, while distinct legitimate origins are not
+incorrectly coalesced, is an unassigned production-refinement proposition.
+
+An emitted Core envelope remains in immutable authentication history when a
 hidden packet is lost before GST.  Retransmission scans only the reducer's
-bounded per-class retained controls and active certified-body requests.
+bounded per-class retained controls and active certified-body requests.  Packet
+publication is atomic here; production's actor admission, encode, frame, batch,
+write, and flush stages and its remaining broadcast cursor must refine that
+single action while retaining the exact occurrence until the matching flush
+acknowledgement.  This is another unassigned production-refinement proposition,
+not a consequence of the abstract packet fairness actions.
 
 Post-GST historical catch-up is also exact scheduler ownership.  A responsive
 validator with no local Decision may be opened as one explicit recovery target
@@ -201,7 +229,7 @@ AsyncConfiguration ==
   /\ AsyncProgressReserve + AsyncCompletionReserve < AsyncQueueCapacity
   /\ AsyncCompletionReserve >= 1
   /\ AsyncIngressCapacity \in Nat \ {0}
-  /\ AsyncIngressCapacity >= 3 * N + 1
+  /\ AsyncIngressCapacity >= 4 * N + 2
   /\ AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve
   /\ AsyncIoAuxCapacity \in Nat \ {0}
   /\ AsyncIoWorkCapacity \in Nat \ {0}
@@ -253,12 +281,13 @@ AsyncNetworkItems ==
   \cup {AsyncNetworkItem("TimeoutCertificate", source, envelope):
           source \in ValidatorIds, envelope \in TcEnvelopeSet}
   \cup {AsyncNetworkItem(kind, source, envelope):
-          kind \in {"Chunk", "CertifiedRequest",
-                    "CommitCertificateRequest",
+          kind \in {"CertifiedRequest", "CommitCertificateRequest",
                     "NormalJunk", "ProgressJunk"},
           source \in ValidatorIds, envelope \in AsyncBodyEnvelopeSet}
-  \cup {AsyncNetworkItem("CertifiedResponse", source, envelope):
-          source \in ValidatorIds, envelope \in AsyncBodyEnvelopeSet}
+  \cup {AsyncNetworkItem(kind, source, envelope):
+          kind \in {"Chunk", "CertifiedResponse"},
+          source \in AsyncIngressSources,
+          envelope \in AsyncBodyEnvelopeSet}
   \cup {AsyncNetworkItem("CommitCertificateResponse", source, envelope):
           source \in ValidatorIds, envelope \in QcEnvelopeSet}
   \cup {AsyncNetworkItem("Noise", source, envelope):
@@ -404,7 +433,8 @@ AsyncItemTyped(item) ==
   /\ DOMAIN item = {"kind", "source", "envelope"}
   /\ item.kind \in AsyncNetworkKinds
   /\ item.source \in AsyncIngressSources
-  /\ (item.kind # "Noise" => item.source \in ValidatorIds)
+  /\ (item.kind \notin {"Noise", "Chunk", "CertifiedResponse"}
+        => item.source \in ValidatorIds)
   /\ item.envelope.recipient \in ValidatorIds
   /\ CASE item.kind = "Proposal" -> item.envelope \in ProposalEnvelopeSet
        [] item.kind \in {"PrepareVote", "CommitVote"} ->
@@ -1225,20 +1255,25 @@ IngressDepth(recipient) ==
 (*
 The transport ingress class is deliberately broader than reducer delivery
 priority.  It is computed before payload authentication, so a Byzantine
-validator may occupy only its own source-scoped non-timeout and TimeoutVote
-reservations; the authenticated reducer still decides whether a Commit vote is
-the exact locked-round reconstruction witness.  Body and certificate recovery
-traffic is progress-relevant because a durable decision cannot apply until its
-request/response chain is serviced.
+validator may occupy only its own source-scoped non-timeout Progress,
+TimeoutVote, and shared TransportCompletion reservations; the authenticated
+reducer still decides whether a Commit vote is the exact locked-round
+reconstruction witness.  Body and certificate recovery requests remain
+Progress.  `Chunk` and `CertifiedResponse` instead share the one completion
+owner whose consumption makes either recovery response structurally
+admissible behind generic pressure.
 *)
+IngressTransportCompletionKinds == {"Chunk", "CertifiedResponse"}
+
 IngressProgressKinds ==
   {"CommitVote", "PrepareQC", "CommitQC", "TimeoutVote",
-   "TimeoutCertificate", "Chunk", "CertifiedRequest",
-   "CertifiedResponse", "CommitCertificateRequest",
+   "TimeoutCertificate", "CertifiedRequest", "CommitCertificateRequest",
    "CommitCertificateResponse"}
 
 IngressAdmissionClass(item) ==
-  IF item.kind \in IngressProgressKinds THEN "Progress" ELSE "Auxiliary"
+  IF item.kind \in IngressTransportCompletionKinds
+  THEN "TransportCompletion"
+  ELSE IF item.kind \in IngressProgressKinds THEN "Progress" ELSE "Auxiliary"
 
 IngressLaneHasNonTimeoutProgressIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
@@ -1249,6 +1284,10 @@ IngressLaneHasTimeoutVoteIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
     queued.kind = "TimeoutVote"
 
+IngressLaneHasTransportCompletionIn(lanes, recipient, source) ==
+  \E queued \in SequenceSet(lanes[recipient][source]):
+    IngressAdmissionClass(queued) = "TransportCompletion"
+
 AsyncTimeoutVoteByteGateAllows(item) ==
   \/ item.kind # "TimeoutVote"
   \/ item.source \notin ValidatorIds
@@ -1256,12 +1295,21 @@ AsyncTimeoutVoteByteGateAllows(item) ==
      /\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes,
                                       item.envelope.recipient, item.source)
 
+AsyncTransportCompletionOwnerGateAllows(item) ==
+  \/ IngressAdmissionClass(item) # "TransportCompletion"
+  \/ ~IngressLaneHasTransportCompletionIn(
+       asyncIngressLanes, item.envelope.recipient, item.source)
+
 (*
 An empty source needs a first-message slot.  A validator separately reserves a
-missing non-timeout Progress item and a missing TimeoutVote.  The continuation
-term covers the depth-one and depth-two combinations whose removal would
-recreate one of those reservations.  This exact three-part potential therefore
-cannot increase when a selected queued occurrence is removed.
+missing non-timeout Progress item, a missing TimeoutVote, and one missing
+TransportCompletion item shared by Chunk and CertifiedResponse.  The
+continuation term covers the depth-one through depth-three combinations whose
+removal would recreate one of those reservations.  The aggregate untrusted
+source reserves `max(2 - depth, missing_transport_completion)`: at depth zero
+the empty-source and missing-completion terms are its two owners, while at
+depth one a present completion receives the separate generic continuation.
+Together these potentials match the production `4N+2` count gate for N >= 1.
 *)
 IngressProtectedSourcesFor(lanes, recipient) ==
   {source \in AsyncIngressSources:
@@ -1274,24 +1322,52 @@ IngressTimeoutVoteProtectedSourcesFor(lanes, recipient) ==
   {source \in ValidatorIds:
      ~IngressLaneHasTimeoutVoteIn(lanes, recipient, source)}
 
+IngressTransportCompletionProtectedSourcesFor(lanes, recipient) ==
+  {source \in AsyncIngressSources:
+     ~IngressLaneHasTransportCompletionIn(lanes, recipient, source)}
+
 IngressContinuationProtectedSourcesFor(lanes, recipient) ==
-  {source \in ValidatorIds:
-     \/ Len(lanes[recipient][source]) = 0
-     \/ /\ Len(lanes[recipient][source]) = 1
-           /\ (IngressLaneHasNonTimeoutProgressIn(
-                  lanes, recipient, source)
-                \/ IngressLaneHasTimeoutVoteIn(
-                     lanes, recipient, source))
-     \/ /\ Len(lanes[recipient][source]) = 2
-           /\ IngressLaneHasNonTimeoutProgressIn(
-                lanes, recipient, source)
-           /\ IngressLaneHasTimeoutVoteIn(
+  {source \in AsyncIngressSources:
+     \/ /\ source \in ValidatorIds
+           /\ \/ Len(lanes[recipient][source]) = 0
+              \/ /\ Len(lanes[recipient][source]) = 1
+                    /\ (IngressLaneHasNonTimeoutProgressIn(
+                           lanes, recipient, source)
+                         \/ IngressLaneHasTimeoutVoteIn(
+                              lanes, recipient, source)
+                         \/ IngressLaneHasTransportCompletionIn(
+                              lanes, recipient, source))
+              \/ /\ Len(lanes[recipient][source]) = 2
+                    /\ \/ /\ IngressLaneHasNonTimeoutProgressIn(
+                                  lanes, recipient, source)
+                               /\ IngressLaneHasTimeoutVoteIn(
+                                    lanes, recipient, source)
+                       \/ /\ IngressLaneHasNonTimeoutProgressIn(
+                                  lanes, recipient, source)
+                               /\ IngressLaneHasTransportCompletionIn(
+                                    lanes, recipient, source)
+                       \/ /\ IngressLaneHasTimeoutVoteIn(
+                                  lanes, recipient, source)
+                               /\ IngressLaneHasTransportCompletionIn(
+                                    lanes, recipient, source)
+              \/ /\ Len(lanes[recipient][source]) = 3
+                    /\ IngressLaneHasNonTimeoutProgressIn(
+                         lanes, recipient, source)
+                    /\ IngressLaneHasTimeoutVoteIn(
+                         lanes, recipient, source)
+                    /\ IngressLaneHasTransportCompletionIn(
+                         lanes, recipient, source)
+     \/ /\ source \notin ValidatorIds
+           /\ Len(lanes[recipient][source]) = 1
+           /\ IngressLaneHasTransportCompletionIn(
                 lanes, recipient, source)}
 
 IngressProtectedSlotCountFor(lanes, recipient) ==
   Cardinality(IngressProtectedSourcesFor(lanes, recipient))
     + Cardinality(
         IngressTimeoutVoteProtectedSourcesFor(lanes, recipient))
+    + Cardinality(
+        IngressTransportCompletionProtectedSourcesFor(lanes, recipient))
     + Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))
 
 IngressLanesAfterAdmission(item) ==
@@ -1314,6 +1390,7 @@ CanAdmitIngressItem(item) ==
   /\ IngressDepth(item.envelope.recipient)
        < IngressUsableCapacityAfterAdmission(item)
   /\ AsyncTimeoutVoteByteGateAllows(item)
+  /\ AsyncTransportCompletionOwnerGateAllows(item)
 
 ItemInIngress(item) ==
   \E recipient \in ValidatorIds, source \in AsyncIngressSources:
@@ -2241,8 +2318,17 @@ CertifiedRequestAuthorized(item) ==
        /\ qc.phase = "Commit"
        /\ item.envelope.recipient \in qc.signers
 
+MatchingCertifiedRequests(response) ==
+  {request \in asyncActiveRequests:
+     /\ request.kind = "CertifiedRequest"
+     /\ request.source = response.envelope.recipient
+     /\ request.envelope.height = response.envelope.height
+     /\ request.envelope.view = response.envelope.view
+     /\ request.envelope.subject = response.envelope.subject}
+
 CertifiedResponseAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
+  /\ MatchingCertifiedRequests(item) # {}
   /\ \E decision \in decisions:
        /\ decision.node = item.envelope.recipient
        /\ decision.qc.context = context
@@ -2284,21 +2370,15 @@ CertifiedResponseCandidate(item) ==
                  item.envelope.recipient, item.envelope.height,
                  item.envelope.view, item.envelope.subject, item)
 
-MatchingCertifiedRequests(response) ==
-  {request \in asyncActiveRequests:
-     /\ request.kind = "CertifiedRequest"
-     /\ request.source = response.envelope.recipient
-     /\ request.envelope.height = response.envelope.height
-     /\ request.envelope.view = response.envelope.view
-     /\ request.envelope.subject = response.envelope.subject}
-
 (***************************************************************************
 The production fair ingress rotates sources, but scans each selected source
 from its oldest entry to its newest and removes the first entry whose exact
 downstream predicate admits it.  Earlier blocked entries stay in place and
 the source consumes only one round-robin turn.  Keeping item admission
 separate from source selection prevents auxiliary I/O backpressure at a lane
-head from hiding later consensus/body progress from the same peer.
+head from hiding later consensus/body progress from the same peer.  Response
+candidates require scheduler-wide freshness, including causal ownership, so
+the exact downstream candidate cannot be admitted into a second carrier.
 ***************************************************************************)
 IngressItemCanDrain(node, item) ==
   LET candidate == DeliveryCandidate(item)
@@ -2313,16 +2393,20 @@ IngressItemCanDrain(node, item) ==
                      /\ CanEnqueueIoClass(node, "Serve")
           ELSE IF item.kind = "CertifiedResponse"
                THEN \/ ~CertifiedResponseAuthorized(item)
+                    \/ CandidateScheduled(
+                         CertifiedResponseCandidate(item))
                     \/ /\ ~CompletionCausalAdmissionDebt(node)
                           /\ AsyncOutstandingWorkCount(node)
                               < AsyncIoWorkCapacity
-                          /\ ~CandidateInFlight(
+                          /\ ~CandidateScheduled(
                                CertifiedResponseCandidate(item))
                ELSE IF item.kind = "CommitCertificateResponse"
                     THEN \/ ~CommitCertificateResponseAuthorized(item)
+                         \/ CandidateScheduled(
+                              CommitCertificateResponseCandidate(item))
                          \/ /\ ~NonCompletionCausalAdmissionDebt(node)
                                /\ CanEnqueueClass(node, "Progress")
-                               /\ ~CandidateInFlight(
+                               /\ ~CandidateScheduled(
                                     CommitCertificateResponseCandidate(item))
                ELSE \/ CandidateScheduled(candidate)
                     \/ /\ ~NonCompletionCausalAdmissionDebt(node)
@@ -2435,18 +2519,22 @@ DrainFairIngressSelected(node) ==
                   THEN IF CertifiedResponseAuthorized(item)
                        THEN LET completion ==
                                   CertifiedResponseCandidate(item)
-                            IN /\ asyncLocalReadyCompletions' =
-                                     [asyncLocalReadyCompletions EXCEPT
-                                        ![node] = Append(@, completion)]
-                               /\ asyncOutstandingWork' =
-                                     [asyncOutstandingWork EXCEPT
-                                        ![node] = @ \cup {completion}]
-                               /\ UNCHANGED <<asyncIoQueues,
-                                               asyncIoReadyCompletions,
-                                               asyncNextCompletionSource,
-                                               asyncIoControlAvailable,
-                                               asyncCommandQueues,
-                                               asyncNextCommandClass>>
+                            IN /\ IF CandidateScheduled(completion)
+                                  THEN UNCHANGED <<AsyncIoVars,
+                                                    asyncCommandQueues,
+                                                    asyncNextCommandClass>>
+                                  ELSE /\ asyncLocalReadyCompletions' =
+                                              [asyncLocalReadyCompletions EXCEPT
+                                                 ![node] = Append(@, completion)]
+                                       /\ asyncOutstandingWork' =
+                                              [asyncOutstandingWork EXCEPT
+                                                 ![node] = @ \cup {completion}]
+                                       /\ UNCHANGED <<asyncIoQueues,
+                                                       asyncIoReadyCompletions,
+                                                       asyncNextCompletionSource,
+                                                       asyncIoControlAvailable,
+                                                       asyncCommandQueues,
+                                                       asyncNextCommandClass>>
                                /\ asyncActiveRequests' =
                                     asyncActiveRequests \
                                       MatchingCertifiedRequests(item)
@@ -2464,7 +2552,12 @@ DrainFairIngressSelected(node) ==
                                        DiscoveredCommitQcItem(item)
                                      discoveredCandidate ==
                                        CommitCertificateResponseCandidate(item)
-                                 IN /\ EnqueueCandidate(discoveredCandidate)
+                                 IN /\ IF CandidateScheduled(
+                                               discoveredCandidate)
+                                        THEN UNCHANGED <<asyncCommandQueues,
+                                                          asyncNextCommandClass>>
+                                        ELSE EnqueueCandidate(
+                                               discoveredCandidate)
                                     /\ UNCHANGED AsyncIoVars
                                     /\ asyncActiveRequests' =
                                          asyncActiveRequests \
@@ -3753,6 +3846,46 @@ InjectByzantineNoise(source, recipient, nonce) ==
                     asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
+(***************************************************************************
+The authenticated resource hop can be the aggregate untrusted lane even when
+the completion's semantic origin is a roster validator.  This abstraction has
+only `item.source`, so the action represents that relayed completion and spends
+the untrusted lane's isolated TransportCompletion owner.  It is not added to
+immutable authentication history and therefore remains discardable after fair
+admission and service; no validator source owner is consumed.  Nonce zero is
+the canonical representative because payload identity does not affect the
+resource-hop count gate, and collapsing the other finite nonce aliases avoids
+multiplying equivalent fault states.  The production origin/via authentication
+premise remains an explicit refinement obligation.
+***************************************************************************)
+InjectUntrustedTransportCompletion(kind, recipient, nonce) ==
+  LET envelope ==
+        AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
+                          AsyncHeartbeatSubject, NoAsyncChunk, nonce)
+      item == AsyncNetworkItem(
+                kind, AsyncUntrustedSource, envelope)
+      packet == AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+  IN /\ kind \in IngressTransportCompletionKinds
+     /\ recipient \in CurrentVoters
+     /\ nonce \in 0..(AsyncIngressCapacity - 1)
+     /\ nonce = 0
+     /\ ~ItemScheduled(item)
+     /\ packet \notin asyncTransport
+     /\ asyncTransport' = asyncTransport \cup {packet}
+     /\ UNCHANGED AsyncDeferredVars
+     /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
+     /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
+                    asyncNextCommandClass, asyncFifoOwed,
+                    asyncTimeoutEmitted, asyncRunnerPhase,
+                    asyncRunnerBudget, AsyncIoVars, asyncOutstandingTags,
+                    asyncNodeDeadlines, asyncRetransmitDeadlines,
+                    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncIngressLanes,
+                    asyncIngressReady, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets>>
+
 InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
   LET envelope ==
         AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
@@ -3866,6 +3999,10 @@ AsyncFaultStep ==
   \/ \E source \in AsyncIngressSources, recipient \in ValidatorIds,
        nonce \in 0..(AsyncIngressCapacity - 1):
        InjectByzantineNoise(source, recipient, nonce)
+  \/ \E kind \in IngressTransportCompletionKinds,
+       recipient \in ValidatorIds,
+       nonce \in 0..(AsyncIngressCapacity - 1):
+       InjectUntrustedTransportCompletion(kind, recipient, nonce)
   \/ \E kind \in {"NormalJunk", "ProgressJunk"},
        source \in ValidatorIds, recipient \in ValidatorIds,
        nonce \in 0..(AsyncIngressCapacity - 1):

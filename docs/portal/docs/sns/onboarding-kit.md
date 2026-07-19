@@ -20,30 +20,27 @@ so external reviewers can follow the same procedure.
 
 ### Grafana dashboard & portal embed
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- The checked-in `dashboards/grafana/sns_suffix_analytics.json` still contains
+  pre-clean-break bulk-settlement series. Do not import it or treat it as
+  financial evidence until those queries are regenerated from canonical alias
+  plans and committed transaction receipts.
+- A read-only adapter may export plan and ledger records to Grafana. It must
+  never construct payment evidence or participate in consensus.
 
-```bash
-curl -H "Content-Type: application/json" \
-     -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-     -X POST https://grafana.sora.net/api/dashboards/db \
-     --data-binary @dashboards/grafana/sns_suffix_analytics.json
-```
-
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- The **Alias Provisioning Operational Evidence** portal page defines the safe
+  data contract. Do not embed the legacy dashboard until its queries satisfy
+  that contract. After regeneration, run `npm run build` inside `docs/portal`
+  and inspect the preview before publishing.
 
 ### Panels & evidence
 
-| Panel | Metrics | Governance evidence |
+| Panel | Canonical source | Governance evidence |
 |-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
+| Setup dispositions | `AliasTransactionPlanV1` plus committed transaction results | No-op, repair, create, and conflict counts without per-resource submissions. |
+| Native charges | Exact planner quotes matched to committed ledger debits | Totals by payment asset, policy version, and resource. |
+| Onboarding readiness | Sorted `AliasSetupReportV1` snapshots | Ready/Pending/Blocked history and stable diagnostic codes. |
 | Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| Lifecycle operations | Verified renewal/auto-renew plans and transaction receipts | CAS failures, suspensions, retries, and successful renewals. |
 
 Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
 review and attach it to the relevant annex entry under
@@ -53,8 +50,8 @@ of the exported bundle under `docs/source/sns/reports/` (for example,
 
 ### Annex automation
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+After the dashboard has passed the safe-source review above, generate annex
+files from its export so reviewers get a consistent digest:
 
 ```bash
 cargo xtask sns-annex \
@@ -125,47 +122,50 @@ registrar ticket.
 1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
    `sns_premium_commit_total`, and publish the manifest under
    `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+2. **Dutch reopen** — after grace + redemption expire, start the governed Dutch
+   sale and bind its audit trail to the canonical auction record plus the
+   resulting alias plan hash.
+3. **Renewals** — archive the verified renewal plan and ordinary transaction
+   receipt. For auto-renew, also capture the configured revision and any native
+   retry or suspension status.
 
 ### Developer APIs & automation
 
 - API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
+- Typed setup helper:
   [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
 - Example command:
 
 ```bash
-python3 scripts/sns_bulk_onboard.py registrations.csv \
-  --ndjson artifacts/sns/releases/2026q2/requests.ndjson \
-  --submission-log artifacts/sns/releases/2026q2/submissions.log \
-  --submit-torii-url https://torii.sora.net \
-  --submit-token-file ~/.config/sora/tokens/registrar.token
+python3 scripts/sns_bulk_onboard.py setup.json \
+  --config client.toml \
+  --plan-file artifacts/sns/releases/2026q2/setup.plan.json \
+  --plan-only
 ```
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+Archive the verified plan hash, live-state anchor, exact asset totals, and
+single-transaction result. The helper neither accepts tokens/keys nor calls a
+direct SNS mutation endpoint.
 
 ### Evidence bundle
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
+1. Registrar ticket with contacts, suffix scope, expected payment asset,
+   policy version, and approved caps.
 2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
 3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+4. API/CLI smoke-test artefacts (signed plan, verified hash, and one atomic
+   transaction result).
+5. Safe read-only report export attached to the monthly annex; do not attach
+   output from the legacy bulk-settlement dashboard.
 
 ## 3. Launch checklist
 
 | Step | Owner | Artefact |
 |------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
+| Reporting source validated | Product Analytics | Query review plus a sample joining exact plan quotes to committed transaction debits; the legacy dashboard is not imported. |
 | Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
 | DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
+| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` verified plan |
 | Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
 
 Complete the checklist before activating a registrar or suffix. The signed

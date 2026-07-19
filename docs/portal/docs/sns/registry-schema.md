@@ -1,316 +1,105 @@
 ---
 id: registry-schema
 title: Sora Name Service Registry Schema
-sidebar_label: Registry schema
-description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+description: Actual V1 Norito read-model types used by the SNS registry.
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::note Canonical source
+This page mirrors `docs/source/sns/registry_schema.md`, which is derived from
+`crates/iroha_data_model/src/sns/mod.rs`.
 :::
 
-# Sora Name Service Registry Schema (SN-2a)
+The registry schema is a persisted/read-model reference, not an HTTP mutation
+contract. Provisioning and lifecycle changes use the signed planner and ordinary
+transactions in the [registrar API guide](./registrar-api.md).
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+The first release does **not** define `RevenueShareRecordV1`,
+`RevenueAccrualEventV1`, `RegistryEventV1`, or `RegistryEventKind`, and it does
+not publish internal storage-map keys as a wire contract.
 
-This document completes the schema deliverable for SN-2a by specifying:
+## Selector
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+`NameSelectorV1` contains `version: u8`, `suffix_id: u16`, and `label: String`.
+Version is currently `1`; the shared constructor canonicalizes a non-empty label
+with the domain-label rules. Its BLAKE3 hash covers, in order, the version byte,
+big-endian suffix ID, and UTF-8 canonical label bytes.
 
-## 1. Identifiers & Hashing
+Fixed lease suffix IDs are `0x1001` for account aliases, `0x1002` for domains,
+and `0x1003` for dataspaces.
 
-| Identifier | Description | Derivation |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+## `NameRecordV1`
 
-Determinism requirements:
+The exact layout order is:
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+| Field | Type |
+|-------|------|
+| `selector` | `NameSelectorV1` |
+| `name_hash` | `[u8; 32]` |
+| `owner` | `AccountId` |
+| `controllers` | `Vec<NameControllerV1>` |
+| `status` | `NameStatus` |
+| `pricing_class` | `u8` |
+| `registered_at_ms` | `u64` |
+| `expires_at_ms` | `u64` |
+| `grace_expires_at_ms` | `u64` |
+| `redemption_expires_at_ms` | `u64` |
+| `metadata` | `Metadata` |
+| `auction` | `Option<NameAuctionStateV1>` |
 
-## 2. Norito Structures
+There is no top-level `suffix_id`, `normalized_label`, `display_label`, or
+`last_tx_hash`. `NameStatus` variants are `Active`, `GracePeriod`,
+`Redemption`, `Frozen(NameFrozenStateV1)`, and
+`Tombstoned(NameTombstoneStateV1)`. Availability is derived from absence;
+pending auction is represented by `auction`, not a status variant.
 
-### 2.1 NameRecordV1
+`NameControllerV1` contains `controller_type`, optional `account_address`,
+optional `resolver_template_id`, and `payload`. Controller types are `Account`,
+`Multisig`, `ResolverTemplate`, and `ExternalLink`.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+`NameAuctionStateV1` contains `kind`, `opened_at_ms`, `closes_at_ms`,
+`floor_price`, `highest_commitment`, and `settlement_tx`. Its auction kinds are
+`VickreyCommitReveal` and `DutchReopen`. Stored settlement metadata is not a
+client payment proof.
 
-Supporting structs:
+## `SuffixPolicyV1`
 
-```text
-Enum NameStatus {
-    Available,          // derived, not stored on-ledger
-    PendingAuction,
-    Active,
-    GracePeriod,
-    Redemption,
-    Frozen(NameFrozenStateV1),
-    Tombstoned(NameTombstoneStateV1)
-}
+The exact layout order is:
 
-Struct NameFrozenStateV1 {
-    reason: String,
-    until_ms: u64,
-}
+| Field | Type |
+|-------|------|
+| `suffix_id` | `SuffixId` |
+| `suffix` | `String` |
+| `steward` | `AccountId` |
+| `status` | `SuffixStatus` |
+| `min_term_years` | `u8` |
+| `max_term_years` | `u8` |
+| `grace_period_days` | `u16` |
+| `redemption_period_days` | `u16` |
+| `referral_cap_bps` | `u16` |
+| `reserved_labels` | `Vec<ReservedNameV1>` |
+| `payment_asset_id` | `String` |
+| `pricing` | `Vec<PriceTierV1>` |
+| `fee_split` | `SuffixFeeSplitV1` |
+| `fund_splitter_account` | `AccountId` |
+| `policy_version` | `u16` |
+| `metadata` | `Metadata` |
 
-Struct NameTombstoneStateV1 {
-    reason: String,
-}
+`SuffixStatus` is `Active`, `Paused`, or `Revoked`. `TokenValue` contains an
+asset-holding string and canonical non-negative `Quantity`; consensus uses no
+host floating point.
 
-Struct NameControllerV1 {
-    controller_type: ControllerType,   // Account, ResolverTemplate, ExternalLink
-    account_address: Option<AccountAddress>,   // Serialized as canonical `0x…` hex in JSON
-    resolver_template_id: Option<String>,
-    payload: Metadata,                 // Extra selector/value pairs for wallets/gateways
-}
+## Alias setup and reads
 
-Struct TokenValue {
-    asset_id: AsciiString,
-    amount: u128,
-}
+The planner resolves canonical text with its expected `DataSpaceId`, orders
+dataspace → domain → account `EnsureAlias` instructions, and rejects static/SNS
+mapping conflicts. Exact state is a zero-charge `NoOp`; missing derived state is
+a charge-free `Repair`; owner/binding/immutable drift is a conflict. All primary
+and derived writes commit atomically.
 
-Enum ControllerType {
-    Account,
-    Multisig,
-    ResolverTemplate,
-    ExternalLink
-}
+Read visibility comes from current dataspace/lane policy: public reads may be
+unsigned; restricted reads return 401 for missing/invalid authentication, 403
+before lookup for insufficient scope, and 404 only for an authorized miss.
+Invisible list entries are removed before totals and cursors.
 
-Struct NameAuctionStateV1 {
-    kind: AuctionKind,             // Vickrey, DutchReopen
-    opened_at_ms: u64,
-    closes_at_ms: u64,
-    floor_price: TokenValue,
-    highest_commitment: Option<Hash>,  // reference to sealed bid
-    settlement_tx: Option<Json>,
-}
-
-Enum AuctionKind {
-    VickreyCommitReveal,
-    DutchReopen
-}
-```
-
-### 2.2 SuffixPolicyV1
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset-holding identifier (`<base58-asset-definition-id>#<i105-account-id>`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | At most 1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
-
-```text
-Struct PriceTierV1 {
-    tier_id: u8,
-    label_regex: String,       // RE2-syntax pattern describing eligible labels
-    base_price: TokenValue,    // Price per one-year term before suffix coefficient
-    auction_kind: AuctionKind, // Default auction when the tier triggers
-    dutch_floor: Option<TokenValue>,
-    min_duration_years: u8,
-    max_duration_years: u8,
-}
-
-Struct ReservedNameV1 {
-    normalized_label: AsciiString,
-    assigned_to: Option<AccountId>,
-    release_at_ms: Option<u64>,
-    note: String,
-}
-
-Struct SuffixFeeSplitV1 {
-    treasury_bps: u16,     // default 7000 (70%)
-    steward_bps: u16,      // default 3000 (30%)
-    referral_max_bps: u16, // optional referral carve-out (<= 1000)
-    escrow_bps: u16,       // % routed to claw-back escrow
-}
-```
-
-### 2.3 Revenue & Settlement Records
-
-| Struct | Fields | Purpose |
-|--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
-
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
-
-### 2.4 Registry Events
-
-Canonical events provide a replay log for DNS/gateway automation and analytics.
-
-```text
-Struct RegistryEventV1 {
-    name_hash: [u8; 32],
-    suffix_id: u16,
-    selector: NameSelectorV1,
-    version: u64,               // increments per NameRecord update
-    timestamp: Timestamp,
-    tx_hash: Hash,
-    actor: AccountId,
-    event: RegistryEventKind,
-}
-
-Enum RegistryEventKind {
-    NameRegistered { expires_at: Timestamp, pricing_class: u8 },
-    NameRenewed { expires_at: Timestamp, term_years: u8 },
-    NameTransferred { previous_owner: AccountId, new_owner: AccountId },
-    NameControllersUpdated { controller_count: u16 },
-    NameFrozen(NameFrozenStateV1),
-    NameUnfrozen,
-    NameTombstoned(NameTombstoneStateV1),
-    AuctionOpened { kind: AuctionKind },
-    AuctionSettled { winning_account: AccountId, clearing_price: TokenValue },
-    RevenueSharePosted { epoch_id: u64, treasury_amount: TokenValue, steward_amount: TokenValue },
-    SuffixPolicyUpdated { policy_version: u16 },
-}
-```
-
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
-
-## 3. Storage Layout & Indexes
-
-| Key | Description |
-|-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
-
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
-
-## 4. Lifecycle State Machine
-
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
-
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
-
-## 5. Canonical Events & Gateway Sync
-
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
-
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred i105 addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
-
-Event delivery guarantees:
-
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
-
-## 6. Example Norito Payloads
-
-### 6.1 NameRecord Example
-
-```text
-NameRecordV1 {
-    suffix_id: 0x0001,                       // .sora
-    selector: NameSelectorV1 { version:1, suffix_id:1, label_len:5, label_bytes:"makoto" },
-    name_hash: 0x5f57...9c2a,
-    normalized_label: "makoto",
-    display_label: "Makoto",
-    owner: "<i105-account-id>",
-    controllers: [
-        NameControllerV1 {
-            controller_type: Account,
-            account_address: Some(AccountAddress("0x020001...")),
-            resolver_template_id: None,
-            payload: {}
-        }
-    ],
-    status: Active,
-    pricing_class: 0,
-    registered_at: 1_776_000_000,
-    expires_at: 1_807_296_000,
-    grace_expires_at: 1_809_888_000,
-    redemption_expires_at: 1_815_072_000,
-    auction: None,
-    last_tx_hash: 0xa3d4...c001,
-    metadata: { "resolver": "wallet.default", "notes": "SNS beta cohort" },
-}
-```
-
-### 6.2 SuffixPolicy Example
-
-```text
-SuffixPolicyV1 {
-    suffix_id: 0x0001,
-    suffix: "sora",
-    steward: "<i105-account-id>",
-    status: Active,
-    payment_asset_id: "<base58-asset-definition-id>#<i105-account-id>",
-    pricing: [
-        PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
-        PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }
-    ],
-    min_term_years: 1,
-    grace_period_days: 30,
-    redemption_period_days: 60,
-    max_term_years: 5,
-    referral_cap_bps: 500,
-    reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
-    ],
-    fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "<i105-account-id>",
-    policy_version: 3,
-    metadata: { "kpi_covenant":"bafybeigd..." },
-}
-```
-
-## 7. Next Steps
-
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+Use typed queries rather than internal storage keys. Cross-SDK canonical fixtures
+live under `fixtures/norito_rpc/alias_setup_v1/`.

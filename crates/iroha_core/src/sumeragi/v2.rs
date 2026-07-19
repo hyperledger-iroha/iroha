@@ -38,6 +38,130 @@ const MAX_DEFERRED_INPUTS: usize = 1024;
 const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
 const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
 
+/// Maximum adapter effects returned by one serialized runtime invocation.
+///
+/// A reducer transition without persistence already has this exact source
+/// bound. Persistence is acknowledged synchronously, but the record-specific
+/// budgets below prove that replacing the sole `Persist` effect with its
+/// causal `Persisted` continuation produces at most five effects. Keeping the
+/// adapter bound equal to the reducer bound therefore matches the executor's
+/// retained-batch contract without inflating either queue.
+const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
+
+/// Largest record-specific `Persist -> Persisted` flattened batch.
+///
+/// The witness is locally formed `InstallTimeout`: one local TimeoutVote
+/// broadcast precedes `Persist`, then the acknowledgement can emit the TC
+/// broadcast, `EnterView`, one protected-body fetch, and one reconstructed
+/// locked Commit signature. Thus `2 - 1 + 4 = 5`.
+const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
+
+// Every persistence-flattened batch must fit the executor's already verified
+// source-transition capacity. A future record shape which breaks this
+// relation fails at compile time as well as at the runtime checks below.
+const _: () =
+    assert!(MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
+
+/// WAL-record class used to select the exact adapter macro-step budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PersistenceMacroStepClass {
+    /// Locally validated proposal intent.
+    ProposalIntent,
+    /// Local Prepare-vote intent.
+    PrepareIntent,
+    /// Newly observed highest Prepare certificate.
+    ObservePrepare,
+    /// Atomic lock and local Commit-vote intent.
+    LockAndCommit,
+    /// Local timeout-vote intent.
+    TimeoutIntent,
+    /// Installed timeout certificate.
+    InstallTimeout,
+    /// Durable Commit certificate decision.
+    Decision,
+}
+
+impl PersistenceMacroStepClass {
+    /// Classify every safety-WAL record; a new record cannot silently inherit a
+    /// budget because the exhaustive match must be deliberately extended.
+    fn from_record(record: &reducer::WalRecord) -> Self {
+        match record {
+            reducer::WalRecord::ProposalIntent(_) => Self::ProposalIntent,
+            reducer::WalRecord::PrepareIntent(_) => Self::PrepareIntent,
+            reducer::WalRecord::ObservePrepare(_) => Self::ObservePrepare,
+            reducer::WalRecord::LockAndCommit { .. } => Self::LockAndCommit,
+            reducer::WalRecord::TimeoutIntent(_) => Self::TimeoutIntent,
+            reducer::WalRecord::InstallTimeout(_) => Self::InstallTimeout,
+            reducer::WalRecord::Decision(_) => Self::Decision,
+        }
+    }
+
+    /// Return the exact reviewed upper bounds for the source transition and
+    /// its persistence acknowledgement continuation.
+    fn budget(self) -> PersistenceMacroStepBudget {
+        match self {
+            // LocalProposalReady emits only Persist; Persisted emits Sign.
+            Self::ProposalIntent => PersistenceMacroStepBudget::new(1, 1),
+            // Signed Proposal may prefix the PrepareIntent Persist with its
+            // Proposal broadcast; Persisted emits one Prepare Sign.
+            Self::PrepareIntent => PersistenceMacroStepBudget::new(2, 1),
+            // Signed Prepare can prefix ObservePrepare with the vote and QC
+            // broadcasts plus one fetch. Its None continuation can emit at
+            // most one already queued, still-authorized signature.
+            Self::ObservePrepare => PersistenceMacroStepBudget::new(4, 1),
+            // Signed Prepare can prefix LockAndCommit with vote and QC
+            // broadcasts; Persisted emits one Commit Sign.
+            Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
+            // TimeoutElapsed emits only Persist; Persisted emits Sign.
+            Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
+            // Signed TimeoutVote can prefix Persist with its vote broadcast;
+            // Persisted can emit TC broadcast, EnterView, fetch, and Sign.
+            Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),
+            // Signed CommitVote can prefix Persist with its vote broadcast;
+            // Persisted can emit the CommitQC broadcast and one body/apply
+            // stage. Decision invalidates every queued pre-decision signer.
+            Self::Decision => PersistenceMacroStepBudget::new(2, 2),
+        }
+    }
+
+    /// Canonical class inventory for exhaustive bound tests.
+    #[cfg(test)]
+    const ALL: [Self; 7] = [
+        Self::ProposalIntent,
+        Self::PrepareIntent,
+        Self::ObservePrepare,
+        Self::LockAndCommit,
+        Self::TimeoutIntent,
+        Self::InstallTimeout,
+        Self::Decision,
+    ];
+}
+
+/// Reviewed source/continuation lengths for one WAL-record class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PersistenceMacroStepBudget {
+    /// Maximum effects in the reducer transition containing `Persist`.
+    initial_effects: usize,
+    /// Maximum effects emitted by the matching `Persisted` transition.
+    continuation_effects: usize,
+}
+
+impl PersistenceMacroStepBudget {
+    /// Construct one compile-time record-specific budget.
+    const fn new(initial_effects: usize, continuation_effects: usize) -> Self {
+        Self {
+            initial_effects,
+            continuation_effects,
+        }
+    }
+
+    /// Maximum returned effects after replacing the sole `Persist` effect with
+    /// the acknowledgement continuation.
+    const fn flattened_effects(self) -> usize {
+        self.initial_effects - 1 + self.continuation_effects
+    }
+}
+
 /// Node-local fingerprints exported through the compact v2 status record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AdapterFingerprints {
@@ -1010,6 +1134,33 @@ pub(crate) enum AdapterError {
     /// Trusted completion ownership exceeded the bounded deferred lane.
     #[error("Sumeragi v2 deferred completion lane exceeded its bounded capacity")]
     DeferredCompletionCapacityExceeded,
+    /// One adapter invocation violated the reviewed reducer/continuation
+    /// composition contract. This is an internal source-refinement failure,
+    /// never recoverable input backpressure.
+    #[error(
+        "Sumeragi v2 adapter macro-step exceeded its reviewed shape: initial {initial_effects}/{maximum_initial_effects}, Persist {persist_effects}/1, continuation {continuation_effects}/{maximum_continuation_effects}, flattened maximum {maximum_flattened_effects}, nested Persist {continuation_contains_persist}"
+    )]
+    AdapterMacroStepBoundExceeded {
+        /// Effects emitted by the source reducer transition.
+        initial_effects: usize,
+        /// Record-specific maximum source-transition effects.
+        maximum_initial_effects: usize,
+        /// Number of `Persist` effects in the source transition.
+        persist_effects: usize,
+        /// Effects emitted by the synchronous `Persisted` continuation.
+        continuation_effects: usize,
+        /// Record-specific maximum continuation effects.
+        maximum_continuation_effects: usize,
+        /// Record-specific maximum flattened effects.
+        maximum_flattened_effects: usize,
+        /// Whether the acknowledgement attempted a second persistence hop.
+        continuation_contains_persist: bool,
+    },
+    /// The adapter reported deferred work as serviceable, but the reducer
+    /// still rejected that exact transition as Busy. Requeueing here would
+    /// create a non-decreasing serialized-runtime spin.
+    #[error("Sumeragi v2 deferred service violated its open-fence contract and is fail-closed")]
+    DeferredServiceContractViolation,
     /// The reducer is permanently closed after a durability failure.
     #[error("Sumeragi v2 adapter is fail-closed after a durability failure")]
     FailClosed,
@@ -1328,10 +1479,15 @@ impl SumeragiV2Adapter {
         self.replay_complete && !self.fail_closed
     }
 
-    /// Return whether application completed and no unfinished safety write or
-    /// signature remains before height rollover.
+    /// Return whether application completed and no unfinished safety write,
+    /// signature, or adapter-owned deferred input remains before height
+    /// rollover.
     pub(crate) fn ready_to_finish(&self) -> bool {
-        self.ingress_ready() && self.reducer.ready_to_finish()
+        self.ingress_ready()
+            && self.deferred_completions.is_empty()
+            && self.deferred_progress_inputs.is_empty()
+            && self.deferred_inputs.is_empty()
+            && self.reducer.ready_to_finish()
     }
 
     /// Verify a canonical consensus message against this adapter's frozen
@@ -1365,6 +1521,28 @@ impl SumeragiV2Adapter {
         message: &AuthenticatedConsensusMessage,
     ) -> bool {
         self.wire_ingress_may_use_progress(message.payload())
+    }
+
+    /// Return the tag of an exact Commit/Prepare QC already owned by the
+    /// adapter's Busy-deferred progress lane.
+    ///
+    /// This comparison is intentionally exact, including canonical signer
+    /// order and aggregate signature. Runtime admission may use the result as
+    /// a capacity hint, but it must independently authenticate the arriving
+    /// envelope before coalescing it with this owner.
+    pub(crate) fn deferred_quorum_certificate_owner_tag(
+        &self,
+        candidate: &wire::QuorumCertificate,
+    ) -> Option<reducer::EventTag> {
+        self.deferred_progress_inputs.iter().find_map(|input| {
+            let reducer::Event::QuorumCertificateReceived { tag, certificate } = &input.event
+            else {
+                return None;
+            };
+            self.registry
+                .reducer_qc_matches_wire(certificate, candidate)
+                .then_some(*tag)
+        })
     }
 
     /// Return whether a wire payload may use the active lock's progress lane.
@@ -3577,16 +3755,12 @@ impl SumeragiV2Adapter {
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
-        let mut effects = self.drive_effects(outcome.into_effects())?;
-        // EnterView is an asynchronous ownership boundary. Return it to the effect executor
-        // before retrying old-generation completions so the effective durable-lock body pipeline can be
-        // rebound instead of being consumed as StaleGeneration in this same adapter step.
-        if !effects
-            .iter()
-            .any(|effect| matches!(effect, AdapterEffect::EnterView { .. }))
-        {
-            effects.extend(self.drain_deferred()?);
-        }
+        // One adapter invocation returns exactly one reducer macro-step. Busy-
+        // deferred inputs remain adapter-owned and the serialized runtime
+        // schedules them explicitly after this batch reaches the executor.
+        // Concatenating them here would erase the reducer transition boundary
+        // and could exceed the executor's retained-batch capacity.
+        let effects = self.drive_effects(outcome.into_effects())?;
         self.publish_status()?;
         self.log_body_progress(&queued, disposition, effects.len());
         Ok(DeferPolicyOutcome {
@@ -3899,49 +4073,69 @@ impl SumeragiV2Adapter {
         }
     }
 
-    fn drain_deferred(&mut self) -> Result<Vec<AdapterEffect>, AdapterError> {
-        let mut ready = Vec::new();
-        while let Some(mut input) = self.pop_deferred_next() {
-            if input.retag_authenticated_ingress {
-                let current_tag = self.reducer.current_tag();
-                input.event = input.event.retag_authenticated_ingress(current_tag);
-                if let Some(admission) = &mut input.admission {
-                    admission.generation = current_tag.generation();
-                }
-            }
-            let retry = input.clone();
-            let event = input.event;
-            let observed_event = event.clone();
-            let outcome = self.reducer.step(event)?;
-            self.record_reducer_outcome(&observed_event, outcome.disposition(), outcome.effects());
-            if outcome.disposition()
-                == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-            {
-                match retry.priority {
-                    DeferredPriority::Completion => self.deferred_completions.push_front(retry),
-                    DeferredPriority::Progress => {
-                        self.deferred_progress_inputs.push_front(retry);
-                    }
-                    DeferredPriority::Normal => self.deferred_inputs.push_front(retry),
-                }
-                break;
-            }
-            if let Some(admission) = input.admission {
-                self.record_ingress_delivery(admission);
-            }
-            let effects = self.drive_effects(outcome.into_effects())?;
-            let installed_view = effects
-                .iter()
-                .any(|effect| matches!(effect, AdapterEffect::EnterView { .. }));
-            ready.extend(effects);
-            if installed_view {
-                // The executor must first transfer protected body work and completion ownership
-                // to the new incarnation. Remaining deferred work is still owned and will be
-                // serviced after that serialized boundary.
-                break;
+    /// Return whether one adapter-owned Busy-deferred input can cross the
+    /// reducer boundary now.
+    ///
+    /// The serialized runtime gives this finite debt its own scheduling turn.
+    /// Pending WAL or signing work must instead be cleared by its matching
+    /// completion command, so reporting deferred work as ready while either
+    /// fence is active would spin and starve that completion.
+    pub(crate) fn deferred_work_is_serviceable(&self) -> bool {
+        !self.fail_closed
+            && self.replay_complete
+            && self.reducer.pending_persistence_record().is_none()
+            && self.reducer.awaiting_signature().is_none()
+            && (!self.deferred_completions.is_empty()
+                || !self.deferred_progress_inputs.is_empty()
+                || !self.deferred_inputs.is_empty())
+    }
+
+    /// Service at most one adapter-owned Busy-deferred reducer transition.
+    ///
+    /// Returning one macro-step preserves the executor's fixed retained-batch
+    /// bound. Repeated serialized runtime turns decrease the finite deferred
+    /// rank, while `pop_deferred_next` keeps the three classes round-robin.
+    pub(crate) fn drain_deferred(&mut self) -> Result<Vec<AdapterEffect>, AdapterError> {
+        self.ensure_ingress()?;
+        if !self.deferred_work_is_serviceable() {
+            return Ok(Vec::new());
+        }
+        let Some(mut input) = self.pop_deferred_next() else {
+            return Ok(Vec::new());
+        };
+        if input.retag_authenticated_ingress {
+            let current_tag = self.reducer.current_tag();
+            input.event = input.event.retag_authenticated_ingress(current_tag);
+            if let Some(admission) = &mut input.admission {
+                admission.generation = current_tag.generation();
             }
         }
-        Ok(ready)
+        let event = input.event;
+        let observed_event = event.clone();
+        let outcome = self.reducer.step(event)?;
+        let disposition = outcome.disposition();
+        self.record_reducer_outcome(&observed_event, disposition, outcome.effects());
+        if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
+            // `Busy` has exactly the two fences excluded by
+            // `deferred_work_is_serviceable`. A future reducer change must
+            // extend that predicate deliberately; silently requeueing would
+            // return `Advanced([])` forever without decreasing queue rank.
+            return Err(self.fail_deferred_service_contract());
+        }
+        if let Some(admission) = input.admission {
+            self.record_ingress_delivery(admission);
+        }
+        let effects = self.drive_effects(outcome.into_effects())?;
+        self.publish_status()?;
+        self.log_body_progress(&observed_event, disposition, effects.len());
+        Ok(effects)
+    }
+
+    /// Fail closed when the deferred-service predicate and reducer Busy
+    /// contract disagree.
+    fn fail_deferred_service_contract(&mut self) -> AdapterError {
+        self.fail_closed = true;
+        AdapterError::DeferredServiceContractViolation
     }
 
     fn pop_deferred_next(&mut self) -> Option<DeferredInput> {
@@ -3984,12 +4178,58 @@ impl SumeragiV2Adapter {
         Ok(())
     }
 
+    /// Permanently close the adapter after an internal macro-step shape
+    /// violates the reviewed reducer/continuation contract.
+    fn fail_macro_step(&mut self, error: AdapterError) -> AdapterError {
+        debug_assert!(matches!(
+            &error,
+            AdapterError::AdapterMacroStepBoundExceeded { .. }
+        ));
+        self.fail_closed = true;
+        error
+    }
+
     fn drive_effects(
         &mut self,
         effects: Vec<reducer::Effect>,
     ) -> Result<Vec<AdapterEffect>, AdapterError> {
+        let initial_effects = effects.len();
+        let mut persist_effects = 0usize;
+        let mut persistence_class = None;
+        for effect in &effects {
+            if let reducer::Effect::Persist { entry, .. } = effect {
+                persist_effects = persist_effects.saturating_add(1);
+                persistence_class = Some(PersistenceMacroStepClass::from_record(entry.record()));
+            }
+        }
+        let persistence_budget = persistence_class.map(PersistenceMacroStepClass::budget);
+        let maximum_initial_effects = persistence_budget
+            .map_or(MAX_ADAPTER_EFFECTS_PER_MACRO_STEP, |budget| {
+                budget.initial_effects
+            });
+        let maximum_continuation_effects =
+            persistence_budget.map_or(0, |budget| budget.continuation_effects);
+        let maximum_flattened_effects = persistence_budget.map_or(
+            MAX_ADAPTER_EFFECTS_PER_MACRO_STEP,
+            PersistenceMacroStepBudget::flattened_effects,
+        );
+        if persist_effects > 1 || initial_effects > maximum_initial_effects {
+            let error = AdapterError::AdapterMacroStepBoundExceeded {
+                initial_effects,
+                maximum_initial_effects,
+                persist_effects,
+                continuation_effects: 0,
+                maximum_continuation_effects,
+                maximum_flattened_effects,
+                continuation_contains_persist: false,
+            };
+            return Err(self.fail_macro_step(error));
+        }
+
         let mut pending = VecDeque::from(effects);
         let mut ready = Vec::new();
+        let mut observed_continuation_effects = 0usize;
+        let mut continuation_contains_persist = false;
         while let Some(effect) = pending.pop_front() {
             match effect {
                 reducer::Effect::Persist { tag, entry } => {
@@ -4045,7 +4285,31 @@ impl SumeragiV2Adapter {
                         continuation.disposition(),
                         continuation.effects(),
                     );
-                    reducer::prepend_causal_continuation(&mut pending, continuation.into_effects());
+                    let continuation = continuation.into_effects();
+                    observed_continuation_effects = continuation.len();
+                    continuation_contains_persist = continuation
+                        .iter()
+                        .any(|effect| matches!(effect, reducer::Effect::Persist { .. }));
+                    let flattened_effects = initial_effects
+                        .saturating_sub(1)
+                        .saturating_add(observed_continuation_effects);
+                    if observed_continuation_effects > maximum_continuation_effects
+                        || continuation_contains_persist
+                        || flattened_effects > maximum_flattened_effects
+                        || flattened_effects > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP
+                    {
+                        let error = AdapterError::AdapterMacroStepBoundExceeded {
+                            initial_effects,
+                            maximum_initial_effects,
+                            persist_effects,
+                            continuation_effects: observed_continuation_effects,
+                            maximum_continuation_effects,
+                            maximum_flattened_effects,
+                            continuation_contains_persist,
+                        };
+                        return Err(self.fail_macro_step(error));
+                    }
+                    reducer::prepend_causal_continuation(&mut pending, continuation);
                 }
                 effect => match self.convert_effect(effect) {
                     Ok(effect) => ready.push(effect),
@@ -4055,6 +4319,18 @@ impl SumeragiV2Adapter {
                     }
                 },
             }
+        }
+        if ready.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP {
+            let error = AdapterError::AdapterMacroStepBoundExceeded {
+                initial_effects,
+                maximum_initial_effects,
+                persist_effects,
+                continuation_effects: observed_continuation_effects,
+                maximum_continuation_effects,
+                maximum_flattened_effects,
+                continuation_contains_persist,
+            };
+            return Err(self.fail_macro_step(error));
         }
         Ok(ready)
     }
@@ -4675,6 +4951,41 @@ impl WireRegistry {
         self.certificates
             .insert(certificate.reference(), wire.clone());
         Ok(wire)
+    }
+
+    /// Return whether a reducer QC retains this exact authenticated wire QC.
+    ///
+    /// Network QCs store the aggregate signature as the same opaque token on
+    /// every reducer signature share. Comparing that token as well as the
+    /// canonical signer order prevents a different certificate for the same
+    /// round, phase, and subject from borrowing an existing deferred owner.
+    fn reducer_qc_matches_wire(
+        &self,
+        queued: &reducer::QuorumCertificate,
+        candidate: &wire::QuorumCertificate,
+    ) -> bool {
+        if self.round_to_wire(queued.round()) != candidate.round
+            || Self::phase_to_wire(queued.phase()) != candidate.phase
+            || !self
+                .subject(queued.subject())
+                .is_ok_and(|subject| subject == candidate.subject)
+            || !self
+                .execution_commitment(queued.round(), queued.subject())
+                .is_ok_and(|commitment| commitment == candidate.execution_commitment)
+            || queued.signatures().len() != candidate.signers.len()
+        {
+            return false;
+        }
+        let aggregate = aggregate_token(&candidate.aggregate_signature);
+        queued
+            .signatures()
+            .iter()
+            .zip(&candidate.signers)
+            .all(|(share, signer)| {
+                self.validator_index(share.signer())
+                    .is_ok_and(|index| index == *signer)
+                    && share.signature() == &aggregate
+            })
     }
 
     fn timeout_vote_to_core(
@@ -6348,6 +6659,289 @@ mod tests {
     }
 
     #[test]
+    fn persistence_macro_step_budgets_have_exact_five_effect_maximum() {
+        let expected = [
+            (
+                PersistenceMacroStepClass::ProposalIntent,
+                PersistenceMacroStepBudget::new(1, 1),
+            ),
+            (
+                PersistenceMacroStepClass::PrepareIntent,
+                PersistenceMacroStepBudget::new(2, 1),
+            ),
+            (
+                PersistenceMacroStepClass::ObservePrepare,
+                PersistenceMacroStepBudget::new(4, 1),
+            ),
+            (
+                PersistenceMacroStepClass::LockAndCommit,
+                PersistenceMacroStepBudget::new(3, 1),
+            ),
+            (
+                PersistenceMacroStepClass::TimeoutIntent,
+                PersistenceMacroStepBudget::new(1, 1),
+            ),
+            (
+                PersistenceMacroStepClass::InstallTimeout,
+                PersistenceMacroStepBudget::new(2, 4),
+            ),
+            (
+                PersistenceMacroStepClass::Decision,
+                PersistenceMacroStepBudget::new(2, 2),
+            ),
+        ];
+        assert_eq!(
+            PersistenceMacroStepClass::ALL,
+            expected.map(|(class, _)| class),
+            "the exhaustive WAL class inventory must remain source ordered"
+        );
+        for (class, budget) in expected {
+            assert_eq!(class.budget(), budget);
+            assert!(budget.initial_effects >= 1);
+            assert!(budget.continuation_effects <= reducer::MAX_EFFECTS_PER_STEP);
+            assert!(budget.flattened_effects() <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
+        }
+        assert_eq!(
+            PersistenceMacroStepClass::ALL
+                .into_iter()
+                .map(|class| class.budget().flattened_effects())
+                .max(),
+            Some(MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP)
+        );
+        assert_eq!(
+            PersistenceMacroStepClass::InstallTimeout
+                .budget()
+                .flattened_effects(),
+            MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP,
+            "local TC formation is the unique five-effect persistence witness"
+        );
+    }
+
+    #[test]
+    fn drive_effects_rejects_oversized_non_persisting_batch() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let effect = reducer::Effect::FetchBody {
+            tag,
+            round: reducer::Round::new(tag.height(), tag.view()),
+            subject: reducer::Subject::default(),
+            manifest: None,
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let oversized = vec![effect; MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 1];
+
+        assert!(matches!(
+            adapter.drive_effects(oversized),
+            Err(AdapterError::AdapterMacroStepBoundExceeded {
+                initial_effects,
+                maximum_initial_effects,
+                persist_effects: 0,
+                continuation_effects: 0,
+                continuation_contains_persist: false,
+                ..
+            }) if initial_effects == MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 1
+                && maximum_initial_effects == MAX_ADAPTER_EFFECTS_PER_MACRO_STEP
+        ));
+        assert!(adapter.fail_closed);
+        assert!(adapter.wal.recovered_records().is_empty());
+    }
+
+    #[test]
+    fn drive_effects_rejects_record_specific_overbudget_before_wal_append() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let timeout = adapter
+            .reducer
+            .step(reducer::Event::TimeoutElapsed { tag })
+            .expect("stage the sole TimeoutIntent Persist")
+            .into_effects();
+        assert!(matches!(
+            timeout.as_slice(),
+            [reducer::Effect::Persist { .. }]
+        ));
+        let unrelated = reducer::Effect::FetchBody {
+            tag,
+            round: reducer::Round::new(tag.height(), tag.view()),
+            subject: reducer::Subject::default(),
+            manifest: None,
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let mut overbudget = vec![unrelated];
+        overbudget.extend(timeout);
+
+        assert!(matches!(
+            adapter.drive_effects(overbudget),
+            Err(AdapterError::AdapterMacroStepBoundExceeded {
+                initial_effects: 2,
+                maximum_initial_effects: 1,
+                persist_effects: 1,
+                continuation_effects: 0,
+                maximum_continuation_effects: 1,
+                maximum_flattened_effects: 1,
+                continuation_contains_persist: false,
+            })
+        ));
+        assert!(adapter.fail_closed);
+        assert!(adapter.wal.recovered_records().is_empty());
+    }
+
+    #[test]
+    fn drive_effects_rejects_multiple_persist_owners_before_wal_append() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let mut timeout = adapter
+            .reducer
+            .step(reducer::Event::TimeoutElapsed { tag })
+            .expect("stage the sole TimeoutIntent Persist")
+            .into_effects();
+        let persist = timeout.pop().expect("one Persist effect");
+        assert!(matches!(&persist, reducer::Effect::Persist { .. }));
+
+        assert!(matches!(
+            adapter.drive_effects(vec![persist.clone(), persist]),
+            Err(AdapterError::AdapterMacroStepBoundExceeded {
+                persist_effects: 2,
+                continuation_effects: 0,
+                continuation_contains_persist: false,
+                ..
+            })
+        ));
+        assert!(adapter.fail_closed);
+        assert!(adapter.wal.recovered_records().is_empty());
+    }
+
+    #[test]
+    fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let wire_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: 0,
+        };
+        let protected_subject = subject(0x6d);
+        let prepare = wire::QuorumCertificate {
+            round: wire_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: protected_subject,
+            execution_commitment: execution_commitment(0x6d),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x6d; 96],
+        };
+        let timeout = wire::TimeoutCertificate {
+            round: wire_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: Some(prepare),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x6e; 96],
+            }],
+        };
+        let wire_context = adapter.wire_context.clone();
+        let timeout = adapter
+            .registry
+            .tc_to_core(&timeout, &wire_context)
+            .expect("convert the lock-promoting timeout certificate");
+        let timeout_tag = adapter.current_tag();
+        let pending_timeout = adapter
+            .reducer
+            .step(reducer::Event::TimeoutCertificateReceived {
+                tag: timeout_tag,
+                certificate: timeout,
+            })
+            .expect("stage the real InstallTimeout persistence");
+        let mut pending_effects = pending_timeout.into_effects();
+        let reducer::Effect::Persist { tag, entry } = pending_effects
+            .pop()
+            .expect("InstallTimeout has one Persist effect")
+        else {
+            panic!("InstallTimeout must stage persistence");
+        };
+        assert!(pending_effects.is_empty());
+
+        // Keep the reducer's real lock-promoting continuation, but classify
+        // and encode this adversarial boundary call as the smaller
+        // TimeoutIntent class. The substitute is itself a valid first WAL
+        // record with the exact pending persistence ID, so the continuation
+        // guard is reached only after the append succeeds.
+        let timeout_round = reducer::Round::new(wire_round.height, wire_round.view);
+        let local_validator = adapter
+            .reducer
+            .local_validator()
+            .expect("test adapter is a validator");
+        let forged_entry = reducer::WalEntry::new(
+            entry.id(),
+            reducer::WalRecord::TimeoutIntent(reducer::TimeoutVote::new(
+                adapter.reducer.context().id(),
+                timeout_round,
+                local_validator,
+                None,
+            )),
+        );
+        assert!(matches!(
+            adapter.drive_effects(vec![reducer::Effect::Persist {
+                tag,
+                entry: forged_entry,
+            }]),
+            Err(AdapterError::AdapterMacroStepBoundExceeded {
+                initial_effects: 1,
+                maximum_initial_effects: 1,
+                persist_effects: 1,
+                continuation_effects: 2,
+                maximum_continuation_effects: 1,
+                maximum_flattened_effects: 1,
+                continuation_contains_persist: false,
+            })
+        ));
+        assert!(adapter.fail_closed);
+        assert_eq!(adapter.wal.recovered_records().len(), 1);
+        assert_eq!(adapter.wal.recovered_records()[0].sequence, 0);
+        drop(adapter);
+
+        let (recovered, first_startup) =
+            open_test(&directory).expect("replay the one valid timeout intent");
+        assert!(recovered.ingress_ready());
+        assert!(!recovered.fail_closed);
+        assert_eq!(recovered.wal.recovered_records().len(), 1);
+        assert_eq!(recovered.reducer.durable_state().last_id().get(), 1);
+        assert!(
+            recovered
+                .reducer
+                .durable_state()
+                .timeout_intent(timeout_round)
+                .is_some()
+        );
+        assert!(first_startup.len() <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
+        assert!(matches!(
+            first_startup.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(vote),
+                ..
+            }] if vote.round == wire_round
+                && vote.highest_prepare_qc.is_none()
+                && vote.signer == 0
+                && vote.signature.is_empty()
+        ));
+        drop(recovered);
+
+        let (recovered_again, second_startup) =
+            open_test(&directory).expect("repeat deterministic timeout-intent replay");
+        assert_eq!(second_startup, first_startup);
+        assert!(second_startup.len() <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
+        assert_eq!(recovered_again.wal.recovered_records().len(), 1);
+        assert!(recovered_again.ingress_ready());
+        assert!(!recovered_again.fail_closed);
+    }
+
+    #[test]
     fn open_records_exactly_one_recovery_progress_transition() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -7209,6 +7803,112 @@ mod tests {
     }
 
     #[test]
+    fn busy_deferred_input_blocks_terminal_readiness_until_serviced() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+        let decided_subject = subject(0x7f);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x7f; 96],
+        };
+        let context = adapter.wire_context.clone();
+        let certificate = adapter
+            .registry
+            .qc_to_core(&decision, &context)
+            .expect("convert exact Decision certificate");
+        let decision_tag = adapter.current_tag();
+        let pending_decision = adapter
+            .reducer
+            .step(reducer::Event::QuorumCertificateReceived {
+                tag: decision_tag,
+                certificate,
+            })
+            .expect("stage Decision WAL persistence");
+        assert!(matches!(
+            pending_decision.effects(),
+            [reducer::Effect::Persist { .. }]
+        ));
+
+        let busy_completion = adapter
+            .local_proposal_ready(decision_tag, manifest.clone(), &durable, &validated)
+            .expect("retain the trusted completion across the Busy fence");
+        assert_eq!(
+            busy_completion.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        let terminal_vote = wire::Vote {
+            round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: 3,
+            signature: vec![0x80; 96],
+        };
+        let busy_vote = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(terminal_vote)),
+            ))
+            .expect("retain authenticated ingress across the Busy fence");
+        assert_eq!(
+            busy_vote.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert_eq!(adapter.deferred_completions.len(), 1);
+        assert_eq!(adapter.deferred_inputs.len(), 1);
+
+        let decision_effects = adapter
+            .drive_effects(pending_decision.into_effects())
+            .expect("fsync and acknowledge the Decision WAL record");
+        assert!(matches!(
+            decision_effects.as_slice(),
+            [AdapterEffect::FetchBody { subject, .. }] if *subject == decided_subject
+        ));
+        let completion_effects = adapter
+            .drain_deferred()
+            .expect("service the retained completion first");
+        assert!(matches!(
+            completion_effects.as_slice(),
+            [AdapterEffect::Apply { subject, .. }] if *subject == decided_subject
+        ));
+        assert!(adapter.deferred_completions.is_empty());
+        assert_eq!(adapter.deferred_inputs.len(), 1);
+
+        let applied = adapter
+            .application_completed(decision_tag, decided_subject)
+            .expect("acknowledge exact decision application");
+        assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+        assert!(applied.effects().is_empty());
+        assert!(adapter.reducer.ready_to_finish());
+        assert!(adapter.deferred_work_is_serviceable());
+        assert!(
+            !adapter.ready_to_finish(),
+            "adapter-owned Busy debt must block terminal height rollover"
+        );
+
+        assert!(
+            adapter
+                .drain_deferred()
+                .expect("retire the authenticated terminal vote")
+                .is_empty()
+        );
+        assert!(adapter.deferred_inputs.is_empty());
+        assert!(adapter.ready_to_finish());
+    }
+
+    #[test]
     fn saturated_normal_lane_retains_exact_local_proposal_completion() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
@@ -7350,8 +8050,20 @@ mod tests {
         )));
         assert_eq!(
             adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
+            (1, 1),
+            "signature completion cannot concatenate a second reducer macro-step"
+        );
+        assert!(adapter.deferred_work_is_serviceable());
+        assert!(
+            adapter
+                .drain_deferred()
+                .expect("service the retained local completion in its own turn")
+                .is_empty()
+        );
+        assert_eq!(
+            adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
             (0, 0),
-            "the complete serialized signature chain retires the sole completion owner"
+            "one explicit deferred turn retires the sole completion owner"
         );
         assert!(adapter.deferred_inputs.len() <= MAX_DEFERRED_INPUTS);
         assert!(adapter.ingress_ready());
@@ -8414,7 +9126,14 @@ mod tests {
             .signature_completed(sign_tag, vec![0xD1; 96])
             .expect("complete outstanding Prepare signature")
             .into_effects();
-        assert!(completed.iter().any(|effect| matches!(
+        assert!(!completed.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Apply { subject, .. } if *subject == decided_subject
+        )));
+        let decided = adapter
+            .drain_deferred()
+            .expect("service the older progress-owned CommitQC as one macro-step");
+        assert!(decided.iter().any(|effect| matches!(
             effect,
             AdapterEffect::Apply { subject, .. } if *subject == decided_subject
         )));
@@ -8431,6 +9150,13 @@ mod tests {
             Some(decided_subject)
         );
         assert!(adapter.deferred_progress_inputs.is_empty());
+        assert_eq!(adapter.deferred_inputs.len(), 1);
+        assert!(
+            adapter
+                .drain_deferred()
+                .expect("service the remaining normal deferred input")
+                .is_empty()
+        );
         assert!(adapter.deferred_inputs.is_empty());
     }
 
@@ -9312,10 +10038,18 @@ mod tests {
         );
 
         let generation_before_tc = adapter.current_tag().generation();
-        let installed_effects = adapter
+        let completed_signature = adapter
             .signature_completed(replay_tag, vec![0xB6])
-            .expect("complete the signature and drain timeout before the locked vote")
+            .expect("complete the signature before draining the older timeout")
             .into_effects();
+        assert!(
+            completed_signature
+                .iter()
+                .all(|effect| !matches!(effect, AdapterEffect::EnterView { .. }))
+        );
+        let installed_effects = adapter
+            .drain_deferred()
+            .expect("service the timeout before the later locked vote");
         assert!(adapter.current_tag().generation() > generation_before_tc);
         assert!(installed_effects.iter().any(|effect| matches!(
             effect,
@@ -9357,7 +10091,10 @@ mod tests {
         );
         adapter
             .signature_completed(commit_sign_tag, vec![0xB7])
-            .expect("complete the reconstructed local vote and service deferred ownership");
+            .expect("complete the reconstructed local vote");
+        adapter
+            .drain_deferred()
+            .expect("service the separately scheduled deferred vote");
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert_eq!(adapter.reducer.volatile_evidence_counts().0, 1);
         let liveness = adapter.status().expect("build post-TC liveness status");
@@ -9556,7 +10293,11 @@ mod tests {
 
         adapter
             .signature_completed(commit_sign_tag, vec![0xBF])
-            .expect("self-admit the local Commit and fairly drain the remote owner");
+            .expect("self-admit the local Commit");
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
+        adapter
+            .drain_deferred()
+            .expect("give the deferred remote owner its serialized runtime turn");
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert!(
             adapter
@@ -9750,7 +10491,10 @@ mod tests {
         assert_eq!(adapter.deferred_progress_inputs.len(), 1);
         adapter
             .signature_completed(commit_sign_tag, vec![0xB8])
-            .expect("complete the reconstructed local vote and drain remote ownership");
+            .expect("complete the reconstructed local vote");
+        adapter
+            .drain_deferred()
+            .expect("drain remote ownership in its own macro-step");
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert_eq!(adapter.reducer.volatile_evidence_counts().0, 1);
         assert_eq!(
@@ -10074,13 +10818,18 @@ mod tests {
     }
 
     #[test]
-    fn deferred_service_cursor_advances_across_busy_front_requeue() {
+    fn deferred_dispatch_decreases_rank_by_exactly_one_macro_step_per_turn() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
-        let tag = adapter.current_tag();
+        let current = adapter.current_tag();
+        let stale = reducer::EventTag::new(
+            current.height().saturating_add(1),
+            current.view(),
+            current.generation(),
+        );
         let input = |priority| DeferredInput {
-            event: reducer::Event::TimeoutElapsed { tag },
+            event: reducer::Event::TimeoutElapsed { tag: stale },
             completion_evidence: None,
             retag_authenticated_ingress: false,
             priority,
@@ -10095,20 +10844,58 @@ mod tests {
         adapter
             .deferred_progress_inputs
             .push_back(input(DeferredPriority::Progress));
+        adapter
+            .deferred_inputs
+            .push_back(input(DeferredPriority::Normal));
         adapter.next_deferred_priority = DeferredPriority::Completion;
 
-        let busy = adapter
-            .pop_deferred_next()
-            .expect("completion receives the first cursor turn");
-        assert_eq!(busy.priority, DeferredPriority::Completion);
-        adapter.deferred_completions.push_front(busy);
+        for (turn, expected_lengths) in [
+            (DeferredPriority::Completion, [0, 1, 1]),
+            (DeferredPriority::Progress, [0, 0, 1]),
+            (DeferredPriority::Normal, [0, 0, 0]),
+        ] {
+            assert!(adapter.deferred_work_is_serviceable());
+            let before = adapter.deferred_completions.len()
+                + adapter.deferred_progress_inputs.len()
+                + adapter.deferred_inputs.len();
+            assert!(
+                adapter
+                    .drain_deferred()
+                    .expect("service one stale deferred transition")
+                    .is_empty()
+            );
+            let after = adapter.deferred_completions.len()
+                + adapter.deferred_progress_inputs.len()
+                + adapter.deferred_inputs.len();
+            assert_eq!(before - after, 1, "{turn:?} owns exactly one turn");
+            assert_eq!(
+                [
+                    adapter.deferred_completions.len(),
+                    adapter.deferred_progress_inputs.len(),
+                    adapter.deferred_inputs.len(),
+                ],
+                expected_lengths,
+                "the round-robin cursor selected {turn:?}"
+            );
+        }
+        assert!(!adapter.deferred_work_is_serviceable());
+    }
 
-        let selected = adapter
-            .pop_deferred_next()
-            .expect("progress receives the turn after a Busy requeue");
-        assert_eq!(selected.priority, DeferredPriority::Progress);
-        assert_eq!(adapter.deferred_completions.len(), 1);
-        assert_eq!(adapter.next_deferred_priority, DeferredPriority::Normal);
+    #[test]
+    fn deferred_service_contract_violation_is_terminal() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+
+        assert!(matches!(
+            adapter.fail_deferred_service_contract(),
+            AdapterError::DeferredServiceContractViolation
+        ));
+        assert!(adapter.fail_closed);
+        assert!(matches!(
+            adapter.drain_deferred(),
+            Err(AdapterError::FailClosed)
+        ));
     }
 
     #[test]
@@ -10898,10 +11685,18 @@ mod tests {
         );
         assert_eq!(adapter.deferred_progress_inputs.len(), 2);
 
-        let enter_view = adapter
+        let signed = adapter
             .signature_completed(first_sign_tag, vec![0xD9; 96])
-            .expect("complete the first signature and install the deferred TC")
+            .expect("complete the first signature before installing the deferred TC")
             .into_effects();
+        assert!(
+            signed
+                .iter()
+                .all(|effect| !matches!(effect, AdapterEffect::EnterView { .. }))
+        );
+        let enter_view = adapter
+            .drain_deferred()
+            .expect("install the deferred TC as a separate macro-step");
         assert!(enter_view.iter().any(|effect| matches!(
             effect,
             AdapterEffect::EnterView { tag, .. } if tag.view() == 1
@@ -10985,7 +11780,13 @@ mod tests {
 
         adapter
             .signature_completed(second_sign_tag, vec![0xDB; 96])
-            .expect("complete the current-view signature and service the old owner");
+            .expect("complete the current-view signature");
+        assert!(
+            adapter
+                .drain_deferred()
+                .expect("service the old owner in its own macro-step")
+                .is_empty()
+        );
         assert!(adapter.deferred_progress_inputs.is_empty());
 
         let applied = adapter
@@ -11186,7 +11987,17 @@ mod tests {
             .signature_completed(sign_tag, vec![0xD2; 96])
             .expect("complete outstanding Prepare signature")
             .into_effects();
-        let timeout_sign_tag = completed
+        assert!(completed.iter().all(|effect| !matches!(
+            effect,
+            AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }
+        )));
+        let timeout_effects = adapter
+            .drain_deferred()
+            .expect("service the absolute timeout as one deferred macro-step");
+        let timeout_sign_tag = timeout_effects
             .iter()
             .find_map(|effect| match effect {
                 AdapterEffect::Sign {
@@ -11205,7 +12016,10 @@ mod tests {
 
         adapter
             .signature_completed(timeout_sign_tag, vec![0xD6; 96])
-            .expect("complete the local TimeoutVote signature and service protected progress");
+            .expect("complete the local TimeoutVote signature");
+        adapter
+            .drain_deferred()
+            .expect("service protected progress in its own macro-step");
         assert!(adapter.deferred_progress_inputs.is_empty());
 
         assert_timeout_vote_owner_rolls_back_across_view_and_retries();

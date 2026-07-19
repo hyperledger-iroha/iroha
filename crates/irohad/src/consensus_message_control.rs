@@ -28,18 +28,24 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus_v2::{ConsensusMessageV2Payload, GlobalPhase},
+        consensus_v2::{
+            BlockSubject, ConsensusMessageV2Payload, ExecutionCommitment, GlobalPhase,
+            ValidatorIndex,
+        },
     },
     peer::{Peer, PeerId},
 };
-use norito::json::{Map, Value};
+use norito::{
+    codec::Encode,
+    json::{Map, Value},
+};
 
 /// Environment variable consumed only by the feature-isolated test daemon.
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 1;
+const FORMAT_VERSION: u64 = 2;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -139,10 +145,16 @@ impl MessageKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MessageMeta {
     sender: PeerId,
+    authenticated_via: PeerId,
     kind: MessageKind,
     height: Option<u64>,
     view: Option<u64>,
     block_hash: Option<HashOf<BlockHeader>>,
+    subject: Option<BlockSubject>,
+    execution_commitment: Option<ExecutionCommitment>,
+    signer: Option<ValidatorIndex>,
+    certificate_signers: Vec<ValidatorIndex>,
+    envelope_digest: Hash,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,10 +362,11 @@ impl Controller {
     pub(crate) fn admit(
         &self,
         peer: Peer,
+        authenticated_via: &PeerId,
         message: NetworkMessage,
         size_bytes: usize,
     ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize)>), ControlError> {
-        let Some(meta) = message_meta(&peer, &message) else {
+        let Some(meta) = message_meta(&peer, authenticated_via, &message)? else {
             return Ok((Admission::Pass, Some((peer, message, size_bytes))));
         };
         let mut state = self.state.lock().expect("message control state poisoned");
@@ -488,7 +501,7 @@ impl Controller {
         self.validate_root()?;
         let bytes = {
             let state = self.state.lock().expect("message control state poisoned");
-            canonical_json(&ack_value(&state))?
+            canonical_json(&ack_value(&state)?)?
         };
         if bytes.len() > MAX_ACK_BYTES {
             return Err(ControlError::AckTooLarge);
@@ -749,12 +762,12 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
         .map_err(|_| ControlError::JsonEncode)
 }
 
-fn ack_value(state: &State) -> Value {
+fn ack_value(state: &State) -> Result<Value, ControlError> {
     let held = state
         .held
         .values()
         .map(|entry| descriptor_value(&entry.descriptor))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let rules = state.rules.iter().map(rule_value).collect::<Vec<_>>();
     let release_pending = state
         .release_pending
@@ -768,7 +781,7 @@ fn ack_value(state: &State) -> Value {
         .copied()
         .map(Value::from)
         .collect::<Vec<_>>();
-    object_value([
+    Ok(object_value([
         (
             "command_digest",
             state
@@ -809,11 +822,38 @@ fn ack_value(state: &State) -> Value {
         ("revision", Value::from(state.revision)),
         ("rules", Value::Array(rules)),
         ("version", Value::from(FORMAT_VERSION)),
-    ])
+    ]))
 }
 
-fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
-    object_value([
+fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> {
+    let subject = descriptor
+        .meta
+        .subject
+        .as_ref()
+        .map(norito::json::to_value)
+        .transpose()
+        .map_err(|_| ControlError::JsonEncode)?
+        .unwrap_or(Value::Null);
+    let execution_commitment = descriptor
+        .meta
+        .execution_commitment
+        .as_ref()
+        .map(norito::json::to_value)
+        .transpose()
+        .map_err(|_| ControlError::JsonEncode)?
+        .unwrap_or(Value::Null);
+    let certificate_signers = descriptor
+        .meta
+        .certificate_signers
+        .iter()
+        .copied()
+        .map(|signer| Value::from(u64::from(signer)))
+        .collect::<Vec<_>>();
+    Ok(object_value([
+        (
+            "authenticated_via",
+            Value::from(descriptor.meta.authenticated_via.to_string()),
+        ),
         (
             "block_hash",
             descriptor
@@ -822,6 +862,12 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
                 .as_ref()
                 .map_or(Value::Null, |hash| Value::from(hash.to_string())),
         ),
+        ("certificate_signers", Value::Array(certificate_signers)),
+        (
+            "envelope_digest",
+            Value::from(descriptor.meta.envelope_digest.to_string()),
+        ),
+        ("execution_commitment", execution_commitment),
         (
             "height",
             descriptor.meta.height.map_or(Value::Null, Value::from),
@@ -830,14 +876,22 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
         ("sender", Value::from(descriptor.meta.sender.to_string())),
         ("sequence", Value::from(descriptor.sequence)),
         (
+            "signer",
+            descriptor
+                .meta
+                .signer
+                .map_or(Value::Null, |signer| Value::from(u64::from(signer))),
+        ),
+        (
             "size_bytes",
             Value::from(u64::try_from(descriptor.size_bytes).unwrap_or(u64::MAX)),
         ),
+        ("subject", subject),
         (
             "view",
             descriptor.meta.view.map_or(Value::Null, Value::from),
         ),
-    ])
+    ]))
 }
 
 fn rule_value(rule: &Rule) -> Value {
@@ -864,87 +918,151 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     Value::Object(object)
 }
 
-fn message_meta(peer: &Peer, message: &NetworkMessage) -> Option<MessageMeta> {
+fn message_meta(
+    peer: &Peer,
+    authenticated_via: &PeerId,
+    message: &NetworkMessage,
+) -> Result<Option<MessageMeta>, ControlError> {
     let NetworkMessage::SumeragiBlock(block) = message else {
-        return None;
+        return Ok(None);
     };
     let iroha_core::sumeragi::message::BlockMessage::V2(message) = block.as_ref().as_ref() else {
-        return None;
+        return Ok(None);
     };
     let sender = peer.id().clone();
-    let (kind, round, block_hash) = match &message.payload {
-        ConsensusMessageV2Payload::Proposal(value) => (
-            MessageKind::Proposal,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::Vote(value) => (
-            match value.phase {
-                GlobalPhase::Prepare => MessageKind::PrepareVote,
-                GlobalPhase::Commit => MessageKind::CommitVote,
-            },
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::QuorumCertificate(value) => (
-            match value.phase {
-                GlobalPhase::Prepare => MessageKind::PrepareCertificate,
-                GlobalPhase::Commit => MessageKind::CommitCertificate,
-            },
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::TimeoutVote(value) => (
-            MessageKind::TimeoutVote,
-            Some(value.round),
-            value
-                .highest_prepare_qc
-                .as_ref()
-                .map(|qc| qc.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::TimeoutCertificate(value) => (
-            MessageKind::TimeoutCertificate,
-            Some(value.round),
-            value.highest_prepare_qc().map(|qc| qc.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::PayloadManifest(value) => (
-            MessageKind::PayloadManifest,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::PayloadChunk(_) => (MessageKind::PayloadChunk, None, None),
-        ConsensusMessageV2Payload::CertifiedBodyRequest(value) => (
-            MessageKind::CertifiedBodyRequest,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => (
-            MessageKind::CertifiedBodyResponse,
-            Some(value.manifest.round),
-            Some(value.manifest.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::CommitCertificateRequest(value) => {
-            return Some(MessageMeta {
-                sender,
-                kind: MessageKind::CommitCertificateRequest,
-                height: Some(value.height),
-                view: None,
-                block_hash: None,
-            });
-        }
-        ConsensusMessageV2Payload::CommitCertificateResponse(value) => (
-            MessageKind::CommitCertificateResponse,
-            Some(value.certificate.round),
-            Some(value.certificate.subject.block_hash),
-        ),
-    };
-    Some(MessageMeta {
+    if &sender != authenticated_via {
+        return Err(ControlError::RelayedIdentityMismatch);
+    }
+    let envelope_digest = Hash::new(message.encode());
+    let (kind, round, subject, execution_commitment, signer, certificate_signers) =
+        match &message.payload {
+            ConsensusMessageV2Payload::Proposal(value) => (
+                MessageKind::Proposal,
+                Some(value.round),
+                Some(value.subject),
+                None,
+                Some(value.proposer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::Vote(value) => (
+                match value.phase {
+                    GlobalPhase::Prepare => MessageKind::PrepareVote,
+                    GlobalPhase::Commit => MessageKind::CommitVote,
+                },
+                Some(value.round),
+                Some(value.subject),
+                Some(value.execution_commitment),
+                Some(value.signer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::QuorumCertificate(value) => (
+                match value.phase {
+                    GlobalPhase::Prepare => MessageKind::PrepareCertificate,
+                    GlobalPhase::Commit => MessageKind::CommitCertificate,
+                },
+                Some(value.round),
+                Some(value.subject),
+                Some(value.execution_commitment),
+                None,
+                value.signers.clone(),
+            ),
+            ConsensusMessageV2Payload::TimeoutVote(value) => (
+                MessageKind::TimeoutVote,
+                Some(value.round),
+                value.highest_prepare_qc.as_ref().map(|qc| qc.subject),
+                value
+                    .highest_prepare_qc
+                    .as_ref()
+                    .map(|qc| qc.execution_commitment),
+                Some(value.signer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::TimeoutCertificate(value) => {
+                let highest = value.highest_prepare_qc();
+                let mut signers = value
+                    .groups
+                    .iter()
+                    .flat_map(|group| group.signers.iter().copied())
+                    .collect::<Vec<_>>();
+                signers.sort_unstable();
+                (
+                    MessageKind::TimeoutCertificate,
+                    Some(value.round),
+                    highest.map(|qc| qc.subject),
+                    highest.map(|qc| qc.execution_commitment),
+                    None,
+                    signers,
+                )
+            }
+            ConsensusMessageV2Payload::PayloadManifest(value) => (
+                MessageKind::PayloadManifest,
+                Some(value.round),
+                Some(value.subject),
+                None,
+                None,
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::PayloadChunk(value) => (
+                MessageKind::PayloadChunk,
+                None,
+                None,
+                None,
+                Some(value.sender),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::CertifiedBodyRequest(value) => (
+                MessageKind::CertifiedBodyRequest,
+                Some(value.round),
+                Some(value.subject),
+                Some(value.certificate.execution_commitment),
+                None,
+                value.certificate.signers.clone(),
+            ),
+            ConsensusMessageV2Payload::CertifiedBodyResponse(value) => (
+                MessageKind::CertifiedBodyResponse,
+                Some(value.manifest.round),
+                Some(value.manifest.subject),
+                None,
+                Some(value.responder),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::CommitCertificateRequest(value) => {
+                return Ok(Some(MessageMeta {
+                    sender,
+                    authenticated_via: authenticated_via.clone(),
+                    kind: MessageKind::CommitCertificateRequest,
+                    height: Some(value.height),
+                    view: None,
+                    block_hash: None,
+                    subject: None,
+                    execution_commitment: None,
+                    signer: None,
+                    certificate_signers: Vec::new(),
+                    envelope_digest,
+                }));
+            }
+            ConsensusMessageV2Payload::CommitCertificateResponse(value) => (
+                MessageKind::CommitCertificateResponse,
+                Some(value.certificate.round),
+                Some(value.certificate.subject),
+                Some(value.certificate.execution_commitment),
+                None,
+                value.certificate.signers.clone(),
+            ),
+        };
+    Ok(Some(MessageMeta {
         sender,
+        authenticated_via: authenticated_via.clone(),
         kind,
         height: round.map(|round| round.height),
         view: round.map(|round| round.view),
-        block_hash,
-    })
+        block_hash: subject.map(|subject| subject.block_hash),
+        subject,
+        execution_commitment,
+        signer,
+        certificate_signers,
+        envelope_digest,
+    }))
 }
 
 fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ControlError> {
@@ -1154,6 +1272,7 @@ pub(crate) enum ControlError {
     HeldBytesOverflow,
     HeldBytesUnderflow,
     HoldQueueOverflow,
+    RelayedIdentityMismatch,
 }
 
 impl ControlError {
@@ -1196,6 +1315,7 @@ impl ControlError {
             Self::HeldBytesOverflow => "held_bytes_overflow",
             Self::HeldBytesUnderflow => "held_bytes_underflow",
             Self::HoldQueueOverflow => "hold_queue_overflow",
+            Self::RelayedIdentityMismatch => "relayed_identity_mismatch",
         }
     }
 }
@@ -1288,15 +1408,21 @@ mod tests {
     }
 
     #[test]
-    fn matcher_is_exact_across_every_authenticated_dimension() {
+    fn matcher_is_exact_across_every_rule_dimension() {
         let peer_a = peer(1);
         let rule = rule(peer_a.clone(), MessageKind::PrepareVote, 9, 3);
         let exact = MessageMeta {
-            sender: peer_a,
+            sender: peer_a.clone(),
+            authenticated_via: peer_a,
             kind: MessageKind::PrepareVote,
             height: Some(9),
             view: Some(3),
             block_hash: Some(hash(1)),
+            subject: None,
+            execution_commitment: None,
+            signer: Some(0),
+            certificate_signers: Vec::new(),
+            envelope_digest: Hash::new(b"exact-envelope"),
         };
         assert!(rule.matches(&exact));
         for changed in [
@@ -1447,6 +1573,7 @@ mod tests {
     fn drain_fence_holds_racing_chunks_fifo_until_atomic_cutover() {
         let (_parent, controller) = test_controller();
         let sender = transport_peer(11);
+        let authenticated_via = sender.id().clone();
 
         // Seed one retained pre-fence chunk. Compact chunks deliberately have
         // no fabricated height/view metadata.
@@ -1456,13 +1583,20 @@ mod tests {
         }
         assert_eq!(
             controller
-                .admit(sender.clone(), chunk_message(1), 101)
+                .admit(sender.clone(), &authenticated_via, chunk_message(1), 101,)
                 .expect("seed retained chunk")
                 .0,
             Admission::Consumed
         );
         {
             let mut state = controller.state.lock().expect("control state");
+            let descriptor = &state.held.get(&1).expect("seed descriptor").descriptor;
+            assert_eq!(descriptor.meta.sender, authenticated_via);
+            assert_eq!(descriptor.meta.authenticated_via, authenticated_via);
+            assert_eq!(descriptor.meta.signer, Some(0));
+            assert!(descriptor.meta.subject.is_none());
+            assert!(descriptor.meta.execution_commitment.is_none());
+            assert_ne!(descriptor.meta.envelope_digest, Hash::new(b""));
             state.drain_next_rules = None;
             state.release_pending.clear();
         }
@@ -1503,10 +1637,16 @@ mod tests {
             for marker in [2_u8, 3] {
                 let controller = &controller;
                 let sender = sender.clone();
+                let authenticated_via = authenticated_via.clone();
                 scope.spawn(move || {
                     assert_eq!(
                         controller
-                            .admit(sender, chunk_message(marker), 100 + usize::from(marker))
+                            .admit(
+                                sender,
+                                &authenticated_via,
+                                chunk_message(marker),
+                                100 + usize::from(marker),
+                            )
                             .expect("admit racing chunk")
                             .0,
                         Admission::Consumed
@@ -1537,11 +1677,20 @@ mod tests {
         }
         assert_eq!(
             controller
-                .admit(sender, chunk_message(4), 104)
+                .admit(sender, &authenticated_via, chunk_message(4), 104)
                 .expect("post-fence admission")
                 .0,
             Admission::Pass
         );
+    }
+
+    #[test]
+    fn controlled_v2_admission_rejects_relay_identity_ambiguity() {
+        let (_parent, controller) = test_controller();
+        let semantic_sender = transport_peer(21);
+        let authenticated_via = peer(22);
+        let result = controller.admit(semantic_sender, &authenticated_via, chunk_message(1), 101);
+        assert!(matches!(result, Err(ControlError::RelayedIdentityMismatch)));
     }
 
     #[test]

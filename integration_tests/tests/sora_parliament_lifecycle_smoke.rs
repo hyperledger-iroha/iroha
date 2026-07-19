@@ -41,9 +41,7 @@ use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
     CanSubmitGovernanceBallot,
 };
-use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, ensure_domain_registration_lease_for_network,
-};
+use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
@@ -1183,14 +1181,8 @@ async fn setup_hostile_fixture(
 
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
-    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
-        .wrap_err("seed governance domain registration lease for hostile fixture")?;
-    alice
-        .submit_blocking(
-            Register::domain(Domain::new(gov_domain_id.clone())),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register governance domain for hostile fixture")?;
+    ensure_domain_setup_for_network(&network, &gov_domain_id)
+        .wrap_err("ensure governance domain and lease state for hostile fixture")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration in hostile fixture")?;
@@ -1502,14 +1494,8 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
-    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
-        .wrap_err("seed governance domain registration lease")?;
-    alice
-        .submit_blocking(
-            Register::domain(Domain::new(gov_domain_id.clone())),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register governance domain")?;
+    ensure_domain_setup_for_network(&network, &gov_domain_id)
+        .wrap_err("ensure governance domain and lease state")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;

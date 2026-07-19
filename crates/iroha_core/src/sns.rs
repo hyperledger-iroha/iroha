@@ -17,32 +17,28 @@ use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
     Identifiable,
     account::{AccountAddress, AccountId, rekey::AccountAlias},
+    alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::{
-        domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
-        register::RegisterBox,
-    },
+    isi::{alias_setup::EnsureAlias, register::RegisterBox},
     metadata::Metadata,
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
     permission::Permission,
     sns::{
-        AuctionKind, ControllerType, FreezeNameRequestV1, GovernanceHookV1, NameAuctionStateV1,
-        NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorError, NameSelectorV1,
-        NameStatus, NameTombstoneStateV1, PaymentProofV1, PriceTierV1, RegisterNameRequestV1,
-        RenewNameRequestV1, ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1,
-        SuffixStatus, TokenValue, TransferNameRequestV1, UpdateControllersRequestV1, fixtures,
+        AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
+        NameSelectorError, NameSelectorV1, NameStatus, NameTombstoneStateV1, PriceTierV1,
+        ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
+        fixtures,
     },
     transaction::Executable,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
-use iroha_primitives::{
-    json::Json as IrohaJson,
-    numeric::{Numeric, Quantity},
-};
+#[cfg(test)]
+use iroha_primitives::json::Json as IrohaJson;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
@@ -50,14 +46,14 @@ use thiserror::Error;
 
 #[cfg(test)]
 use crate::state::{State, StateReadOnly};
-use crate::state::{StateTransaction, World, WorldReadOnly};
+use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
 
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
 };
 
 const MS_PER_DAY: u64 = 86_400_000;
-const MS_PER_YEAR: u64 = MS_PER_DAY * 365;
+const MS_PER_YEAR: u64 = iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
 const LEGACY_ACCOUNT_ALIAS_LABEL_REGEX: &str = r"^[a-z0-9@.-]{3,255}$";
 const LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
@@ -69,7 +65,57 @@ fn default_namespace_lease_price() -> Quantity {
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
+/// Stable diagnostic code emitted when static and ledger-backed dataspace mappings disagree.
+pub const ALIAS_CATALOG_MAPPING_CONFLICT_CODE: &str = "alias.catalog.mapping_conflict";
+/// Name-record metadata key carrying the expected numeric id of a dataspace alias.
+pub const SNS_DATASPACE_ID_METADATA_KEY: &str = "sns.dataspace_id";
 const SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE: u32 = 1;
+
+/// Maximum number of persisted alias auto-renew records examined in one block.
+///
+/// This consensus constant bounds native maintenance work. A durable cursor
+/// advances through canonically ordered storage keys so larger registries remain fair.
+pub const ALIAS_AUTO_RENEW_SWEEP_LIMIT: usize = 64;
+/// Stable suspension code for a pinned SNS policy-version mismatch.
+pub const ALIAS_AUTO_RENEW_POLICY_DRIFT_CODE: &str = "alias.auto_renew.policy_drift";
+/// Stable suspension code for a pinned payment-asset mismatch.
+pub const ALIAS_AUTO_RENEW_ASSET_DRIFT_CODE: &str = "alias.auto_renew.asset_drift";
+/// Stable suspension code for a persisted/current resource-owner mismatch.
+pub const ALIAS_AUTO_RENEW_OWNER_DRIFT_CODE: &str = "alias.auto_renew.owner_drift";
+/// Stable suspension code for an invalid persisted auto-renew timing range.
+pub const ALIAS_AUTO_RENEW_RANGE_INVALID_CODE: &str = "alias.auto_renew.range_invalid";
+/// Stable suspension code after the configured consecutive-failure limit.
+pub const ALIAS_AUTO_RENEW_FAILURES_EXHAUSTED_CODE: &str = "alias.auto_renew.failures_exhausted";
+
+const ALIAS_AUTO_RENEW_CURSOR_VERSION: u8 = 1;
+const ALIAS_AUTO_RENEW_STATE_PREFIX: &str = "sns/auto_renew/";
+const ALIAS_AUTO_RENEW_CURSOR_KEY: &str = "sns/auto_renew_cursor/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+struct AliasAutoRenewCursorV1 {
+    version: u8,
+    last_storage_key: Name,
+}
+
+/// Internal record proving that Core already debited the exact lease quote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeasePayment {
+    pub(crate) asset_id: String,
+    pub(crate) gross_amount: Quantity,
+    pub(crate) net_amount: Quantity,
+}
+
+/// Internal registrar input assembled only after native payment succeeds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RegisterNameInput {
+    pub(crate) selector: NameSelectorV1,
+    pub(crate) owner: AccountId,
+    pub(crate) controllers: Vec<NameControllerV1>,
+    pub(crate) term_years: u8,
+    pub(crate) pricing_class_hint: Option<u8>,
+    pub(crate) payment: LeasePayment,
+    pub(crate) metadata: Metadata,
+}
 
 /// Errors returned by the ledger-backed SNS helpers.
 #[derive(Debug, Error)]
@@ -211,6 +257,474 @@ pub fn record_storage_key(selector: &NameSelectorV1) -> Name {
 pub fn policy_storage_key(suffix_id: SuffixId) -> Name {
     Name::from_str(&format!("sns/policies/{suffix_id}"))
         .expect("static SNS policy storage key format is a valid Name")
+}
+
+/// Compute the durable key for one alias auto-renew configuration record.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] if the resolved target is not canonical.
+pub fn alias_auto_renew_storage_key(target: &AliasTargetV1) -> Result<Name, SnsError> {
+    let selector = crate::alias_setup::selector_for_resolved_alias_target(target)
+        .map_err(|error| SnsError::BadRequest(error.to_string()))?;
+    Name::from_str(&format!(
+        "sns/auto_renew/{}/{}",
+        selector.suffix_id,
+        hex::encode(selector.name_hash())
+    ))
+    .map_err(|error| SnsError::Internal(format!("invalid auto-renew storage key: {error}")))
+}
+
+/// Read and validate the persisted auto-renew state for a resolved target.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] for malformed, unsupported, or mismatched persisted state.
+pub fn alias_auto_renew_state(
+    world: &impl WorldReadOnly,
+    target: &AliasTargetV1,
+) -> Result<Option<AliasAutoRenewStateV1>, SnsError> {
+    let key = alias_auto_renew_storage_key(target)?;
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(None);
+    };
+    let mut cursor = bytes.as_slice();
+    let state = AliasAutoRenewStateV1::decode(&mut cursor).map_err(|error| {
+        SnsError::Internal(format!("failed to decode alias auto-renew state: {error}"))
+    })?;
+    if !cursor.is_empty() {
+        return Err(SnsError::Internal(
+            "alias auto-renew state contains trailing bytes".to_owned(),
+        ));
+    }
+    if state.version != AliasAutoRenewStateV1::VERSION {
+        return Err(SnsError::Conflict(format!(
+            "unsupported alias auto-renew state version {}",
+            state.version
+        )));
+    }
+    if &state.target != target {
+        return Err(SnsError::Conflict(
+            "alias auto-renew storage key contains a different target".to_owned(),
+        ));
+    }
+    Ok(Some(state))
+}
+
+fn alias_auto_renew_internal_key(literal: &str) -> Name {
+    Name::from_str(literal).expect("hard-coded alias auto-renew key is a valid Name")
+}
+
+fn alias_auto_renew_cursor(
+    world: &impl WorldReadOnly,
+) -> Result<Option<AliasAutoRenewCursorV1>, SnsError> {
+    let key = alias_auto_renew_internal_key(ALIAS_AUTO_RENEW_CURSOR_KEY);
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(None);
+    };
+    let mut cursor = bytes.as_slice();
+    let state = AliasAutoRenewCursorV1::decode(&mut cursor).map_err(|error| {
+        SnsError::Internal(format!("failed to decode alias auto-renew cursor: {error}"))
+    })?;
+    if !cursor.is_empty() {
+        return Err(SnsError::Internal(
+            "alias auto-renew cursor contains trailing bytes".to_owned(),
+        ));
+    }
+    if state.version != ALIAS_AUTO_RENEW_CURSOR_VERSION {
+        return Err(SnsError::Conflict(format!(
+            "unsupported alias auto-renew cursor version {}",
+            state.version
+        )));
+    }
+    if !state
+        .last_storage_key
+        .as_ref()
+        .starts_with(ALIAS_AUTO_RENEW_STATE_PREFIX)
+    {
+        return Err(SnsError::Conflict(
+            "alias auto-renew cursor points outside the state namespace".to_owned(),
+        ));
+    }
+    Ok(Some(state))
+}
+
+fn persist_alias_auto_renew_cursor(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    last_storage_key: Name,
+) {
+    let key = alias_auto_renew_internal_key(ALIAS_AUTO_RENEW_CURSOR_KEY);
+    state_transaction.world.smart_contract_state.insert(
+        key,
+        AliasAutoRenewCursorV1 {
+            version: ALIAS_AUTO_RENEW_CURSOR_VERSION,
+            last_storage_key,
+        }
+        .encode(),
+    );
+}
+
+fn alias_auto_renew_candidate_keys(
+    world: &impl WorldReadOnly,
+    last_storage_key: Option<&Name>,
+    limit: usize,
+) -> Vec<Name> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let prefix = alias_auto_renew_internal_key(ALIAS_AUTO_RENEW_STATE_PREFIX);
+    let start = last_storage_key.cloned().unwrap_or_else(|| prefix.clone());
+    let mut keys = Vec::with_capacity(limit);
+    for (key, _) in world.smart_contract_state().range(start..) {
+        if !key.as_ref().starts_with(ALIAS_AUTO_RENEW_STATE_PREFIX) {
+            break;
+        }
+        if last_storage_key.is_some_and(|last| last == key) {
+            continue;
+        }
+        keys.push(key.clone());
+        if keys.len() == limit {
+            return keys;
+        }
+    }
+    let Some(last_storage_key) = last_storage_key else {
+        return keys;
+    };
+    for (key, _) in world.smart_contract_state().range(prefix..) {
+        if !key.as_ref().starts_with(ALIAS_AUTO_RENEW_STATE_PREFIX) || key > last_storage_key {
+            break;
+        }
+        keys.push(key.clone());
+        if keys.len() == limit {
+            break;
+        }
+    }
+    keys
+}
+
+fn alias_auto_renew_state_by_storage_key(
+    world: &impl WorldReadOnly,
+    storage_key: &Name,
+) -> Result<AliasAutoRenewStateV1, SnsError> {
+    let bytes = world
+        .smart_contract_state()
+        .get(storage_key)
+        .ok_or_else(|| {
+            SnsError::NotFound(format!(
+                "alias auto-renew state `{storage_key}` disappeared during maintenance"
+            ))
+        })?;
+    let mut cursor = bytes.as_slice();
+    let state = AliasAutoRenewStateV1::decode(&mut cursor).map_err(|error| {
+        SnsError::Internal(format!(
+            "failed to decode alias auto-renew state `{storage_key}`: {error}"
+        ))
+    })?;
+    if !cursor.is_empty() {
+        return Err(SnsError::Internal(format!(
+            "alias auto-renew state `{storage_key}` contains trailing bytes"
+        )));
+    }
+    if state.version != AliasAutoRenewStateV1::VERSION {
+        return Err(SnsError::Conflict(format!(
+            "unsupported alias auto-renew state version {} at `{storage_key}`",
+            state.version
+        )));
+    }
+    let expected_key = alias_auto_renew_storage_key(&state.target)?;
+    if expected_key != *storage_key {
+        return Err(SnsError::Conflict(format!(
+            "alias auto-renew state target does not match storage key `{storage_key}`"
+        )));
+    }
+    Ok(state)
+}
+
+/// Persist one validated alias auto-renew state record.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] if the target cannot produce its canonical storage key.
+pub(crate) fn persist_alias_auto_renew_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    state: &AliasAutoRenewStateV1,
+) -> Result<(), SnsError> {
+    let key = alias_auto_renew_storage_key(&state.target)?;
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(key, state.encode());
+    Ok(())
+}
+
+enum AliasAutoRenewAttempt {
+    NotDue,
+    Renewed,
+    Retry(String),
+    Suspend(&'static str),
+}
+
+fn alias_auto_renew_attempt(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    state: &AliasAutoRenewStateV1,
+    config: &AliasAutoRenewConfigV1,
+    now_ms: u64,
+) -> AliasAutoRenewAttempt {
+    if crate::alias_setup::validate_alias_auto_renew_ranges(config).is_err() {
+        return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_RANGE_INVALID_CODE);
+    }
+    let selector = match crate::alias_setup::selector_for_resolved_alias_target(&state.target) {
+        Ok(selector) => selector,
+        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+    };
+    let policy = match policy_by_id(state_transaction.world(), selector.suffix_id) {
+        Some(policy) => policy,
+        None => {
+            return AliasAutoRenewAttempt::Retry(format!(
+                "SNS policy {} is missing or malformed",
+                selector.suffix_id
+            ));
+        }
+    };
+    if policy.policy_version != config.policy_version {
+        return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_POLICY_DRIFT_CODE);
+    }
+    let policy_payment_asset = match payment_asset_definition_id(&policy) {
+        Ok(asset) => asset,
+        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+    };
+    if policy_payment_asset != config.payment_asset {
+        return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_ASSET_DRIFT_CODE);
+    }
+
+    if let Err(error) = crate::alias_setup::validate_resolved_alias_target(
+        state_transaction.world(),
+        &state_transaction.nexus.dataspace_catalog,
+        &state.target,
+        now_ms,
+    ) {
+        return AliasAutoRenewAttempt::Retry(error.to_string());
+    }
+    let record = match get_name_record_by_selector(state_transaction.world(), &selector, now_ms) {
+        Ok(record) => record,
+        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+    };
+    if record.owner != state.owner {
+        return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_OWNER_DRIFT_CODE);
+    }
+    if now_ms
+        < record
+            .expires_at_ms
+            .saturating_sub(config.renew_before_expiry_ms)
+    {
+        return AliasAutoRenewAttempt::NotDue;
+    }
+    if state
+        .next_retry_at_ms
+        .is_some_and(|next_retry_at_ms| now_ms < next_retry_at_ms)
+    {
+        return AliasAutoRenewAttempt::NotDue;
+    }
+
+    let target_expiry_ms = record
+        .expires_at_ms
+        .saturating_add(years_to_ms(config.term_years));
+    let quote = match quote_resolved_name_renewal(
+        state_transaction.world(),
+        selector.clone(),
+        record.expires_at_ms,
+        target_expiry_ms,
+        now_ms,
+    ) {
+        Ok(quote) => quote,
+        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+    };
+    if quote.payment_asset_definition_id != config.payment_asset {
+        return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_ASSET_DRIFT_CODE);
+    }
+    if quote.charge_amount > config.max_amount {
+        return AliasAutoRenewAttempt::Retry(format!(
+            "exact renewal quote {} exceeds configured cap {}",
+            quote.charge_amount, config.max_amount
+        ));
+    }
+
+    if let Err(error) =
+        crate::smartcontracts::isi::asset::isi::execute_native_authorized_numeric_asset_transfer(
+            state_transaction,
+            &state.owner,
+            AssetId::of(config.payment_asset.clone(), state.owner.clone()),
+            quote.collector_account.clone(),
+            quote.charge_amount.as_numeric().clone(),
+        )
+    {
+        return AliasAutoRenewAttempt::Retry(error.to_string());
+    }
+    let payment = native_payment_for_quote(&quote);
+    match renew_resolved_name(
+        state_transaction,
+        selector,
+        record.expires_at_ms,
+        target_expiry_ms,
+        payment,
+    ) {
+        Ok(_) => AliasAutoRenewAttempt::Renewed,
+        Err(error) => AliasAutoRenewAttempt::Retry(error.to_string()),
+    }
+}
+
+fn advance_alias_auto_renew_revision(state: &mut AliasAutoRenewStateV1) {
+    state.revision = state.revision.saturating_add(1);
+}
+
+fn suspend_alias_auto_renew(
+    state_block: &mut StateBlock<'_>,
+    mut state: AliasAutoRenewStateV1,
+    reason: &'static str,
+) {
+    advance_alias_auto_renew_revision(&mut state);
+    state.next_retry_at_ms = None;
+    state.suspended_reason = Some(reason.to_owned());
+    let target = state.target.clone();
+    let mut transaction = state_block.transaction();
+    match persist_alias_auto_renew_state(&mut transaction, &state) {
+        Ok(()) => {
+            transaction.apply();
+            iroha_logger::warn!(target = %target, reason, "alias auto-renew suspended");
+        }
+        Err(error) => {
+            iroha_logger::error!(target = %target, %error, "failed to persist alias auto-renew suspension");
+        }
+    }
+}
+
+fn record_alias_auto_renew_failure(
+    state_block: &mut StateBlock<'_>,
+    mut state: AliasAutoRenewStateV1,
+    config: &AliasAutoRenewConfigV1,
+    now_ms: u64,
+    error: &str,
+) {
+    advance_alias_auto_renew_revision(&mut state);
+    state.failure_count = state.failure_count.saturating_add(1);
+    if state.failure_count >= config.max_failures {
+        state.next_retry_at_ms = None;
+        state.suspended_reason = Some(ALIAS_AUTO_RENEW_FAILURES_EXHAUSTED_CODE.to_owned());
+    } else {
+        state.next_retry_at_ms = Some(now_ms.saturating_add(config.retry_backoff_ms));
+        state.suspended_reason = None;
+    }
+    let target = state.target.clone();
+    let suspended = state.suspended_reason.is_some();
+    let failure_count = state.failure_count;
+    let mut transaction = state_block.transaction();
+    match persist_alias_auto_renew_state(&mut transaction, &state) {
+        Ok(()) => {
+            transaction.apply();
+            if suspended {
+                iroha_logger::warn!(
+                    target = %target,
+                    failure_count,
+                    error,
+                    "alias auto-renew suspended after repeated failures"
+                );
+            } else {
+                iroha_logger::info!(
+                    target = %target,
+                    failure_count,
+                    error,
+                    "alias auto-renew scheduled a deterministic retry"
+                );
+            }
+        }
+        Err(persist_error) => {
+            iroha_logger::error!(
+                target = %target,
+                %persist_error,
+                "failed to persist alias auto-renew failure state"
+            );
+        }
+    }
+}
+
+fn process_alias_auto_renew_storage_key(
+    state_block: &mut StateBlock<'_>,
+    storage_key: &Name,
+    now_ms: u64,
+) {
+    let state = match alias_auto_renew_state_by_storage_key(&state_block.world, storage_key) {
+        Ok(state) => state,
+        Err(error) => {
+            iroha_logger::error!(%storage_key, %error, "malformed alias auto-renew state skipped");
+            return;
+        }
+    };
+    let Some(config) = state.config.clone() else {
+        return;
+    };
+    if state.suspended_reason.is_some() {
+        return;
+    }
+
+    let mut transaction = state_block.transaction();
+    match alias_auto_renew_attempt(&mut transaction, &state, &config, now_ms) {
+        AliasAutoRenewAttempt::NotDue => {}
+        AliasAutoRenewAttempt::Renewed => {
+            let mut updated = state;
+            advance_alias_auto_renew_revision(&mut updated);
+            updated.failure_count = 0;
+            updated.next_retry_at_ms = None;
+            updated.suspended_reason = None;
+            let target = updated.target.clone();
+            match persist_alias_auto_renew_state(&mut transaction, &updated) {
+                Ok(()) => {
+                    transaction.apply();
+                    iroha_logger::info!(target = %target, now_ms, "alias lease auto-renewed");
+                }
+                Err(error) => {
+                    iroha_logger::error!(target = %target, %error, "failed to persist successful alias auto-renew state");
+                }
+            }
+        }
+        AliasAutoRenewAttempt::Suspend(reason) => {
+            drop(transaction);
+            suspend_alias_auto_renew(state_block, state, reason);
+        }
+        AliasAutoRenewAttempt::Retry(error) => {
+            drop(transaction);
+            record_alias_auto_renew_failure(state_block, state, &config, now_ms, &error);
+        }
+    }
+}
+
+/// Process a bounded, fair slice of enabled alias auto-renew records at block time.
+///
+/// This native maintenance path is intentionally infallible at the block level:
+/// individual payment or renewal failures update deterministic retry/suspension
+/// state, while malformed state or cursor records fail closed without mutation.
+pub(crate) fn process_alias_auto_renewals(state_block: &mut StateBlock<'_>) {
+    let cursor = match alias_auto_renew_cursor(&state_block.world) {
+        Ok(cursor) => cursor,
+        Err(error) => {
+            iroha_logger::error!(%error, "alias auto-renew sweep skipped because its cursor is invalid");
+            return;
+        }
+    };
+    let storage_keys = alias_auto_renew_candidate_keys(
+        &state_block.world,
+        cursor.as_ref().map(|cursor| &cursor.last_storage_key),
+        ALIAS_AUTO_RENEW_SWEEP_LIMIT,
+    );
+    let now_ms =
+        u64::try_from(state_block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+    for storage_key in &storage_keys {
+        process_alias_auto_renew_storage_key(state_block, storage_key, now_ms);
+    }
+    if let Some(last_storage_key) = storage_keys.last().cloned() {
+        let mut transaction = state_block.transaction();
+        persist_alias_auto_renew_cursor(&mut transaction, last_storage_key);
+        transaction.apply();
+    }
 }
 
 /// Build the selector used for a full account-alias lease record.
@@ -526,7 +1040,12 @@ pub(crate) fn prepare_all_account_alias_lease_rekeys(
     Ok(updates)
 }
 
-fn seed_name_record_if_missing(world: &mut World, owner: &AccountId, selector: NameSelectorV1) {
+fn seed_name_record_with_metadata_if_missing(
+    world: &mut World,
+    owner: &AccountId,
+    selector: NameSelectorV1,
+    metadata: Metadata,
+) {
     let storage_key = record_storage_key(&selector);
     if world
         .smart_contract_state
@@ -548,11 +1067,15 @@ fn seed_name_record_if_missing(world: &mut World, owner: &AccountId, selector: N
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        Metadata::default(),
+        metadata,
     );
     world
         .smart_contract_state
         .insert(storage_key, record.encode());
+}
+
+fn seed_name_record_if_missing(world: &mut World, owner: &AccountId, selector: NameSelectorV1) {
+    seed_name_record_with_metadata_if_missing(world, owner, selector, Metadata::default());
 }
 
 fn seed_alias_manage_permissions_if_missing(
@@ -634,37 +1157,18 @@ pub fn seed_genesis_alias_bootstrap(
                 }
             }
 
-            if let Some(set_alias) = instruction
-                .as_any()
-                .downcast_ref::<SetPrimaryAccountAlias>()
-            {
-                if let Some(alias) = set_alias.alias.as_ref() {
-                    seed_alias_manage_permissions_if_missing(
+            if let Some(ensure) = instruction.as_any().downcast_ref::<EnsureAlias>() {
+                let target = ensure.intent.target();
+                if let Ok(selector) =
+                    crate::alias_setup::selector_for_resolved_alias_target(&target)
+                    && let Ok(metadata) = crate::alias_setup::alias_registration_metadata(&target)
+                {
+                    seed_name_record_with_metadata_if_missing(
                         world,
-                        authority,
-                        alias,
-                        dataspace_catalog,
+                        crate::alias_setup::alias_intent_owner(&ensure.intent),
+                        selector,
+                        metadata,
                     );
-                    if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
-                        seed_name_record_if_missing(world, &set_alias.account, selector);
-                    }
-                }
-            }
-
-            if let Some(bind_alias) = instruction
-                .as_any()
-                .downcast_ref::<SetAccountAliasBinding>()
-            {
-                if let Some(alias) = bind_alias.alias.as_ref() {
-                    seed_alias_manage_permissions_if_missing(
-                        world,
-                        authority,
-                        alias,
-                        dataspace_catalog,
-                    );
-                    if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
-                        seed_name_record_if_missing(world, &bind_alias.account, selector);
-                    }
                 }
             }
         }
@@ -1046,7 +1550,7 @@ fn validate_payment_for_term(
     policy: &SuffixPolicyV1,
     tier: &PriceTierV1,
     term_years: u8,
-    payment: &PaymentProofV1,
+    payment: &LeasePayment,
 ) -> Result<(), SnsError> {
     if payment.asset_id != policy.payment_asset_id {
         return Err(SnsError::BadRequest(format!(
@@ -1202,7 +1706,7 @@ fn registration_record(
     owner: AccountId,
     controllers: Vec<NameControllerV1>,
     term_years: u8,
-    payment: &PaymentProofV1,
+    payment: &LeasePayment,
     metadata: Metadata,
     policy: &SuffixPolicyV1,
     tier: &PriceTierV1,
@@ -1315,6 +1819,39 @@ fn canonicalize_request_selector(
     Ok((namespace, canonical))
 }
 
+fn canonicalize_resolved_selector(
+    selector: NameSelectorV1,
+) -> Result<(SnsNamespace, NameSelectorV1), SnsError> {
+    if selector.version != NameSelectorV1::VERSION {
+        return Err(SnsError::BadRequest(format!(
+            "unsupported SNS selector version `{}`",
+            selector.version
+        )));
+    }
+    let namespace = SnsNamespace::from_suffix_id(selector.suffix_id)?;
+    let canonical = match namespace {
+        SnsNamespace::AccountAlias => {
+            let alias = selector
+                .label
+                .parse::<AccountAliasName>()
+                .map_err(|err| SnsError::BadRequest(err.to_string()))?;
+            NameSelectorV1 {
+                version: NameSelectorV1::VERSION,
+                suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+                label: alias.canonical_text(),
+            }
+        }
+        SnsNamespace::Domain => {
+            let domain = DomainId::parse_fully_qualified(selector.label.trim())
+                .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
+            selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))?
+        }
+        SnsNamespace::Dataspace => selector_for_dataspace_alias(&selector.label)
+            .map_err(|err| SnsError::BadRequest(err.to_string()))?,
+    };
+    Ok((namespace, canonical))
+}
+
 fn record_or_not_found(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
@@ -1372,16 +1909,13 @@ pub fn get_name_record_by_selector(
     Ok(record)
 }
 
-/// Build a deterministic payment proof that satisfies the current quote.
+/// Build the internal payment record after Core debits the exact quote.
 #[must_use]
-pub fn payment_proof_for_quote(quote: &LeaseQuote, payer: AccountId) -> PaymentProofV1 {
-    PaymentProofV1 {
+pub(crate) fn native_payment_for_quote(quote: &LeaseQuote) -> LeasePayment {
+    LeasePayment {
         asset_id: quote.payment_asset_id.clone(),
         gross_amount: quote.charge_amount.clone(),
         net_amount: quote.charge_amount.clone(),
-        settlement_tx: IrohaJson::from("canonical-sns-lease"),
-        payer,
-        signature: IrohaJson::from("canonical-sns-lease"),
     }
 }
 
@@ -1561,6 +2095,117 @@ pub fn quote_name_registration(
     lease_quote(canonical_selector, &policy, &tier, term_years, now_ms)
 }
 
+/// Quote registration for a catalog-free, pre-resolved canonical selector.
+///
+/// Unlike [`quote_name_registration`], account aliases are parsed from their
+/// complete textual form and do not require a static dataspace catalog. Callers
+/// must separately validate the textual dataspace against its pinned numeric ID.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the selector or lease terms are invalid, the
+/// suffix policy is unavailable, the label is reserved, or the name exists.
+pub fn quote_resolved_name_registration(
+    world: &impl WorldReadOnly,
+    selector: NameSelectorV1,
+    owner: &AccountId,
+    term_years: u8,
+    pricing_class_hint: Option<u8>,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let (namespace, canonical_selector) = canonicalize_resolved_selector(selector)?;
+    ensure_selector_is_mutable(&canonical_selector)?;
+    let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, owner, now_ms)?;
+    if record_by_selector(world, &canonical_selector).is_some() {
+        return Err(SnsError::Conflict(format!(
+            "selector `{}` is already registered",
+            canonical_selector.normalized_label()
+        )));
+    }
+    let tier = pick_pricing_tier(&policy, &canonical_selector, pricing_class_hint)?;
+    lease_quote(canonical_selector, &policy, &tier, term_years, now_ms)
+}
+
+fn resolved_renewal_term_years(
+    current_expiry_ms: u64,
+    target_expiry_ms: u64,
+) -> Result<u8, SnsError> {
+    let extension_ms = target_expiry_ms
+        .checked_sub(current_expiry_ms)
+        .ok_or_else(|| {
+            SnsError::BadRequest(
+                "target lease expiry must be later than the current expiry".to_owned(),
+            )
+        })?;
+    if extension_ms == 0 || extension_ms % MS_PER_YEAR != 0 {
+        return Err(SnsError::BadRequest(format!(
+            "target lease expiry must extend the current expiry by a whole number of {MS_PER_YEAR}ms years"
+        )));
+    }
+    u8::try_from(extension_ms / MS_PER_YEAR)
+        .map_err(|_| SnsError::BadRequest("target lease extension exceeds 255 years".to_owned()))
+}
+
+fn ensure_record_renewable(record: &NameRecordV1) -> Result<(), SnsError> {
+    match &record.status {
+        NameStatus::Tombstoned(_) => Err(SnsError::Conflict(format!(
+            "registration `{}` is tombstoned",
+            record.selector.normalized_label()
+        ))),
+        NameStatus::Frozen(_) => Err(SnsError::Conflict(format!(
+            "registration `{}` is frozen",
+            record.selector.normalized_label()
+        ))),
+        NameStatus::Active | NameStatus::GracePeriod | NameStatus::Redemption => Ok(()),
+    }
+}
+
+/// Quote a catalog-free lease renewal using expiry compare-and-set and an absolute target.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the selector or policy is invalid, the current
+/// expiry differs, the record is frozen/tombstoned, or the target does not add
+/// an allowed whole-year term.
+pub fn quote_resolved_name_renewal(
+    world: &impl WorldReadOnly,
+    selector: NameSelectorV1,
+    expected_current_expiry_ms: u64,
+    target_expiry_ms: u64,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let (_, canonical_selector) = canonicalize_resolved_selector(selector)?;
+    ensure_selector_is_mutable(&canonical_selector)?;
+    let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let mut record = record_or_not_found(world, &canonical_selector)?;
+    refresh_lifecycle(&mut record, now_ms);
+    ensure_record_renewable(&record)?;
+    if record.expires_at_ms != expected_current_expiry_ms {
+        return Err(SnsError::Conflict(format!(
+            "alias.lease.expiry_conflict: expected current expiry {expected_current_expiry_ms}, actual expiry is {}",
+            record.expires_at_ms
+        )));
+    }
+    let term_years = resolved_renewal_term_years(expected_current_expiry_ms, target_expiry_ms)?;
+    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
+    let quote = lease_quote(
+        canonical_selector,
+        &policy,
+        &tier,
+        term_years,
+        expected_current_expiry_ms,
+    )?;
+    if quote.expires_at_ms != target_expiry_ms {
+        return Err(SnsError::Conflict(
+            "renewal quote did not reproduce the absolute target expiry".to_owned(),
+        ));
+    }
+    Ok(quote)
+}
+
 /// Quote the cost and resulting lifecycle for renewing a SNS name.
 ///
 /// # Errors
@@ -1604,23 +2249,84 @@ fn persist_record(state_transaction: &mut StateTransaction<'_, '_>, record: &Nam
 ///
 /// Returns [`SnsError`] when the selector is invalid, the policy is missing or
 /// inactive, or a record already exists for the same canonical selector.
-pub(crate) fn register_name(
+#[cfg(test)]
+fn register_name(
     state_transaction: &mut StateTransaction<'_, '_>,
-    request: RegisterNameRequestV1,
+    request: RegisterNameInput,
 ) -> Result<NameRecordV1, SnsError> {
-    let RegisterNameRequestV1 {
+    register_name_with_selector(state_transaction, request, canonicalize_request_selector)
+}
+
+/// Register a catalog-free, pre-resolved SNS selector in authoritative state.
+///
+/// The caller must first revalidate the selector's textual dataspace against
+/// the numeric ID carried by the resolved setup intent.
+pub(crate) fn register_resolved_name(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    request: RegisterNameInput,
+) -> Result<NameRecordV1, SnsError> {
+    register_name_with_selector(state_transaction, request, |selector, _catalog| {
+        canonicalize_resolved_selector(selector)
+    })
+}
+
+/// Apply a catalog-free absolute-expiry renewal after exact payment was charged.
+pub(crate) fn renew_resolved_name(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    selector: NameSelectorV1,
+    expected_current_expiry_ms: u64,
+    target_expiry_ms: u64,
+    payment: LeasePayment,
+) -> Result<NameRecordV1, SnsError> {
+    let (_, canonical_selector) = canonicalize_resolved_selector(selector)?;
+    ensure_selector_is_mutable(&canonical_selector)?;
+    let policy = policy_or_not_found(state_transaction.world(), canonical_selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    let mut record = record_or_not_found(state_transaction.world(), &canonical_selector)?;
+    refresh_lifecycle(&mut record, now_ms);
+    ensure_record_renewable(&record)?;
+    if record.expires_at_ms != expected_current_expiry_ms {
+        return Err(SnsError::Conflict(format!(
+            "alias.lease.expiry_conflict: expected current expiry {expected_current_expiry_ms}, actual expiry is {}",
+            record.expires_at_ms
+        )));
+    }
+    let term_years = resolved_renewal_term_years(expected_current_expiry_ms, target_expiry_ms)?;
+    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
+    validate_term_bounds(&policy, &tier, term_years)?;
+    validate_payment_for_term(&policy, &tier, term_years, &payment)?;
+    record.expires_at_ms = target_expiry_ms;
+    record.grace_expires_at_ms =
+        target_expiry_ms.saturating_add(u64::from(policy.grace_period_days) * MS_PER_DAY);
+    record.redemption_expires_at_ms = record
+        .grace_expires_at_ms
+        .saturating_add(u64::from(policy.redemption_period_days) * MS_PER_DAY);
+    refresh_lifecycle(&mut record, now_ms);
+    persist_record(state_transaction, &record);
+    Ok(record)
+}
+
+fn register_name_with_selector(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    request: RegisterNameInput,
+    canonicalize: impl FnOnce(
+        NameSelectorV1,
+        &DataSpaceCatalog,
+    ) -> Result<(SnsNamespace, NameSelectorV1), SnsError>,
+) -> Result<NameRecordV1, SnsError> {
+    let RegisterNameInput {
         selector,
         owner,
         controllers,
         term_years,
         pricing_class_hint,
         payment,
-        governance: _,
         metadata,
     } = request;
 
     let (namespace, canonical_selector) =
-        canonicalize_request_selector(selector, &state_transaction.nexus.dataspace_catalog)?;
+        canonicalize(selector, &state_transaction.nexus.dataspace_catalog)?;
     ensure_selector_is_mutable(&canonical_selector)?;
     let policy = policy_or_not_found(state_transaction.world(), canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
@@ -1650,52 +2356,6 @@ pub(crate) fn register_name(
         &tier,
         now_ms,
     )?;
-    persist_record(state_transaction, &record);
-    Ok(record)
-}
-
-/// Renew an existing SNS name in authoritative state.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, the record is not
-/// mutable, or the payment/term fails policy validation.
-pub(crate) fn renew_name(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    namespace: SnsNamespace,
-    literal: &str,
-    payload: RenewNameRequestV1,
-) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(
-        namespace,
-        literal,
-        &state_transaction.nexus.dataspace_catalog,
-    )?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(state_transaction.world(), selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    let mut record = record_or_not_found(state_transaction.world(), &selector)?;
-    let now_ms = state_transaction.block_unix_timestamp_ms();
-    refresh_lifecycle(&mut record, now_ms);
-    if matches!(record.status, NameStatus::Tombstoned(_)) {
-        return Err(SnsError::Conflict(format!(
-            "registration `{}` is tombstoned",
-            selector.normalized_label()
-        )));
-    }
-    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
-    validate_term_bounds(&policy, &tier, payload.term_years)?;
-    validate_payment_for_term(&policy, &tier, payload.term_years, &payload.payment)?;
-    record.expires_at_ms = record
-        .expires_at_ms
-        .saturating_add(years_to_ms(payload.term_years));
-    record.grace_expires_at_ms = record
-        .expires_at_ms
-        .saturating_add(u64::from(policy.grace_period_days) * MS_PER_DAY);
-    record.redemption_expires_at_ms = record
-        .grace_expires_at_ms
-        .saturating_add(u64::from(policy.redemption_period_days) * MS_PER_DAY);
-    refresh_lifecycle(&mut record, now_ms);
     persist_record(state_transaction, &record);
     Ok(record)
 }
@@ -1745,119 +2405,6 @@ fn set_name_lease_expiry(
     refresh_lifecycle(&mut record, now_ms);
     persist_record(state_transaction, &record);
     Ok(record)
-}
-
-/// Transfer SNS name ownership in authoritative state.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, the record is
-/// immutable, or the current lifecycle does not permit transfer.
-pub(crate) fn transfer_name(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    namespace: SnsNamespace,
-    literal: &str,
-    _payload: TransferNameRequestV1,
-) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(
-        namespace,
-        literal,
-        &state_transaction.nexus.dataspace_catalog,
-    )?;
-    ensure_selector_is_mutable(&selector)?;
-    Err(SnsError::Conflict(
-        "SNS ownership transfer is unavailable until governance evidence verification is configured"
-            .to_owned(),
-    ))
-}
-
-/// Update SNS controllers in authoritative state.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, the record is
-/// immutable, or the new controller set is invalid.
-pub fn update_name_controllers(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    namespace: SnsNamespace,
-    literal: &str,
-    payload: UpdateControllersRequestV1,
-) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(
-        namespace,
-        literal,
-        &state_transaction.nexus.dataspace_catalog,
-    )?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(state_transaction.world(), selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    let mut record = record_or_not_found(state_transaction.world(), &selector)?;
-    let now_ms = state_transaction.block_unix_timestamp_ms();
-    refresh_lifecycle(&mut record, now_ms);
-    if matches!(record.status, NameStatus::Tombstoned(_)) {
-        return Err(SnsError::Conflict(format!(
-            "registration `{}` is tombstoned",
-            selector.normalized_label()
-        )));
-    }
-    validate_name_controllers(&payload.controllers)?;
-    record.controllers = payload.controllers;
-    persist_record(state_transaction, &record);
-    Ok(record)
-}
-
-/// Freeze a SNS name in authoritative state.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, the record is
-/// immutable, or the current lifecycle does not permit freezing.
-pub fn freeze_name(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    namespace: SnsNamespace,
-    literal: &str,
-    payload: FreezeNameRequestV1,
-) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(
-        namespace,
-        literal,
-        &state_transaction.nexus.dataspace_catalog,
-    )?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(state_transaction.world(), selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    let mut record = record_or_not_found(state_transaction.world(), &selector)?;
-    let now_ms = state_transaction.block_unix_timestamp_ms();
-    refresh_lifecycle(&mut record, now_ms);
-    if matches!(record.status, NameStatus::Tombstoned(_)) {
-        return Err(SnsError::Conflict(
-            "cannot freeze a tombstoned name".to_owned(),
-        ));
-    }
-    record.status = NameStatus::Frozen(NameFrozenStateV1 {
-        reason: payload.reason,
-        until_ms: payload.until_ms,
-    });
-    persist_record(state_transaction, &record);
-    Ok(record)
-}
-
-/// Clear a freeze and reactivate a SNS name in authoritative state.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, the record is
-/// immutable, or the current lifecycle does not permit unfreezing.
-pub(crate) fn unfreeze_name(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _namespace: SnsNamespace,
-    _literal: &str,
-    _governance: GovernanceHookV1,
-) -> Result<NameRecordV1, SnsError> {
-    Err(SnsError::Conflict(
-        "SNS unfreeze is unavailable until governance evidence verification is configured"
-            .to_owned(),
-    ))
 }
 
 /// Apply a ledger-backed SNS mutation in a dedicated state block for unit tests.
@@ -1950,7 +2497,7 @@ pub fn active_account_alias_owner(
     alias: &AccountAlias,
     now_ms: u64,
 ) -> Option<AccountId> {
-    let selector = selector_for_account_alias(alias, catalog).ok()?;
+    let selector = active_account_alias_selector(world, catalog, alias, now_ms).ok()?;
     active_owner_by_selector(world, &selector, now_ms)
 }
 
@@ -2081,10 +2628,214 @@ pub fn active_dataspace_owner_by_alias(
     active_owner_by_selector(world, &selector, now_ms)
 }
 
+fn active_dataspace_record_id(record: &NameRecordV1) -> Result<DataSpaceId, SnsError> {
+    if let Some(encoded_id) = record.metadata.get(SNS_DATASPACE_ID_METADATA_KEY) {
+        let raw = norito::json::from_str::<u64>(encoded_id.get()).map_err(|err| {
+            SnsError::Conflict(format!(
+                "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace alias `{}` stores an invalid numeric id: {err}",
+                record.selector.normalized_label()
+            ))
+        })?;
+        return Ok(DataSpaceId::new(raw));
+    }
+    dataspace_id_for_sns_alias(record.selector.normalized_label()).ok_or_else(|| {
+        SnsError::Internal(format!(
+            "failed to derive dataspace id for canonical alias `{}`",
+            record.selector.normalized_label()
+        ))
+    })
+}
+
+fn active_dynamic_dataspace_aliases_by_id(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    dataspace_id: DataSpaceId,
+    now_ms: u64,
+) -> Result<BTreeSet<String>, SnsError> {
+    let prefix = Name::from_str(&format!("sns/records/{DATASPACE_ALIAS_SUFFIX_ID}/"))
+        .expect("static dataspace SNS record prefix is valid");
+    let prefix_literal = prefix.as_ref().to_owned();
+    let mut aliases = BTreeSet::new();
+
+    for (storage_key, bytes) in world.smart_contract_state().range(prefix..) {
+        if !storage_key.as_ref().starts_with(&prefix_literal) {
+            break;
+        }
+        let mut slice = bytes.as_slice();
+        let record = NameRecordV1::decode(&mut slice).map_err(|error| {
+            SnsError::Internal(format!(
+                "failed to decode dataspace SNS record `{storage_key}`: {error}"
+            ))
+        })?;
+        if !slice.is_empty() {
+            return Err(SnsError::Internal(format!(
+                "dataspace SNS record `{storage_key}` contains trailing bytes"
+            )));
+        }
+        if record.selector.suffix_id != DATASPACE_ALIAS_SUFFIX_ID
+            || record.name_hash != record.selector.name_hash()
+            || record_storage_key(&record.selector) != storage_key.clone()
+        {
+            return Err(SnsError::Internal(format!(
+                "dataspace SNS record identity mismatch at `{storage_key}`"
+            )));
+        }
+        if !matches!(effective_status(&record, now_ms), NameStatus::Active) {
+            continue;
+        }
+
+        let alias = record.selector.normalized_label();
+        let dynamic_id = active_dataspace_record_id(&record)?;
+        if let Some(static_entry) = catalog.by_alias(alias)
+            && static_entry.id != dynamic_id
+            && (static_entry.id == dataspace_id || dynamic_id == dataspace_id)
+        {
+            return Err(SnsError::Conflict(format!(
+                "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace alias `{alias}` maps to static id {} and active SNS id {dynamic_id}",
+                static_entry.id
+            )));
+        }
+        if dynamic_id == dataspace_id {
+            aliases.insert(alias.to_owned());
+        }
+    }
+
+    Ok(aliases)
+}
+
+/// Resolve a dataspace alias against both the static catalog and active SNS state.
+///
+/// Static and dynamic mappings are independent evidence for the same canonical
+/// text-to-id pair. If both are present they must agree exactly; a caller must
+/// never silently prefer one directory over the other.
+///
+/// # Errors
+///
+/// Returns [`SnsError::NotFound`] when neither directory knows the alias,
+/// [`SnsError::BadRequest`] when the alias is not canonical, and
+/// [`SnsError::Conflict`] with [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the
+/// two directories disagree.
+pub fn resolve_active_dataspace_id_by_alias(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &str,
+    now_ms: u64,
+) -> Result<DataSpaceId, SnsError> {
+    let alias = alias.trim();
+    let selector =
+        selector_for_dataspace_alias(alias).map_err(|err| SnsError::BadRequest(err.to_string()))?;
+    let static_id = catalog
+        .by_alias(selector.normalized_label())
+        .map(|entry| entry.id);
+    let dynamic_id = record_by_selector(world, &selector)
+        .filter(|record| matches!(effective_status(record, now_ms), NameStatus::Active))
+        .map(|record| active_dataspace_record_id(&record))
+        .transpose()?;
+
+    let resolved_id = match (static_id, dynamic_id) {
+        (Some(static_id), Some(dynamic_id)) if static_id != dynamic_id => {
+            return Err(SnsError::Conflict(format!(
+                "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace alias `{}` maps to static id {static_id} and active SNS id {dynamic_id}",
+                selector.normalized_label()
+            )));
+        }
+        (Some(id), _) | (None, Some(id)) => id,
+        (None, None) => {
+            return Err(SnsError::NotFound(format!(
+                "unknown dataspace alias `{}`",
+                selector.normalized_label()
+            )));
+        }
+    };
+    let reverse_alias = resolve_active_dataspace_alias_by_id(world, catalog, resolved_id, now_ms)?;
+    if reverse_alias != selector.normalized_label() {
+        return Err(SnsError::Conflict(format!(
+            "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace alias `{}` maps to id {resolved_id}, whose canonical active name is `{reverse_alias}`",
+            selector.normalized_label()
+        )));
+    }
+    Ok(resolved_id)
+}
+
+/// Resolve a dataspace id to its unique canonical alias across the static catalog and active SNS.
+///
+/// Static and dynamic mappings must describe one exact text/id pair. Multiple active names for
+/// the same numeric id, or a disagreement between the directories, fail closed instead of
+/// selecting an arbitrary spelling.
+///
+/// # Errors
+///
+/// Returns [`SnsError::NotFound`] when neither directory knows the id,
+/// [`SnsError::Conflict`] with [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the id has multiple
+/// canonical names or a static/dynamic mapping disagrees, and [`SnsError::Internal`] for malformed
+/// authoritative SNS state.
+pub fn resolve_active_dataspace_alias_by_id(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    dataspace_id: DataSpaceId,
+    now_ms: u64,
+) -> Result<String, SnsError> {
+    let mut aliases = active_dynamic_dataspace_aliases_by_id(world, catalog, dataspace_id, now_ms)?;
+    if let Some(static_entry) = catalog.by_id(dataspace_id) {
+        aliases.insert(static_entry.alias.clone());
+    }
+
+    match aliases.len() {
+        0 => Err(SnsError::NotFound(format!(
+            "unknown dataspace id `{dataspace_id}`"
+        ))),
+        1 => Ok(aliases
+            .into_iter()
+            .next()
+            .expect("singleton dataspace alias set contains one value")),
+        _ => Err(SnsError::Conflict(format!(
+            "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace id {dataspace_id} maps to multiple active aliases: {}",
+            aliases.into_iter().collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+/// Render an account alias with the unique active dataspace name for its numeric id.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the dataspace mapping is unknown, conflicting, or the resulting
+/// account-alias literal is invalid.
+pub fn active_account_alias_literal(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    now_ms: u64,
+) -> Result<String, SnsError> {
+    let dataspace = resolve_active_dataspace_alias_by_id(world, catalog, alias.dataspace, now_ms)?;
+    AccountAliasName::try_new(
+        alias.label.as_ref(),
+        alias.domain.as_ref().map(|domain| domain.name().as_ref()),
+        dataspace,
+    )
+    .map(|name| name.to_string())
+    .map_err(|error| SnsError::BadRequest(error.to_string()))
+}
+
+/// Build the authoritative selector for an account alias using live/static dataspace resolution.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the dataspace mapping or account-alias literal is invalid.
+pub fn active_account_alias_selector(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    now_ms: u64,
+) -> Result<NameSelectorV1, SnsError> {
+    let literal = active_account_alias_literal(world, catalog, alias, now_ms)?;
+    NameSelectorV1::new(ACCOUNT_ALIAS_SUFFIX_ID, literal)
+        .map_err(|error| SnsError::BadRequest(error.to_string()))
+}
+
 /// Resolve an active dataspace alias to its canonical id.
 ///
-/// The static Nexus catalog is treated as a bootstrap directory. Active SNS
-/// dataspace leases extend that directory at runtime.
+/// This convenience projection fails closed for unknown or conflicting mappings.
 #[must_use]
 pub fn active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
@@ -2092,12 +2843,7 @@ pub fn active_dataspace_id_by_alias(
     alias: &str,
     now_ms: u64,
 ) -> Option<DataSpaceId> {
-    let alias = alias.trim();
-    if let Some(entry) = catalog.by_alias(alias) {
-        return Some(entry.id);
-    }
-    active_dataspace_owner_by_alias(world, alias, now_ms)?;
-    dataspace_id_for_sns_alias(alias)
+    resolve_active_dataspace_id_by_alias(world, catalog, alias, now_ms).ok()
 }
 
 /// Resolve active dataspace metadata from the bootstrap catalog or SNS.
@@ -2109,14 +2855,14 @@ pub fn active_dataspace_metadata_by_alias(
     now_ms: u64,
 ) -> Option<DataSpaceMetadata> {
     let alias = alias.trim();
+    let resolved_id = resolve_active_dataspace_id_by_alias(world, catalog, alias, now_ms).ok()?;
     if let Some(entry) = catalog.by_alias(alias) {
         return Some(entry.clone());
     }
     let selector = selector_for_dataspace_alias(alias).ok()?;
     active_owner_by_selector(world, &selector, now_ms)?;
-    let id = DataSpaceId::from_hash(&selector.name_hash());
     Some(DataSpaceMetadata {
-        id,
+        id: resolved_id,
         alias: selector.label,
         description: Some("ledger-backed SNS dataspace".to_owned()),
         fault_tolerance: SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE,
@@ -2131,8 +2877,8 @@ pub fn active_dataspace_owner_by_id(
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Option<AccountId> {
-    let alias = catalog.by_id(dataspace_id)?.alias.as_str();
-    active_dataspace_owner_by_alias(world, alias, now_ms)
+    let alias = resolve_active_dataspace_alias_by_id(world, catalog, dataspace_id, now_ms).ok()?;
+    active_dataspace_owner_by_alias(world, &alias, now_ms)
 }
 
 #[cfg(test)]
@@ -2144,23 +2890,23 @@ mod tests {
             Account, AccountAddress, AccountId,
             rekey::{AccountAlias, AccountAliasDomain},
         },
-        asset::AssetDefinition,
+        alias_setup::{
+            AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+            AliasAutoRenewStateV1, AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+            AliasQuoteGuardV1, AliasTargetV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+        },
+        asset::{AssetDefinition, AssetDefinitionId},
         block::SignedBlock,
         domain::Domain,
-        isi::{
-            InstructionBox, Register,
-            domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
-        },
+        isi::{InstructionBox, Register, alias_setup::EnsureAlias},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
-            FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameFrozenStateV1,
-            NameRecordV1, NameSelectorV1, NameStatus, NameTombstoneStateV1, PaymentProofV1,
-            RegisterNameRequestV1, TransferNameRequestV1,
+            NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorV1, NameStatus,
+            NameTombstoneStateV1,
         },
         transaction::TransactionBuilder,
     };
-    use iroha_primitives::json::Json;
 
     use super::*;
     use crate::{
@@ -2172,6 +2918,101 @@ mod tests {
     #[test]
     fn default_namespace_lease_price_is_exact() {
         assert_eq!(default_namespace_lease_price().to_string(), "0.5");
+    }
+
+    #[test]
+    fn absolute_renewal_target_requires_positive_whole_year_delta() {
+        let current = 10_000;
+        assert_eq!(
+            resolved_renewal_term_years(current, current + MS_PER_YEAR).expect("one whole year"),
+            1
+        );
+        assert!(resolved_renewal_term_years(current, current).is_err());
+        assert!(resolved_renewal_term_years(current, current - 1).is_err());
+        assert!(resolved_renewal_term_years(current, current + MS_PER_YEAR - 1).is_err());
+        assert!(
+            resolved_renewal_term_years(
+                current,
+                current + MS_PER_YEAR.saturating_mul(u64::from(u8::MAX) + 1),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn auto_renew_state_storage_is_target_bound_and_revision_preserving() {
+        let target = AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
+            "merchant@universal"
+                .parse::<AccountAliasName>()
+                .expect("account alias"),
+            DataSpaceId::UNIVERSAL,
+        ));
+        let state = AliasAutoRenewStateV1::new(target.clone(), owner(), 7, None);
+        let key = alias_auto_renew_storage_key(&target).expect("auto-renew storage key");
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(key, state.encode());
+        assert_eq!(
+            alias_auto_renew_state(&world.view(), &target).expect("decode auto-renew state"),
+            Some(state)
+        );
+
+        let other = AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
+            "other@universal"
+                .parse::<AccountAliasName>()
+                .expect("other account alias"),
+            DataSpaceId::UNIVERSAL,
+        ));
+        assert_eq!(
+            alias_auto_renew_state(&world.view(), &other).expect("other target is absent"),
+            None
+        );
+    }
+
+    #[test]
+    fn auto_renew_storage_selection_is_bounded_and_wraps_after_cursor() {
+        let mut entries = ["alpha@universal", "bravo@universal", "charlie@universal"]
+            .into_iter()
+            .map(|literal| {
+                let target = AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
+                    literal.parse::<AccountAliasName>().expect("account alias"),
+                    DataSpaceId::UNIVERSAL,
+                ));
+                let key = alias_auto_renew_storage_key(&target).expect("storage key");
+                let state = AliasAutoRenewStateV1::new(target, owner(), 1, None);
+                (key, state)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut world = World::default();
+        for (key, state) in &entries {
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(key.clone(), state.encode());
+        }
+        let keys = entries
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            alias_auto_renew_candidate_keys(&world.view(), None, 2),
+            keys[..2]
+        );
+        assert_eq!(
+            alias_auto_renew_candidate_keys(&world.view(), Some(&keys[1]), 2),
+            vec![keys[2].clone(), keys[0].clone()]
+        );
+        assert_eq!(
+            alias_auto_renew_candidate_keys(&world.view(), Some(&keys[2]), 1),
+            vec![keys[0].clone()]
+        );
+        assert_eq!(
+            alias_auto_renew_candidate_keys(&world.view(), Some(&keys[1]), 3),
+            vec![keys[2].clone(), keys[0].clone(), keys[1].clone()],
+            "a full sweep must revisit the cursor key after wrapping"
+        );
     }
 
     fn owner() -> AccountId {
@@ -2235,25 +3076,11 @@ mod tests {
         NameControllerV1::account(&address)
     }
 
-    fn payment(owner: &AccountId, amount: u64) -> PaymentProofV1 {
-        PaymentProofV1 {
-            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-            gross_amount: amount.into(),
-            net_amount: amount.into(),
-            settlement_tx: Json::from("tx"),
-            payer: owner.clone(),
-            signature: Json::from("sig"),
-        }
-    }
-
-    fn default_payment(owner: &AccountId) -> PaymentProofV1 {
-        PaymentProofV1 {
+    fn default_payment(_owner: &AccountId) -> LeasePayment {
+        LeasePayment {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
             gross_amount: default_namespace_lease_price(),
             net_amount: default_namespace_lease_price(),
-            settlement_tx: Json::from("tx"),
-            payer: owner.clone(),
-            signature: Json::from("sig"),
         }
     }
 
@@ -2598,7 +3425,7 @@ mod tests {
         let selector = selector_for_dataspace_alias("banking").expect("selector");
         let owner = another_owner();
         let address = AccountAddress::from_account_id(&owner).expect("account address");
-        let record = NameRecordV1::new(
+        let mut record = NameRecordV1::new(
             selector.clone(),
             owner.clone(),
             vec![NameControllerV1::account(&address)],
@@ -2608,6 +3435,12 @@ mod tests {
             210,
             310,
             Metadata::default(),
+        );
+        record.metadata.insert(
+            SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace id metadata key"),
+            IrohaJson::new(7_u64),
         );
 
         let mut world = World::default();
@@ -2623,7 +3456,7 @@ mod tests {
     }
 
     #[test]
-    fn active_dataspace_id_prefers_configured_catalog_entry() {
+    fn active_dataspace_id_rejects_conflicting_static_and_dynamic_mappings() {
         let catalog = dataspace_catalog();
         let selector = selector_for_dataspace_alias("banking").expect("selector");
         let owner = another_owner();
@@ -2644,9 +3477,100 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(record_storage_key(&selector), record.encode());
 
+        let error = resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50);
+        let error = error.expect_err("conflicting directories must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains(ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
+            "unexpected error: {error}"
+        );
         assert_eq!(
             active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50),
-            Some(DataSpaceId::new(7))
+            None
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_accepts_matching_static_and_dynamic_mappings() {
+        let selector = selector_for_dataspace_alias("banking").expect("selector");
+        let expected_id = DataSpaceId::from_hash(&selector.name_hash());
+        let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: expected_id,
+            alias: "banking".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("matching dataspace catalog");
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+
+        assert_eq!(
+            resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50)
+                .expect("matching directories"),
+            expected_id
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_accepts_explicit_dynamic_id_matching_static_catalog() {
+        let catalog = dataspace_catalog();
+        let selector = selector_for_dataspace_alias("banking").expect("selector");
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let mut record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        record.metadata.insert(
+            SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace id metadata key"),
+            IrohaJson::new(7_u64),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+
+        assert_eq!(
+            resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50)
+                .expect("matching explicit mapping"),
+            DataSpaceId::new(7)
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_accepts_static_mapping_without_active_sns_record() {
+        let catalog = dataspace_catalog();
+        let world = World::default();
+
+        assert_eq!(
+            resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50)
+                .expect("static mapping"),
+            DataSpaceId::new(7)
         );
     }
 
@@ -2682,6 +3606,93 @@ mod tests {
             active_dataspace_metadata_by_alias(&view, &catalog, "alpha", 50).expect("metadata");
         assert_eq!(metadata.id, expected_id);
         assert_eq!(metadata.alias, "alpha");
+        assert_eq!(
+            resolve_active_dataspace_alias_by_id(&view, &catalog, expected_id, 50)
+                .expect("dynamic reverse mapping"),
+            "alpha"
+        );
+    }
+
+    #[test]
+    fn active_dataspace_alias_by_id_rejects_multiple_dynamic_names() {
+        let catalog = dataspace_catalog();
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let shared_id = DataSpaceId::new(42);
+        let mut world = World::default();
+        for alias in ["alpha", "beta"] {
+            let selector = selector_for_dataspace_alias(alias).expect("selector");
+            let mut record = NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![NameControllerV1::account(&address)],
+                0,
+                10,
+                110,
+                210,
+                310,
+                Metadata::default(),
+            );
+            record.metadata.insert(
+                SNS_DATASPACE_ID_METADATA_KEY
+                    .parse()
+                    .expect("dataspace id metadata key"),
+                IrohaJson::new(shared_id.as_u64()),
+            );
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(record_storage_key(&selector), record.encode());
+        }
+
+        let error = resolve_active_dataspace_alias_by_id(&world.view(), &catalog, shared_id, 50)
+            .expect_err("one id must not select between multiple active names");
+        assert!(
+            error
+                .to_string()
+                .contains(ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn active_dataspace_alias_by_id_rejects_static_dynamic_name_collision() {
+        let catalog = dataspace_catalog();
+        let selector = selector_for_dataspace_alias("banking").expect("selector");
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let conflicting_id = DataSpaceId::new(8);
+        let mut record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        record.metadata.insert(
+            SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace id metadata key"),
+            IrohaJson::new(conflicting_id.as_u64()),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+
+        for id in [DataSpaceId::new(7), conflicting_id] {
+            let error = resolve_active_dataspace_alias_by_id(&world.view(), &catalog, id, 50)
+                .expect_err("both sides of a mapping collision must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains(ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
+                "unexpected error for {id}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -2716,6 +3727,9 @@ mod tests {
             active_dataspace_metadata_by_alias(&world.view(), &catalog, "alpha", 50),
             None
         );
+        let error = resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50)
+            .expect_err("unknown mapping must fail");
+        assert!(error.to_string().contains("unknown dataspace alias"));
     }
 
     #[test]
@@ -3131,30 +4145,72 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
+        let primary_alias = AccountAlias::new(
+            "ops".parse().expect("label"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        );
+        let payment_asset = AssetDefinitionId::new(
+            DomainId::try_new("assets", "universal").expect("asset domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let ensure_alias = |literal: &str, target_account: AccountId, role| {
+            EnsureAlias::new(
+                AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                    alias: ResolvedAccountAliasV1::new(
+                        literal.parse().expect("resolved account alias"),
+                        DataSpaceId::UNIVERSAL,
+                    ),
+                    target_account,
+                    provision: AccountProvisionV1::Existing,
+                    role,
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset: payment_asset.clone(),
+                    max_amount: Quantity::zero(),
+                    valid_until_ms: u64::MAX,
+                },
+            )
+        };
+        let ensure_dataspace = EnsureAlias::new(
+            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: ResolvedDataSpaceV1::new(
+                    "cbuae".parse().expect("dataspace name"),
+                    DataSpaceId::new(4),
+                ),
+                owner: genesis_account.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset.clone(),
+                max_amount: Quantity::zero(),
+                valid_until_ms: u64::MAX,
+            },
+        );
         let tx = TransactionBuilder::new(
             chain_id,
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([
+            InstructionBox::from(ensure_dataspace.clone()),
             InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
             InstructionBox::from(Register::account(
                 Account::new(account_id.clone()).with_label(Some(label.clone())),
             )),
-            InstructionBox::from(SetAccountAliasBinding {
-                account: account_id.clone(),
-                alias: Some(bound_alias.clone()),
-                lease_expiry_ms: None,
-            }),
-            InstructionBox::from(SetPrimaryAccountAlias {
-                account: genesis_account.clone(),
-                alias: Some(AccountAlias::new(
-                    "ops".parse().expect("label"),
-                    Some(AccountAliasDomain::new(domain_id.name().clone())),
-                    DataSpaceId::UNIVERSAL,
-                )),
-                lease_expiry_ms: None,
-            }),
+            InstructionBox::from(ensure_alias(
+                "settlement@cbuae.universal",
+                account_id.clone(),
+                AccountAliasRoleV1::Additional,
+            )),
+            InstructionBox::from(ensure_alias(
+                "ops@cbuae.universal",
+                genesis_account.clone(),
+                AccountAliasRoleV1::Primary,
+            )),
         ])
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
@@ -3170,23 +4226,25 @@ mod tests {
 
         let view = world.view();
         let domain_selector = selector_for_domain(&domain_id).expect("selector");
+        let dataspace_selector = selector_for_dataspace_alias("cbuae").expect("selector");
         let label_selector =
             selector_for_account_alias(&label, &dataspace_catalog).expect("selector");
         let bound_selector =
             selector_for_account_alias(&bound_alias, &dataspace_catalog).expect("selector");
-        let relabel_selector = selector_for_account_alias(
-            &AccountAlias::new(
-                "ops".parse().expect("label"),
-                Some(AccountAliasDomain::new(domain_id.name().clone())),
-                DataSpaceId::UNIVERSAL,
-            ),
-            &dataspace_catalog,
-        )
-        .expect("selector");
+        let relabel_selector =
+            selector_for_account_alias(&primary_alias, &dataspace_catalog).expect("selector");
 
         assert!(
             record_by_selector(&view, &domain_selector).is_some(),
             "genesis domain names must be leased before validation"
+        );
+        assert_eq!(
+            record_by_selector(&view, &dataspace_selector)
+                .expect("declarative dataspace aliases must seed leases")
+                .metadata,
+            crate::alias_setup::alias_registration_metadata(&ensure_dataspace.intent.target())
+                .expect("dataspace setup metadata"),
+            "genesis dataspace leases must retain their immutable text-to-ID metadata"
         );
         assert_eq!(
             record_by_selector(&view, &label_selector)
@@ -3197,14 +4255,14 @@ mod tests {
         );
         assert_eq!(
             record_by_selector(&view, &bound_selector)
-                .expect("explicit account-alias bindings must seed leases")
+                .expect("declarative account aliases must seed leases")
                 .owner,
             account_id,
             "genesis bound-alias leases must be owned by the exact target account"
         );
         assert_eq!(
             record_by_selector(&view, &relabel_selector)
-                .expect("explicit label-setting instructions must also seed leases")
+                .expect("declarative primary aliases must also seed leases")
                 .owner,
             genesis_account,
             "genesis primary-alias leases must be owned by the exact target account"
@@ -3242,7 +4300,7 @@ mod tests {
         let record = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
@@ -3253,7 +4311,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3280,7 +4337,7 @@ mod tests {
         apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3291,7 +4348,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3301,7 +4357,7 @@ mod tests {
         let err = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3312,7 +4368,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3338,7 +4393,7 @@ mod tests {
         let record = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
@@ -3349,7 +4404,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3380,7 +4434,7 @@ mod tests {
         apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
@@ -3391,7 +4445,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3439,7 +4492,7 @@ mod tests {
         let record = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3450,7 +4503,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3480,7 +4532,7 @@ mod tests {
         let err = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3491,7 +4543,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3518,7 +4569,7 @@ mod tests {
         let err = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3529,7 +4580,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3543,7 +4593,7 @@ mod tests {
         let record = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3554,7 +4604,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&steward),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3701,7 +4750,7 @@ mod tests {
         let record = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3712,7 +4761,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3806,7 +4854,7 @@ mod tests {
         let err = apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: 0xFFFF,
@@ -3817,7 +4865,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3826,55 +4873,6 @@ mod tests {
 
         assert!(
             err.to_string().contains("unsupported SNS suffix id"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn update_name_controllers_rejects_empty_controller_set() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        state.nexus.write().dataspace_catalog = dataspace_catalog();
-        let owner = owner();
-
-        apply_with_state_block(&state, |tx| {
-            register_name(
-                tx,
-                RegisterNameRequestV1 {
-                    selector: NameSelectorV1 {
-                        version: NameSelectorV1::VERSION,
-                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
-                        label: "ops.universal".to_owned(),
-                    },
-                    owner: owner.clone(),
-                    controllers: vec![controller(&owner)],
-                    term_years: 1,
-                    pricing_class_hint: None,
-                    payment: default_payment(&owner),
-                    governance: None,
-                    metadata: Metadata::default(),
-                },
-            )
-        })
-        .expect("register name");
-
-        let err = apply_with_state_block(&state, |tx| {
-            update_name_controllers(
-                tx,
-                SnsNamespace::Domain,
-                "ops.universal",
-                UpdateControllersRequestV1 {
-                    controllers: Vec::new(),
-                },
-            )
-        })
-        .expect_err("empty controllers must fail");
-
-        assert!(
-            err.to_string().contains("at least one controller"),
             "unexpected error: {err}"
         );
     }
@@ -3892,7 +4890,7 @@ mod tests {
         apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3903,7 +4901,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3934,7 +4931,7 @@ mod tests {
         apply_with_state_block(&state, |tx| {
             register_name(
                 tx,
-                RegisterNameRequestV1 {
+                RegisterNameInput {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
@@ -3945,7 +4942,6 @@ mod tests {
                     term_years: 1,
                     pricing_class_hint: None,
                     payment: default_payment(&owner),
-                    governance: None,
                     metadata: Metadata::default(),
                 },
             )
@@ -3979,123 +4975,14 @@ mod tests {
     }
 
     #[test]
-    fn unfreeze_name_rejects_unverified_governance() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        state.nexus.write().dataspace_catalog = dataspace_catalog();
-        let owner = owner();
-
-        apply_with_state_block(&state, |tx| {
-            register_name(
-                tx,
-                RegisterNameRequestV1 {
-                    selector: NameSelectorV1 {
-                        version: NameSelectorV1::VERSION,
-                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
-                        label: "activeunfreeze.universal".to_owned(),
-                    },
-                    owner: owner.clone(),
-                    controllers: vec![controller(&owner)],
-                    term_years: 1,
-                    pricing_class_hint: None,
-                    payment: default_payment(&owner),
-                    governance: None,
-                    metadata: Metadata::default(),
-                },
-            )
-        })
-        .expect("register name");
-
-        let err = apply_with_state_block(&state, |tx| {
-            unfreeze_name(
-                tx,
-                SnsNamespace::Domain,
-                "activeunfreeze.universal",
-                GovernanceHookV1 {
-                    proposal_id: "proposal-1".into(),
-                    council_vote_hash: Json::from("council"),
-                    dao_vote_hash: Json::from("dao"),
-                    steward_ack: Json::from("steward"),
-                    guardian_clearance: Some(Json::from("guardian")),
-                },
-            )
-        })
-        .expect_err("unverified governance must not unfreeze");
-
-        assert!(
-            err.to_string().contains("governance evidence verification"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn reserved_universal_dataspace_record_is_immutable() {
-        let mut state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+    fn reserved_universal_dataspace_selector_is_immutable() {
         let selector =
             selector_for_dataspace_alias(RESERVED_UNIVERSAL_DATASPACE_ALIAS).expect("selector");
-        let owner = owner();
-        let record = NameRecordV1::new(
-            selector.clone(),
-            owner.clone(),
-            vec![controller(&owner)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        state
-            .world
-            .smart_contract_state
-            .insert(record_storage_key(&selector), record.encode());
-
-        let transfer_err = apply_with_state_block(&state, |tx| {
-            transfer_name(
-                tx,
-                SnsNamespace::Dataspace,
-                RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-                TransferNameRequestV1 {
-                    new_owner: another_owner(),
-                    governance: GovernanceHookV1 {
-                        proposal_id: "proposal-1".into(),
-                        council_vote_hash: Json::from("council"),
-                        dao_vote_hash: Json::from("dao"),
-                        steward_ack: Json::from("steward"),
-                        guardian_clearance: None,
-                    },
-                },
-            )
-        })
-        .expect_err("universal transfer must fail");
+        let err = ensure_selector_is_mutable(&selector)
+            .expect_err("reserved universal selector must reject every mutation path");
         assert!(
-            transfer_err.to_string().contains("immutable"),
-            "unexpected error: {transfer_err}"
-        );
-
-        let freeze_err = apply_with_state_block(&state, |tx| {
-            freeze_name(
-                tx,
-                SnsNamespace::Dataspace,
-                RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-                FreezeNameRequestV1 {
-                    reason: "maintenance".to_owned(),
-                    until_ms: 10,
-                    guardian_ticket: Json::from("ticket"),
-                },
-            )
-        })
-        .expect_err("universal freeze must fail");
-        assert!(
-            freeze_err.to_string().contains("immutable"),
-            "unexpected error: {freeze_err}"
+            err.to_string().contains("immutable"),
+            "unexpected error: {err}"
         );
     }
 

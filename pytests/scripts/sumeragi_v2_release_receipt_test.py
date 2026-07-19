@@ -21,7 +21,8 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
+    "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
 CHAOS_MARKER = (
@@ -995,6 +996,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         ROOT_DIR
     )
     data_status_test = writer_symbols["_DATA_STATUS_TEST"]
+    data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
     js_status_tests = writer_symbols["_JS_STATUS_TESTS"]
@@ -1045,6 +1047,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 ]
             elif leg_id == "status-rust":
                 test_lines = [f"test {data_status_test} ... ok"]
+            elif leg_id == "lane-certificate-rust":
+                test_lines = [f"test {data_lane_certificate_test} ... ok"]
             elif leg_id == "cross-sdk-rust":
                 test_lines = [f"test {test} ... ok" for test in cross_sdk_tests]
             elif leg_id.startswith("taira-contract-"):

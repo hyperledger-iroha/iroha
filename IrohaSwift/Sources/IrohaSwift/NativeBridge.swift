@@ -84,7 +84,9 @@ enum NoritoBridgeLoader {
         "connect_norito_encode_transfer_instruction_box",
         "connect_norito_detached_transaction_scaffold_inspect_v1",
         "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
-        "connect_norito_canonical_json_blake3_v1"
+        "connect_norito_canonical_json_blake3_v1",
+        "connect_norito_encode_account_onboarding_plan_body_v1",
+        "connect_norito_alias_instruction_round_trip_v1"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -542,6 +544,11 @@ struct NativeAccountAddressRenderResult {
     let i105: String
 }
 
+struct NativeAliasInstructionRoundTripResult {
+    let framedPayload: Data
+    let typedJSON: Data
+}
+
 enum NativeBridgeError: Error, Equatable {
     case nullPointer
     case utf8
@@ -580,6 +587,8 @@ enum NativeBridgeError: Error, Equatable {
     case feePayment
     case multisigSpec
     case identifierReceipt
+    case accountOnboardingBody
+    case aliasInstruction
     case verifyingKeyId
     case zkAssetMode
     case secpParse
@@ -636,6 +645,8 @@ enum NativeBridgeError: Error, Equatable {
         case -317: return .kagemushaRecursiveSpendV4Artifact
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
+        case -408: return .accountOnboardingBody
+        case -409: return .aliasInstruction
         case -403: return .verifyingKeyId
         case -404: return .zkAssetMode
         case -501: return .detachedTransactionScaffold
@@ -1913,6 +1924,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias EncodeAccountOnboardingPlanBodyFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AliasInstructionRoundTripFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias CanonicalJSONBlake3Fn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
@@ -2080,6 +2101,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var blake3HashFn: Blake3HashFn? = nil
     private var detachedTransactionInspectFn: DetachedTransactionInspectFn? = nil
     private var detachedTransactionFinalizeEd25519Fn: DetachedTransactionFinalizeEd25519Fn? = nil
+    private var encodeAccountOnboardingPlanBodyFn: EncodeAccountOnboardingPlanBodyFn? = nil
+    private var aliasInstructionRoundTripFn: AliasInstructionRoundTripFn? = nil
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
@@ -2205,6 +2228,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let blake3HashFn: Any? = nil
     private let detachedTransactionInspectFn: Any? = nil
     private let detachedTransactionFinalizeEd25519Fn: Any? = nil
+    private let encodeAccountOnboardingPlanBodyFn: Any? = nil
+    private let aliasInstructionRoundTripFn: Any? = nil
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyProofRequestFn: Any? = nil
@@ -2296,6 +2321,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 dlsym($0, "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1")
             }
             .map { unsafeBitCast($0, to: DetachedTransactionFinalizeEd25519Fn.self) }
+        self.encodeAccountOnboardingPlanBodyFn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_encode_account_onboarding_plan_body_v1")
+            }
+            .map { unsafeBitCast($0, to: EncodeAccountOnboardingPlanBodyFn.self) }
+        self.aliasInstructionRoundTripFn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_alias_instruction_round_trip_v1")
+            }
+            .map { unsafeBitCast($0, to: AliasInstructionRoundTripFn.self) }
         self.canonicalJSONBlake3Fn = staticHandle
             .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
             .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
@@ -2417,6 +2452,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 canonicalJSONSymbol,
                 to: CanonicalJSONBlake3Fn.self
             )
+            self.encodeAccountOnboardingPlanBodyFn = dlsym(
+                handle,
+                "connect_norito_encode_account_onboarding_plan_body_v1"
+            ).map { unsafeBitCast($0, to: EncodeAccountOnboardingPlanBodyFn.self) }
+            self.aliasInstructionRoundTripFn = dlsym(
+                handle,
+                "connect_norito_alias_instruction_round_trip_v1"
+            ).map { unsafeBitCast($0, to: AliasInstructionRoundTripFn.self) }
             loadPrivacySymbols(from: handle)
             if let chainSymbol = dlsym(handle, "connect_norito_set_chain_discriminant") {
                 self.setChainDiscriminantFn = unsafeBitCast(chainSymbol, to: SetChainDiscriminantFn.self)
@@ -3077,6 +3120,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.blake3HashFn = nil
             self.detachedTransactionInspectFn = nil
             self.detachedTransactionFinalizeEd25519Fn = nil
+            self.encodeAccountOnboardingPlanBodyFn = nil
+            self.aliasInstructionRoundTripFn = nil
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyProofRequestFn = nil
@@ -3990,6 +4035,100 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return DetachedTransactionFinalizationResult(
             signedTransaction: signedTransaction,
             finalization: finalization
+        )
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
+    /// Encode the exact sponsored-onboarding plan body as bare canonical Norito.
+    func encodeAccountOnboardingPlanBody(
+        _ body: ToriiAccountOnboardingPlanBody
+    ) throws -> Data {
+        #if canImport(Darwin)
+        guard let encodeAccountOnboardingPlanBodyFn, let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        let encoder = JSONEncoder()
+        let json = try encoder.encode(body)
+        guard !json.isEmpty, json.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.accountOnboardingBody
+        }
+        var outputPointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputLength: CUnsignedLong = 0
+        let status = json.withUnsafeBytes { buffer -> Int32 in
+            encodeAccountOnboardingPlanBodyFn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &outputPointer,
+                &outputLength
+            )
+        }
+        defer {
+            if let outputPointer { freeFn(outputPointer) }
+        }
+        try throwOnStatus(status)
+        guard outputLength > 0,
+              outputLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              outputPointer != nil else {
+            throw NativeBridgeError.accountOnboardingBody
+        }
+        return Data(bytes: outputPointer!, count: Int(outputLength))
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
+    /// Registry-decode and canonically re-encode one exact alias instruction frame.
+    func roundTripAliasInstruction(
+        wireId: String,
+        framedPayload: Data
+    ) throws -> NativeAliasInstructionRoundTripResult {
+        #if canImport(Darwin)
+        guard let aliasInstructionRoundTripFn, let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        let wireIdBytes = Data(wireId.utf8)
+        guard !wireIdBytes.isEmpty,
+              wireIdBytes.count <= 256,
+              !framedPayload.isEmpty,
+              framedPayload.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.aliasInstruction
+        }
+        var outputFramePointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputFrameLength: CUnsignedLong = 0
+        var outputJSONPointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputJSONLength: CUnsignedLong = 0
+        let status = wireIdBytes.withUnsafeBytes { wireIdBuffer -> Int32 in
+            framedPayload.withUnsafeBytes { framedPayloadBuffer -> Int32 in
+                aliasInstructionRoundTripFn(
+                    wireIdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(wireIdBuffer.count),
+                    framedPayloadBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(framedPayloadBuffer.count),
+                    &outputFramePointer,
+                    &outputFrameLength,
+                    &outputJSONPointer,
+                    &outputJSONLength
+                )
+            }
+        }
+        defer {
+            if let outputFramePointer { freeFn(outputFramePointer) }
+            if let outputJSONPointer { freeFn(outputJSONPointer) }
+        }
+        try throwOnStatus(status)
+        guard outputFrameLength > 0,
+              outputFrameLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              let outputFramePointer,
+              outputJSONLength > 0,
+              outputJSONLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              let outputJSONPointer else {
+            throw NativeBridgeError.aliasInstruction
+        }
+        return NativeAliasInstructionRoundTripResult(
+            framedPayload: Data(bytes: outputFramePointer, count: Int(outputFrameLength)),
+            typedJSON: Data(bytes: outputJSONPointer, count: Int(outputJSONLength))
         )
         #else
         throw NativeBridgeError.bridgeUnavailable

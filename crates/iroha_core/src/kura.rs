@@ -20264,9 +20264,16 @@ impl CertifiedLaneBlockArtifact {
     ///
     /// # Errors
     ///
-    /// Returns an error if framing fails.
+    /// Returns an error if framing fails or the complete certified source
+    /// exceeds its protocol-reserved merge envelope.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        let bytes = norito::to_bytes(self)?;
+        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
+            return Err(norito::Error::Message(
+                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -22796,7 +22803,7 @@ impl Kura {
         ) {
             return Err(Self::invalid_lane_artifact_error(
                 data_path,
-                "failed to recover certified lane block data/index pair",
+                "failed to recover certified lane block data/index pair to a durable fixed point",
             ));
         }
         let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
@@ -26671,7 +26678,9 @@ impl Kura {
     /// This read is deliberately not a durability witness: the same writer reopens the
     /// pair under the geometry and sidecar locks and reissues every strict barrier before
     /// it can report success. Keeping the observation non-attesting ensures a failed
-    /// barrier cannot be consumed by a preliminary read and then hidden by the retry.
+    /// barrier cannot be consumed by a preliminary read and then hidden by the retry. In
+    /// particular, pending sidecar recovery is reserved for that locked writer because it
+    /// may itself execute the barrier sequence.
     fn read_active_lane_block_application_receipt_for_write_observation(
         &self,
         lane_id: LaneId,
@@ -26682,13 +26691,7 @@ impl Kura {
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required()
-            || !self.recover_bound_progress_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                "lane block application receipt",
-            )
-        {
+        if self.prune_recovery_is_required() {
             return None;
         }
         let mut bound = self
@@ -55562,6 +55565,31 @@ mod tests {
         assert_eq!(
             reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
             Some(artifact)
+        );
+    }
+
+    #[test]
+    fn certified_lane_block_encoding_enforces_source_envelope() {
+        let lane_id = LaneId::from(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, dataspace_id, 1);
+        let mut artifact = CertifiedLaneBlockArtifact::new(session, signer_pops);
+
+        assert!(
+            artifact.encode_framed().is_ok(),
+            "a normal certified lane source must fit its reserved envelope"
+        );
+        artifact.commit_qc.bls_aggregate_signature =
+            vec![0xA5; MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES];
+
+        assert!(
+            artifact.encode_framed().is_err(),
+            "an oversized certified source must fail before persistence or recovery fanout"
+        );
+        assert_eq!(
+            Kura::validate_certified_lane_block_artifact(&artifact),
+            Err("certified lane block exceeds the merge source envelope byte limit")
         );
     }
 

@@ -1485,6 +1485,7 @@ mod tests {
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
