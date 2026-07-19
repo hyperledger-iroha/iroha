@@ -2,6 +2,7 @@ use std::io::{BufWriter, Write};
 
 use clap::Subcommand;
 use color_eyre::eyre::eyre;
+use iroha_data_model::{nexus::DataSpaceId, prelude::RoleId};
 use iroha_genesis::RawGenesisTransaction;
 
 use crate::{Outcome, RunArgs};
@@ -26,6 +27,17 @@ pub use profile::{
     parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
     public_xor_profile_for_chain_id, resolve_vrf_seed,
 };
+
+/// Deterministic role used to authorize restricted-dataspace reads at the
+/// universal Torii ingress hop for a private localnet profile.
+pub(crate) fn private_dataspace_reader_role_id(alias: &str, dataspace: DataSpaceId) -> RoleId {
+    format!(
+        "private_{alias}_dataspace_{}_restricted_reader",
+        dataspace.as_u64()
+    )
+    .parse()
+    .expect("private localnet aliases must produce a valid role id")
+}
 
 fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
     let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);

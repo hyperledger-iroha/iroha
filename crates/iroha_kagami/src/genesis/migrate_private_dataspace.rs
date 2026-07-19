@@ -21,6 +21,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
     domain::CanRegisterDomain,
+    query::CanReadRestrictedDataspace,
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{
@@ -37,6 +38,9 @@ const PRIVATE_SBP_DOMAINS: &[&str] = &["hbl.sbp", "ubl.sbp"];
 const PRIVATE_SNS_LEASE_PAYMENT: &str = "0.5";
 const FEE_ASSET_DOMAIN: &str = "universal.universal";
 const FEE_ASSET_NAME: &str = "xor";
+// Keep this migration fail-closed against the structural limit enforced by
+// `iroha_core::block::check_genesis_block`.
+const PROTOCOL_MAX_GENESIS_TRANSACTIONS: usize = 16;
 
 /// Legacy private localnet profile whose retained genesis should be migrated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -144,13 +148,18 @@ impl<T: Write> RunArgs<T> for Args {
 
 /// Migrate one exact legacy private-profile manifest.
 ///
-/// The legacy generator placed universal and private permission grants in one
-/// final transaction. The router consequently selected the universal
-/// dataspace. This migration preserves all instructions and raw manifest fields
-/// except for replacing that final batch with a universal-only batch and a
-/// private-only batch. The private batch begins with a label-less registration
-/// of the same client so the private world has an account row before its grants
-/// execute.
+/// The legacy generator mixed the universal payment-reserve mint with private
+/// SNS registrations, then placed universal and private permission grants in
+/// one final transaction. Target routing cannot execute either mixed batch in
+/// both worlds. This migration preserves every instruction and raw manifest
+/// field while splitting the SNS batch into a universal setup transaction and a
+/// private-SNS transaction, and replacing the permission tail with a
+/// private-only transaction. The universal setup combines the reserve with the
+/// universal permission grants and assigns a restricted-reader role to the
+/// client. This remains one lane-homogeneous transaction and keeps the migrated
+/// genesis within the protocol transaction limit. The private permission batch
+/// begins with a label-less registration of the same client so the private
+/// world has an account row before its direct grants execute.
 pub fn migrate(
     mut manifest: RawGenesisTransaction,
     profile: Profile,
@@ -172,7 +181,7 @@ pub fn migrate(
     }
     let tail_index = tx_count - 1;
     let tail = manifest.transactions()[tail_index].instructions();
-    let (universal_permissions, private_permissions) = expected_permissions(spec)?;
+    let (universal_permissions, private_permissions) = expected_target_permissions(spec)?;
     let legacy_permissions =
         expected_legacy_permission_order(&universal_permissions, &private_permissions, spec);
     if tail.len() != legacy_permissions.len() {
@@ -222,32 +231,81 @@ pub fn migrate(
         &legacy_permissions,
         spec,
     )?;
+    let legacy_sns_index = tail_index - 1;
     validate_sns_bootstrap(
-        manifest.transactions()[tail_index - 1].instructions(),
+        manifest.transactions()[legacy_sns_index].instructions(),
         &client_account_id,
         spec,
     )?;
 
-    let universal_batch = universal_permissions
-        .into_iter()
-        .map(|permission| Grant::account_permission(permission, client_account_id.clone()).into())
-        .collect::<Vec<InstructionBox>>();
+    let legacy_sns = manifest.transactions()[legacy_sns_index].instructions();
+    let reserve_mint = legacy_sns[0].clone();
+    let private_sns_batch = legacy_sns[1..].to_vec();
+
+    let mut universal_batch = Vec::with_capacity(universal_permissions.len() + 2);
+    universal_batch.push(reserve_mint);
+    universal_batch.extend(
+        universal_permissions.iter().cloned().map(|permission| {
+            Grant::account_permission(permission, client_account_id.clone()).into()
+        }),
+    );
+    let private_dataspace = DataSpaceId::new(spec.dataspace_id);
+    let restricted_read = Permission::from(CanReadRestrictedDataspace {
+        dataspace: private_dataspace,
+    });
+    universal_batch.push(
+        Register::role(
+            Role::new(
+                crate::genesis::private_dataspace_reader_role_id(spec.alias, private_dataspace),
+                client_account_id.clone(),
+            )
+            .add_permission(restricted_read),
+        )
+        .into(),
+    );
     let mut private_batch = Vec::with_capacity(private_permissions.len() + 1);
     private_batch.push(Register::account(Account::new(client_account_id.clone())).into());
     private_batch.extend(
-        private_permissions.into_iter().map(|permission| {
+        private_permissions.iter().cloned().map(|permission| {
             Grant::account_permission(permission, client_account_id.clone()).into()
         }),
     );
 
-    manifest
-        .replace_instruction_only_transaction(tail_index, vec![universal_batch, private_batch])?;
+    manifest.replace_instruction_only_transaction(
+        legacy_sns_index,
+        vec![universal_batch, private_sns_batch],
+    )?;
+    // Splitting the transaction immediately before the legacy tail shifts that tail forward by
+    // exactly one slot.
+    let private_permission_index = tail_index + 1;
+    manifest.replace_instruction_only_transaction(private_permission_index, vec![private_batch])?;
+    if manifest.transactions().len() > PROTOCOL_MAX_GENESIS_TRANSACTIONS {
+        return Err(eyre!(
+            "{} migrated genesis would contain {} transactions, exceeding the protocol maximum of {PROTOCOL_MAX_GENESIS_TRANSACTIONS}",
+            spec.profile_name,
+            manifest.transactions().len()
+        ));
+    }
+    validate_migrated_sns_bootstrap(&manifest, legacy_sns_index, &client_account_id, spec)?;
+    validate_migrated_permission_tail(
+        &manifest,
+        legacy_sns_index,
+        private_permission_index,
+        &client_account_id,
+        &universal_permissions,
+        &private_permissions,
+        spec,
+    )?;
     Ok(manifest)
 }
 
-fn expected_permissions(spec: ProfileSpec) -> Result<(Vec<Permission>, Vec<Permission>)> {
+fn expected_target_permissions(spec: ProfileSpec) -> Result<(Vec<Permission>, Vec<Permission>)> {
     // The universal Manage grant is intentionally absent: the ordinary localnet bootstrap
     // already granted it and the legacy private-profile append path deduplicated it.
+    // Torii authorizes at universal ingress and re-authorizes the forwarded signed query on the
+    // receiving private peer. The universal hop receives its restricted-read capability through
+    // a role registered in that transaction; only the private hop uses a direct account grant.
+    let private_dataspace = DataSpaceId::new(spec.dataspace_id);
     let mut universal = vec![Permission::from(CanResolveAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     })];
@@ -255,7 +313,6 @@ fn expected_permissions(spec: ProfileSpec) -> Result<(Vec<Permission>, Vec<Permi
         universal.push(Permission::from(CanRegisterDomain));
     }
 
-    let private_dataspace = DataSpaceId::new(spec.dataspace_id);
     let mut private = vec![
         Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(private_dataspace),
@@ -278,24 +335,145 @@ fn expected_permissions(spec: ProfileSpec) -> Result<(Vec<Permission>, Vec<Permi
             scope: AccountAliasPermissionScope::Domain(domain),
         }));
     }
+    private.push(Permission::from(CanReadRestrictedDataspace {
+        dataspace: private_dataspace,
+    }));
     Ok((universal, private))
 }
 
 fn expected_legacy_permission_order(
     universal: &[Permission],
-    private: &[Permission],
+    target_private: &[Permission],
     spec: ProfileSpec,
 ) -> Vec<Permission> {
     // The retained SBP generator appended CanRegisterDomain after every scoped alias grant,
     // even though the corrected universal-only replacement must place it beside universal
-    // Resolve. CBUAE has no CanRegisterDomain grant, so its retained order is simply universal
-    // Resolve followed by its private dataspace grants.
+    // Resolve. Both retained profiles predate CanReadRestrictedDataspace, so their exact input
+    // order excludes the new role and private direct grant. CBUAE has no
+    // CanRegisterDomain grant, so its retained order is simply universal Resolve followed by its
+    // legacy private grants.
     debug_assert_eq!(universal.len(), if spec.domains.is_empty() { 1 } else { 2 });
-    let mut legacy = Vec::with_capacity(universal.len() + private.len());
+    let restricted_read = Permission::from(CanReadRestrictedDataspace {
+        dataspace: DataSpaceId::new(spec.dataspace_id),
+    });
+    debug_assert_eq!(target_private.last(), Some(&restricted_read));
+    let legacy_private = &target_private[..target_private.len() - 1];
+    let mut legacy = Vec::with_capacity(universal.len() + legacy_private.len());
     legacy.push(universal[0].clone());
-    legacy.extend(private.iter().cloned());
+    legacy.extend(legacy_private.iter().cloned());
     legacy.extend(universal[1..].iter().cloned());
     legacy
+}
+
+fn validate_migrated_permission_tail(
+    manifest: &RawGenesisTransaction,
+    universal_index: usize,
+    private_index: usize,
+    client_account_id: &AccountId,
+    expected_universal: &[Permission],
+    expected_private: &[Permission],
+    spec: ProfileSpec,
+) -> Result<()> {
+    let transactions = manifest.transactions();
+    if transactions.len() != private_index + 1 || private_index != universal_index + 2 {
+        return Err(eyre!(
+            "{} migrated genesis must end with one private SNS transaction between its universal setup and private permission transaction",
+            spec.profile_name
+        ));
+    }
+
+    let universal = transactions[universal_index].instructions();
+    if universal.len() != expected_universal.len() + 2 {
+        return Err(eyre!(
+            "{} migrated universal setup transaction has an unexpected instruction count",
+            spec.profile_name
+        ));
+    }
+    for (instruction_index, (instruction, expected_permission)) in
+        universal[1..].iter().zip(expected_universal).enumerate()
+    {
+        let Some((destination, permission)) = account_permission_grant(instruction) else {
+            return Err(eyre!(
+                "{} migrated universal permission instruction {instruction_index} is not an account permission grant",
+                spec.profile_name
+            ));
+        };
+        if destination != client_account_id || permission != expected_permission {
+            return Err(eyre!(
+                "{} migrated universal permission instruction {instruction_index} does not match the exact target destination and order",
+                spec.profile_name
+            ));
+        }
+    }
+    let Some(RegisterBox::Role(register)) = universal
+        .last()
+        .and_then(|instruction| instruction.as_any().downcast_ref::<RegisterBox>())
+    else {
+        return Err(eyre!(
+            "{} migrated universal permission transaction must end with restricted-reader role registration",
+            spec.profile_name
+        ));
+    };
+    let role = register.object();
+    let private_dataspace = DataSpaceId::new(spec.dataspace_id);
+    let expected_role_id =
+        crate::genesis::private_dataspace_reader_role_id(spec.alias, private_dataspace);
+    let expected_read = Permission::from(CanReadRestrictedDataspace {
+        dataspace: private_dataspace,
+    });
+    if role.inner().id != expected_role_id
+        || role.grant_to() != client_account_id
+        || role.inner().permissions().ne([&expected_read])
+    {
+        return Err(eyre!(
+            "{} migrated universal restricted-reader role does not exactly match its id, owner, and permission",
+            spec.profile_name
+        ));
+    }
+
+    let private = transactions[private_index].instructions();
+    if private.len() != expected_private.len() + 1 {
+        return Err(eyre!(
+            "{} migrated private permission transaction has an unexpected instruction count",
+            spec.profile_name
+        ));
+    }
+    let Some(RegisterBox::Account(register)) = private[0].as_any().downcast_ref::<RegisterBox>()
+    else {
+        return Err(eyre!(
+            "{} migrated private permission transaction must begin with account registration",
+            spec.profile_name
+        ));
+    };
+    let account = register.object();
+    if account.id != *client_account_id
+        || account.metadata != Metadata::default()
+        || account.label.is_some()
+        || account.uaid.is_some()
+        || !account.opaque_ids.is_empty()
+    {
+        return Err(eyre!(
+            "{} migrated private account registration does not match the exact target client",
+            spec.profile_name
+        ));
+    }
+    for (instruction_index, (instruction, expected_permission)) in
+        private[1..].iter().zip(expected_private).enumerate()
+    {
+        let Some((destination, permission)) = account_permission_grant(instruction) else {
+            return Err(eyre!(
+                "{} migrated private permission instruction {instruction_index} is not an account permission grant",
+                spec.profile_name
+            ));
+        };
+        if destination != client_account_id || permission != expected_permission {
+            return Err(eyre!(
+                "{} migrated private permission instruction {instruction_index} does not match the exact target destination and order",
+                spec.profile_name
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn account_permission_grant(instruction: &InstructionBox) -> Option<(&AccountId, &Permission)> {
@@ -315,9 +493,31 @@ fn validate_prior_permission_inventory(
     let expected_existing_manage = Permission::from(CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     });
+    let private_dataspace = DataSpaceId::new(spec.dataspace_id);
+    let expected_reader_role =
+        crate::genesis::private_dataspace_reader_role_id(spec.alias, private_dataspace);
+    let expected_read = Permission::from(CanReadRestrictedDataspace {
+        dataspace: private_dataspace,
+    });
     let mut existing_manage_count = 0_usize;
     for (tx_index, transaction) in manifest.transactions()[..tail_index].iter().enumerate() {
         for (instruction_index, instruction) in transaction.instructions().iter().enumerate() {
+            if let Some(RegisterBox::Role(register)) =
+                instruction.as_any().downcast_ref::<RegisterBox>()
+            {
+                let role = register.object();
+                if role.inner().id == expected_reader_role
+                    || role
+                        .inner()
+                        .permissions()
+                        .any(|permission| permission == &expected_read)
+                {
+                    return Err(eyre!(
+                        "{} retained genesis contains an unexpected prior restricted-reader role at transaction {tx_index}, instruction {instruction_index}",
+                        spec.profile_name
+                    ));
+                }
+            }
             let Some((destination, permission)) = account_permission_grant(instruction) else {
                 continue;
             };
@@ -331,7 +531,10 @@ fn validate_prior_permission_inventory(
             if legacy_permissions.contains(&permission)
                 || matches!(
                     permission.name(),
-                    "CanManageAccountAlias" | "CanResolveAccountAlias" | "CanRegisterDomain"
+                    "CanManageAccountAlias"
+                        | "CanResolveAccountAlias"
+                        | "CanRegisterDomain"
+                        | "CanReadRestrictedDataspace"
                 )
             {
                 return Err(eyre!(
@@ -484,6 +687,57 @@ fn validate_sns_bootstrap(
     Ok(())
 }
 
+fn validate_migrated_sns_bootstrap(
+    manifest: &RawGenesisTransaction,
+    reserve_index: usize,
+    client_account_id: &AccountId,
+    spec: ProfileSpec,
+) -> Result<()> {
+    let transactions = manifest.transactions();
+    let universal_setup = transactions
+        .get(reserve_index)
+        .ok_or_else(|| {
+            eyre!(
+                "{} migrated universal setup transaction is absent",
+                spec.profile_name
+            )
+        })?
+        .instructions();
+    if universal_setup.is_empty() {
+        return Err(eyre!(
+            "{} migrated universal setup transaction must begin with the reserve mint",
+            spec.profile_name
+        ));
+    }
+    let registrations = transactions
+        .get(reserve_index + 1)
+        .ok_or_else(|| eyre!("{} migrated SNS transaction is absent", spec.profile_name))?
+        .instructions();
+    let expected_registration_count = spec.domains.len() + 1;
+    if registrations.len() != expected_registration_count
+        || registrations.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterSnsName>()
+                .is_none()
+        })
+    {
+        return Err(eyre!(
+            "{} migrated SNS transaction must contain exactly {expected_registration_count} registrations",
+            spec.profile_name
+        ));
+    }
+
+    // Reuse the exact legacy inventory validator after proving the new transaction boundary.
+    // This demonstrates that the split changes ordering boundaries only, not instruction data.
+    let combined = universal_setup[..1]
+        .iter()
+        .chain(registrations)
+        .cloned()
+        .collect::<Vec<_>>();
+    validate_sns_bootstrap(&combined, client_account_id, spec)
+}
+
 fn fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
         DomainId::parse_fully_qualified(FEE_ASSET_DOMAIN)
@@ -496,7 +750,7 @@ fn fee_asset_definition_id() -> AssetDefinitionId {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{collections::BTreeSet, fs};
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -606,7 +860,7 @@ mod tests {
             ));
         }
         builder = builder.next_transaction();
-        let (universal, private) = expected_permissions(spec).expect("fixture permissions");
+        let (universal, private) = expected_target_permissions(spec).expect("fixture permissions");
         for permission in expected_legacy_permission_order(&universal, &private, spec) {
             builder =
                 builder.append_instruction(Grant::account_permission(permission, client.clone()));
@@ -614,6 +868,31 @@ mod tests {
         builder
             .build_raw()
             .with_consensus_mode(SumeragiConsensusMode::Npos)
+    }
+
+    fn pad_legacy_manifest_to_transaction_count(
+        mut manifest: RawGenesisTransaction,
+        target_count: usize,
+    ) -> RawGenesisTransaction {
+        let current_count = manifest.transactions().len();
+        assert!(target_count >= current_count);
+        let padding_count = target_count - current_count;
+        let sns_index = current_count - 2;
+        let original_sns = manifest.transactions()[sns_index].instructions().to_vec();
+        let mut replacement = Vec::with_capacity(padding_count + 1);
+        for index in 0..padding_count {
+            let domain =
+                DomainId::parse_fully_qualified(&format!("migration-padding-{index}.universal"))
+                    .expect("valid migration padding domain");
+            replacement.push(vec![Register::domain(Domain::new(domain)).into()]);
+        }
+        // Keep the exact SNS transaction immediately before the legacy permission tail.
+        replacement.push(original_sns);
+        manifest
+            .replace_instruction_only_transaction(sns_index, replacement)
+            .expect("pad retained fixture with ordinary transactions");
+        assert_eq!(manifest.transactions().len(), target_count);
+        manifest
     }
 
     fn grant_permissions(instructions: &[InstructionBox]) -> Vec<Permission> {
@@ -639,9 +918,9 @@ mod tests {
                 .instructions(),
         );
         let (universal, private) =
-            expected_permissions(Profile::PrivateSbp.spec()).expect("expected permissions");
+            expected_target_permissions(Profile::PrivateSbp.spec()).expect("expected permissions");
         assert_eq!(universal.len(), 2);
-        assert_eq!(private.len(), 6);
+        assert_eq!(private.len(), 7);
         let expected = vec![
             universal[0].clone(),
             private[0].clone(),
@@ -654,7 +933,13 @@ mod tests {
         ];
         assert_eq!(
             observed, expected,
-            "retained SBP tail is Resolve(universal), all private scopes, then CanRegisterDomain"
+            "retained SBP tail is Resolve(universal), its pre-read-grant private scopes, then CanRegisterDomain"
+        );
+        assert!(
+            !observed
+                .iter()
+                .any(|permission| permission.name() == "CanReadRestrictedDataspace"),
+            "legacy fixture must model the retained input before restricted-read grants existed"
         );
     }
 
@@ -671,11 +956,11 @@ mod tests {
     }
 
     #[test]
-    fn migrates_exact_legacy_profiles_without_changing_instruction_inventory() {
+    fn migrates_exact_legacy_profiles_and_adds_the_read_grant_to_both_worlds() {
         for profile in [Profile::PrivateSbp, Profile::PrivateCbuae] {
             let legacy = legacy_manifest(profile);
             let before_transactions = legacy.transactions().len();
-            let before_prefix = legacy.transactions()[..before_transactions - 1]
+            let before_prefix = legacy.transactions()[..before_transactions - 2]
                 .iter()
                 .map(|transaction| {
                     transaction
@@ -685,20 +970,94 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
+            let before_sns = legacy.transactions()[before_transactions - 2]
+                .instructions()
+                .iter()
+                .map(iroha_genesis::genesis_instructions_json::instruction_value)
+                .collect::<Vec<_>>();
             let before_tail =
                 grant_permissions(legacy.transactions()[before_transactions - 1].instructions());
             let expected_client = fixture_account();
             let spec = profile.spec();
             let (expected_universal, expected_private) =
-                expected_permissions(spec).expect("expected permissions");
+                expected_target_permissions(spec).expect("expected permissions");
+
+            assert!(
+                !before_tail
+                    .iter()
+                    .any(|permission| permission.name() == "CanReadRestrictedDataspace"),
+                "exact legacy input must not already contain the new restricted-read grant"
+            );
 
             let migrated = migrate(legacy, profile).expect("migrate exact legacy manifest");
             assert_eq!(migrated.transactions().len(), before_transactions + 1);
-            let universal = &migrated.transactions()[before_transactions - 1];
+            assert!(
+                migrated.transactions().len() <= PROTOCOL_MAX_GENESIS_TRANSACTIONS,
+                "migrated private genesis must remain signable under the protocol transaction limit"
+            );
+            let universal = &migrated.transactions()[before_transactions - 2];
+            let private_sns = &migrated.transactions()[before_transactions - 1];
             let private = &migrated.transactions()[before_transactions];
             assert_eq!(
-                grant_permissions(universal.instructions()),
+                universal.instructions().len(),
+                expected_universal.len() + 2,
+                "universal setup must contain the reserve, grants, and reader role"
+            );
+            assert_eq!(private_sns.instructions().len(), spec.domains.len() + 1);
+            assert!(
+                universal.instructions()[0]
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .is_some()
+            );
+            assert!(private_sns.instructions().iter().all(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterSnsName>()
+                    .is_some()
+            }));
+            let after_sns = universal.instructions()[..1]
+                .iter()
+                .chain(private_sns.instructions())
+                .map(iroha_genesis::genesis_instructions_json::instruction_value)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                after_sns, before_sns,
+                "migration must preserve the exact SNS instruction inventory and order while splitting its transaction boundary"
+            );
+            assert_eq!(
+                grant_permissions(&universal.instructions()[1..universal.instructions().len() - 1]),
                 expected_universal
+            );
+            let RegisterBox::Role(reader_role) = universal
+                .instructions()
+                .last()
+                .expect("universal batch has role registration")
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("universal batch ends with registration")
+            else {
+                panic!("universal batch must end with role registration");
+            };
+            let expected_read = Permission::from(CanReadRestrictedDataspace {
+                dataspace: DataSpaceId::new(spec.dataspace_id),
+            });
+            assert_eq!(
+                reader_role.object().inner().id,
+                crate::genesis::private_dataspace_reader_role_id(
+                    spec.alias,
+                    DataSpaceId::new(spec.dataspace_id)
+                )
+            );
+            assert_eq!(reader_role.object().grant_to(), &expected_client);
+            assert_eq!(
+                reader_role
+                    .object()
+                    .inner()
+                    .permissions()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![expected_read.clone()]
             );
             assert_eq!(private.instructions().len(), expected_private.len() + 1);
             let RegisterBox::Account(register) = private.instructions()[0]
@@ -718,7 +1077,7 @@ mod tests {
                 expected_private
             );
 
-            let after_prefix = migrated.transactions()[..before_transactions - 1]
+            let after_prefix = migrated.transactions()[..before_transactions - 2]
                 .iter()
                 .map(|transaction| {
                     transaction
@@ -730,25 +1089,70 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(
                 after_prefix, before_prefix,
-                "transactions before the legacy tail must remain unchanged"
+                "transactions before the legacy SNS and permission tail must remain unchanged"
             );
-            let split_tail = grant_permissions(universal.instructions())
-                .into_iter()
-                .chain(grant_permissions(&private.instructions()[1..]))
-                .collect::<Vec<_>>();
+            let split_tail =
+                grant_permissions(&universal.instructions()[1..universal.instructions().len() - 1])
+                    .into_iter()
+                    .chain(grant_permissions(&private.instructions()[1..]))
+                    .collect::<Vec<_>>();
             assert_eq!(
-                split_tail.len(),
-                before_tail.len(),
-                "tail splitting must preserve the exact permission count"
+                split_tail,
+                expected_universal
+                    .iter()
+                    .chain(&expected_private)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "migrated permission ordering must exactly match the target profile"
+            );
+            let mut expected_inventory = before_tail.into_iter().collect::<BTreeSet<_>>();
+            assert!(expected_inventory.insert(expected_read.clone()));
+            let migrated_inventory = expected_universal
+                .iter()
+                .chain(&expected_private)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                migrated_inventory, expected_inventory,
+                "migration must preserve every legacy permission and add only the exact restricted-read grant"
             );
             assert_eq!(
-                split_tail
-                    .into_iter()
-                    .collect::<std::collections::BTreeSet<_>>(),
-                before_tail
-                    .into_iter()
-                    .collect::<std::collections::BTreeSet<_>>(),
-                "tail splitting must preserve every pre-existing typed permission"
+                expected_universal
+                    .iter()
+                    .filter(|permission| permission.name() == "CanReadRestrictedDataspace")
+                    .collect::<Vec<_>>(),
+                Vec::<&Permission>::new(),
+                "target universal account grants must not duplicate the role-based read capability"
+            );
+            assert_eq!(
+                expected_private
+                    .iter()
+                    .filter(|permission| permission.name() == "CanReadRestrictedDataspace")
+                    .collect::<Vec<_>>(),
+                vec![&expected_read],
+                "target private batch must contain the exact direct grant for proxy re-authorization"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_preserves_the_protocol_transaction_limit() {
+        for profile in [Profile::PrivateSbp, Profile::PrivateCbuae] {
+            let retained = pad_legacy_manifest_to_transaction_count(legacy_manifest(profile), 15);
+            let migrated = migrate(retained, profile)
+                .expect("a retained 15-transaction manifest must migrate to exactly the limit");
+            assert_eq!(
+                migrated.transactions().len(),
+                PROTOCOL_MAX_GENESIS_TRANSACTIONS
+            );
+
+            let already_at_limit =
+                pad_legacy_manifest_to_transaction_count(legacy_manifest(profile), 16);
+            let error = migrate(already_at_limit, profile)
+                .expect_err("migration must reject output that would exceed the protocol limit");
+            assert!(
+                error.to_string().contains("exceeding the protocol maximum"),
+                "unexpected error: {error:?}"
             );
         }
     }
@@ -789,6 +1193,30 @@ mod tests {
             error
                 .to_string()
                 .contains("exact destination and permission order"),
+            "unexpected error: {error:?}"
+        );
+
+        let mut pregranted = legacy_manifest(Profile::PrivateSbp);
+        let tail_index = pregranted.transactions().len() - 1;
+        let mut legacy_tail = pregranted.transactions()[tail_index]
+            .instructions()
+            .to_vec();
+        legacy_tail.push(
+            Grant::account_permission(
+                CanReadRestrictedDataspace {
+                    dataspace: DataSpaceId::new(PRIVATE_SBP_DATASPACE_ID),
+                },
+                fixture_account(),
+            )
+            .into(),
+        );
+        pregranted
+            .replace_instruction_only_transaction(tail_index, vec![legacy_tail])
+            .expect("construct pregranted fixture");
+        let error = migrate(pregranted, Profile::PrivateSbp)
+            .expect_err("legacy input already containing the restricted-read grant must fail");
+        assert!(
+            error.to_string().contains("must contain exactly"),
             "unexpected error: {error:?}"
         );
     }

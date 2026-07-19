@@ -8650,20 +8650,16 @@ fn validate_initial_native_instruction_authority(
                         executor_permission::peer::CanManagePeers.into(),
                     )?
             }
-            RegisterBox::Domain(_) => {
-                is_genesis
-                    || initial_authority_has_exact_permission(
-                        state_transaction,
-                        authority,
-                        executor_permission::domain::CanRegisterDomain.into(),
-                    )?
-            }
             RegisterBox::Nft(register) => can_register_nft_initial(
                 state_transaction,
                 authority,
                 register.object().id().domain(),
             )?,
-            RegisterBox::Account(_)
+            // Native domain registration enforces the exact active SNS domain-name lease owner.
+            // A second global permission check here would strand private route-local registrars
+            // whose universal permissions are intentionally not copied into the private world.
+            RegisterBox::Domain(_)
+            | RegisterBox::Account(_)
             | RegisterBox::AssetDefinition(_)
             | RegisterBox::Role(_)
             | RegisterBox::Trigger(_) => true,
@@ -10210,6 +10206,41 @@ mod tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    fn seed_active_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("domain selector");
+        let address = AccountAddress::from_account_id(owner).expect("owner account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+    }
+
+    fn commit_initial_executor_bootstrap(world: World) -> State {
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x54; Hash::LENGTH]),
+            ));
+            block_hashes.commit_for_tests();
+        }
+        state
     }
 
     #[test]
@@ -13145,35 +13176,160 @@ mod tests {
     }
 
     #[test]
+    fn initial_executor_registers_domain_for_matching_active_lease_without_global_permission() {
+        let authority = checked_account_id();
+        let domain_id = DomainId::try_new("leased-initial", "sbp").expect("domain id");
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        seed_active_domain_name_lease(&mut world, &authority, &domain_id);
+        let state = commit_initial_executor_bootstrap(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut stx = block.transaction();
+        assert!(
+            !initial_authority_has_exact_permission(
+                &stx,
+                &authority,
+                executor_permission::domain::CanRegisterDomain.into(),
+            )
+            .expect("permission lookup"),
+            "fixture must prove lease ownership is sufficient without CanRegisterDomain"
+        );
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut stx,
+                &authority,
+                Register::domain(Domain::new(domain_id.clone())).into(),
+            )
+            .expect("matching active lease owner must register the domain");
+
+        let domain = stx
+            .world
+            .domains
+            .get(&domain_id)
+            .expect("domain must be materialized");
+        assert_eq!(domain.owned_by(), &authority);
+    }
+
+    #[test]
+    fn initial_executor_rejects_domain_registration_without_active_lease() {
+        let authority = checked_account_id();
+        let domain_id = DomainId::try_new("unleased-initial", "sbp").expect("domain id");
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        assert!(
+            world
+                .account_permissions
+                .insert(
+                    authority.clone(),
+                    BTreeSet::from([executor_permission::domain::CanRegisterDomain.into(),]),
+                )
+                .is_none()
+        );
+        let state = commit_initial_executor_bootstrap(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut stx = block.transaction();
+
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut stx,
+                &authority,
+                Register::domain(Domain::new(domain_id.clone())).into(),
+            )
+            .expect_err("missing active lease must fail");
+
+        let message = format!("{error:?}");
+        assert!(
+            message.contains("active SNS domain-name lease is required"),
+            "unexpected error: {message}"
+        );
+        assert!(stx.world.domains.get(&domain_id).is_none());
+    }
+
+    #[test]
+    fn initial_executor_rejects_domain_registration_for_foreign_active_lease() {
+        let authority = checked_account_id();
+        let lease_owner_key = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::Ed25519)
+            .expect("deterministic foreign lease owner key");
+        let lease_owner = AccountId::new(lease_owner_key.public_key().clone());
+        assert_ne!(authority, lease_owner, "fixture accounts must be distinct");
+        let domain_id = DomainId::try_new("foreign-lease-initial", "sbp").expect("domain id");
+        let mut world = World::with(
+            [],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(lease_owner.clone()).build(&lease_owner),
+            ],
+            [],
+        );
+        assert!(
+            world
+                .account_permissions
+                .insert(
+                    authority.clone(),
+                    BTreeSet::from([executor_permission::domain::CanRegisterDomain.into(),]),
+                )
+                .is_none()
+        );
+        seed_active_domain_name_lease(&mut world, &lease_owner, &domain_id);
+        let state = commit_initial_executor_bootstrap(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut stx = block.transaction();
+
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut stx,
+                &authority,
+                Register::domain(Domain::new(domain_id.clone())).into(),
+            )
+            .expect_err("foreign active lease owner must fail");
+
+        let message = format!("{error:?}");
+        assert!(
+            message.contains("active SNS domain-name lease")
+                && message.contains(&authority.to_string())
+                && message.contains(&lease_owner.to_string()),
+            "unexpected error: {message}"
+        );
+        assert!(stx.world.domains.get(&domain_id).is_none());
+    }
+
+    #[test]
     fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain() {
-        fn test_state() -> State {
+        fn test_state(domain_id: &DomainId) -> State {
             let wonderland_domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(wonderland_domain_id).build(&ALICE_ID);
             let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let world = World::with([domain], [alice_account], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = query::store::LiveQueryStore::start_test();
-            State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"))
+            let mut world = World::with([domain], [alice_account], []);
+            seed_active_domain_name_lease(&mut world, &ALICE_ID, domain_id);
+            commit_initial_executor_bootstrap(world)
         }
 
         let executor = super::Executor::Initial;
         let domain_id: DomainId =
             DomainId::try_new("borrowed-overlay", "universal").expect("domain id");
 
-        let owned_state = test_state();
+        let owned_state = test_state(&domain_id);
         let mut owned_block =
-            owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            owned_state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
         let mut owned_tx = owned_block.transaction();
+        assert!(
+            !initial_authority_has_exact_permission(
+                &owned_tx,
+                &ALICE_ID,
+                executor_permission::domain::CanRegisterDomain.into(),
+            )
+            .expect("permission lookup"),
+            "overlay parity fixture must not rely on CanRegisterDomain"
+        );
         let owned_instruction = Register::domain(Domain::new(domain_id.clone())).into();
         executor
             .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), owned_instruction)
             .expect("owned initial executor applies instruction");
         assert!(owned_tx.world.domains.get(&domain_id).is_some());
 
-        let overlay_state = test_state();
+        let overlay_state = test_state(&domain_id);
         let mut overlay_block =
-            overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            overlay_state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
         let mut overlay_tx = overlay_block.transaction();
         let overlay_instruction = Register::domain(Domain::new(domain_id.clone())).into();
         let overlay =

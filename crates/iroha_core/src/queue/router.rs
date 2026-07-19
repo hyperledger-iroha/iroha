@@ -19,6 +19,7 @@ use iroha_data_model::{
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
+        account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
         asset_alias::SetAssetDefinitionBalancePolicy,
         contract_alias::SetContractAlias,
         musubi::{
@@ -33,6 +34,10 @@ use iroha_data_model::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
             UploadSmartContractCodeChunk,
+        },
+        sns::{
+            FreezeSnsName, RegisterSnsName, RenewSnsName, TransferSnsName, UnfreezeSnsName,
+            UpdateSnsNameControllers,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
@@ -53,6 +58,7 @@ use iroha_data_model::{
     },
     permission::Permission,
     smart_contract::ContractAddress,
+    sns::{RegisterNameRequestV1, SuffixId},
     transaction::Executable,
 };
 use iroha_executor_data_model::isi::multisig::{
@@ -2507,6 +2513,23 @@ fn instruction_transaction_dataspace_target(
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
+    if let Some(acquire) = any.downcast_ref::<AcquireAccountAliasLease>() {
+        return Some(acquire.alias.dataspace);
+    }
+
+    if let Some(renew) = any.downcast_ref::<RenewAccountAliasLease>() {
+        return Some(renew.alias.dataspace);
+    }
+
+    if let Some((namespace, literal)) = sns_instruction_namespace_literal(instruction) {
+        return sns_namespace_literal_dataspace_target_with_state(
+            namespace,
+            &literal,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2953,6 +2976,24 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
+
+    if let Some(acquire) = any.downcast_ref::<AcquireAccountAliasLease>() {
+        return Some(acquire.alias.dataspace);
+    }
+
+    if let Some(renew) = any.downcast_ref::<RenewAccountAliasLease>() {
+        return Some(renew.alias.dataspace);
+    }
+
+    if let Some((namespace, literal)) = sns_instruction_namespace_literal(instruction) {
+        return sns_namespace_literal_dataspace_target_with_world(
+            namespace,
+            &literal,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
 
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
@@ -4525,6 +4566,98 @@ fn authority_dataspace_target_with_world<W: WorldReadOnly>(
 ) -> Option<DataSpaceId> {
     tx.authority_opt()
         .and_then(|authority| account_dataspace_target(world, authority, ledger_time_ms))
+}
+
+fn sns_namespace_literal(
+    suffix_id: SuffixId,
+    literal: &str,
+) -> Option<(crate::sns::SnsNamespace, String)> {
+    let namespace = crate::sns::SnsNamespace::from_suffix_id(suffix_id).ok()?;
+    Some((namespace, literal.to_owned()))
+}
+
+fn sns_instruction_namespace_literal(
+    instruction: &dyn Instruction,
+) -> Option<(crate::sns::SnsNamespace, String)> {
+    let any = instruction.as_any();
+
+    if let Some(register) = any.downcast_ref::<RegisterSnsName>() {
+        let mut input = register.request.as_slice();
+        let request = RegisterNameRequestV1::decode(&mut input).ok()?;
+        if !input.is_empty() {
+            return None;
+        }
+        return sns_namespace_literal(request.selector.suffix_id, &request.selector.label);
+    }
+
+    if let Some(renew) = any.downcast_ref::<RenewSnsName>() {
+        return sns_namespace_literal(renew.suffix_id, &renew.literal);
+    }
+    if let Some(transfer) = any.downcast_ref::<TransferSnsName>() {
+        return sns_namespace_literal(transfer.suffix_id, &transfer.literal);
+    }
+    if let Some(update) = any.downcast_ref::<UpdateSnsNameControllers>() {
+        return sns_namespace_literal(update.suffix_id, &update.literal);
+    }
+    if let Some(freeze) = any.downcast_ref::<FreezeSnsName>() {
+        return sns_namespace_literal(freeze.suffix_id, &freeze.literal);
+    }
+    if let Some(unfreeze) = any.downcast_ref::<UnfreezeSnsName>() {
+        return sns_namespace_literal(unfreeze.suffix_id, &unfreeze.literal);
+    }
+
+    None
+}
+
+fn sns_namespace_literal_dataspace_target_with_state(
+    namespace: crate::sns::SnsNamespace,
+    literal: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let catalog = dataspace_catalog?;
+    let selector = crate::sns::selector_for_namespace_literal(namespace, literal, catalog).ok()?;
+    let literal = selector.normalized_label();
+
+    match namespace {
+        crate::sns::SnsNamespace::AccountAlias => AccountAlias::from_literal(literal, catalog)
+            .ok()
+            .map(|alias| alias.dataspace),
+        crate::sns::SnsNamespace::Domain => {
+            let domain = DomainId::parse_fully_qualified(literal).ok()?;
+            domain_dataspace_target_with_state(&domain, Some(catalog), state_view)
+        }
+        crate::sns::SnsNamespace::Dataspace => {
+            dataspace_alias_target_with_state(literal, Some(catalog), state_view)
+                .or_else(|| crate::sns::dataspace_id_for_sns_alias(literal))
+        }
+    }
+}
+
+fn sns_namespace_literal_dataspace_target_with_world<W: WorldReadOnly>(
+    namespace: crate::sns::SnsNamespace,
+    literal: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    let catalog = dataspace_catalog?;
+    let selector = crate::sns::selector_for_namespace_literal(namespace, literal, catalog).ok()?;
+    let literal = selector.normalized_label();
+
+    match namespace {
+        crate::sns::SnsNamespace::AccountAlias => AccountAlias::from_literal(literal, catalog)
+            .ok()
+            .map(|alias| alias.dataspace),
+        crate::sns::SnsNamespace::Domain => {
+            let domain = DomainId::parse_fully_qualified(literal).ok()?;
+            domain_dataspace_target_with_world(&domain, Some(catalog), world, ledger_time_ms)
+        }
+        crate::sns::SnsNamespace::Dataspace => {
+            dataspace_alias_target_with_world(literal, Some(catalog), world, ledger_time_ms)
+                .or_else(|| crate::sns::dataspace_id_for_sns_alias(literal))
+        }
+    }
 }
 
 fn domain_dataspace_target_with_state(
@@ -7584,7 +7717,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
@@ -7616,7 +7749,10 @@ mod tests {
         permission::Permission,
         prelude::*,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        sns::{NameControllerV1, NameRecordV1},
+        sns::{
+            DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameRecordV1,
+            NameSelectorV1, PaymentProofV1, RegisterNameRequestV1,
+        },
         transaction::TransactionBuilder,
     };
     use iroha_executor_data_model::permission::{
@@ -7643,6 +7779,35 @@ mod tests {
         instructions: Vec<InstructionBox>,
     ) -> AcceptedTransaction<'static> {
         sample_transaction_with_metadata(authority, signer, instructions, Metadata::default())
+    }
+
+    fn sample_sns_registration(
+        suffix_id: SuffixId,
+        literal: &str,
+        owner: &AccountId,
+    ) -> RegisterSnsName {
+        let controller = NameControllerV1::account(
+            &owner
+                .to_account_address()
+                .expect("derive SNS controller address"),
+        );
+        RegisterSnsName::new(RegisterNameRequestV1 {
+            selector: NameSelectorV1::new(suffix_id, literal).expect("valid SNS selector"),
+            owner: owner.clone(),
+            controllers: vec![controller],
+            term_years: 1,
+            pricing_class_hint: None,
+            payment: PaymentProofV1 {
+                asset_id: "test-fee-asset".to_owned(),
+                gross_amount: 0_u64.into(),
+                net_amount: 0_u64.into(),
+                settlement_tx: iroha_primitives::json::Json::from("test-transaction"),
+                payer: owner.clone(),
+                signature: iroha_primitives::json::Json::from("test-signature"),
+            },
+            governance: None,
+            metadata: Metadata::default(),
+        })
     }
 
     fn sample_transaction_with_metadata(
@@ -17815,6 +17980,360 @@ mod tests {
                 .expect("dataspace alias permission should route without world state"),
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
+    }
+
+    #[test]
+    fn account_alias_lease_instructions_route_by_embedded_alias_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (owner_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let alias = account_alias("admin1@hbl.paynet", &catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+
+        for instruction in [
+            InstructionBox::from(AcquireAccountAliasLease::new(
+                alias.clone(),
+                owner_id.clone(),
+                submitter_id.clone(),
+                1,
+                None,
+            )),
+            InstructionBox::from(RenewAccountAliasLease::new(
+                alias.clone(),
+                submitter_id.clone(),
+                1,
+            )),
+        ] {
+            let tx = sample_transaction(
+                &submitter_id,
+                submitter_keypair.private_key(),
+                vec![
+                    Register::account(Account::new(submitter_id.clone())).into(),
+                    instruction,
+                ],
+            );
+            let expected = RoutingDecision::new(lane_id, dataspace_id);
+
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("account-alias lease routing must not require world state"),
+                Some(expected)
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &state.view())
+                    .expect("world-aware account-alias lease routing must use the embedded scope"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn domain_sns_registration_and_domain_registration_co_route_for_label_less_authority() {
+        let submitter_keypair = KeyPair::random();
+        let submitter_id = AccountId::new(submitter_keypair.public_key().clone());
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let domain_id = DomainId::try_new("hbl", "sbp").expect("domain id");
+        let lease = InstructionBox::from(sample_sns_registration(
+            DOMAIN_NAME_SUFFIX_ID,
+            &domain_id.to_string(),
+            &submitter_id,
+        ));
+        let register_domain =
+            InstructionBox::from(Register::domain(Domain::new(domain_id.clone())));
+        let expected = RoutingDecision::new(lane_id, dataspace_id);
+
+        let view = state.view();
+        for instruction in [&lease, &register_domain] {
+            assert_eq!(
+                instruction_transaction_dataspace_target(
+                    &**instruction,
+                    Some(&catalog),
+                    Some(&view),
+                ),
+                Some(dataspace_id)
+            );
+            assert_eq!(
+                instruction_transaction_dataspace_target_with_world(
+                    &**instruction,
+                    Some(&catalog),
+                    view.world(),
+                    Some(state_view_ledger_time_ms(&view)),
+                ),
+                Some(dataspace_id)
+            );
+        }
+
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![lease, register_domain],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("domain SNS and domain registration should route without world state"),
+            Some(expected)
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &view)
+                .expect("world-aware co-routing should succeed"),
+            expected
+        );
+    }
+
+    #[test]
+    fn domain_sns_kagami_mixed_bootstrap_preserves_private_amx_participant() {
+        let submitter_keypair = KeyPair::random();
+        let submitter_id = AccountId::new(submitter_keypair.public_key().clone());
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let fee_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("fee asset domain"),
+            "xor".parse().expect("fee asset name"),
+        );
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![
+                InstructionBox::from(Mint::asset_quantity(
+                    3_u32,
+                    AssetId::of(fee_asset_definition, submitter_id.clone()),
+                )),
+                InstructionBox::from(sample_sns_registration(
+                    DATASPACE_ALIAS_SUFFIX_ID,
+                    "sbp",
+                    &submitter_id,
+                )),
+                InstructionBox::from(sample_sns_registration(
+                    DOMAIN_NAME_SUFFIX_ID,
+                    "hbl.sbp",
+                    &submitter_id,
+                )),
+                InstructionBox::from(sample_sns_registration(
+                    DOMAIN_NAME_SUFFIX_ID,
+                    "ubl.sbp",
+                    &submitter_id,
+                )),
+            ],
+        );
+        let expected_coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let expected_participant = RoutingDecision::new(lane_id, dataspace_id);
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("catalog-only bootstrap routing should defer cleanly"),
+            None,
+            "the reserve mint requires world state to resolve its balance scope",
+        );
+        let view = state.view();
+        let plan = router
+            .try_route_plan_with_view(&tx, &view)
+            .expect("world-aware Kagami-shaped SNS bootstrap should resolve");
+
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("universal reserve mint plus private SNS writes must use native AMX");
+        };
+        assert_eq!(plan.coordinator.route, expected_coordinator);
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                expected_participant,
+                RouteLegRole::Participant,
+            )],
+            "the universal mint must not erase the private SNS participant",
+        );
+    }
+
+    #[test]
+    fn domain_sns_named_lifecycle_instructions_route_consistently() {
+        let submitter_keypair = KeyPair::random();
+        let submitter_id = AccountId::new(submitter_keypair.public_key().clone());
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let literal = "hbl.sbp";
+        let instructions = [
+            InstructionBox::from(RenewSnsName {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: literal.to_owned(),
+                request: vec![0xFF],
+            }),
+            InstructionBox::from(TransferSnsName {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: literal.to_owned(),
+                request: vec![0xFF],
+            }),
+            InstructionBox::from(UpdateSnsNameControllers {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: literal.to_owned(),
+                request: vec![0xFF],
+            }),
+            InstructionBox::from(FreezeSnsName {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: literal.to_owned(),
+                request: vec![0xFF],
+            }),
+            InstructionBox::from(UnfreezeSnsName {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: literal.to_owned(),
+                governance: vec![0xFF],
+            }),
+        ];
+        let expected = RoutingDecision::new(lane_id, dataspace_id);
+        let view = state.view();
+
+        for instruction in instructions {
+            assert_eq!(
+                instruction_transaction_dataspace_target(
+                    &*instruction,
+                    Some(&catalog),
+                    Some(&view),
+                ),
+                Some(dataspace_id)
+            );
+            assert_eq!(
+                instruction_transaction_dataspace_target_with_world(
+                    &*instruction,
+                    Some(&catalog),
+                    view.world(),
+                    Some(state_view_ledger_time_ms(&view)),
+                ),
+                Some(dataspace_id)
+            );
+
+            let tx = sample_transaction(
+                &submitter_id,
+                submitter_keypair.private_key(),
+                vec![instruction],
+            );
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("named SNS lifecycle routing should not require world state"),
+                Some(expected)
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &view)
+                    .expect("world-aware named SNS lifecycle routing should succeed"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn domain_sns_malformed_embedded_targets_fail_safely() {
+        let owner_keypair = KeyPair::random();
+        let owner = AccountId::new(owner_keypair.public_key().clone());
+        let dataspace_id = DataSpaceId::new(10);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let state = blank_state();
+        let mut trailing = sample_sns_registration(DOMAIN_NAME_SUFFIX_ID, "hbl.sbp", &owner);
+        trailing.request.push(0x00);
+        let malformed = [
+            InstructionBox::from(RegisterSnsName {
+                request: vec![0xFF],
+            }),
+            InstructionBox::from(trailing),
+            InstructionBox::from(RenewSnsName {
+                suffix_id: 0xFFFF,
+                literal: "hbl.sbp".to_owned(),
+                request: Vec::new(),
+            }),
+            InstructionBox::from(FreezeSnsName {
+                suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                literal: "not-a-fully-qualified-domain".to_owned(),
+                request: Vec::new(),
+            }),
+        ];
+        let view = state.view();
+
+        for instruction in malformed {
+            assert_eq!(
+                instruction_transaction_dataspace_target(
+                    &*instruction,
+                    Some(&catalog),
+                    Some(&view),
+                ),
+                None
+            );
+            assert_eq!(
+                instruction_transaction_dataspace_target_with_world(
+                    &*instruction,
+                    Some(&catalog),
+                    view.world(),
+                    Some(state_view_ledger_time_ms(&view)),
+                ),
+                None
+            );
+        }
     }
 
     #[test]

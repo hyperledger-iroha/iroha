@@ -44,6 +44,7 @@ use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain,
     governance::CanEnactGovernance,
     nexus::CanPublishSpaceDirectoryManifest,
+    query::CanReadRestrictedDataspace,
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
@@ -2204,11 +2205,21 @@ fn render_peer_config(
         );
         fees.insert(
             "per_gas_unit_fee".into(),
-            Value::String("0.000001".to_owned()),
+            Value::String("0.00005".to_owned()),
         );
         fees.insert("sponsorship_enabled".into(), Value::Boolean(true));
-        fees.insert("external_settlement_enabled".into(), Value::Boolean(false));
-        fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
+        fees.insert(
+            "external_settlement_enabled".into(),
+            Value::Boolean(matches!(
+                sora_profile,
+                Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+            )),
+        );
+        fees.insert("sponsor_max_fee".into(), Value::String("5".to_owned()));
+        fees.insert(
+            "sponsor_verified_balance_safety_floor".into(),
+            Value::String("1000".to_owned()),
+        );
         fees.insert(
             "fee_sink_account_id".into(),
             Value::String(gas_account_id.to_owned()),
@@ -3438,34 +3449,41 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
         })
         .collect();
 
-    let mut builder = genesis.into_builder().next_transaction();
-    builder = builder.append_instruction(Mint::asset_quantity(
-        payment_reserve,
-        AssetId::new(
-            localnet_fee_asset_definition_id(),
-            genesis_account_id.clone(),
-        ),
-    ));
-    builder = builder.append_instruction(localnet_private_sns_registration_instruction(
-        DATASPACE_ALIAS_SUFFIX_ID,
-        spec.alias,
-        client_account_id,
-        &client_controller,
-        genesis_account_id,
-        &payment_amount,
-    )?);
-    for domain in domains {
-        builder = builder.append_instruction(localnet_private_sns_registration_instruction(
-            DOMAIN_NAME_SUFFIX_ID,
-            domain,
-            client_account_id,
-            &client_controller,
-            genesis_account_id,
-            &payment_amount,
-        )?);
+    let private_dataspace = DataSpaceId::new(spec.id);
+    let restricted_read_permission = Permission::from(CanReadRestrictedDataspace {
+        dataspace: private_dataspace,
+    });
+    if seen_permissions.contains(&(
+        client_account_id.clone(),
+        restricted_read_permission.clone(),
+    )) {
+        return Err(eyre!(
+            "private-dataspace bootstrap requires explicit restricted-read grants in both authorization worlds; refusing an ambiguous pre-existing grant for `{client_account_id}`"
+        ));
+    }
+    let restricted_reader_role_id =
+        crate::genesis::private_dataspace_reader_role_id(spec.alias, private_dataspace);
+    if genesis.instructions().any(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .is_some_and(|register| match register {
+                RegisterBox::Role(register) => {
+                    let role = register.object();
+                    role.inner().id == restricted_reader_role_id
+                        || role
+                            .inner()
+                            .permissions()
+                            .any(|permission| permission == &restricted_read_permission)
+                }
+                _ => false,
+            })
+    }) {
+        return Err(eyre!(
+            "private-dataspace bootstrap refuses a pre-existing restricted-reader role for `{client_account_id}`"
+        ));
     }
 
-    let private_dataspace = DataSpaceId::new(spec.id);
     let mut universal_permissions = vec![
         Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -3495,25 +3513,63 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             scope: AccountAliasPermissionScope::Domain(domain),
         }));
     }
+    private_permissions.push(restricted_read_permission.clone());
 
-    // Keep each permission transaction lane-homogeneous. The native router deliberately
-    // collapses a transaction that targets both the universal dataspace and a private
-    // dataspace to the universal coordinator. Mixing these grants would therefore make the
-    // private alias permissions absent from the private lane after genesis.
+    // Keep each setup transaction lane-homogeneous. Torii authorizes once at universal ingress
+    // and again on the receiving private peer, with each hop reading its local world. The
+    // universal copy is held by a native role assigned to the client, while the private copy
+    // remains a direct account grant. This gives both authorization hops the same typed
+    // capability without repeating an identical direct grant in staged genesis execution.
     let universal_permissions = universal_permissions
         .into_iter()
         .filter(|permission| {
             seen_permissions.insert((client_account_id.clone(), permission.clone()))
         })
         .collect::<Vec<_>>();
-    if !universal_permissions.is_empty() {
-        builder = builder.next_transaction();
-        for permission in universal_permissions {
-            builder = builder.append_instruction(Grant::account_permission(
-                permission,
-                client_account_id.clone(),
-            ));
-        }
+
+    // The fee reserve and these permissions all belong to the universal world. Co-locating them
+    // keeps the private bootstrap within the protocol's 16-transaction genesis limit while still
+    // isolating the reserve from the target-routed SNS selectors.
+    let mut builder = genesis.into_builder().next_transaction();
+    builder = builder.append_instruction(Mint::asset_quantity(
+        payment_reserve,
+        AssetId::new(
+            localnet_fee_asset_definition_id(),
+            genesis_account_id.clone(),
+        ),
+    ));
+    for permission in universal_permissions {
+        builder = builder.append_instruction(Grant::account_permission(
+            permission,
+            client_account_id.clone(),
+        ));
+    }
+    builder = builder.append_instruction(Register::role(
+        Role::new(restricted_reader_role_id, client_account_id.clone())
+            .add_permission(restricted_read_permission),
+    ));
+
+    // Every selector resolves to this profile's one private dataspace. With the universal setup
+    // isolated above, this transaction is a pure DS10/DS12 routing unit.
+    builder = builder.next_transaction().append_instruction(
+        localnet_private_sns_registration_instruction(
+            DATASPACE_ALIAS_SUFFIX_ID,
+            spec.alias,
+            client_account_id,
+            &client_controller,
+            genesis_account_id,
+            &payment_amount,
+        )?,
+    );
+    for domain in domains {
+        builder = builder.append_instruction(localnet_private_sns_registration_instruction(
+            DOMAIN_NAME_SUFFIX_ID,
+            domain,
+            client_account_id,
+            &client_controller,
+            genesis_account_id,
+            &payment_amount,
+        )?);
     }
 
     let private_permissions = private_permissions
@@ -4535,6 +4591,10 @@ mod tests {
                 .expect("expected payment reserve must fit");
 
             let manifest = localnet_genesis_for_opts_and_client(&opts, &client_account_id);
+            let expected_normalized = manifest
+                .clone()
+                .normalize()
+                .expect("normalize in-memory private-profile genesis");
             let manifest_json =
                 json::to_json(&manifest).expect("serialize private-profile genesis manifest");
             let manifest: RawGenesisTransaction = json::from_str(&manifest_json)
@@ -4543,6 +4603,24 @@ mod tests {
                 .clone()
                 .normalize()
                 .expect("normalize private-profile genesis");
+            let expected_boundary_lengths = expected_normalized
+                .transactions
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>();
+            let persisted_boundary_lengths = normalized
+                .transactions
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                persisted_boundary_lengths, expected_boundary_lengths,
+                "persisted private genesis JSON must preserve every routing boundary"
+            );
+            assert!(
+                normalized.transactions.len() <= 16,
+                "persisted private genesis must remain within the protocol transaction limit"
+            );
             let sns_batches = normalized
                 .transactions
                 .iter()
@@ -4564,13 +4642,21 @@ mod tests {
             let (sns_batch_index, sns_batch) = sns_batches[0];
             assert_eq!(
                 sns_batch.len(),
-                case.domains.len().saturating_add(2),
-                "SNS bootstrap transaction must contain one reserve mint followed by the exact registrations"
+                case.domains.len().saturating_add(1),
+                "private SNS transaction must contain only the exact lane-homogeneous registrations"
             );
-            let reserve_mint = sns_batch[0]
+            let universal_setup_batch = normalized
+                .transactions
+                .get(
+                    sns_batch_index
+                        .checked_sub(1)
+                        .expect("SNS bootstrap must follow its universal setup transaction"),
+                )
+                .expect("SNS bootstrap must follow its universal setup transaction");
+            let reserve_mint = universal_setup_batch[0]
                 .as_any()
                 .downcast_ref::<MintBox>()
-                .expect("SNS bootstrap transaction must start with its payment reserve mint");
+                .expect("the universal setup transaction must begin with its payment reserve mint");
             let MintBox::Asset(reserve_mint) = reserve_mint else {
                 panic!("SNS bootstrap reserve must mint the fee asset");
             };
@@ -4587,11 +4673,11 @@ mod tests {
                 "genesis authority must receive exactly the reserve consumed by the SNS registrations"
             );
 
-            let registrations = sns_batch[1..]
+            let registrations = sns_batch
                 .iter()
                 .map(|instruction| {
                     decode_sns_registration(instruction)
-                        .expect("only SNS registrations may follow the reserve mint")
+                        .expect("the private SNS transaction may contain only registrations")
                 })
                 .collect::<Vec<_>>();
             let mut expected_selectors = vec![(DATASPACE_ALIAS_SUFFIX_ID, case.alias.to_owned())];
@@ -4651,6 +4737,9 @@ mod tests {
                     scope: AccountAliasPermissionScope::Domain(domain),
                 }));
             }
+            expected_private_permissions.push(Permission::from(CanReadRestrictedDataspace {
+                dataspace: private_dataspace,
+            }));
             let expected_permissions = expected_universal_permissions
                 .iter()
                 .chain(&expected_private_permissions)
@@ -4668,37 +4757,87 @@ mod tests {
                             "CanManageAccountAlias"
                                 | "CanResolveAccountAlias"
                                 | "CanRegisterDomain"
+                                | "CanReadRestrictedDataspace"
                         )
                         .then(|| permission.clone())
                     }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let observed_permission_inventory = observed_permissions
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
             assert_eq!(
-                observed_permissions
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .len(),
+                observed_permission_inventory.len(),
                 observed_permissions.len(),
-                "private-profile permission grants must remain distinct after genesis JSON round-trip"
+                "direct private-profile permissions must be unique in staged genesis"
             );
             assert_eq!(
                 observed_permissions, expected_permissions,
                 "private-profile client grants must be exact, ordered, and deduplicated"
             );
 
-            let universal_permission_batch = normalized
-                .transactions
-                .get(sns_batch_index.saturating_add(1))
-                .expect("SNS bootstrap must be followed by its universal permission transaction");
+            let observed_restricted_read_grants = manifest
+                .instructions()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+                .filter_map(|grant| match grant {
+                    GrantBox::Permission(grant)
+                        if grant.object().name() == "CanReadRestrictedDataspace" =>
+                    {
+                        Some((grant.destination().clone(), grant.object().clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             assert_eq!(
-                universal_permission_batch.len(),
-                expected_universal_permissions.len().saturating_sub(1),
-                "the existing universal Manage grant must be deduplicated from the universal permission transaction"
+                observed_restricted_read_grants,
+                vec![(
+                    client_account_id.clone(),
+                    Permission::from(CanReadRestrictedDataspace {
+                        dataspace: private_dataspace,
+                    }),
+                )],
+                "fresh private genesis must materialize one exact direct read grant in the private execution world"
+            );
+
+            let expected_reader_role_id =
+                crate::genesis::private_dataspace_reader_role_id(case.alias, private_dataspace);
+            let observed_reader_roles = manifest
+                .instructions()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterBox>())
+                .filter_map(|register| match register {
+                    RegisterBox::Role(register) => Some(register.object()),
+                    _ => None,
+                })
+                .filter(|role| role.inner().id == expected_reader_role_id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed_reader_roles.len(),
+                1,
+                "fresh private genesis must register exactly one deterministic ingress reader role"
+            );
+            let reader_role = observed_reader_roles[0];
+            assert_eq!(reader_role.grant_to(), &client_account_id);
+            assert_eq!(
+                reader_role
+                    .inner()
+                    .permissions()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![Permission::from(CanReadRestrictedDataspace {
+                    dataspace: private_dataspace,
+                })],
+                "the ingress role must hold only the exact restricted-dataspace read capability"
+            );
+
+            assert_eq!(
+                universal_setup_batch.len(),
+                expected_universal_permissions.len().saturating_add(1),
+                "the universal setup must contain one reserve mint, its deduplicated direct grants, and one reader role"
             );
             assert_eq!(
-                universal_permission_batch
+                universal_setup_batch[1..universal_setup_batch.len() - 1]
                     .iter()
                     .map(|instruction| {
                         let grant = instruction
@@ -4713,15 +4852,41 @@ mod tests {
                     })
                     .collect::<Vec<_>>(),
                 expected_universal_permissions[1..].to_vec(),
-                "universal permission transaction must follow SNS ownership and preserve grant order"
+                "universal setup must preserve the deduplicated permission grant order"
+            );
+            let RegisterBox::Role(universal_reader_role) = universal_setup_batch
+                .last()
+                .expect("universal setup has reader role")
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("universal setup ends with role registration")
+            else {
+                panic!("universal setup must end with role registration");
+            };
+            assert_eq!(
+                universal_reader_role.object().inner().id,
+                expected_reader_role_id
+            );
+            assert_eq!(
+                universal_reader_role.object().grant_to(),
+                &client_account_id
+            );
+            assert_eq!(
+                universal_reader_role
+                    .object()
+                    .inner()
+                    .permissions()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![Permission::from(CanReadRestrictedDataspace {
+                    dataspace: private_dataspace,
+                })]
             );
 
             let private_permission_batch = normalized
                 .transactions
-                .get(sns_batch_index.saturating_add(2))
-                .expect(
-                    "universal permissions must be followed by a private permission transaction",
-                );
+                .get(sns_batch_index.saturating_add(1))
+                .expect("SNS bootstrap must be followed by a private permission transaction");
             assert_eq!(
                 private_permission_batch.len(),
                 expected_private_permissions.len().saturating_add(1),
@@ -4779,6 +4944,42 @@ mod tests {
                         })
                 }),
                 "private-profile app domains must retain SNS ownership without being registered by genesis"
+            );
+        }
+    }
+
+    #[test]
+    fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
+        for (profile, alias, base_api_port, base_p2p_port) in [
+            (SoraProfile::PrivateSbp, "sbp", 39_080, 43_337),
+            (SoraProfile::PrivateCbuae, "cbuae", 49_080, 53_337),
+        ] {
+            let temp = tempfile::tempdir().expect("create private-profile signing directory");
+            let opts = LocalnetOptions {
+                build_line: BuildLine::Iroha3,
+                sora_profile: Some(profile),
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(format!("private-profile-staged-sign-{alias}")),
+                bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port,
+                base_p2p_port,
+                out_dir: temp.path().join(alias),
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Npos,
+            };
+
+            generate_localnet(&opts, &mut BufWriter::new(Vec::new())).unwrap_or_else(|error| {
+                panic!("stage and sign {alias} private genesis: {error:#}")
+            });
+            let signed = fs::read(opts.out_dir.join("genesis.signed.nrt"))
+                .expect("read staged and signed private genesis");
+            assert!(
+                !signed.is_empty(),
+                "{alias} staged genesis signer must emit a framed block"
             );
         }
     }
@@ -8109,7 +8310,7 @@ mod tests {
         );
         assert_eq!(
             fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
-            Some("0.000001")
+            Some("0.00005")
         );
         assert_eq!(
             fees.get("sponsorship_enabled")
@@ -8120,6 +8321,15 @@ mod tests {
             fees.get("external_settlement_enabled")
                 .and_then(toml::Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            fees.get("sponsor_max_fee").and_then(toml::Value::as_str),
+            Some("5")
+        );
+        assert_eq!(
+            fees.get("sponsor_verified_balance_safety_floor")
+                .and_then(toml::Value::as_str),
+            Some("1000")
         );
         assert_eq!(
             fees.get("fee_sink_account_id")
@@ -8141,6 +8351,74 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some(gas_account_id.as_str())
         );
+    }
+
+    #[test]
+    fn private_dataspace_peer_configs_enable_external_fee_settlement() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        for (profile, label, base_port) in [
+            (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
+            (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),
+        ] {
+            let out_dir = temp.path().join(label);
+            let opts = LocalnetOptions {
+                build_line: BuildLine::Iroha3,
+                sora_profile: Some(profile),
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(format!("private-external-settlement-{label}")),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: base_port,
+                base_p2p_port: base_port.saturating_add(257),
+                out_dir: out_dir.clone(),
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Npos,
+            };
+
+            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+                .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
+            for peer in 0..4 {
+                let peer_cfg: toml::Value = toml::from_str(
+                    &fs::read_to_string(out_dir.join(format!("peer{peer}.toml")))
+                        .expect("read generated peer config"),
+                )
+                .expect("parse peer config");
+                let fees = peer_cfg
+                    .get("nexus")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|nexus| nexus.get("fees"))
+                    .and_then(toml::Value::as_table)
+                    .expect("nexus fees table");
+
+                assert_eq!(
+                    fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
+                    Some("0.00005")
+                );
+                assert_eq!(
+                    fees.get("sponsorship_enabled")
+                        .and_then(toml::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    fees.get("sponsor_max_fee").and_then(toml::Value::as_str),
+                    Some("5")
+                );
+                assert_eq!(
+                    fees.get("sponsor_verified_balance_safety_floor")
+                        .and_then(toml::Value::as_str),
+                    Some("1000")
+                );
+                assert_eq!(
+                    fees.get("external_settlement_enabled")
+                        .and_then(toml::Value::as_bool),
+                    Some(true),
+                    "private {label} peer {peer} must settle universal fees externally"
+                );
+            }
+        }
     }
 
     #[test]

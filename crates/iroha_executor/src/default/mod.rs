@@ -2169,7 +2169,7 @@ pub mod sorafs {
 /// Permission-checked visitors for domain lifecycle instructions.
 pub mod domain {
     use iroha_executor_data_model::permission::domain::{
-        CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain,
+        CanModifyDomainMetadata, CanUnregisterDomain,
     };
     use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
 
@@ -2178,19 +2178,96 @@ pub mod domain {
         account::is_account_owner, domain::is_domain_owner, revoke_permissions,
     };
 
-    /// Registers a domain when genesis or a caller with the register-domain permission requests it.
+    /// Registers a domain after deferring exact authorization to the native SNS lease invariant.
+    ///
+    /// Native execution requires an active domain-name lease owned by the transaction authority
+    /// (outside genesis/replay bootstrap). Keeping a second, global `CanRegisterDomain` gate here
+    /// would prevent a correctly leased domain from being materialized on a private dataspace
+    /// route where that route-local account has not inherited universal permissions.
     pub fn visit_register_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Domain>,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterDomain.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
+        execute!(executor, isi);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        use super::*;
+        use crate::{Iroha, prelude};
+
+        #[derive(Debug)]
+        struct TestExecutor {
+            host: Iroha,
+            context: prelude::Context,
+            verdict: crate::data_model::executor::Result<(), ValidationFail>,
         }
 
-        deny!(executor, "Can't register domain");
+        impl TestExecutor {
+            fn post_genesis(authority: AccountId) -> Self {
+                Self {
+                    host: Iroha,
+                    context: prelude::Context {
+                        authority,
+                        curr_block: BlockHeader::new(
+                            NonZeroU64::new(2).expect("non-zero block height"),
+                            None,
+                            None,
+                            None,
+                            0,
+                            0,
+                        ),
+                    },
+                    verdict: Ok(()),
+                }
+            }
+        }
+
+        impl Execute for TestExecutor {
+            fn host(&self) -> &Iroha {
+                &self.host
+            }
+
+            fn context(&self) -> &prelude::Context {
+                &self.context
+            }
+
+            fn context_mut(&mut self) -> &mut prelude::Context {
+                &mut self.context
+            }
+
+            fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+                &self.verdict
+            }
+
+            fn deny(&mut self, reason: ValidationFail) {
+                self.verdict = Err(reason);
+            }
+        }
+
+        impl Visit for TestExecutor {}
+
+        #[test]
+        fn register_domain_reaches_native_sns_lease_authorization_without_global_permission() {
+            let key_pair = KeyPair::try_from_seed(vec![0xD0; 32], Algorithm::Ed25519)
+                .expect("deterministic domain registrar key");
+            let authority = AccountId::new(key_pair.public_key().clone());
+            let registration = Register::domain(Domain::new(
+                DomainId::try_new("leased", "sbp").expect("domain id"),
+            ));
+            let mut executor = TestExecutor::post_genesis(authority);
+
+            visit_register_domain(&mut executor, &registration);
+
+            assert!(
+                executor.verdict().is_ok(),
+                "the executor must leave exact lease ownership enforcement to native execution"
+            );
+        }
     }
 
     /// Unregisters a domain after checking that the caller governs the domain or holds the revoke permission.
