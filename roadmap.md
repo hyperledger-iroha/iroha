@@ -5,6 +5,18 @@ Last updated: 2026-07-18
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Wallet activity query follow-ups
+
+- TODO: Add one authenticated, snapshot-stable account activity feed that
+  combines value movements and participant-scoped contract events behind an
+  opaque continuation cursor. The cursor must bind the ledger snapshot, make
+  the requested page limit apply to the combined result, and return an explicit
+  stale/expired-cursor error instead of allowing offset drift to skip rows.
+- TODO: Add an authenticated indexed aggregate for outgoing asset value over a
+  caller-supplied timestamp range. The result must bind its ledger snapshot and
+  support retail-wallet monthly policy checks without downloading transaction
+  pages or exposing unrelated account activity.
+
 Fee sponsorship has two intentionally deferred extensions. Sponsor-program
 assets are globally scoped in the first release; supporting
 `DataspaceRestricted` assets requires one scope-keyed vault, queue-reservation,
