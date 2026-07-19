@@ -38,7 +38,7 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
    The release command requires a clean dependency-closure source tree, compiles the Rust
    bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 macOS targets,
    and writes `dist/NoritoBridge.xcframework` plus
-   `dist/NoritoBridge.artifacts.json`. The manifest binds exact native bridge ABI 20,
+   `dist/NoritoBridge.artifacts.json`. The manifest binds exact native bridge ABI 21,
    the privacy-production feature state, source commit and fingerprint, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. The helper finishes by
    invoking `scripts/check_mobile_sdk_artifacts.sh --apple-only`; a checker failure makes

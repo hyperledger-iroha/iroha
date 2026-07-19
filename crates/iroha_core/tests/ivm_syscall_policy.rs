@@ -2,7 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
 
-use core::str::FromStr;
+use std::num::NonZeroU64;
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_crypto::KeyPair;
@@ -41,13 +41,8 @@ fn unlisted_syscall_number() -> u8 {
         .expect("ABI v1 should leave at least one u8 syscall number unmapped")
 }
 
-fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
-    let mut md = iroha_data_model::metadata::Metadata::default();
-    md.insert(
-        iroha_data_model::name::Name::from_str("gas_limit").expect("gas_limit key"),
-        iroha_primitives::json::Json::new(limit),
-    );
-    md
+fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
 
 fn checked_random_ivm_admission_keypair() -> KeyPair {
@@ -120,10 +115,13 @@ fn unknown_syscall_is_rejected_at_admission() {
     // Program calls an unknown syscall number before halting.
     let prog = program_with_scall(unlisted_syscall_number());
     let chain: ChainId = "chain".parse().expect("chain id");
-    let tx = TransactionBuilder::new(chain, account_id.clone())
-        .with_metadata(metadata_with_gas_limit(1_000_000))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain,
+        account_id.clone(),
+        fee_payment_with_gas_limit(1_000_000),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+    .sign(kp.private_key());
 
     // Validate the transaction in a block; admission should surface UnknownSyscall.
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

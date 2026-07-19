@@ -14,6 +14,8 @@
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
 
+use std::collections::VecDeque;
+
 use super::{
     ContextId, Digest, DurableState, HeightContext, Reducer, Subject, ValidatorId,
     reducer::PendingPersistence,
@@ -49,6 +51,24 @@ pub const CONTINUATION_NONE: u8 = 0;
 pub const CONTINUATION_SIGN: u8 = 1;
 pub const CONTINUATION_INSTALL_TIMEOUT: u8 = 2;
 pub const CONTINUATION_DECIDE: u8 = 3;
+
+/// Prepend one persisted reducer continuation without reversing its order.
+///
+/// `V2Adapter::drive_effects` removes a `Persist` effect from the head of its
+/// private work queue, acknowledges the WAL record synchronously, and obtains
+/// the reducer effects causally enabled by that acknowledgement. Those effects
+/// must run before the queue's old tail and in the exact order emitted by the
+/// reducer. Iterating the continuation backwards while pushing each item to
+/// the front implements precisely `continuation ++ old_tail`.
+///
+/// This helper is intentionally generic: the production call moves concrete
+/// effects, while the refinement regression uses opaque tokens to pin the
+/// queue transformation independently of effect identity or cloning.
+pub fn prepend_causal_continuation<T>(pending: &mut VecDeque<T>, continuation: Vec<T>) {
+    for item in continuation.into_iter().rev() {
+        pending.push_front(item);
+    }
+}
 
 /// Caller-visible reducer action classes checked at the commit boundary.
 ///
@@ -2611,6 +2631,58 @@ mod tests {
         ));
         assert!(push_authorized(&mut persist_and_sign.effects, EFFECT_SIGN));
         assert!(!accepts_facts(persist_and_sign));
+
+        struct OpaqueOrderToken(&'static str);
+
+        let mut pending = VecDeque::from([
+            OpaqueOrderToken("old-tail-0"),
+            OpaqueOrderToken("old-tail-1"),
+        ]);
+        prepend_causal_continuation(
+            &mut pending,
+            vec![
+                OpaqueOrderToken("continuation-0"),
+                OpaqueOrderToken("continuation-1"),
+                OpaqueOrderToken("continuation-2"),
+            ],
+        );
+        assert_eq!(
+            pending.into_iter().map(|token| token.0).collect::<Vec<_>>(),
+            [
+                "continuation-0",
+                "continuation-1",
+                "continuation-2",
+                "old-tail-0",
+                "old-tail-1",
+            ],
+            "persisted continuation order is causal FIFO order"
+        );
+
+        let mut forward_iteration_mutant = VecDeque::from([
+            OpaqueOrderToken("old-tail-0"),
+            OpaqueOrderToken("old-tail-1"),
+        ]);
+        for item in [
+            OpaqueOrderToken("continuation-0"),
+            OpaqueOrderToken("continuation-1"),
+            OpaqueOrderToken("continuation-2"),
+        ] {
+            forward_iteration_mutant.push_front(item);
+        }
+        assert_eq!(
+            forward_iteration_mutant
+                .into_iter()
+                .map(|token| token.0)
+                .collect::<Vec<_>>(),
+            [
+                "continuation-2",
+                "continuation-1",
+                "continuation-0",
+                "old-tail-0",
+                "old-tail-1",
+            ],
+            "the compact forward-iteration mutant reverses the continuation"
+        );
     }
 
     #[test]

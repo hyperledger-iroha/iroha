@@ -396,3 +396,49 @@ done
 
 echo "[tlc] producer-first local admission has the required three-state fair lasso"
 echo "[tlc] causal debt and the alternating source cursor service the causal owner"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/serve-nonce-reuse" \
+    -config serve_nonce_reuse_bug.cfg \
+    SumeragiV2ServeNonceMutation.tla
+) >"$run_dir/serve-nonce-reuse.log" 2>&1
+serve_nonce_reuse_status=$?
+set -e
+
+[[ $serve_nonce_reuse_status -eq 13 ]] || {
+  echo "live Serve nonce reuse did not fail with TLC status 13" >&2
+  cat "$run_dir/serve-nonce-reuse.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "3 distinct states" \
+  "Back to state 1"; do
+  grep -Fq "$marker" "$run_dir/serve-nonce-reuse.log" || {
+    echo "live Serve nonce reuse missed expected marker: $marker" >&2
+    cat "$run_dir/serve-nonce-reuse.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/serve-nonce-fresh" \
+    -config serve_nonce_fresh.cfg \
+    SumeragiV2ServeNonceMutation.tla
+) >"$run_dir/serve-nonce-fresh.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "4 distinct states" \
+  "depth of the complete state graph search is 3"; do
+  grep -Fq "$marker" "$run_dir/serve-nonce-fresh.log" || {
+    cat "$run_dir/serve-nonce-fresh.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] live Serve nonce reuse has the required fair replacement lasso"
+echo "[tlc] a fresh live nonce makes service exit the original occurrence"

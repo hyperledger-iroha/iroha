@@ -31,9 +31,13 @@ fn build_tx_size_transaction(
     let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
     let authority = AccountId::new(key_pair.public_key().clone());
 
-    TransactionBuilder::new(chain, authority)
-        .with_instructions([Log::new(Level::INFO, payload)])
-        .try_sign(key_pair.private_key())
+    TransactionBuilder::new(
+        chain,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, payload)])
+    .try_sign(key_pair.private_key())
 }
 
 fn tx_size_key_pair() -> Result<KeyPair, iroha_crypto::Error> {

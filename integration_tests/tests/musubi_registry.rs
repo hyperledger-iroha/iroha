@@ -219,10 +219,13 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
     assert_eq!(propagated_swap.dependencies.len(), 1);
     assert_eq!(propagated_swap.dependencies[0].package, math_ref);
 
-    client.submit(SetMusubiShortAlias::new(MusubiShortAlias::new(
-        "swap-post".parse()?,
-        swap_ref.package.clone(),
-    )))?;
+    client.submit(
+        SetMusubiShortAlias::new(MusubiShortAlias::new(
+            "swap-post".parse()?,
+            swap_ref.package.clone(),
+        )),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let alias_target = eventually_find_alias(&query_client, "swap-post".parse()?).await?;
     assert_eq!(alias_target, swap_ref.package);
 
@@ -235,10 +238,10 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
     )?;
     eventually_find_release(&query_client, &legacy_ref).await?;
 
-    client.submit(YankMusubiRelease::new(
-        legacy_ref.clone(),
-        "superseded by post-genesis release",
-    ))?;
+    client.submit(
+        YankMusubiRelease::new(legacy_ref.clone(), "superseded by post-genesis release"),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let yanked_legacy = eventually_find_yanked_release(&query_client, &legacy_ref).await?;
     assert!(matches!(
         yanked_legacy.status,
@@ -249,7 +252,10 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
 }
 
 fn submit_instructions(client: &Client, instructions: Vec<InstructionBox>) -> Result<()> {
-    client.submit_all(instructions)?;
+    client.submit_all(
+        instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 

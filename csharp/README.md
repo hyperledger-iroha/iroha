@@ -385,7 +385,7 @@ Broader iterable families beyond the current fast_dsl subset, richer typed event
 The managed SDK exposes the unchanged Kagemusha routes through
 `GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
-Readiness accepts bridge ABI 20 and the manifest-V4 Eq/Ep verifier identity;
+Readiness accepts bridge ABI 21 and the manifest-V4 Eq/Ep verifier identity;
 ABI-19 and V3 projections fail instead of being upgraded.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
@@ -530,12 +530,44 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
 - `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create a signed VPN quote and verify that Torii returns an `OpenVpnLeaseEscrow` instruction skeleton
 
+## Fee quotes and sponsor programs
+
+Every `TransactionBuilder` requires a `FeePaymentIntent`. The guided ledger
+flow freezes the unsigned payload, account-signs `POST /v1/fees/quote`, verifies
+that the quote retained the payer, exact sponsor program/revision, and gas
+bound, then replaces only the charge maxima before signing:
+
+```csharp
+using Hyperledger.Iroha.Transactions;
+
+var requested = FeePaymentIntent.Sponsor(
+    new FeeSponsorProgramId(sponsorAccountId, "wallet_payments"),
+    programRevision: 3,
+    chargeLimits: Array.Empty<FeeChargeLimit>());
+
+var transaction = client.Ledger
+    .BuildTransaction(chainId, authorityAccountId, requested)
+    .TransferAsset(assetId, NumericV1.QuantityValue.ParseCanonical("1"), destinationAccountId)
+    .SetCreationTime(DateTimeOffset.UtcNow)
+    .SetTimeToLiveMilliseconds(30_000);
+
+var quoted = await client.Ledger.QuoteAndSignAsync(transaction, privateKeySeed);
+```
+
+Configure `ToriiClientOptions.CanonicalRequestCredentials` for the same
+authority before calling the guided flow. Use
+`client.Torii.GetFeeSponsorProgramAsync(programId)` to inspect one exact
+lifecycle record. Contract/IVM intents also require a positive gas bound.
+Metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
+rejected, and sponsor rejection never falls back to the authority.
+
 ## Sample
 
 ```csharp
 using Hyperledger.Iroha;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
+using Hyperledger.Iroha.Transactions;
 
 using var client = new IrohaClient(new Uri("https://taira.sora.org"));
 try
@@ -554,17 +586,23 @@ try
     // var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
     // if (!string.IsNullOrWhiteSpace(seedHex))
     // {
-    //     var signed = client.Ledger
-    //         .BuildTransaction("00000042", accounts.Items[0].Id)
+    //     var transaction = client.Ledger
+    //         .BuildTransaction(
+    //             "00000042",
+    //             accounts.Items[0].Id,
+    //             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
     //         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", NumericV1.QuantityValue.ParseCanonical("1"), accounts.Items[0].Id)
     //         .SetCreationTime(DateTimeOffset.UtcNow)
     //         .SetTimeToLiveMilliseconds(5_000)
-    //         .SetNonce(1)
-    //         .BuildSigned(Convert.FromHexString(seedHex));
+    //         .SetNonce(1);
+    //     // Configure matching CanonicalRequestCredentials on the client first.
+    //     var signed = await client.Ledger.QuoteAndSignAsync(
+    //         transaction,
+    //         Convert.FromHexString(seedHex));
     //
-    //     Console.WriteLine($"Signed tx hash: {signed.TransactionHashHex}");
-    //     // await client.Ledger.SubmitAsync(signed);
-    //     // var status = await client.Ledger.WaitForAsync(signed.TransactionHashHex);
+    //     Console.WriteLine($"Signed tx hash: {signed.Transaction.TransactionHashHex}");
+    //     // await client.Ledger.SubmitAsync(signed.Transaction);
+    //     // var status = await client.Ledger.WaitForAsync(signed.Transaction.TransactionHashHex);
     // }
 }
 catch (ToriiApiException exception)

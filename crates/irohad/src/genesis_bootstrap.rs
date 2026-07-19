@@ -1041,8 +1041,7 @@ mod tests {
     fn sample_block(chain_id: &ChainId, signer: &KeyPair) -> GenesisBlock {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             chain_id.clone(),
-            AccountId::new(signer.public_key().clone()),
-        )
+            AccountId::new(signer.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
         .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
         .sign(signer.private_key());
         let signed_block = SignedBlock::genesis(vec![tx], signer.private_key(), None, None);

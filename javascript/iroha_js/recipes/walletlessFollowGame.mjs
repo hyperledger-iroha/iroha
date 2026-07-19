@@ -5,9 +5,9 @@ import {
   ToriiClient,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
-  buildTransaction,
   generateKeyPair,
   publicKeyFromPrivate,
+  quoteAndSignTransaction,
   submitSignedTransaction,
 } from "../src/index.js";
 
@@ -115,13 +115,19 @@ async function main() {
     metadata.walletless_session_pubkey_hex = sessionPublicHex;
   }
 
-  const tx = buildTransaction({
-    chainId,
-    authority: sponsorId,
-    instructions,
-    metadata,
-    privateKey: sessionPrivate,
-  });
+  const client = new ToriiClient(toriiUrl);
+  const tx = await quoteAndSignTransaction(
+    client,
+    {
+      chainId,
+      authority: sponsorId,
+      instructions,
+      feePayment: { payer: "authority", chargeLimits: [] },
+      metadata,
+      privateKey: sessionPrivate,
+    },
+    { canonicalAuth: { accountId: sponsorId, privateKey: sessionPrivate } },
+  );
 
   console.log(`Walletless flow built for ${bindingRaw}`);
   console.log(`Transaction hash: ${tx.hash.toString("hex")}`);
@@ -131,7 +137,6 @@ async function main() {
     return;
   }
 
-  const client = new ToriiClient(toriiUrl);
   const result = await submitSignedTransaction(client, tx.signedTransaction, {
     waitForCommit: true,
   });

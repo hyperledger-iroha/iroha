@@ -84,12 +84,16 @@ fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
         .get_name(SnsNamespacePath::Domain, &domain_label)
         .is_err()
     {
-        client
-            .sns()
-            .register(&build_domain_register_request(domain, &client.account)?)?;
+        client.sns().register(
+            &build_domain_register_request(domain, &client.account)?,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
 
-    client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
+    client.submit_blocking(
+        Register::domain(Domain::new(domain.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -128,29 +132,36 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
 
     let asset_definition_id =
         iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "coin".parse()?);
-    client.submit_blocking(Register::asset_definition(
-        AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
-    ))?;
+    client.submit_blocking(
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let source_asset_id = AssetId::new(asset_definition_id.clone(), source_account.clone());
-    client.submit_blocking(Mint::asset_quantity(10u32, source_asset_id.clone()))?;
-    client.submit_blocking(Transfer::asset_quantity(
-        source_asset_id,
-        4u32,
-        destination_asset.clone(),
-    ))?;
+    client.submit_blocking(
+        Mint::asset_quantity(10u32, source_asset_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    client.submit_blocking(
+        Transfer::asset_quantity(source_asset_id, 4u32, destination_asset.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let destination_asset_id = AssetId::new(asset_definition_id, destination_asset.clone());
     let destination_asset_state = client.query_single(FindAssetById::new(destination_asset_id))?;
     assert_eq!(*destination_asset_state.value(), Quantity::from(4_u32));
 
     let nft_id: NftId = format!("nft_receive${domain}").parse()?;
-    client.submit_blocking(Register::nft(Nft::new(nft_id.clone(), Metadata::default())))?;
-    client.submit_blocking(Transfer::nft(
-        source_account,
-        nft_id.clone(),
-        destination_nft.clone(),
-    ))?;
+    client.submit_blocking(
+        Register::nft(Nft::new(nft_id.clone(), Metadata::default())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    client.submit_blocking(
+        Transfer::nft(source_account, nft_id.clone(), destination_nft.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let nft = client
         .query(FindNfts::new())

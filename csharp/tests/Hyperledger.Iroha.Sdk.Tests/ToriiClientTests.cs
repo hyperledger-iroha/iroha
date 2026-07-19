@@ -43,6 +43,15 @@ public sealed class ToriiClientTests
     private static readonly string OnboardingAccountId = TestAccountId(0x52);
     private static readonly string FaucetAccountId = TestAccountId(0x53);
     private static readonly string MultisigOnboardingAccountId = TestAccountId(0x54);
+    private static FeePaymentIntent EmptyAuthorityFeePayment =>
+        FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
+
+    private static FeePaymentIntent SponsorFeePayment(string sponsor, ulong? gasLimit = null) =>
+        FeePaymentIntent.Sponsor(
+            new FeeSponsorProgramId(sponsor, "default"),
+            1,
+            Array.Empty<FeeChargeLimit>(),
+            gasLimit);
     private static readonly string AliasLookupAccountId = TestAccountId(0x55);
     private static readonly string AliasResolutionAccountId = TestAccountId(0x56);
     private static readonly string AliasIndexAccountId = TestAccountId(0x57);
@@ -9148,7 +9157,6 @@ public sealed class ToriiClientTests
             valid with { SuccessorOfHex = new string('c', 63) },
             valid with { SuccessorOfHex = new string('0', 64) },
             valid with { SubmittedEpoch = null },
-            valid with { GasAssetId = " " },
             valid with { Alias = valid.Alias! with { Namespace = "" } },
             valid with { Alias = valid.Alias! with { Namespace = new string('a', 129) } },
             valid with { Alias = valid.Alias! with { Namespace = "Docs" } },
@@ -9188,7 +9196,6 @@ public sealed class ToriiClientTests
             (valid with { PrivateKey = "ed25519:dead beef" }, "PrivateKey", "whitespace"),
             (valid with { ManifestPayloadBase64 = manifestBase64 + " ", ManifestBytes = null }, "ManifestPayloadBase64", "whitespace"),
             (valid with { ManifestPayloadBase64 = "AR==", ManifestBytes = null }, "ManifestPayloadBase64", "canonical base64"),
-            (valid with { GasAssetId = " xor#universal" }, "GasAssetId", "whitespace"),
             (valid with { Alias = valid.Alias! with { Namespace = "docs " } }, "Alias.Namespace", "whitespace"),
             (valid with { Alias = valid.Alias! with { Name = " main" } }, "Alias.Name", "whitespace"),
             (valid with { Alias = valid.Alias! with { ProofBase64 = aliasProofBase64 + "\u0001" } }, "Alias.ProofBase64", "control characters"),
@@ -13878,7 +13885,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task SubmitTransactionAsyncPostsNoritoPayload()
     {
-        var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+        var transaction = new TransactionBuilder(
+            "00000042",
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
@@ -17799,7 +17809,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal(ContractFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -17829,13 +17839,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Authority = ContractAuthorityAccountId,
             ContractAlias = "router::dex.universal",
             Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-            GasLimit = 500_000,
-            FeeSponsor = ContractFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(ContractFeeSponsorAccountId, 500_000),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(response.Ok);
         Assert.False(response.Submitted);
-        Assert.Equal("router::dex.universal", response.ContractId);
+        Assert.NotNull(response.ContractAddress);
         Assert.Equal("c2NhZmZvbGQ=", response.TransactionScaffoldBase64);
         Assert.Equal("/v1/contracts/call", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
@@ -17856,7 +17865,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.ok", error.Message);
@@ -17900,7 +17909,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains($"contract call response.{responseField}", error.Message);
@@ -17922,7 +17931,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.creation_time_ms", error.Message);
@@ -18413,12 +18422,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = " AQID" }, "SignatureBase64", "whitespace" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
         yield return new object[] { valid with { Entrypoint = " main" }, "Entrypoint", "whitespace" };
-        yield return new object[] { valid with { GasAssetId = "xor #universal" }, "GasAssetId", "whitespace" };
-        yield return new object[] { valid with { FeeSponsor = ContractFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "merchant@sora" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { GasLimit = 0 }, "GasLimit", "positive" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
     }
 
     [Theory]
@@ -18757,7 +18761,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
-            Assert.Equal(MultisigFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -18782,10 +18786,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
-            Namespace = "apps",
-            ContractId = "calc.v1",
+            ContractAlias = "router::dex.universal",
             Entrypoint = "main",
-            FeeSponsor = MultisigFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId, 500_000),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(response.Ok);
@@ -18811,15 +18814,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { SignerAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { PrivateKey = "ed0120AABB", PublicKeyHex = new string('a', 64), SignatureBase64 = "AQID" }, "PrivateKey", "not both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64) }, "SignatureBase64", "Detached signing requires both" };
-        yield return new object[] { valid with { Namespace = " apps" }, "Namespace", "whitespace" };
-        yield return new object[] { valid with { ContractId = "calc v1" }, "ContractId", "whitespace" };
+        yield return new object[] { valid with { ContractAlias = " router::dex.universal" }, "ContractAlias", "whitespace" };
         yield return new object[] { valid with { Entrypoint = "" }, "Entrypoint", "null or whitespace" };
-        yield return new object[] { valid with { FeeSponsor = MultisigFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "sponsor@universal" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
         yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
-        yield return new object[] { valid with { GasLimit = 0 }, "GasLimit", "positive" };
     }
 
     [Theory]
@@ -19316,7 +19314,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal(CanonicalMultisigAccountId, payload.RootElement.GetProperty("multisig_account_id").GetString());
             Assert.Equal(MultisigSignerAccountId, payload.RootElement.GetProperty("signer_account_id").GetString());
-            Assert.Equal(MultisigFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -19334,7 +19332,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountId = CanonicalMultisigAccountId,
             SignerAccountId = MultisigSignerAccountId,
-            FeeSponsor = MultisigFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId),
             Instructions = ["AQID"],
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -19407,11 +19405,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { SignatureBase64 = "AQID" }, "PublicKeyHex", "Detached signing requires both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
         yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
-        yield return new object[] { valid with { FeeSponsor = " sponsor@universal" }, "FeeSponsor", "whitespace" };
-        yield return new object[] { valid with { FeeSponsor = MultisigFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "sponsor@universal" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
         yield return new object[] { valid with { Instructions = null! }, "Instructions", "cannot be null" };
         yield return new object[] { valid with { Instructions = [] }, "Instructions", "must not be empty" };
         yield return new object[] { valid with { Instructions = [" AQID"] }, "Instructions[0]", "whitespace" };
@@ -31260,7 +31254,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ContractAlias = "router::dex.universal",
             Entrypoint = "main",
             Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-            GasLimit = 500_000,
+            FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
         };
     }
 
@@ -31282,6 +31276,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             Instructions = ["AQID"],
         };
     }
@@ -31292,10 +31287,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
-            Namespace = "apps",
-            ContractId = "calc.v1",
+            ContractAlias = "router::dex.universal",
             Entrypoint = "main",
-            GasLimit = 500_000,
+            FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
         };
     }
 
@@ -31305,6 +31299,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             ProposalId = new string('a', 64),
         };
     }
@@ -31339,7 +31334,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             PrivateKey = "ed25519:deadbeef",
             ManifestBytes = "manifest-norito"u8.ToArray(),
             SubmittedEpoch = 42,
-            GasAssetId = "xor#universal",
             Alias = new ToriiSoraFsPinAlias
             {
                 Namespace = "docs",

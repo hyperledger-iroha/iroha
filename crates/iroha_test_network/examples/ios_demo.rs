@@ -293,14 +293,20 @@ fn main() -> Result<()> {
         if known_domains.insert(domain_id.clone()) {
             let new_domain = Domain::new(domain_id.clone());
             client
-                .submit_blocking(Register::domain(new_domain))
+                .submit_blocking(
+                    Register::domain(new_domain),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .wrap_err_with(|| eyre!("Failed to register domain `{domain_id}`"))?;
         }
 
         if known_asset_defs.insert(asset_def_id.clone()) {
             let definition = AssetDefinition::numeric(asset_def_id.clone());
             client
-                .submit_blocking(Register::asset_definition(definition))
+                .submit_blocking(
+                    Register::asset_definition(definition),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .wrap_err_with(|| eyre!("Failed to register asset definition `{asset_def_id}`"))?;
         }
 
@@ -315,14 +321,20 @@ fn main() -> Result<()> {
                 account_builder = account_builder.with_metadata(metadata);
             }
             client
-                .submit_blocking(Register::account(account_builder))
+                .submit_blocking(
+                    Register::account(account_builder),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
                 .wrap_err_with(|| eyre!("Failed to register account `{account_id}`"))?;
         }
 
         let amount = parse_quantity(&initial_balance, &account_id.to_string())?;
         let asset_instance = AssetId::new(asset_def_id.clone(), account_id.clone());
         client
-            .submit_blocking(Mint::asset_quantity(amount, asset_instance.clone()))
+            .submit_blocking(
+                Mint::asset_quantity(amount, asset_instance.clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 eyre!(
                     "Failed to mint {} into asset `{}`",

@@ -49,9 +49,13 @@ fn data_events_follow_instruction_order_in_tx() {
         // 3) Mint creates the asset (first time)
         Mint::asset_quantity(10_u32, asset.clone()).into(),
     ];
-    let tx = TransactionBuilder::new(ChainId::from("chain"), authority_id.clone())
-        .with_instructions(instrs)
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        ChainId::from("chain"),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instrs)
+    .sign(kp.private_key());
 
     // Build and validate block with one tx
     let acc = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));

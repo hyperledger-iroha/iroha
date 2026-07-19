@@ -1,11 +1,16 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Sccp;
+using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Torii;
 
 [JsonSerializable(typeof(JsonNode))]
 [JsonSerializable(typeof(JsonObject))]
+[JsonSerializable(typeof(UnsignedTransactionPayload))]
+[JsonSerializable(typeof(FeeChargeLimit))]
+[JsonSerializable(typeof(FeeSponsorProgramId))]
+[JsonSerializable(typeof(FeePaymentIntent))]
 [JsonSerializable(typeof(SccpBridgeProofSubmitRequest))]
 [JsonSerializable(typeof(SccpBridgeMessageSubmitRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]
@@ -131,6 +136,18 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiContractStateEntry))]
 [JsonSerializable(typeof(ToriiContractStateResponse))]
 [JsonSerializable(typeof(ToriiContractCallRequest))]
+[JsonSerializable(typeof(ToriiFeeQuoteRequest))]
+[JsonSerializable(typeof(ToriiFeeQuoteObservation))]
+[JsonSerializable(typeof(ToriiFeeQuoteCapacity))]
+[JsonSerializable(typeof(ToriiFeeDebitSource))]
+[JsonSerializable(typeof(ToriiFeeQuoteDecisionValue))]
+[JsonSerializable(typeof(ToriiFeeQuoteDecision))]
+[JsonSerializable(typeof(ToriiFeeQuoteResponse))]
+[JsonSerializable(typeof(ToriiFeeSponsorProgramLookupRequest))]
+[JsonSerializable(typeof(ToriiFeeSponsorProgramLifecycle))]
+[JsonSerializable(typeof(ToriiFeeSponsorProgramActivation))]
+[JsonSerializable(typeof(ToriiFeeSponsorProgram))]
+[JsonSerializable(typeof(ToriiOperationReceipt))]
 [JsonSerializable(typeof(ToriiContractViewRequest))]
 [JsonSerializable(typeof(ToriiContractViewAccessHints))]
 [JsonSerializable(typeof(ToriiContractViewEntrypointParam))]
@@ -147,6 +164,9 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiContractVerifiedSourceSubmission))]
 [JsonSerializable(typeof(ToriiContractVerifiedSourceJob))]
 [JsonSerializable(typeof(ToriiMultisigProposeRequest))]
+[JsonSerializable(typeof(ToriiMultisigApproveRequest))]
+[JsonSerializable(typeof(ToriiMultisigCancelRequest))]
+[JsonSerializable(typeof(ToriiMultisigCancelResponse))]
 [JsonSerializable(typeof(ToriiMultisigResponse))]
 [JsonSerializable(typeof(ToriiMultisigContractCallProposeRequest))]
 [JsonSerializable(typeof(ToriiMultisigContractCallApproveRequest))]

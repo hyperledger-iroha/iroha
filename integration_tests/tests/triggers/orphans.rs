@@ -105,11 +105,14 @@ async fn set_up_trigger(
         let grant_register_trigger_permission: InstructionBox =
             grant_register_trigger_permission.into();
         move || {
-            client.submit_all_blocking::<InstructionBox>([
-                create_failand,
-                create_the_one_who_fails,
-                grant_register_trigger_permission,
-            ])?;
+            client.submit_all_blocking::<InstructionBox>(
+                [
+                    create_failand,
+                    create_the_one_who_fails,
+                    grant_register_trigger_permission,
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
             eyre::Result::<()>::Ok(())
         }
     })
@@ -118,7 +121,12 @@ async fn set_up_trigger(
         let client = authority_client.clone();
         let register_fail_on_account_events: InstructionBox =
             register_fail_on_account_events.into();
-        move || client.submit_blocking::<InstructionBox>(register_fail_on_account_events)
+        move || {
+            client.submit_blocking::<InstructionBox>(
+                register_fail_on_account_events,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     Ok((failand, the_one_who_fails, fail_on_account_events))
@@ -149,7 +157,12 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
     spawn_blocking({
         let client = iroha.clone();
         let the_one_who_fails = the_one_who_fails.clone();
-        move || client.submit_blocking(Unregister::account(the_one_who_fails))
+        move || {
+            client.submit_blocking(
+                Unregister::account(the_one_who_fails),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     assert_eq!(
@@ -190,7 +203,12 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
     spawn_blocking({
         let client = iroha.clone();
         let failand = failand.clone();
-        move || client.submit_blocking(Unregister::domain(failand))
+        move || {
+            client.submit_blocking(
+                Unregister::domain(failand),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     assert_eq!(

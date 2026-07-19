@@ -96,7 +96,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_search_musubi_packages(SearchMusubiPackages),
         visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
         visit_find_domain_by_id(FindDomainById),
-        visit_find_fee_sponsor_policy_by_id(FindFeeSponsorPolicyById),
+        visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
     }
 }
 
@@ -138,8 +138,8 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         crate::query::CommittedTransaction => visit_find_transactions,
         crate::block::BlockHeader => visit_find_block_headers,
         crate::block::SignedBlock => visit_find_blocks,
-        crate::nexus::FeeSponsorPolicy => visit_find_fee_sponsor_policies,
-        crate::nexus::FeeSponsorPolicyId => visit_find_fee_sponsor_policy_ids,
+        crate::nexus::FeeSponsorProgram => visit_find_fee_sponsor_programs,
+        crate::nexus::FeeSponsorProgramId => visit_find_fee_sponsor_program_ids,
     }
 }
 
@@ -319,8 +319,8 @@ macro_rules! query_visitors {
                 &$crate::query::musubi::prelude::FindMusubiShortAliasByName
             ),
             visit_find_domain_by_id(&$crate::query::domain::FindDomainById),
-            visit_find_fee_sponsor_policy_by_id(
-                &$crate::query::nexus::prelude::FindFeeSponsorPolicyById
+            visit_find_fee_sponsor_program_by_id(
+                &$crate::query::nexus::prelude::FindFeeSponsorProgramById
             ),
 
             // Iterable Query visitors
@@ -346,8 +346,8 @@ macro_rules! query_visitors {
             visit_find_transactions(&$crate::query::ErasedIterQuery<$crate::query::CommittedTransaction>),
             visit_find_blocks(&$crate::query::ErasedIterQuery<$crate::block::SignedBlock>),
             visit_find_block_headers(&$crate::query::ErasedIterQuery<$crate::block::BlockHeader>),
-            visit_find_fee_sponsor_policies(&$crate::query::ErasedIterQuery<$crate::nexus::FeeSponsorPolicy>),
-            visit_find_fee_sponsor_policy_ids(&$crate::query::ErasedIterQuery<$crate::nexus::FeeSponsorPolicyId>),
+            visit_find_fee_sponsor_programs(&$crate::query::ErasedIterQuery<$crate::nexus::FeeSponsorProgram>),
+            visit_find_fee_sponsor_program_ids(&$crate::query::ErasedIterQuery<$crate::nexus::FeeSponsorProgramId>),
         }
     };
 }
@@ -450,7 +450,7 @@ mod tests {
             SingularQueryBox::SearchMusubiPackages(_) => {}
             SingularQueryBox::FindMusubiShortAliasByName(_) => {}
             SingularQueryBox::FindDomainById(_) => {}
-            SingularQueryBox::FindFeeSponsorPolicyById(_) => {}
+            SingularQueryBox::FindFeeSponsorProgramById(_) => {}
             SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
             SingularQueryBox::FindFxCorridorPolicyById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}

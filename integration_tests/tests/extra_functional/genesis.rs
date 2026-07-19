@@ -61,10 +61,15 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
     let domain_id: DomainId = DomainId::try_new("foo", "universal").expect("Valid");
     ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let create_domain = Register::domain(Domain::new(domain_id));
-    let submit_result = spawn_blocking(move || client.submit_blocking(create_domain))
-        .await
-        .map_err(Into::into)
-        .and_then(|res| res);
+    let submit_result = spawn_blocking(move || {
+        client.submit_blocking(
+            create_domain,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .map_err(Into::into)
+    .and_then(|res| res);
     if sandbox::handle_result(submit_result, stringify!(multiple_genesis_peers))?.is_none() {
         return Ok(());
     }

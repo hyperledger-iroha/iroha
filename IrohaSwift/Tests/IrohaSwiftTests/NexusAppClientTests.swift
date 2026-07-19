@@ -84,7 +84,8 @@ final class NexusAppClientTests: XCTestCase {
             let input = NexusTransferInput(
                 sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
                 quantity: quantity,
-                destinationAccountID: Self.destinationAccountID
+                destinationAccountID: Self.destinationAccountID,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             )
             XCTAssertThrowsError(try client.buildTransferDraft(input: input), quantity) { error in
                 XCTAssertTrue(error is KotodamaNumericV1Error)
@@ -333,7 +334,8 @@ final class NexusAppClientTests: XCTestCase {
                                           quantity: "12.34",
                                           destinationAccountID: Self.destinationAccountID,
                                           authority: Self.destinationAccountID,
-                                          signingPublicKey: Self.publicKey)
+                                          signingPublicKey: Self.publicKey,
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
             )
         }
 
@@ -427,7 +429,8 @@ final class NexusAppClientTests: XCTestCase {
             let input = NexusTransferInput(
                 sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
                 quantity: quantity,
-                destinationAccountID: Self.destinationAccountID
+                destinationAccountID: Self.destinationAccountID,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             )
             XCTAssertThrowsError(
                 try codec.buildTransferPayload(
@@ -456,7 +459,8 @@ final class NexusAppClientTests: XCTestCase {
             creationTimeMs: 1_700_000_000_000,
             ttlMs: 30_000,
             nonce: 7,
-            metadata: ["purpose": "nexus-app-fixture"]
+            metadata: ["purpose": "nexus-app-fixture"],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
     }
 

@@ -3266,35 +3266,47 @@ mod tests {
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_instructions(instructions)
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-                    .parse()
-                    .expect("contract address"),
-                expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
-                entrypoint: "send_transfer".to_owned(),
-                arguments: None,
-            }))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
+            entrypoint: "send_transfer".to_owned(),
+            arguments: None,
+        }))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn ivm_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn ivm_proved_tx(
@@ -3304,15 +3316,19 @@ mod tests {
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(vec![0x00]),
-                overlay: overlay.into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas-policy"),
-            }))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x00]),
+            overlay: overlay.into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        }))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn metadata_for(policy: &ValidationFeePolicyV1) -> Metadata {

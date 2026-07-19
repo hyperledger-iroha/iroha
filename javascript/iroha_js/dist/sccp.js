@@ -4,6 +4,8 @@ import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { validateNoritoFrame } from "./norito.js";
+import { normalizeAssetDefinitionId } from "./normalizers.js";
+import { NumericV1 } from "./numericV1.js";
 
 /** First-release SCCP protocol domains. Domain 4 remains retired and reserved. */
 export const SCCP_DOMAIN_SORA = 0;
@@ -3430,6 +3432,119 @@ function validateAuthority(value, label) {
   return authority;
 }
 
+function normalizeSccpFeePayment(value, label) {
+  const record = exactFields(
+    value,
+    new Set(["payer", "value"]),
+    label,
+    new Set(["payer", "value"]),
+  );
+  if (record.payer !== "authority" && record.payer !== "sponsor") {
+    throw new TypeError(`${label}.payer must be authority or sponsor`);
+  }
+  const bodyFields = new Set(["charge_limits", "gas_limit"]);
+  const requiredBodyFields = new Set(["charge_limits"]);
+  if (record.payer === "sponsor") {
+    bodyFields.add("program_id");
+    bodyFields.add("program_revision");
+    requiredBodyFields.add("program_id");
+    requiredBodyFields.add("program_revision");
+  }
+  const body = exactFields(
+    record.value,
+    bodyFields,
+    `${label}.value`,
+    requiredBodyFields,
+  );
+  if (!Array.isArray(body.charge_limits) || body.charge_limits.length > 2) {
+    throw new TypeError(`${label}.value.charge_limits must contain at most two entries`);
+  }
+  let previousKind = -1;
+  const chargeLimits = body.charge_limits.map((raw, index) => {
+    const context = `${label}.value.charge_limits[${index}]`;
+    const limit = exactFields(
+      raw,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      context,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+    );
+    const taggedKind = exactFields(
+      limit.kind,
+      new Set(["kind", "value"]),
+      `${context}.kind`,
+      new Set(["kind", "value"]),
+    );
+    if (taggedKind.value !== null) {
+      throw new TypeError(`${context}.kind.value must be null`);
+    }
+    const kindIndex = taggedKind.kind === "nexus"
+      ? 0
+      : taggedKind.kind === "pipeline_gas"
+        ? 1
+        : -1;
+    if (kindIndex < 0 || kindIndex <= previousKind) {
+      throw new TypeError(
+        `${label}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
+      );
+    }
+    previousKind = kindIndex;
+    const assetDefinitionId = normalizeAssetDefinitionId(
+      limit.asset_definition_id,
+      `${context}.asset_definition_id`,
+    );
+    if (assetDefinitionId !== limit.asset_definition_id) {
+      throw new TypeError(`${context}.asset_definition_id must use its exact canonical form`);
+    }
+    let amount;
+    try {
+      amount = NumericV1.decodeQuantityJson(limit.max_amount);
+    } catch (error) {
+      throw new TypeError(`${context}.max_amount must be a canonical positive quantity`, {
+        cause: error,
+      });
+    }
+    if (amount.mantissa <= 0n) {
+      throw new TypeError(`${context}.max_amount must be positive`);
+    }
+    return {
+      kind: { kind: taggedKind.kind, value: null },
+      asset_definition_id: assetDefinitionId,
+      max_amount: amount.toString(),
+    };
+  });
+  const normalizedBody = { charge_limits: chargeLimits, gas_limit: null };
+  if (body.gas_limit !== undefined && body.gas_limit !== null) {
+    normalizedBody.gas_limit = integer(
+      body.gas_limit,
+      `${label}.value.gas_limit`,
+      1,
+    );
+  }
+  if (record.payer === "sponsor") {
+    const program = exactFields(
+      body.program_id,
+      new Set(["sponsor", "name"]),
+      `${label}.value.program_id`,
+      new Set(["sponsor", "name"]),
+    );
+    const sponsor = validateAuthority(
+      program.sponsor,
+      `${label}.value.program_id.sponsor`,
+    );
+    const name = canonicalText(program.name, `${label}.value.program_id.name`, 255);
+    if (name.normalize("NFC") !== name || /[\s@#$\/]/u.test(name)) {
+      throw new TypeError(`${label}.value.program_id.name must be canonical`);
+    }
+    normalizedBody.program_id = { sponsor, name };
+    normalizedBody.program_revision = integer(
+      body.program_revision,
+      `${label}.value.program_revision`,
+      1,
+    );
+  }
+  return { payer: record.payer, value: normalizedBody };
+}
+
 function detachedSigningState(record, label, creationTime) {
   const hasSignature = record.signature_b64 !== undefined;
   const hasTransactionPayload = record.transaction_payload_b64 !== undefined;
@@ -3458,13 +3573,14 @@ export function normalizeBridgeProofSubmitPayload(value) {
     value,
     new Set([
       "authority",
+      "fee_payment",
       "signature_b64",
       "transaction_payload_b64",
       "destination_proof_b64",
       "creation_time_ms",
     ]),
     "bridge proof submit",
-    new Set(["authority", "destination_proof_b64"]),
+    new Set(["authority", "fee_payment", "destination_proof_b64"]),
   );
   canonicalNoritoBase64(
     record.destination_proof_b64,
@@ -3482,6 +3598,10 @@ export function normalizeBridgeProofSubmitPayload(value) {
         );
   const result = {
     authority: validateAuthority(record.authority, "bridge proof submit.authority"),
+    fee_payment: normalizeSccpFeePayment(
+      record.fee_payment,
+      "bridge proof submit.fee_payment",
+    ),
     ...detachedSigningState(record, "bridge proof submit", creationTime),
     destination_proof_b64: record.destination_proof_b64,
   };
@@ -3495,13 +3615,14 @@ export function normalizeBridgeMessageSubmitPayload(value) {
     value,
     new Set([
       "authority",
+      "fee_payment",
       "signature_b64",
       "transaction_payload_b64",
       "native_proof_b64",
       "creation_time_ms",
     ]),
     "bridge message submit",
-    new Set(["authority", "native_proof_b64"]),
+    new Set(["authority", "fee_payment", "native_proof_b64"]),
   );
   canonicalNoritoBase64(
     record.native_proof_b64,
@@ -3519,6 +3640,10 @@ export function normalizeBridgeMessageSubmitPayload(value) {
         );
   const result = {
     authority: validateAuthority(record.authority, "bridge message submit.authority"),
+    fee_payment: normalizeSccpFeePayment(
+      record.fee_payment,
+      "bridge message submit.fee_payment",
+    ),
     ...detachedSigningState(record, "bridge message submit", creationTime),
     native_proof_b64: record.native_proof_b64,
   };

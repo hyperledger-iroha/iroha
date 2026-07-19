@@ -536,6 +536,7 @@ fn sccp_submit_destination_proof(
     args: SubmitDestinationProofArgs,
 ) -> Result<()> {
     let authority = ctx.config().account.clone();
+    let fee_payment = ctx.transaction_fee_payment()?;
     let artifact = read_bounded_binary_artifact(
         &args.artifact,
         iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1,
@@ -544,6 +545,7 @@ fn sccp_submit_destination_proof(
     let detached = load_detached_submit_material(&args.detached, &authority)?;
     let request = SccpDestinationProofSubmitRequest {
         authority,
+        fee_payment,
         signature_b64: detached.signature_b64,
         transaction_payload_b64: detached.transaction_payload_b64,
         destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(artifact),
@@ -561,6 +563,7 @@ fn sccp_submit_native_message(
     args: SubmitNativeMessageArgs,
 ) -> Result<()> {
     let authority = ctx.config().account.clone();
+    let fee_payment = ctx.transaction_fee_payment()?;
     let proof = read_bounded_binary_artifact(
         &args.proof,
         iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_V1,
@@ -569,6 +572,7 @@ fn sccp_submit_native_message(
     let detached = load_detached_submit_material(&args.detached, &authority)?;
     let request = SccpNativeMessageSubmitRequest {
         authority,
+        fee_payment,
         signature_b64: detached.signature_b64,
         transaction_payload_b64: detached.transaction_payload_b64,
         native_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof),

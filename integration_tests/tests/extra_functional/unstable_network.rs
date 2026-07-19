@@ -809,8 +809,13 @@ async fn network_starts_with_relay() -> Result<()> {
     {
         return Ok(());
     }
-    spawn_blocking(move || client.submit(Log::new(Level::INFO, "relay started".to_owned())))
-        .await??;
+    spawn_blocking(move || {
+        client.submit(
+            Log::new(Level::INFO, "relay started".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     timeout(
         network.sync_timeout(),
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -849,8 +854,13 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     }
 
     let client = network.client();
-    spawn_blocking(move || client.submit(Log::new(Level::INFO, "relay stalled".to_owned())))
-        .await??;
+    spawn_blocking(move || {
+        client.submit(
+            Log::new(Level::INFO, "relay stalled".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
 
     let Err(_) = timeout(
         Duration::from_secs(3),
@@ -904,8 +914,13 @@ async fn suspending_works() -> Result<()> {
     }
 
     let client = network.client();
-    spawn_blocking(move || client.submit(Log::new(Level::INFO, "suspend tick".to_owned())))
-        .await??;
+    spawn_blocking(move || {
+        client.submit(
+            Log::new(Level::INFO, "suspend tick".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
 
     // all peers except the last one should get the non-empty block
     timeout(
@@ -981,7 +996,13 @@ async fn block_after_genesis_is_synced() -> Result<()> {
         relay.suspend(&peer.id()).activate();
     }
     let client = network.client();
-    spawn_blocking(move || client.submit(Log::new(Level::INFO, "tick".to_owned()))).await??;
+    spawn_blocking(move || {
+        client.submit(
+            Log::new(Level::INFO, "tick".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     let Err(_) = timeout(
         pipeline_window,
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -1224,7 +1245,13 @@ impl UnstableNetwork {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        let submit_res = spawn_blocking(move || client.submit_blocking(isi)).await?;
+        let submit_res = spawn_blocking(move || {
+            client.submit_blocking(
+                isi,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await?;
         match submit_res {
             Ok(_) => Ok(()),
             Err(err) if is_tx_confirmation_timeout(&err) => {
@@ -1435,8 +1462,11 @@ impl UnstableNetwork {
                 .expect("valid metadata key"),
             target_height,
         );
-        let tx =
-            Arc::new(builder_client.build_transaction_from_items(vec![mint_asset], tx_metadata));
+        let tx = Arc::new(builder_client.build_transaction_from_items(
+            vec![mint_asset],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            tx_metadata,
+        ));
         let partition_submit_window = relay_pause
             .min(
                 network

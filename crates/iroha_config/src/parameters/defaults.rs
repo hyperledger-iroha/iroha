@@ -2534,14 +2534,14 @@ pub mod nexus {
 
     /// Universal fee schedule defaults.
     pub mod fees {
+        use iroha_data_model::account::AccountId;
         use iroha_primitives::numeric::Quantity;
 
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
-        /// Whether fee sponsorship is allowed.
-        pub const SPONSORSHIP_ENABLED: bool = false;
-        /// Whether sponsored fee settlement is performed outside this chain.
-        pub const EXTERNAL_SETTLEMENT_ENABLED: bool = false;
+        /// Protocol account that physically custodies isolated sponsor-program vault assets.
+        pub const SPONSOR_VAULT_CUSTODY_ACCOUNT_ID: &str =
+            "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT";
         /// Base fee charged per transaction.
         pub fn base_fee() -> Quantity {
             Quantity::zero()
@@ -2558,22 +2558,18 @@ pub mod nexus {
         pub fn per_gas_unit_fee() -> Quantity {
             "0.00005".parse().expect("canonical fee quantity")
         }
-        /// Maximum fee a sponsor can cover (0 = unlimited).
-        pub fn sponsor_max_fee() -> Quantity {
-            Quantity::zero()
-        }
-        /// Minimum verified sponsor balance left unused by asynchronous lane-relay fee admission.
-        pub fn sponsor_verified_balance_safety_floor() -> Quantity {
-            Quantity::zero()
-        }
-        /// Default canonical sponsor for asynchronous lane-relay fee burns.
-        pub const CANONICAL_SPONSOR_ACCOUNT_ID: Option<&str> = None;
-        /// First block height whose lane commitments include Nexus fee receipts.
-        pub const FEE_RECEIPTS_ACTIVATION_HEIGHT: u64 = u64::MAX;
-        /// Direct Nexus fees burn immediately.
-        pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = 0;
         /// Default Nexus fee settlement mode.
         pub const SETTLEMENT_MODE: &str = "direct";
+
+        /// Sponsor vault custody account parsed under the default Sora chain discriminant.
+        pub fn sponsor_vault_custody_account_id() -> AccountId {
+            let _default_chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                super::super::common::chain_discriminant(),
+            );
+            AccountId::parse_encoded(SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("default sponsor vault custody account must be canonical I105")
+        }
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
@@ -3839,7 +3835,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::AccountId;
 
-    use super::{governance, oracle, pipeline, queue, torii};
+    use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
 
     #[test]
     fn gas_technical_account_matches_default_bootstrap_identity() {
@@ -3850,6 +3846,18 @@ mod tests {
             .expect("default gas technical account must be canonical I105")
             .into_account_id();
         assert_eq!(parsed, governance::bond_escrow_account_id());
+    }
+
+    #[test]
+    fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            super::common::chain_discriminant(),
+        );
+        let parsed = AccountId::parse_encoded(fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
+            .expect("default sponsor vault custody account must be canonical I105")
+            .into_account_id();
+        assert_eq!(parsed, fees::sponsor_vault_custody_account_id());
+        assert_ne!(parsed.to_string(), pipeline::GAS_TECH_ACCOUNT_ID);
     }
 
     #[test]

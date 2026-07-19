@@ -45,9 +45,13 @@ fn bounded_concurrency(sample_count: usize, requested: usize) -> usize {
 }
 
 fn build_log_transaction(chain_id: ChainId, prefix: &str, index: usize) -> SignedTransaction {
-    TransactionBuilder::new(chain_id, ALICE_ID.clone())
-        .with_instructions([Log::new(Level::INFO, format!("{prefix}-{index:04}"))])
-        .sign(ALICE_KEYPAIR.private_key())
+    TransactionBuilder::new(
+        chain_id,
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, format!("{prefix}-{index:04}"))])
+    .sign(ALICE_KEYPAIR.private_key())
 }
 
 async fn warmup_queries(clients: &[Client], warmup_samples: usize) -> eyre::Result<()> {

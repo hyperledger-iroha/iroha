@@ -20,7 +20,8 @@ SCENARIOS = (
     "authoritative_v2_genesis_commits_on_every_validator",
     "authoritative_v2_finalizes_through_validator_restart",
     "taira_npos_leader_timeout_commits_within_rotation_bound",
-    "real_network_divergent_prepare_qcs_converge_after_ordered_release",
+    "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
+    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
 )
 SOURCE_MANIFEST = "a" * 64
 HEAD_COMMIT = "1" * 40
@@ -238,7 +239,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
 
     assert result.returncode == 0, result.stderr
     rows = [line.split("\t") for line in capture.read_text().splitlines()]
-    assert len(rows) == 18
+    assert len(rows) == 2 + len(SCENARIOS) * 4
     execution_rows = rows[2:]
     assert len(execution_rows) == len(SCENARIOS) * 4
     assert all(
@@ -309,7 +310,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         "source_bound_root": str(expected_source_root),
         "cargo_target_dir": str(expected_source_root / "test-suite"),
         "iroha_test_target_dir": str(expected_source_root / "programs"),
-        "expected_runs": "16",
+        "expected_runs": str(len(SCENARIOS) * 4),
         "build_timeout_seconds": "3600",
         "process_timeout_seconds": "300",
         "network_permit_wait_timeout_seconds": "300",
@@ -320,8 +321,8 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     assert completion_fields["schema_version"] == "1"
     assert completion_fields["profile"] == "pr"
     assert completion_fields["source_manifest_sha256"] == source_manifest
-    assert completion_fields["completed_runs"] == "16"
-    assert completion_fields["expected_runs"] == "16"
+    assert completion_fields["completed_runs"] == str(len(SCENARIOS) * 4)
+    assert completion_fields["expected_runs"] == str(len(SCENARIOS) * 4)
     assert completion_fields["summary_sha256"] == hashlib.sha256(
         (invocation / "summary.tsv").read_bytes()
     ).hexdigest()
@@ -376,10 +377,11 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
     result = _run_launcher(env, "--release")
 
     assert result.returncode == 0, result.stderr
-    assert len(capture.read_text().splitlines()) == 2 + len(SCENARIOS) * 32
+    assert len(SCENARIOS) == 5
+    assert len(capture.read_text().splitlines()) == 162
     invocation = _single_invocation(evidence)
     summary_rows = _summary_rows(invocation)
-    assert len(summary_rows) == len(SCENARIOS) * 32
+    assert len(summary_rows) == 160
     assert {row["profile"] for row in summary_rows} == {"release"}
     assert {row["result"] for row in summary_rows} == {"passed"}
     for scenario_index, scenario in enumerate(SCENARIOS):
@@ -389,8 +391,8 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
         assert scenario_rows[0]["seed"] == scenario
         assert scenario_rows[-1]["seed"] == f"{scenario}:seed:31"
     completion = _key_values(invocation / "COMPLETED.tsv")
-    assert completion["completed_runs"] == "128"
-    assert completion["expected_runs"] == "128"
+    assert completion["completed_runs"] == "160"
+    assert completion["expected_runs"] == "160"
     assert completion["head_commit"] == HEAD_COMMIT
     assert completion["head_tree"] == HEAD_TREE
     assert completion["cargo_lock_sha256"] == CARGO_LOCK_SHA256
@@ -599,7 +601,7 @@ def test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering(
         first_stdout, first_stderr = first.communicate(timeout=30)
 
     assert first.returncode == 0, (first_stdout, first_stderr)
-    assert len(first_capture.read_text(encoding="utf-8").splitlines()) == 18
+    assert len(first_capture.read_text(encoding="utf-8").splitlines()) == 2 + len(SCENARIOS) * 4
     assert (in_progress / "COMPLETED.tsv").is_file()
     assert not (evidence / ".seed-matrix.lock").exists()
 

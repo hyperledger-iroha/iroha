@@ -16,6 +16,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -72,9 +73,9 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect,
-        LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1,
-        LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
+        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
+        LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -86,7 +87,8 @@ use iroha_data_model::{
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
-        Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
+        Executable, FeePaymentIntent, IvmBytecode, SignedTransaction,
+        TransactionBuilder as ModelTransactionBuilder, TransactionPayload,
         TransactionSubmissionReceipt,
     },
     trigger::{
@@ -422,6 +424,30 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+}
+
+fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
+    require_non_blank_unpadded(value, "fee sponsor program id")?;
+    let program_id = FeeSponsorProgramId::from_str(value).map_err(|err| {
+        PyValueError::new_err(format!("invalid fee sponsor program id `{value}`: {err}"))
+    })?;
+    if program_id.to_string() != value {
+        return Err(PyValueError::new_err(
+            "fee sponsor program id must use its exact canonical encoding",
+        ));
+    }
+    ensure_ed25519_account(&program_id.sponsor)?;
+    Ok(program_id)
+}
+
+fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
+    require_non_blank_unpadded(value, "fee payment intent JSON")?;
+    let intent = json::from_str::<FeePaymentIntent>(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent JSON: {err}")))?;
+    intent
+        .validate()
+        .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent: {err}")))?;
+    Ok(intent)
 }
 
 fn parse_asset_id(value: &str) -> PyResult<AssetId> {
@@ -6529,6 +6555,21 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn authority_fee_payment_json() -> &'static str {
+        r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#
+    }
+
+    #[test]
+    fn fee_sponsor_program_ids_require_exact_canonical_literals() {
+        let sponsor_literal = taira_i105_from_seed(0x74);
+        let literal = format!("{sponsor_literal}/retail");
+        let parsed = parse_fee_sponsor_program_id(&literal).expect("program id parses");
+        assert_eq!(parsed.sponsor, sample_account(0x74));
+        assert_eq!(parsed.name.as_ref(), "retail");
+        assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
+        assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
+    }
+
     #[test]
     fn i105_discriminant_hint_decodes_valid_literals_only() {
         let custom_account = custom_i105_from_seed(0x70, 42);
@@ -10927,8 +10968,13 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
 
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority).expect("builder constructs");
+        let mut builder = TransactionBuilder::new(
+            "test-chain",
+            &authority,
+            authority_fee_payment_json(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("builder constructs");
         let envelope = builder.sign(signing.as_bytes()).expect("transaction signs");
 
         let attachments = envelope
@@ -10947,7 +10993,12 @@ mod tests {
             .expect("canonical I105 authority");
 
         for chain_id in [" test-chain", "test-chain "] {
-            let err = match TransactionBuilder::new(chain_id, &authority) {
+            let err = match TransactionBuilder::new(
+                chain_id,
+                &authority,
+                authority_fee_payment_json(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ) {
                 Ok(_) => panic!("padded chain_id must reject before parsing"),
                 Err(err) => err,
             };
@@ -10958,7 +11009,12 @@ mod tests {
         }
 
         for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
-            let err = match TransactionBuilder::new("test-chain", &padded_authority) {
+            let err = match TransactionBuilder::new(
+                "test-chain",
+                &padded_authority,
+                authority_fee_payment_json(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ) {
                 Ok(_) => panic!("padded authority must reject before account parsing"),
                 Err(err) => err,
             };
@@ -13065,6 +13121,79 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn transaction_builder_signs_only_the_exact_quoted_payer_and_gas_bound() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x31; 32]);
+        let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
+        let authority = AccountId::new(public_key)
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":100}}"#;
+        let mut builder = TransactionBuilder::new(
+            "test-chain",
+            &authority,
+            intent,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("builder constructs");
+        builder.set_creation_time_ms(42).expect("creation time");
+        let draft = builder.payload_json().expect("payload JSON");
+
+        let envelope = builder
+            .sign_quoted_payload(&draft, intent, signing.as_bytes())
+            .expect("exact quote signs");
+        assert_eq!(envelope.authority, authority);
+
+        let mut substituted = TransactionBuilder::new(
+            "test-chain",
+            &authority,
+            intent,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("builder constructs");
+        substituted.set_creation_time_ms(42).expect("creation time");
+        let draft = substituted.payload_json().expect("payload JSON");
+        let changed_gas = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":101}}"#;
+        let error = match substituted.sign_quoted_payload(&draft, changed_gas, signing.as_bytes()) {
+            Ok(_) => panic!("quote must not substitute the executable gas bound"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("fee quote changed the selected payer, sponsor revision, or gas bound")
+        );
+    }
+
+    #[test]
+    fn transaction_builder_rejects_invalid_fee_payment_replacement() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x32; 32]);
+        let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
+        let authority = AccountId::new(public_key)
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let mut builder = TransactionBuilder::new(
+            "test-chain",
+            &authority,
+            authority_fee_payment_json(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("builder constructs");
+
+        let error = builder
+            .set_fee_payment_json(
+                r#"{"payer":"sponsor","value":{"charge_limits":[],"gas_limit":null,"program_revision":0}}"#,
+            )
+            .expect_err("malformed sponsor intent must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid fee payment intent JSON")
+        );
+    }
 }
 
 fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Metadata> {
@@ -13909,28 +14038,203 @@ impl Instruction {
         Ok(dict)
     }
 
+    /// Create a new fail-closed fee sponsor program.
     #[classmethod]
-    #[pyo3(signature = (sponsor, policy_name = "default"))]
-    fn upsert_fee_sponsor_policy(
+    #[pyo3(signature = (sponsor, program_name = "default"))]
+    fn create_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         sponsor: &str,
-        policy_name: &str,
+        program_name: &str,
     ) -> PyResult<Self> {
         let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
         ensure_ed25519_account(&sponsor)?;
-        let policy_name: Name = policy_name.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid fee sponsor policy `{policy_name}`: {err}"))
+        let program_name: Name = program_name.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor program `{program_name}`: {err}"
+            ))
         })?;
-        let policy = FeeSponsorPolicy {
-            id: FeeSponsorPolicyId::new(sponsor, policy_name),
-            enabled: true,
-            max_fee: None,
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
-        };
-        let instruction = iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy { policy };
-        Ok(Instruction::new(instruction.into()))
+        let program = FeeSponsorProgram::new(FeeSponsorProgramId::new(sponsor, program_name));
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::CreateFeeSponsorProgram { program }.into(),
+        ))
+    }
+
+    /// Stage an immutable fee sponsor program revision from canonical Norito JSON.
+    #[classmethod]
+    fn stage_fee_sponsor_program_revision(
+        _cls: &Bound<'_, PyType>,
+        revision_json: &str,
+    ) -> PyResult<Self> {
+        let revision =
+            json::from_str::<FeeSponsorProgramRevision>(revision_json).map_err(|err| {
+                PyValueError::new_err(format!("invalid fee sponsor program revision JSON: {err}"))
+            })?;
+        revision.validate().map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor program revision: {err}"))
+        })?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }.into(),
+        ))
+    }
+
+    /// Schedule an exact staged fee sponsor program revision for activation.
+    #[classmethod]
+    fn activate_fee_sponsor_program_revision(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        revision: u64,
+        activate_at_height: u64,
+    ) -> PyResult<Self> {
+        if revision == 0 {
+            return Err(PyValueError::new_err(
+                "fee sponsor program revision must be non-zero",
+            ));
+        }
+        let program_id = parse_fee_sponsor_program_id(program_id)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision {
+                program_id,
+                revision,
+                activate_at_height,
+            }
+            .into(),
+        ))
+    }
+
+    /// Pause an active fee sponsor program.
+    #[classmethod]
+    fn pause_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::PauseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Begin the fail-closed drain phase for a fee sponsor program.
+    #[classmethod]
+    fn begin_close_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+    ) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::BeginCloseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Permanently close a fully drained fee sponsor program.
+    #[classmethod]
+    fn close_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::CloseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Enroll one exact canonical account in a fee sponsor program.
+    #[classmethod]
+    fn enroll_fee_sponsor_beneficiary(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        beneficiary: &str,
+    ) -> PyResult<Self> {
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                beneficiary,
+            }
+            .into(),
+        ))
+    }
+
+    /// Remove one exact canonical account from a fee sponsor program.
+    #[classmethod]
+    fn unenroll_fee_sponsor_beneficiary(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        beneficiary: &str,
+    ) -> PyResult<Self> {
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                beneficiary,
+            }
+            .into(),
+        ))
+    }
+
+    /// Allocate a positive asset amount to one program-isolated fee vault.
+    #[classmethod]
+    fn fund_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        asset_definition_id: &str,
+        amount: &str,
+    ) -> PyResult<Self> {
+        let amount = parse_asset_quantity(amount, "fee sponsor funding amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "fee sponsor funding amount must be positive",
+            ));
+        }
+        let asset_definition_id = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor asset definition `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::FundFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                asset_definition_id,
+                amount,
+            }
+            .into(),
+        ))
+    }
+
+    /// Withdraw a positive asset amount from a paused or closing program vault.
+    #[classmethod]
+    fn withdraw_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        asset_definition_id: &str,
+        amount: &str,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let amount = parse_asset_quantity(amount, "fee sponsor withdrawal amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "fee sponsor withdrawal amount must be positive",
+            ));
+        }
+        let asset_definition_id = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor asset definition `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                asset_definition_id,
+                amount,
+                destination,
+            }
+            .into(),
+        ))
     }
 
     #[classmethod]
@@ -15156,6 +15460,7 @@ impl Instruction {
 struct TransactionBuilder {
     chain_id: ChainId,
     authority: AccountId,
+    fee_payment: FeePaymentIntent,
     creation_time: Option<Duration>,
     ttl: Option<Duration>,
     nonce: Option<NonZeroU32>,
@@ -15167,8 +15472,11 @@ struct TransactionBuilder {
 
 impl TransactionBuilder {
     fn to_model_builder(&self) -> ModelTransactionBuilder {
-        let mut builder =
-            ModelTransactionBuilder::new(self.chain_id.clone(), self.authority.clone());
+        let mut builder = ModelTransactionBuilder::new(
+            self.chain_id.clone(),
+            self.authority.clone(),
+            self.fee_payment.clone(),
+        );
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -15228,16 +15536,23 @@ impl TransactionBuilder {
 #[pymethods]
 impl TransactionBuilder {
     #[new]
-    fn new(chain_id: &str, authority: &str) -> PyResult<Self> {
+    fn new(chain_id: &str, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(chain_id, "chain_id")?;
         require_non_blank_unpadded(authority, "authority")?;
         let chain_id = parse_chain_id(chain_id)?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;
+        let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        let creation_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| {
+                PyValueError::new_err(format!("system clock precedes UNIX epoch: {err}"))
+            })?;
         Ok(Self {
             chain_id,
             authority,
-            creation_time: None,
+            fee_payment,
+            creation_time: Some(creation_time),
             ttl: None,
             nonce: None,
             instructions: Vec::new(),
@@ -15245,6 +15560,12 @@ impl TransactionBuilder {
             executable_override: None,
             attachments: Vec::new(),
         })
+    }
+
+    /// Replace the exact signature-bound fee payment intent.
+    fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
+        self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        Ok(())
     }
 
     /// Set a deterministic creation timestamp (milliseconds since UNIX epoch).
@@ -15371,6 +15692,16 @@ impl TransactionBuilder {
         PyBytes::new(py, &payload_bytes)
     }
 
+    /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
+    fn payload_json(&self) -> PyResult<String> {
+        let payload = self
+            .to_model_builder()
+            .into_payload()
+            .map_err(|err| PyValueError::new_err(format!("invalid transaction payload: {err}")))?;
+        json::to_json(&payload)
+            .map_err(|err| PyValueError::new_err(format!("encode transaction payload JSON: {err}")))
+    }
+
     /// Return the canonical Iroha transaction payload prehash bytes.
     fn payload_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let payload_hash = self.to_model_builder().payload_hash_bytes();
@@ -15394,12 +15725,55 @@ impl TransactionBuilder {
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
         let private_key = parse_private_key(private_key)?;
-        let signed = self.to_model_builder().sign(&private_key);
+        let signed = self
+            .to_model_builder()
+            .try_sign(&private_key)
+            .map_err(|err| PyValueError::new_err(format!("transaction signing failed: {err}")))?;
         let envelope = self.envelope_from_signed(&signed)?;
 
         // Reset instructions for the next transaction while keeping metadata.
         self.clear_transaction_state();
 
+        Ok(envelope)
+    }
+
+    /// Replace only fee maxima using a quote, then sign the exact quoted draft.
+    fn sign_quoted_payload(
+        &mut self,
+        draft_payload_json: &str,
+        quoted_fee_payment_json: &str,
+        private_key: &[u8],
+    ) -> PyResult<SignedTransactionEnvelope> {
+        let mut draft =
+            json::from_str::<TransactionPayload>(draft_payload_json).map_err(|err| {
+                PyValueError::new_err(format!("invalid quoted transaction payload JSON: {err}"))
+            })?;
+        let expected = self
+            .to_model_builder()
+            .into_payload()
+            .map_err(|err| PyValueError::new_err(format!("invalid transaction payload: {err}")))?;
+        if draft != expected {
+            return Err(PyValueError::new_err(
+                "quoted transaction payload does not match this builder's exact draft",
+            ));
+        }
+        let quoted_fee_payment = parse_fee_payment_intent_json(quoted_fee_payment_json)?;
+        if !draft
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quoted_fee_payment)
+        {
+            return Err(PyValueError::new_err(
+                "fee quote changed the selected payer, sponsor revision, or gas bound",
+            ));
+        }
+        draft.fee_payment = quoted_fee_payment;
+        let private_key = parse_private_key(private_key)?;
+        let signed = ModelTransactionBuilder::from_payload(draft)
+            .map_err(|err| PyValueError::new_err(format!("invalid quoted payload: {err}")))?
+            .try_sign(&private_key)
+            .map_err(|err| PyValueError::new_err(format!("transaction signing failed: {err}")))?;
+        let envelope = self.envelope_from_signed(&signed)?;
+        self.clear_transaction_state();
         Ok(envelope)
     }
 

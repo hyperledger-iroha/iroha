@@ -290,7 +290,11 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = client.build_transaction(setup_instructions, metadata.clone());
+    let setup_tx = client.build_transaction(
+        setup_instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&setup_tx)?;
 
     // Initiate the repo: Alice borrows cash, pledging collateral.
@@ -321,13 +325,21 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     };
     let repo_instruction = repo_instruction_template()?;
     let repo_instruction_box = repo_instr_box(repo_instruction);
-    let repo_tx = client.build_transaction(vec![repo_instruction_box], metadata.clone());
+    let repo_tx = client.build_transaction(
+        vec![repo_instruction_box],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&repo_tx)?;
 
     // Ensure duplicate agreement IDs are rejected while active.
     let duplicate_repo = repo_instruction_template()?;
     let duplicate_instruction_box = repo_instr_box(duplicate_repo);
-    let duplicate_tx = client.build_transaction(vec![duplicate_instruction_box], metadata.clone());
+    let duplicate_tx = client.build_transaction(
+        vec![duplicate_instruction_box],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     let duplicate_err = client
         .submit_transaction_blocking(&duplicate_tx)
         .unwrap_err();
@@ -390,8 +402,11 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1100_u64)),
         settlement_timestamp_ms + 86_400_000,
     );
-    let future_tx =
-        client.build_transaction(vec![repo_instr_box(future_reverse)], metadata.clone());
+    let future_tx = client.build_transaction(
+        vec![repo_instr_box(future_reverse)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     let future_err = client.submit_transaction_blocking(&future_tx).unwrap_err();
     assert!(
         error_chain_contains(&future_err, "future"),
@@ -477,8 +492,11 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .expect("reverse maturity timestamp fits in u64"),
         RepoGovernance::with_defaults(1_500, 43_200),
     );
-    let reopened_tx =
-        client.build_transaction(vec![repo_instr_box(reopened_repo)], metadata.clone());
+    let reopened_tx = client.build_transaction(
+        vec![repo_instr_box(reopened_repo)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&reopened_tx)?;
 
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo reopen")?;
@@ -504,10 +522,13 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     }
 
     // Provide additional collateral so the counterparty can settle above the recorded pledge.
-    client.submit_blocking(Mint::asset_quantity(
-        Quantity::from(50_u64),
-        AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
-    ))?;
+    client.submit_blocking(
+        Mint::asset_quantity(
+            Quantity::from(50_u64),
+            AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let substitution_settlement_ms = *repo_snapshot.initiated_timestamp_ms();
 
@@ -522,8 +543,11 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1050_u64)),
         substitution_settlement_ms,
     );
-    let insufficient_tx =
-        client.build_transaction(vec![repo_instr_box(insufficient_reverse)], metadata.clone());
+    let insufficient_tx = client.build_transaction(
+        vec![repo_instr_box(insufficient_reverse)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     let insufficient_err = client
         .submit_transaction_blocking(&insufficient_tx)
         .unwrap_err();
@@ -542,8 +566,11 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1150_u64)),
         substitution_settlement_ms,
     );
-    let substitution_tx =
-        client.build_transaction(vec![repo_instr_box(substitution_reverse)], metadata.clone());
+    let substitution_tx = client.build_transaction(
+        vec![repo_instr_box(substitution_reverse)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&substitution_tx)?;
 
     let assets_after_substitution = wait_for_assets(
@@ -624,7 +651,11 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = client.build_transaction(setup_instructions, metadata.clone());
+    let setup_tx = client.build_transaction(
+        setup_instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&setup_tx)?;
 
     let agreement_id: RepoAgreementId = "margin_repo".parse()?;
@@ -652,8 +683,11 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         // integration test network.
         RepoGovernance::with_defaults(1_500, 300),
     );
-    let repo_tx =
-        client.build_transaction(vec![repo_instr_box(repo_instruction)], metadata.clone());
+    let repo_tx = client.build_transaction(
+        vec![repo_instr_box(repo_instruction)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&repo_tx)?;
 
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "margin repo initiation")?;
@@ -747,7 +781,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = client.build_transaction(setup_instructions, metadata.clone());
+    let setup_tx = client.build_transaction(
+        setup_instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&setup_tx)?;
 
     let agreement_id: RepoAgreementId = "tri_party_repo".parse()?;
@@ -773,8 +811,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         maturity_timestamp_ms,
         RepoGovernance::with_defaults(1_500, 86_400),
     );
-    let repo_tx =
-        client.build_transaction(vec![repo_instr_box(repo_instruction)], metadata.clone());
+    let repo_tx = client.build_transaction(
+        vec![repo_instr_box(repo_instruction)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    );
     client.submit_transaction_blocking(&repo_tx)?;
 
     let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());

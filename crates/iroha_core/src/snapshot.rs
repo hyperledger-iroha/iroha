@@ -4384,6 +4384,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -4859,20 +4860,28 @@ mod tests {
     fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
         let key_pair = checked_seeded_keypair(0x31, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
-            .with_instructions([PublishSpaceDirectoryManifest {
-                manifest: sample_space_directory_manifest(),
-            }])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(TEST_CHAIN_ID),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([PublishSpaceDirectoryManifest {
+            manifest: sample_space_directory_manifest(),
+        }])
+        .sign(key_pair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
     }
 
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
         let key_pair = checked_seeded_keypair(0x32, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
-            .with_instructions([Log::new(Level::INFO, message.to_owned())])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(TEST_CHAIN_ID),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_owned())])
+        .sign(key_pair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
     }
 

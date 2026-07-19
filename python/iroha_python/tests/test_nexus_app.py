@@ -27,6 +27,10 @@ FIXTURE = json.loads(
 FIXTURE_PAYLOAD = bytes.fromhex(FIXTURE["expected"]["payload_bytes_hex"])
 FIXTURE_PUBLIC_KEY = bytes.fromhex(FIXTURE["connect"]["approval_frame"]["signing_public_key_hex"])
 FIXTURE_SIGNATURE = bytes.fromhex(FIXTURE["expected"]["wallet_signature_hex"])
+FEE_PAYMENT = {
+    "payer": "authority",
+    "value": {"charge_limits": [], "gas_limit": None},
+}
 UNSUPPORTED_SIGNATURE_ALGORITHMS = (
     "secp256k1",
     "",
@@ -197,6 +201,7 @@ def test_nexus_app_builds_transfer_draft_and_computes_payload_hash():
             source_asset_id="asset#approved-account-i105",
             quantity="1.25",
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -224,6 +229,7 @@ def test_nexus_app_normalizes_lossless_quantity_before_custom_codec():
             source_asset_id="asset#approved-account-i105",
             quantity=Decimal("1.2500"),
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -256,6 +262,7 @@ def test_nexus_app_rejects_lossy_or_noncanonical_quantity_before_codec(quantity)
                 source_asset_id="asset#approved-account-i105",
                 quantity=quantity,
                 destination_account_id="destination-i105",
+                fee_payment=FEE_PAYMENT,
             )
         )
 
@@ -282,6 +289,7 @@ def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
             source_asset_id="asset#approved-account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -327,6 +335,7 @@ def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
                 source_asset_id="asset#approved-account-i105",
                 quantity=1,
                 destination_account_id="destination-i105",
+                fee_payment=FEE_PAYMENT,
             )
         )
 
@@ -351,6 +360,7 @@ def test_nexus_app_rejects_mismatched_custom_payload_hash():
                 source_asset_id="asset#approved-account-i105",
                 quantity=1,
                 destination_account_id="destination-i105",
+                fee_payment=FEE_PAYMENT,
             )
         )
 
@@ -380,6 +390,7 @@ def test_nexus_app_rejects_conflicting_custom_payload_hash_aliases():
                 source_asset_id="asset#approved-account-i105",
                 quantity=1,
                 destination_account_id="destination-i105",
+                fee_payment=FEE_PAYMENT,
             )
         )
 
@@ -404,6 +415,7 @@ def test_nexus_app_default_codec_matches_shared_fixture():
             source_asset_id=transfer["source_asset_id"],
             quantity=transfer["quantity"],
             destination_account_id=transfer["destination_account_id"],
+            fee_payment=FEE_PAYMENT,
             metadata=transfer["metadata"],
             creation_time_ms=transfer["creation_time_ms"],
             ttl_ms=transfer["ttl_ms"],
@@ -448,6 +460,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
             source_asset_id="asset#approved-account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         ),
     )
 
@@ -478,6 +491,7 @@ def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -511,6 +525,7 @@ def test_nexus_app_rejects_unsupported_signable_signature_algorithm(algorithm):
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
     signable = replace(draft.signable, signature_algorithm=algorithm)
@@ -548,6 +563,7 @@ def test_nexus_app_accepts_exact_zero_signature_algorithm_alias():
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -578,6 +594,7 @@ def _client_for_finalized_result(result):
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
     return client, draft, torii
@@ -724,6 +741,7 @@ def test_nexus_app_rejects_authority_mismatch_before_wallet_signature():
                 source_asset_id="asset#other-account-i105",
                 quantity=1,
                 destination_account_id="destination-i105",
+                fee_payment=FEE_PAYMENT,
                 authority="other-account-i105",
             ),
         )
@@ -754,6 +772,7 @@ def test_nexus_app_rejects_invalid_signature_length():
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -791,6 +810,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
 
@@ -819,6 +839,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
     with pytest.raises(NexusAppError) as submit_exc:
@@ -846,6 +867,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
             source_asset_id="asset#account-i105",
             quantity=1,
             destination_account_id="destination-i105",
+            fee_payment=FEE_PAYMENT,
         )
     )
     with pytest.raises(NexusAppError) as status_exc:

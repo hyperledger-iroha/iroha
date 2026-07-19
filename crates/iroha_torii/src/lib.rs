@@ -298,7 +298,7 @@ use iroha_data_model::{
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
     musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
-    nexus::{DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, LaneId},
+    nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
     permission::Permission,
@@ -306,8 +306,8 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
-        SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
-        signed::TransactionEntrypoint,
+        SignedTransaction, TransactionPayload, TransactionSubmissionReceipt,
+        TransactionSubmissionReceiptPayload, signed::TransactionEntrypoint,
     },
 };
 use iroha_executor_data_model::permission::account::{
@@ -318,7 +318,7 @@ use iroha_executor_data_model::permission::account::{
     CanDelegateAccountAliasResolution, CanRegisterAccount,
 };
 #[cfg(feature = "app_api")]
-use iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain;
+use iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram;
 #[cfg(feature = "app_api")]
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain;
 use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
@@ -328,10 +328,11 @@ use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
 use iroha_torii_shared::{
-    AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope,
-    NORITO_V1_WEBSOCKET_SUBPROTOCOL, PipelineTransactionStatus, PipelineTransactionStatusResponse,
-    QueueErrorSnapshot, TriggerCompletionListResponse, TriggerCompletionRecord,
-    TriggerCompletionSummary,
+    AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope, FeeErrorDetails,
+    FeeQuoteCapacity, FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest,
+    FeeQuoteResponse, FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
+    PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
+    TriggerCompletionListResponse, TriggerCompletionRecord, TriggerCompletionSummary,
     route_catalog::{self, RouteCatalog},
     uri,
 };
@@ -3467,7 +3468,7 @@ mod preauth_connection_lifetime_tests {
             allowed_permissions: BTreeSet::new(),
             alias_resolve_dataspaces: BTreeSet::new(),
             alias_resolve_domains: BTreeSet::new(),
-            fee_sponsor: None,
+            fee_sponsor_program_id: None,
             alias_lease_term_years: 1,
             alias_auto_renew_enabled: false,
             alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -5566,6 +5567,50 @@ fn axt_error_details_is_empty(details: &AxtErrorDetails) -> bool {
         && details.next_min_sub_nonce.is_none()
 }
 
+fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
+    if FeeRejectionCode::from_str(&details.code).is_err() {
+        return false;
+    }
+
+    if details.program_id.as_deref().is_some_and(|literal| {
+        literal
+            .parse::<iroha_data_model::nexus::FeeSponsorProgramId>()
+            .map_or(true, |id| id.to_string() != literal)
+    }) {
+        details.program_id = None;
+    }
+    if details.program_revision == Some(0) {
+        details.program_revision = None;
+    }
+    if details
+        .asset_definition_id
+        .as_deref()
+        .is_some_and(|literal| {
+            literal
+                .parse::<AssetDefinitionId>()
+                .map_or(true, |id| id.to_string() != literal)
+        })
+    {
+        details.asset_definition_id = None;
+    }
+    for amount in [&mut details.required, &mut details.available] {
+        if amount.as_deref().is_some_and(|literal| {
+            literal
+                .parse::<Quantity>()
+                .map_or(true, |quantity| quantity.to_string() != literal)
+        }) {
+            *amount = None;
+        }
+    }
+    if details.rule_id.as_deref().is_some_and(|literal| {
+        Name::from_str(literal).map_or(true, |name| name.to_string() != literal)
+    }) {
+        details.rule_id = None;
+    }
+    retain_valid_error_detail(&mut details.remediation);
+    true
+}
+
 fn sanitize_error_details(details: &mut ErrorDetails) {
     retain_valid_error_detail(&mut details.layer);
     if details
@@ -5608,6 +5653,13 @@ fn sanitize_error_details(details: &mut ErrorDetails) {
         if axt_error_details_is_empty(axt) {
             details.axt = None;
         }
+    }
+    if details
+        .fee
+        .as_mut()
+        .is_some_and(|fee| !sanitize_fee_error_details(fee))
+    {
+        details.fee = None;
     }
 }
 
@@ -7925,6 +7977,34 @@ mod typed_error_contract_tests {
             envelope.details.and_then(|details| details.reject_code),
             Some("PRTRY:BAD".to_owned())
         );
+    }
+
+    #[test]
+    fn fee_error_detail_sanitizer_enforces_public_codes_and_canonical_values() {
+        let mut details = FeeErrorDetails {
+            code: FeeRejectionCode::VaultInsufficient.as_str().to_owned(),
+            retryable: true,
+            program_id: Some("not-a-program".to_owned()),
+            program_revision: Some(0),
+            asset_definition_id: Some("not-an-asset".to_owned()),
+            required: Some("01".to_owned()),
+            available: Some("4".to_owned()),
+            rule_id: Some("not a name".to_owned()),
+            observation_height: Some(42),
+            remediation: Some("fund the program vault".to_owned()),
+        };
+
+        assert!(sanitize_fee_error_details(&mut details));
+        assert!(details.program_id.is_none());
+        assert!(details.program_revision.is_none());
+        assert!(details.asset_definition_id.is_none());
+        assert!(details.required.is_none());
+        assert_eq!(details.available.as_deref(), Some("4"));
+        assert!(details.rule_id.is_none());
+        assert_eq!(details.observation_height, Some(42));
+
+        details.code = "private/reason".to_owned();
+        assert!(!sanitize_fee_error_details(&mut details));
     }
 
     #[tokio::test]
@@ -12193,19 +12273,19 @@ fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
         vec![
             offline_readiness_blocker(
                 "recursive_step_eq_verifier_unavailable",
-                "The authenticated ABI-20 V4 recursive StepEq verifier is unavailable.",
+                "The authenticated ABI-21 V4 recursive StepEq verifier is unavailable.",
             ),
             offline_readiness_blocker(
                 "recursive_step_ep_verifier_unavailable",
-                "The authenticated ABI-20 V4 recursive StepEp verifier is unavailable.",
+                "The authenticated ABI-21 V4 recursive StepEp verifier is unavailable.",
             ),
             offline_readiness_blocker(
                 "proof_backend_unavailable",
-                "The ABI-20 V4 proof backend cannot be constructed without an authenticated active recursive release.",
+                "The ABI-21 V4 proof backend cannot be constructed without an authenticated active recursive release.",
             ),
             offline_readiness_blocker(
                 "recursive_lineage_unavailable",
-                "The authenticated ABI-20 V4 recursive lineage proof path is unavailable.",
+                "The authenticated ABI-21 V4 recursive lineage proof path is unavailable.",
             ),
         ]
     };
@@ -12214,7 +12294,7 @@ fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
         Err(error) => {
             let mut blockers = vec![offline_readiness_blocker(
                 "recursive_v4_registry_malformed",
-                format!("The ABI-20 V4 recursive registry failed authentication: {error}"),
+                format!("The ABI-21 V4 recursive registry failed authentication: {error}"),
             )];
             blockers.extend(unavailable_components());
             return OfflineKagemushaRecursiveV4Evaluation {
@@ -12228,7 +12308,7 @@ fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
     }) else {
         let mut blockers = vec![offline_readiness_blocker(
             "recursive_v4_registry_unavailable",
-            "No active atomic ABI-20 V4 Eq/Ep verifier release is installed at the evaluated block.",
+            "No active atomic ABI-21 V4 Eq/Ep verifier release is installed at the evaluated block.",
         )];
         blockers.extend(unavailable_components());
         return OfflineKagemushaRecursiveV4Evaluation {
@@ -12245,11 +12325,11 @@ fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
     if let Some(error) = resolved.proof_backend_error {
         blockers.push(offline_readiness_blocker(
             "proof_backend_unavailable",
-            format!("The authenticated ABI-20 V4 proof backend could not be constructed: {error}"),
+            format!("The authenticated ABI-21 V4 proof backend could not be constructed: {error}"),
         ));
         blockers.push(offline_readiness_blocker(
             "recursive_lineage_unavailable",
-            "The authenticated ABI-20 V4 recursive lineage proof path is unavailable because the proof backend could not be constructed.",
+            "The authenticated ABI-21 V4 recursive lineage proof path is unavailable because the proof backend could not be constructed.",
         ));
     }
     OfflineKagemushaRecursiveV4Evaluation {
@@ -12406,7 +12486,7 @@ async fn handler_offline_readiness(
     if recursive_v4.artifact_set.is_some() && !issuance_window_active {
         blockers.push(offline_readiness_blocker(
             "recursive_release_outside_issuance_window",
-            "The authenticated ABI-20/V4 release is not inside its issuance window.",
+            "The authenticated ABI-21/V4 release is not inside its issuance window.",
         ));
     }
     if asset_scale.is_none() {
@@ -12768,7 +12848,7 @@ mod offline_kagemusha_readiness_tests {
             ("step_eq", Some(&step_eq)),
             ("step_ep", Some(&step_ep)),
         ])
-        .expect("the exact ABI-20 readiness projection has five distinct roles");
+        .expect("the exact ABI-21 readiness projection has five distinct roles");
         let artifact_set = recursive.artifact_set.expect("authenticated artifact set");
         assert_eq!(artifact_set.generation, "release-v4");
         assert_eq!(artifact_set.manifest_sha256, "56".repeat(32));
@@ -12795,9 +12875,9 @@ mod offline_kagemusha_readiness_tests {
             ready: true,
             blockers: Vec::new(),
         };
-        let json = norito::json::to_vec(&payload).expect("encode ABI-20 readiness JSON");
+        let json = norito::json::to_vec(&payload).expect("encode ABI-21 readiness JSON");
         let decoded: iroha_torii_shared::offline_api::OfflineReadiness =
-            norito::json::from_slice(&json).expect("decode ABI-20 readiness JSON");
+            norito::json::from_slice(&json).expect("decode ABI-21 readiness JSON");
         assert_eq!(decoded, payload);
     }
 
@@ -12937,7 +13017,7 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
-            required_bridge_abi_version: 20,
+            required_bridge_abi_version: 21,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -16755,7 +16835,9 @@ pub struct ZkIvmDeriveRequestDto {
     pub vk_ref: iroha_data_model::proof::VerifyingKeyId,
     /// Transaction authority used for admission-style binding and host context.
     pub authority: iroha_data_model::account::AccountId,
-    /// Transaction metadata (must include `gas_limit`).
+    /// Exact fee payer, component maxima, and executable gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
     pub metadata: iroha_data_model::metadata::Metadata,
     /// IVM bytecode to execute.
@@ -16796,7 +16878,9 @@ pub struct ZkIvmProveRequestDto {
     pub vk_ref: iroha_data_model::proof::VerifyingKeyId,
     /// Transaction authority used for admission-style binding and host context.
     pub authority: iroha_data_model::account::AccountId,
-    /// Transaction metadata (must include `gas_limit`).
+    /// Exact fee payer, component maxima, and executable gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
     pub metadata: iroha_data_model::metadata::Metadata,
     /// IVM bytecode to execute and prove.
@@ -17749,6 +17833,34 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
 }
 
 #[cfg(feature = "app_api")]
+fn validate_zk_ivm_fee_payment(
+    fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
+    metadata: &iroha_data_model::metadata::Metadata,
+) -> Result<(), Error> {
+    let invalid = |message: String| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        ))
+    };
+    fee_payment
+        .validate()
+        .map_err(|err| invalid(format!("invalid fee_payment: {err}")))?;
+    if fee_payment.gas_limit().is_none() {
+        return Err(invalid(
+            "fee_payment.gas_limit is required for IVM derive/prove".to_owned(),
+        ));
+    }
+    for key in ["fee_sponsor", "gas_limit", "gas_asset_id"] {
+        if metadata.get(key).is_some() {
+            return Err(invalid(format!(
+                "legacy metadata key `{key}` is not supported; use fee_payment"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -17776,6 +17888,7 @@ async fn handler_zk_ivm_derive(
                 )),
             ))
         })?;
+    validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
 
     let backend = req.vk_ref.backend.as_str();
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
@@ -17879,6 +17992,7 @@ async fn handler_zk_ivm_derive(
     let chain_id = app.chain_id.as_ref().clone();
     let state = Arc::clone(&app.state);
     let authority = req.authority;
+    let fee_payment = req.fee_payment;
     let metadata = req.metadata;
     let bytecode = req.bytecode;
     let derive_task = tokio::task::spawn_blocking(move || -> Result<Bytes, String> {
@@ -17889,6 +18003,7 @@ async fn handler_zk_ivm_derive(
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             chain_id,
             authority.clone(),
+            fee_payment,
         )
         .with_metadata(metadata)
         .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
@@ -17974,6 +18089,7 @@ async fn handler_zk_ivm_prove(
             )),
         ))
     })?;
+    validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
 
     let backend = req.vk_ref.backend.as_str();
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
@@ -18083,6 +18199,7 @@ async fn handler_zk_ivm_prove(
     let ZkIvmProveRequestDto {
         vk_ref,
         authority,
+        fee_payment,
         metadata,
         bytecode,
         proved: maybe_client_proved,
@@ -18287,6 +18404,7 @@ async fn handler_zk_ivm_prove(
                 let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
                     chain_id,
                     authority.clone(),
+                    fee_payment,
                 )
                 .with_metadata(metadata.clone())
                 .with_executable(iroha_data_model::transaction::Executable::Ivm(
@@ -22997,13 +23115,13 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
         ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
         (
-            QueryOutputBatchBox::FeeSponsorPolicy(mut left),
-            QueryOutputBatchBox::FeeSponsorPolicy(right),
-        ) => merge_variant!(left, right, FeeSponsorPolicy),
+            QueryOutputBatchBox::FeeSponsorProgram(mut left),
+            QueryOutputBatchBox::FeeSponsorProgram(right),
+        ) => merge_variant!(left, right, FeeSponsorProgram),
         (
-            QueryOutputBatchBox::FeeSponsorPolicyId(mut left),
-            QueryOutputBatchBox::FeeSponsorPolicyId(right),
-        ) => merge_variant!(left, right, FeeSponsorPolicyId),
+            QueryOutputBatchBox::FeeSponsorProgramId(mut left),
+            QueryOutputBatchBox::FeeSponsorProgramId(right),
+        ) => merge_variant!(left, right, FeeSponsorProgramId),
         (left, right) => Err(torii_proxy_error_response(
             StatusCode::CONFLICT,
             "query_conflict",
@@ -23126,11 +23244,11 @@ fn canonicalize_query_batch_box(
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
             canonicalize_variant!(items, AnonymousAssetEscrowRecord)
         }
-        QueryOutputBatchBox::FeeSponsorPolicy(items) => {
-            canonicalize_variant!(items, FeeSponsorPolicy)
+        QueryOutputBatchBox::FeeSponsorProgram(items) => {
+            canonicalize_variant!(items, FeeSponsorProgram)
         }
-        QueryOutputBatchBox::FeeSponsorPolicyId(items) => {
-            canonicalize_variant!(items, FeeSponsorPolicyId)
+        QueryOutputBatchBox::FeeSponsorProgramId(items) => {
+            canonicalize_variant!(items, FeeSponsorProgramId)
         }
     }
 }
@@ -40809,9 +40927,9 @@ async fn handler_iso_pacs008(
     }
 
     let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
-    let (transaction, context) = {
+    let (mut transaction_payload, context) = {
         let world = app.state.world_view();
-        match runtime.build_pacs008_transaction(
+        match runtime.build_pacs008_payload(
             &parsed,
             &world,
             now_ms,
@@ -40823,6 +40941,20 @@ async fn handler_iso_pacs008(
                 runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
                 return Err(Error::Query(map_iso_error(err)));
             }
+        }
+    };
+    transaction_payload.fee_payment = match quote_internal_fee_payment(&app, &transaction_payload) {
+        Ok(intent) => intent,
+        Err(err) => {
+            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+            return Err(err);
+        }
+    };
+    let transaction = match runtime.sign_transaction_payload(transaction_payload) {
+        Ok(transaction) => transaction,
+        Err(err) => {
+            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+            return Err(Error::Query(map_iso_error(err)));
         }
     };
 
@@ -40983,9 +41115,9 @@ async fn handler_iso_pacs009(
     }
 
     let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
-    let (transaction, context) = {
+    let (mut transaction_payload, context) = {
         let world = app.state.world_view();
-        match runtime.build_pacs009_transaction(
+        match runtime.build_pacs009_payload(
             &parsed,
             &world,
             now_ms,
@@ -40997,6 +41129,20 @@ async fn handler_iso_pacs009(
                 runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
                 return Err(Error::Query(map_iso_error(err)));
             }
+        }
+    };
+    transaction_payload.fee_payment = match quote_internal_fee_payment(&app, &transaction_payload) {
+        Ok(intent) => intent,
+        Err(err) => {
+            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+            return Err(err);
+        }
+    };
+    let transaction = match runtime.sign_transaction_payload(transaction_payload) {
+        Ok(transaction) => transaction,
+        Err(err) => {
+            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+            return Err(Error::Query(map_iso_error(err)));
         }
     };
 
@@ -42892,9 +43038,13 @@ mod transaction_ingress_decode_tests {
         let keypair =
             checked_transaction_batch_test_keypair(0xa1, iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, message.to_owned())])
-            .sign(keypair.private_key())
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_owned())])
+        .sign(keypair.private_key())
     }
 
     fn signed_transaction_for_test_with_keypair(
@@ -42903,9 +43053,13 @@ mod transaction_ingress_decode_tests {
         message: &str,
     ) -> SignedTransaction {
         let authority = AccountId::new(keypair.public_key().clone());
-        TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, message.to_owned())])
-            .sign(keypair.private_key())
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_owned())])
+        .sign(keypair.private_key())
     }
 
     fn checked_transaction_batch_test_keypair(
@@ -43168,9 +43322,13 @@ mod transaction_ingress_decode_tests {
         let keypair =
             checked_transaction_batch_test_keypair(0xa3, iroha_crypto::Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "batch secp".to_owned())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "batch secp".to_owned())])
+        .sign(keypair.private_key());
         let decoded =
             decode_transaction_batch_payloads(vec![versioned_signed_transaction(&signed)])
                 .expect("non-Ed25519 signed transaction decodes");
@@ -43191,12 +43349,19 @@ mod transaction_ingress_decode_tests {
         let decoded = decode_transaction_batch_payloads(
             (0..3)
                 .map(|index| {
-                    let signed = TransactionBuilder::new(chain.clone(), authority.clone())
-                        .with_instructions([Log::new(
-                            Level::INFO,
-                            format!("same-authority-rate-limit-{index}"),
-                        )])
-                        .sign(keypair.private_key());
+                    let signed = TransactionBuilder::new(
+                        chain.clone(),
+                        authority.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        format!("same-authority-rate-limit-{index}"),
+                    )])
+                    .sign(keypair.private_key());
                     versioned_signed_transaction(&signed)
                 })
                 .collect(),
@@ -43221,15 +43386,27 @@ mod transaction_ingress_decode_tests {
         let authority_a = AccountId::new(keypair_a.public_key().clone());
         let authority_b = AccountId::new(keypair_b.public_key().clone());
         let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
-        let signed_a1 = TransactionBuilder::new(chain.clone(), authority_a.clone())
-            .with_instructions([Log::new(Level::INFO, "authority-a-1".to_owned())])
-            .sign(keypair_a.private_key());
-        let signed_b = TransactionBuilder::new(chain.clone(), authority_b.clone())
-            .with_instructions([Log::new(Level::INFO, "authority-b".to_owned())])
-            .sign(keypair_b.private_key());
-        let signed_a2 = TransactionBuilder::new(chain, authority_a.clone())
-            .with_instructions([Log::new(Level::INFO, "authority-a-2".to_owned())])
-            .sign(keypair_a.private_key());
+        let signed_a1 = TransactionBuilder::new(
+            chain.clone(),
+            authority_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "authority-a-1".to_owned())])
+        .sign(keypair_a.private_key());
+        let signed_b = TransactionBuilder::new(
+            chain.clone(),
+            authority_b.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "authority-b".to_owned())])
+        .sign(keypair_b.private_key());
+        let signed_a2 = TransactionBuilder::new(
+            chain,
+            authority_a.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "authority-a-2".to_owned())])
+        .sign(keypair_a.private_key());
         let decoded = decode_transaction_batch_payloads(vec![
             versioned_signed_transaction(&signed_a1),
             versioned_signed_transaction(&signed_b),
@@ -45961,7 +46138,7 @@ async fn handler_retail_recipient_route(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_fee_sponsor_policy_by_id(
+async fn handler_fee_sponsor_program_by_id(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
@@ -45974,108 +46151,396 @@ async fn handler_fee_sponsor_policy_by_id(
         &method,
         &uri,
         body.as_ref(),
-        "v1/fee-sponsor-policies/by-id",
+        "v1/fee-sponsor-programs/by-id",
     )?;
     if !visibility.is_signed() {
         return Ok(torii_canonical_auth_required_response(
-            "fee_sponsor_policy_signature_required",
-            "fee sponsor policy lookup requires canonical request signing",
+            "fee_sponsor_program_signature_required",
+            "fee sponsor program lookup requires canonical request signing",
         ));
     }
-    let request: routing::FeeSponsorPolicyByIdRequestDto = norito::json::from_slice(body.as_ref())
-        .map_err(|err| {
+    let request: FeeSponsorProgramByIdRequest =
+        norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let sponsor_literal = request.sponsor_account_id.trim();
-    let policy_name_literal = request.policy_name.trim();
-    if sponsor_literal != request.sponsor_account_id
-        || policy_name_literal != request.policy_name
-        || policy_name_literal.is_empty()
-    {
+    let literal = request.program_id.trim();
+    if literal != request.program_id || literal.is_empty() {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
-            "invalid_fee_sponsor_policy_id",
-            "sponsor_account_id and policy_name must be canonical without surrounding whitespace",
+            "invalid_fee_sponsor_program_id",
+            "program_id must be a canonical sponsor/program literal without surrounding whitespace",
         ));
     }
-    let sponsor = match AccountId::parse_encoded(sponsor_literal) {
-        Ok(parsed) => parsed.into_account_id(),
+    let program_id = match FeeSponsorProgramId::from_str(literal) {
+        Ok(program_id) => program_id,
         Err(err) => {
             return Ok(torii_proxy_error_response(
                 StatusCode::BAD_REQUEST,
-                "invalid_fee_sponsor_policy_id",
-                format!("invalid sponsor_account_id: {err}"),
+                "invalid_fee_sponsor_program_id",
+                format!("invalid program_id: {err}"),
             ));
         }
     };
-    if sponsor.to_string() != sponsor_literal {
+    if program_id.to_string() != literal {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
-            "invalid_fee_sponsor_policy_id",
-            "sponsor_account_id must use the canonical I105 encoding",
+            "invalid_fee_sponsor_program_id",
+            "program_id must use the exact canonical sponsor/program encoding",
         ));
     }
-    let policy_name = match Name::from_str(policy_name_literal) {
-        Ok(name) => name,
-        Err(err) => {
-            return Ok(torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_fee_sponsor_policy_id",
-                format!("invalid policy_name: {err}"),
-            ));
-        }
-    };
-    if policy_name.as_ref() != policy_name_literal {
-        return Ok(torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_fee_sponsor_policy_id",
-            "policy_name must use the exact canonical Iroha Name encoding",
-        ));
-    }
-    let policy_id = FeeSponsorPolicyId::new(sponsor, policy_name);
-    let nexus = app.state.nexus_snapshot();
-    let is_configured_default =
-        nexus
-            .dataspace_fee_sponsor_policies
-            .iter()
-            .any(|(dataspace, configured_name)| {
-                if configured_name != &policy_id.name {
-                    return false;
-                }
-                let Some(configured_sponsor) = nexus.dataspace_fee_sponsors.get(dataspace) else {
-                    return false;
-                };
-                routing::parse_account_literal_with_state(
-                    app.state.as_ref(),
-                    configured_sponsor,
-                    &app.telemetry,
-                    "/v1/fee-sponsor-policies/by-id",
-                )
-                .is_ok_and(|(account_id, _)| {
-                    account_id.subject_id() == policy_id.sponsor.subject_id()
-                })
-            });
-    if !is_configured_default {
-        return Ok(torii_proxy_error_response(
-            StatusCode::NOT_FOUND,
-            "fee_sponsor_policy_not_found",
-            "the exact fee sponsor policy is not selected by dataspace configuration",
-        ));
-    }
-    let policy = {
+    let program = {
         let world = app.state.world_view();
-        world.fee_sponsor_policies().get(&policy_id).cloned()
+        world.fee_sponsor_programs().get(&program_id).cloned()
     };
-    let Some(policy) = policy else {
+    let Some(program) = program else {
         return Ok(torii_proxy_error_response(
             StatusCode::NOT_FOUND,
-            "fee_sponsor_policy_not_found",
-            "the exact on-chain fee sponsor policy was not found",
+            "fee_sponsor_program_not_found",
+            "the exact on-chain fee sponsor program was not found",
         ));
     };
-    alias_json_response(StatusCode::OK, policy)
+    alias_json_response(StatusCode::OK, program)
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
+    matches!(
+        code,
+        FeeRejectionCode::RevisionNotActive
+            | FeeRejectionCode::ProgramNotActive
+            | FeeRejectionCode::ProgramBlockBudgetExhausted
+            | FeeRejectionCode::ProgramEpochBudgetExhausted
+            | FeeRejectionCode::BeneficiaryEpochBudgetExhausted
+            | FeeRejectionCode::VaultInsufficient
+            | FeeRejectionCode::AuthorityPayerInsufficient
+            | FeeRejectionCode::RelayCapacityUnavailable
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_remediation(code: FeeRejectionCode) -> &'static str {
+    match code {
+        FeeRejectionCode::InvalidFeeIntent => {
+            "rebuild the unsigned payload with a canonical fee payment intent"
+        }
+        FeeRejectionCode::ProgramNotFound => "select an existing on-chain sponsor program",
+        FeeRejectionCode::RevisionNotFound | FeeRejectionCode::RevisionNotActive => {
+            "refresh the sponsor program and select its active revision"
+        }
+        FeeRejectionCode::ProgramNotActive => {
+            "wait for program activation or select another active program"
+        }
+        FeeRejectionCode::BeneficiaryNotEligible => {
+            "enroll the authority in the program or select an eligible route default"
+        }
+        FeeRejectionCode::OperationNotAllowed | FeeRejectionCode::OperationDenied => {
+            "select a program whose active rules authorize every operation"
+        }
+        FeeRejectionCode::InvalidGasLimit => {
+            "set a positive gas bound appropriate for the executable"
+        }
+        FeeRejectionCode::FeeAssetNotCovered => {
+            "select a program revision that covers every quoted fee asset"
+        }
+        FeeRejectionCode::SignedLimitExceeded => {
+            "sign the exact charge limits returned by a fresh quote"
+        }
+        FeeRejectionCode::ProgramTransactionLimitExceeded => {
+            "reduce the transaction or select a program with a sufficient transaction limit"
+        }
+        FeeRejectionCode::ProgramBlockBudgetExhausted
+        | FeeRejectionCode::ProgramEpochBudgetExhausted
+        | FeeRejectionCode::BeneficiaryEpochBudgetExhausted => {
+            "retry after the applicable deterministic budget window advances"
+        }
+        FeeRejectionCode::VaultInsufficient => {
+            "fund the isolated sponsor-program vault or select another payer"
+        }
+        FeeRejectionCode::AuthorityPayerInsufficient => {
+            "fund the authority fee asset balance or select an eligible sponsor program"
+        }
+        FeeRejectionCode::RelayCapacityUnavailable => {
+            "retry after receipt-backed relay capacity becomes available"
+        }
+        FeeRejectionCode::InvalidProgramConfiguration => {
+            "repair the on-chain sponsor-program revision before retrying"
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_error_details(
+    code: FeeRejectionCode,
+    payload: &TransactionPayload,
+    observation_height: u64,
+) -> FeeErrorDetails {
+    let (program_id, program_revision) = payload
+        .fee_payment
+        .sponsor_program()
+        .map_or((None, None), |(program_id, revision)| {
+            (Some(program_id.to_string()), Some(revision))
+        });
+    FeeErrorDetails {
+        code: code.as_str().to_owned(),
+        retryable: fee_quote_rejection_retryable(code),
+        program_id,
+        program_revision,
+        observation_height: Some(observation_height),
+        remediation: Some(fee_quote_remediation(code).to_owned()),
+        ..FeeErrorDetails::default()
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_rejection_response(
+    status: StatusCode,
+    code: FeeRejectionCode,
+    payload: &TransactionPayload,
+    observation_height: u64,
+) -> Response {
+    let envelope = ErrorEnvelope::new(
+        "fee_quote_rejected",
+        "Fee admission rejected the unsigned transaction payload.",
+    )
+    .with_details(ErrorDetails {
+        layer: Some("torii".to_owned()),
+        endpoint: Some("/v1/fees/quote".to_owned()),
+        fee: Some(fee_quote_error_details(code, payload, observation_height)),
+        ..ErrorDetails::default()
+    });
+    (status, NoritoBody(envelope)).into_response()
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_request_rejection_response(
+    status: StatusCode,
+    code: FeeRejectionCode,
+    observation_height: u64,
+) -> Response {
+    let envelope = ErrorEnvelope::new(
+        "fee_quote_rejected",
+        "Fee admission rejected the unsigned transaction payload.",
+    )
+    .with_details(ErrorDetails {
+        layer: Some("torii".to_owned()),
+        endpoint: Some("/v1/fees/quote".to_owned()),
+        fee: Some(FeeErrorDetails {
+            code: code.as_str().to_owned(),
+            retryable: fee_quote_rejection_retryable(code),
+            observation_height: Some(observation_height),
+            remediation: Some(fee_quote_remediation(code).to_owned()),
+            ..FeeErrorDetails::default()
+        }),
+        ..ErrorDetails::default()
+    });
+    (status, NoritoBody(envelope)).into_response()
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_routing_decision(
+    app: &AppState,
+    payload: &TransactionPayload,
+) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
+    app.queue
+        .route_payload_with_state(payload, app.state.as_ref())
+        .map_err(|_| FeeRejectionCode::InvalidProgramConfiguration)
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn quote_internal_fee_payment(
+    app: &AppState,
+    payload: &TransactionPayload,
+) -> Result<iroha_data_model::transaction::FeePaymentIntent, Error> {
+    let rejected = |code: FeeRejectionCode, reason: &str| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "internal fee quote rejected ({}): {reason}",
+                code.as_str()
+            )),
+        ))
+    };
+    if payload.chain != *app.chain_id
+        || payload.fee_payment.validate().is_err()
+        || ["fee_sponsor", "gas_limit", "gas_asset_id"]
+            .into_iter()
+            .any(|key| payload.metadata.get(key).is_some())
+    {
+        return Err(rejected(
+            FeeRejectionCode::InvalidFeeIntent,
+            "payload chain, fee payment, or metadata is invalid",
+        ));
+    }
+    let route = fee_quote_routing_decision(app, payload)
+        .map_err(|code| rejected(code, "payload routing could not be resolved"))?;
+    let latest_header = app.state.latest_block_header_fast();
+    let ledger_time_ms = latest_header
+        .as_ref()
+        .map_or(0, |header| header.creation_time_ms);
+    let next_block_height = latest_header
+        .as_ref()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let nexus = app.state.nexus_snapshot();
+    let pipeline = app.state.pipeline_snapshot();
+    let world = app.state.world_view();
+    iroha_core::executor::quote_nexus_fee_admission_draft(
+        &world,
+        &nexus,
+        &pipeline,
+        payload,
+        ledger_time_ms,
+        next_block_height,
+        Some(route.dataspace_id),
+    )
+    .map(|quote| quote.recommended_intent)
+    .map_err(|err| rejected(err.code(), err.reason()))
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_fee_quote(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/fees/quote",
+    )?;
+    let Some(caller) = visibility.caller() else {
+        return Ok(torii_canonical_auth_required_response(
+            "fee_quote_signature_required",
+            "fee quoting requires canonical request signing",
+        ));
+    };
+    let latest_header = app.state.latest_block_header_fast();
+    let ledger_time_ms = latest_header
+        .as_ref()
+        .map_or(0, |header| header.creation_time_ms);
+    let next_block_height = latest_header
+        .as_ref()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let request: FeeQuoteRequest = match norito::json::from_slice(body.as_ref()) {
+        Ok(request) => request,
+        Err(_) => {
+            return Ok(fee_quote_request_rejection_response(
+                StatusCode::BAD_REQUEST,
+                FeeRejectionCode::InvalidFeeIntent,
+                next_block_height,
+            ));
+        }
+    };
+
+    if request.payload.chain != *app.chain_id || request.payload.authority != *caller {
+        return Ok(fee_quote_rejection_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            FeeRejectionCode::InvalidFeeIntent,
+            &request.payload,
+            next_block_height,
+        ));
+    }
+    if request.payload.fee_payment.validate().is_err()
+        || ["fee_sponsor", "gas_limit", "gas_asset_id"]
+            .into_iter()
+            .any(|key| request.payload.metadata.get(key).is_some())
+    {
+        return Ok(fee_quote_rejection_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            FeeRejectionCode::InvalidFeeIntent,
+            &request.payload,
+            next_block_height,
+        ));
+    }
+
+    let route = match fee_quote_routing_decision(&app, &request.payload) {
+        Ok(route) => route,
+        Err(code) => {
+            return Ok(fee_quote_rejection_response(
+                if code == FeeRejectionCode::InvalidProgramConfiguration {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                },
+                code,
+                &request.payload,
+                next_block_height,
+            ));
+        }
+    };
+    let nexus = app.state.nexus_snapshot();
+    let pipeline = app.state.pipeline_snapshot();
+    let quote = {
+        let world = app.state.world_view();
+        iroha_core::executor::quote_nexus_fee_admission_draft(
+            &world,
+            &nexus,
+            &pipeline,
+            &request.payload,
+            ledger_time_ms,
+            next_block_height,
+            Some(route.dataspace_id),
+        )
+    };
+    let draft_quote = match quote {
+        Ok(quote) => quote,
+        Err(err) => {
+            let code = err.code();
+            return Ok(fee_quote_rejection_response(
+                if code == FeeRejectionCode::InvalidProgramConfiguration {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                },
+                code,
+                &request.payload,
+                next_block_height,
+            ));
+        }
+    };
+    let quote = draft_quote.quote;
+
+    let components = quote
+        .charges
+        .into_iter()
+        .map(|charge| FeeQuoteComponent {
+            kind: charge.kind,
+            asset_definition_id: charge.asset_definition_id,
+            max_amount: charge.max_bound,
+        })
+        .collect();
+    let capacities = quote
+        .capacities
+        .into_iter()
+        .map(|(asset_definition_id, capacity)| FeeQuoteCapacity {
+            asset_definition_id,
+            vault_balance: capacity.vault_balance,
+            reserve_floor: capacity.reserve_floor,
+            block_remaining: capacity.block_remaining,
+            program_epoch_remaining: capacity.program_epoch_remaining,
+            beneficiary_epoch_remaining: capacity.beneficiary_epoch_remaining,
+        })
+        .collect();
+    let response = FeeQuoteResponse {
+        intent: draft_quote.recommended_intent,
+        observation: FeeQuoteObservation {
+            ledger_time_ms,
+            next_block_height,
+            route_dataspace_id: route.dataspace_id,
+        },
+        components,
+        capacities,
+        decision: FeeQuoteDecision::Accepted {
+            debit_source: quote.debit_source,
+            program_revision: quote.program_revision,
+        },
+    };
+    alias_json_response(StatusCode::OK, response)
 }
 
 #[cfg(feature = "app_api")]
@@ -47520,7 +47985,7 @@ struct AccountOnboardingSigner {
     allowed_permissions: std::collections::BTreeSet<String>,
     alias_resolve_dataspaces: std::collections::BTreeSet<DataSpaceId>,
     alias_resolve_domains: std::collections::BTreeSet<DomainId>,
-    fee_sponsor: Option<iroha_config::parameters::actual::ToriiOnboardingFeeSponsor>,
+    fee_sponsor_program_id: Option<FeeSponsorProgramId>,
     alias_lease_term_years: u8,
     alias_auto_renew_enabled: bool,
     alias_auto_renew_retry_backoff_ms: u64,
@@ -47554,11 +48019,17 @@ fn onboarding_alias_resolve_permissions(signer: &AccountOnboardingSigner) -> Vec
 fn validate_onboarding_alias_resolve_grants(state: &CoreState, signer: &AccountOnboardingSigner) {
     let world = state.world_view();
     let catalog = state.nexus_snapshot().dataspace_catalog;
-    if let Some(fee_sponsor) = signer.fee_sponsor.as_ref() {
-        if world.account(&fee_sponsor.account).is_err() {
+    if let Some(program_id) = signer.fee_sponsor_program_id.as_ref() {
+        if world.fee_sponsor_programs().get(program_id).is_none() {
+            panic!("torii.onboarding fee sponsor program `{program_id}` is not registered");
+        }
+        let enrollment_permission = Permission::from(CanEnrollFeeSponsorProgram {
+            program_id: program_id.clone(),
+        });
+        if !torii_account_has_permission(&world, &signer.authority, &enrollment_permission) {
             panic!(
-                "torii.onboarding fee sponsor account `{}` is not registered",
-                fee_sponsor.account
+                "torii.onboarding authority `{}` lacks exact CanEnrollFeeSponsorProgram for `{program_id}`",
+                signer.authority
             );
         }
     }
@@ -47607,20 +48078,6 @@ fn validate_onboarding_alias_resolve_grants(state: &CoreState, signer: &AccountO
                 signer.authority,
                 dataspace.as_u64()
             );
-        }
-        if let Some(fee_sponsor) = signer.fee_sponsor.as_ref() {
-            let enrollment_permission =
-                Permission::from(CanEnrollFeeSponsorPolicyForAccountDomain {
-                    sponsor: fee_sponsor.account.clone(),
-                    policy: fee_sponsor.policy.clone(),
-                    domain: domain.clone(),
-                });
-            if !torii_account_has_permission(&world, &signer.authority, &enrollment_permission) {
-                panic!(
-                    "torii.onboarding authority `{}` lacks exact CanEnrollFeeSponsorPolicyForAccountDomain for sponsor `{}`, policy `{}`, and credential domain `{domain}`",
-                    signer.authority, fee_sponsor.account, fee_sponsor.policy
-                );
-            }
         }
     }
     for dataspace in &signer.alias_resolve_dataspaces {
@@ -48346,14 +48803,34 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-            &route_catalog::aliases::FEE_SPONSOR_POLICY_BY_ID,
-            catalog_post(handler_fee_sponsor_policy_by_id)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+            &route_catalog::aliases::ASSET_RESOLVE,
+            catalog_post(handler_asset_alias_resolve),
+        );
+    }
+
+    #[cfg(not(feature = "app_api"))]
+    fn add_fee_routes(&self, _builder: &mut RouterBuilder) {
+        let _ = self;
+    }
+
+    #[cfg(feature = "app_api")]
+    fn add_fee_routes(&self, builder: &mut RouterBuilder) {
+        let quote_body_limit: usize = self
+            .transaction_max_content_len
+            .get()
+            .try_into()
+            .expect("transaction body limit should fit usize");
+        builder.route(
+            &route_catalog::fees::QUOTE,
+            catalog_post(handler_fee_quote)
+                .layer(DefaultBodyLimit::max(quote_body_limit))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-            &route_catalog::aliases::ASSET_RESOLVE,
-            catalog_post(handler_asset_alias_resolve),
+            &route_catalog::fees::SPONSOR_PROGRAM_BY_ID,
+            catalog_post(handler_fee_sponsor_program_by_id)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
     }
 
@@ -51291,7 +51768,7 @@ impl Torii {
                 allowed_permissions: cfg.allowed_permissions.iter().cloned().collect(),
                 alias_resolve_dataspaces: cfg.alias_resolve_dataspaces.iter().copied().collect(),
                 alias_resolve_domains: cfg.alias_resolve_domains.iter().cloned().collect(),
-                fee_sponsor: cfg.fee_sponsor.clone(),
+                fee_sponsor_program_id: cfg.fee_sponsor_program_id.clone(),
                 alias_lease_term_years: cfg.alias_lease_term_years,
                 alias_auto_renew_enabled: cfg.alias_auto_renew_enabled,
                 alias_auto_renew_retry_backoff_ms: cfg.alias_auto_renew_retry_backoff_ms,
@@ -52077,6 +52554,7 @@ impl Torii {
         self.add_core_info_routes(&mut builder);
         self.add_operator_auth_routes(&mut builder);
         self.add_alias_routes(&mut builder);
+        self.add_fee_routes(&mut builder);
         self.add_time_routes(&mut builder);
         self.add_schema_routes(&mut builder);
         self.add_openapi_routes(&mut builder);
@@ -54527,7 +55005,7 @@ pub(crate) mod tests_runtime_handlers {
         kiso::KisoHandle,
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::{LaneRouter, Queue, RoutingDecision, RoutingResolveError},
+        queue::{LaneRouter, Queue, RoutingDecision, RoutingResolveError, TransactionRoutingView},
         smartcontracts::Execute,
         state::{State as IrohaState, World},
         sumeragi::{
@@ -56734,20 +57212,20 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     impl LaneRouter for CountingRouteRouter {
-        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         }
 
         fn try_route_without_state(
             &self,
-            _tx: &AcceptedTransaction<'_>,
+            _tx: &dyn TransactionRoutingView,
         ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
             Ok(None)
         }
 
         fn try_route_with_state(
             &self,
-            tx: &AcceptedTransaction<'_>,
+            tx: &dyn TransactionRoutingView,
             _state: &IrohaState,
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.route_calls.fetch_add(1, Ordering::Relaxed);
@@ -56756,7 +57234,7 @@ pub(crate) mod tests_runtime_handlers {
 
         fn try_route_plan_with_state(
             &self,
-            tx: &AcceptedTransaction<'_>,
+            tx: &dyn TransactionRoutingView,
             state: &IrohaState,
         ) -> Result<RoutingPlan, RoutingResolveError> {
             self.try_route_with_state(tx, state)
@@ -56816,12 +57294,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "rate-limit-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "rate-limit-2".to_string())])
+        .sign(keypair.private_key());
         let headers = HeaderMap::new();
         let submitted_hash = tx1.hash().to_string();
 
@@ -56891,12 +57377,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
+        .sign(keypair.private_key());
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
 
@@ -56957,13 +57451,17 @@ pub(crate) mod tests_runtime_handlers {
         let tx1 = TransactionBuilder::new(
             chain.clone(),
             AccountId::new(first_keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "token-rate-limit-1".to_string())])
         .sign(first_keypair.private_key());
-        let tx2 =
-            TransactionBuilder::new(chain, AccountId::new(second_keypair.public_key().clone()))
-                .with_instructions([Log::new(Level::INFO, "token-rate-limit-2".to_string())])
-                .sign(second_keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            AccountId::new(second_keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "token-rate-limit-2".to_string())])
+        .sign(second_keypair.private_key());
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("shared-token"));
 
@@ -57003,9 +57501,13 @@ pub(crate) mod tests_runtime_handlers {
             "derive post-transaction route-cache fixture key",
         );
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "route-cache-submit".to_string())])
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "route-cache-submit".to_string())])
+        .sign(keypair.private_key());
 
         let response = super::handler_post_transaction(
             State(app.clone()),
@@ -57039,9 +57541,13 @@ pub(crate) mod tests_runtime_handlers {
             "derive entrypoint external fixture key",
         );
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "entrypoint-submit".to_string())])
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "entrypoint-submit".to_string())])
+        .sign(keypair.private_key());
         let entrypoint = TransactionEntrypoint::External(transaction);
 
         let response = super::handler_post_transaction_entrypoint(
@@ -57080,12 +57586,16 @@ pub(crate) mod tests_runtime_handlers {
             "derive entrypoint route-cache fixture key",
         );
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "entrypoint-route-cache-submit".to_string(),
-            )])
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "entrypoint-route-cache-submit".to_string(),
+        )])
+        .sign(keypair.private_key());
         let entrypoint = TransactionEntrypoint::External(transaction);
 
         let response = super::handler_post_transaction_entrypoint(
@@ -57131,19 +57641,23 @@ pub(crate) mod tests_runtime_handlers {
         let tx1 = TransactionBuilder::new(
             chain.clone(),
             AccountId::new(first_keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
             Level::INFO,
             "entrypoint-token-rate-limit-1".to_string(),
         )])
         .sign(first_keypair.private_key());
-        let tx2 =
-            TransactionBuilder::new(chain, AccountId::new(second_keypair.public_key().clone()))
-                .with_instructions([Log::new(
-                    Level::INFO,
-                    "entrypoint-token-rate-limit-2".to_string(),
-                )])
-                .sign(second_keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            AccountId::new(second_keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "entrypoint-token-rate-limit-2".to_string(),
+        )])
+        .sign(second_keypair.private_key());
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("entrypoint-token"));
 
@@ -57189,18 +57703,26 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "entrypoint-queue-before-rate-1".to_string(),
-            )])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "entrypoint-queue-before-rate-2".to_string(),
-            )])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "entrypoint-queue-before-rate-1".to_string(),
+        )])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "entrypoint-queue-before-rate-2".to_string(),
+        )])
+        .sign(keypair.private_key());
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-api-token",
@@ -57253,9 +57775,13 @@ pub(crate) mod tests_runtime_handlers {
             "derive minimal post-transaction response fixture key",
         );
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "minimal-submit-response".to_string())])
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "minimal-submit-response".to_string())])
+        .sign(keypair.private_key());
         let submitted_hash = transaction.hash().to_string();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -57310,12 +57836,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "batch-submit-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "batch-submit-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "batch-submit-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "batch-submit-2".to_string())])
+        .sign(keypair.private_key());
         let payloads = vec![
             iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
             iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
@@ -57357,12 +57891,16 @@ pub(crate) mod tests_runtime_handlers {
         let chain = (*app.chain_id).clone();
         let payloads = (0..3)
             .map(|index| {
-                let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                    .with_instructions([Log::new(
-                        Level::INFO,
-                        format!("batch-token-rate-limit-{index}"),
-                    )])
-                    .sign(keypair.private_key());
+                let tx = TransactionBuilder::new(
+                    chain.clone(),
+                    authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    format!("batch-token-rate-limit-{index}"),
+                )])
+                .sign(keypair.private_key());
                 iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
             })
             .collect();
@@ -57409,12 +57947,16 @@ pub(crate) mod tests_runtime_handlers {
                     "derive distinct-authority batch token fixture key",
                 );
                 let authority = AccountId::new(keypair.public_key().clone());
-                let tx = TransactionBuilder::new(chain.clone(), authority)
-                    .with_instructions([Log::new(
-                        Level::INFO,
-                        format!("batch-token-distinct-authority-{index}"),
-                    )])
-                    .sign(keypair.private_key());
+                let tx = TransactionBuilder::new(
+                    chain.clone(),
+                    authority,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    format!("batch-token-distinct-authority-{index}"),
+                )])
+                .sign(keypair.private_key());
                 iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
             })
             .collect();
@@ -57458,15 +58000,23 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "batch-valid-before-invalid".to_string(),
-            )])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "batch-invalid-signature".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "batch-valid-before-invalid".to_string(),
+        )])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "batch-invalid-signature".to_string())])
+        .sign(keypair.private_key());
         let tx2 = transaction_with_invalid_signature_for_test(tx2);
         let payloads = vec![
             iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
@@ -57529,9 +58079,13 @@ pub(crate) mod tests_runtime_handlers {
         let mut app = mk_app_state_for_tests_with_world(world);
         configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &fee_sink);
 
-        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "fee-insolvent".to_owned())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "fee-insolvent".to_owned())])
+        .sign(keypair.private_key());
         let tx_hash = tx.hash();
         let tx_hash_hex = tx_hash.to_string();
 
@@ -57547,7 +58101,7 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err.into_response(),
         };
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
             response
                 .headers()
@@ -57612,12 +58166,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "early-shed-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "early-shed-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "early-shed-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "early-shed-2".to_string())])
+        .sign(keypair.private_key());
 
         let first = super::handler_post_transaction(
             State(app.clone()),
@@ -57658,12 +58220,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "age-shed-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "age-shed-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
+        .sign(keypair.private_key());
 
         let first = super::handler_post_transaction(
             State(app.clone()),
@@ -57720,12 +58290,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "queue-full-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "queue-full-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "queue-full-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "queue-full-2".to_string())])
+        .sign(keypair.private_key());
 
         let first = super::handler_post_transaction(
             State(app.clone()),
@@ -57774,12 +58352,20 @@ pub(crate) mod tests_runtime_handlers {
         );
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
+        .sign(keypair.private_key());
 
         let _ = app
             .queue
@@ -60022,6 +60608,7 @@ pub(crate) mod tests_runtime_handlers {
                 .parse::<ChainId>()
                 .expect("chain id"),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
         let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
@@ -61961,7 +62548,11 @@ pub(crate) mod tests_runtime_handlers {
         let chain: ChainId = "block-header-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain, authority),
+            TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             &keypair,
             "sign Torii block-header fixture transaction",
         );
@@ -62009,7 +62600,11 @@ pub(crate) mod tests_runtime_handlers {
         let chain: ChainId = "trigger-completion-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain, authority.clone()),
+            TransactionBuilder::new(
+                chain,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             &keypair,
             "sign Torii trigger-completion fixture transaction",
         );
@@ -62075,7 +62670,11 @@ pub(crate) mod tests_runtime_handlers {
         let chain: ChainId = "block-header-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain.clone(), authority),
+            TransactionBuilder::new(
+                chain.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             &keypair,
             "sign Torii sealed-reveal fixture transaction",
         );
@@ -62546,7 +63145,12 @@ pub(crate) mod tests_runtime_handlers {
             checked_torii_test_ed25519_keypair(0x28, "derive Torii queued-status fixture key");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new((*app.chain_id).clone(), authority).with_instructions([Log {
+            TransactionBuilder::new(
+                (*app.chain_id).clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log {
                 level: Level::INFO,
                 msg: "queued".to_string(),
             }]),
@@ -62626,7 +63230,12 @@ pub(crate) mod tests_runtime_handlers {
             checked_torii_test_ed25519_keypair(0x29, "derive Torii typed-status fixture key");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new((*app.chain_id).clone(), authority).with_instructions([Log {
+            TransactionBuilder::new(
+                (*app.chain_id).clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log {
                 level: Level::INFO,
                 msg: "queued".to_string(),
             }]),
@@ -62826,12 +63435,16 @@ pub(crate) mod tests_runtime_handlers {
             "derive live pending pipeline-status fixture key",
         );
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "pipeline-status-live-pending".to_string(),
-            )])
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "pipeline-status-live-pending".to_string(),
+        )])
+        .sign(keypair.private_key());
         let tx_hash = transaction.hash();
 
         let response = super::handler_post_transaction(
@@ -64745,7 +65358,12 @@ pub(crate) mod tests_runtime_handlers {
                 .expect("valid SCCP indexed-message fixture payload encodes"),
         );
         let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain, authority).with_instructions([record]),
+            TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([record]),
             &keypair,
             "sign indexed Torii SCCP-message fixture transaction",
         );
@@ -75425,6 +76043,55 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn push_into_queue_fee_rejections_are_typed_and_redacted() {
+        use nonzero_ext::nonzero;
+
+        const PRIVATE_REASON: &str = "private sponsor rule internals";
+        for (source, expected_status, expected_code) in [
+            (
+                queue::Error::NexusFeeAdmissionRejected {
+                    code: FeeRejectionCode::BeneficiaryNotEligible,
+                    reason: PRIVATE_REASON.to_owned(),
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                FeeRejectionCode::BeneficiaryNotEligible,
+            ),
+            (
+                queue::Error::NexusFeeAdmissionConfigInvalid {
+                    code: FeeRejectionCode::InvalidProgramConfiguration,
+                    reason: PRIVATE_REASON.to_owned(),
+                },
+                StatusCode::SERVICE_UNAVAILABLE,
+                FeeRejectionCode::InvalidProgramConfiguration,
+            ),
+        ] {
+            let (_, public_detail) = queue_rejection_metadata(&source);
+            assert!(!public_detail.contains(PRIVATE_REASON));
+            assert!(public_detail.contains(expected_code.as_str()));
+            let response = super::Error::PushIntoQueue {
+                source: Box::new(source),
+                backpressure: queue::BackpressureState::Healthy {
+                    queued: 0,
+                    capacity: nonzero!(1_usize),
+                },
+            }
+            .into_response();
+            assert_eq!(response.status(), expected_status);
+            let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
+                .expect("fee queue response body")
+                .to_bytes();
+            assert!(!String::from_utf8_lossy(&body).contains(PRIVATE_REASON));
+            let envelope: ErrorEnvelope =
+                norito::decode_from_bytes(&body).expect("typed fee queue envelope");
+            let fee = envelope
+                .details
+                .and_then(|details| details.fee)
+                .expect("typed fee rejection details");
+            assert_eq!(fee.code, expected_code.as_str());
+        }
+    }
+
     #[tokio::test]
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
@@ -75501,7 +76168,12 @@ pub(crate) mod tests_runtime_handlers {
         );
         let chain: ChainId = "chain".parse().unwrap();
         let authority = AccountId::of(kp.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority).sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(kp.private_key());
 
         let fail = iroha_core::tx::SignatureVerificationFail::new(
             tx.signature().clone(),
@@ -75869,11 +76541,9 @@ impl Error {
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
-            queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::FORBIDDEN,
+            queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
-            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -75948,6 +76618,16 @@ impl Error {
             _ => None,
         };
         let (reject_code, _detail) = queue_rejection_metadata(err);
+        let fee = match err {
+            queue::Error::NexusFeeAdmissionRejected { code, .. }
+            | queue::Error::NexusFeeAdmissionConfigInvalid { code, .. } => Some(FeeErrorDetails {
+                code: code.as_str().to_owned(),
+                retryable: fee_quote_rejection_retryable(*code),
+                remediation: Some(fee_quote_remediation(*code).to_owned()),
+                ..FeeErrorDetails::default()
+            }),
+            _ => None,
+        };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
             queue: Some(QueueErrorSnapshot {
@@ -75961,6 +76641,7 @@ impl Error {
                 saturated,
             }),
             retry_after_seconds,
+            fee,
             ..Default::default()
         })
     }
@@ -76039,17 +76720,23 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
             format!("lane privacy proof rejected transaction for alias '{alias}': {reason}"),
         ),
-        queue::Error::NexusFeeAdmissionRejected { reason } => (
+        queue::Error::NexusFeeAdmissionRejected { code, .. } => (
             "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
-            format!("transaction rejected by Nexus fee admission: {reason}"),
+            format!(
+                "transaction rejected by Nexus fee admission: {}",
+                code.as_str()
+            ),
         ),
         queue::Error::ConfidentialPolicyAdmissionRejected { detail, .. } => (
             "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
             format!("transaction rejected by confidential policy admission: {detail}"),
         ),
-        queue::Error::NexusFeeAdmissionConfigInvalid { reason } => (
+        queue::Error::NexusFeeAdmissionConfigInvalid { code, .. } => (
             "PRTRY:NEXUS_FEE_ADMISSION_CONFIG_INVALID",
-            format!("invalid Nexus fee admission configuration: {reason}"),
+            format!(
+                "invalid Nexus fee admission configuration: {}",
+                code.as_str()
+            ),
         ),
     }
 }
@@ -77118,13 +77805,29 @@ mod tests {
         checked_torii_test_account_id(0x83, "derive ZK IVM prove authority fixture key")
     }
 
-    fn sample_ivm_prove_metadata() -> iroha_data_model::metadata::Metadata {
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_limit").expect("static gas_limit key"),
+    fn sample_ivm_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(50_000_000),
+        )
+    }
+
+    #[test]
+    fn zk_ivm_fee_payment_requires_typed_gas_bound_and_rejects_legacy_metadata() {
+        let metadata = iroha_data_model::metadata::Metadata::default();
+        let missing_gas =
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        assert!(validate_zk_ivm_fee_payment(&missing_gas, &metadata).is_err());
+
+        let valid = sample_ivm_fee_payment();
+        validate_zk_ivm_fee_payment(&valid, &metadata).expect("typed gas bound should validate");
+
+        let mut legacy = metadata;
+        legacy.insert(
+            Name::from_str("gas_limit").expect("static legacy metadata key"),
             iroha_primitives::json::Json::new(50_000_000_u64),
         );
-        metadata
+        assert!(validate_zk_ivm_fee_payment(&valid, &legacy).is_err());
     }
 
     fn make_ivm_prove_request(
@@ -77135,7 +77838,8 @@ mod tests {
         ZkIvmProveRequestDto {
             vk_ref,
             authority: sample_ivm_prove_authority(),
-            metadata: sample_ivm_prove_metadata(),
+            fee_payment: sample_ivm_fee_payment(),
+            metadata: iroha_data_model::metadata::Metadata::default(),
             bytecode,
             proved,
         }
@@ -77476,24 +78180,47 @@ mod tests {
         ]
     }
 
-    fn onboarding_fee_sponsor_for_test(
-        account: &AccountId,
-    ) -> iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
-        iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
-            account: account.clone(),
-            policy: "retail".parse().expect("retail fee sponsor policy"),
-        }
+    fn onboarding_fee_sponsor_program_for_test(account: &AccountId) -> FeeSponsorProgramId {
+        FeeSponsorProgramId::new(
+            account.clone(),
+            "retail".parse().expect("retail fee sponsor program name"),
+        )
     }
 
     fn onboarding_fee_sponsor_enrollment_permission(
-        fee_sponsor: &iroha_config::parameters::actual::ToriiOnboardingFeeSponsor,
-        domain: &DomainId,
+        program_id: &FeeSponsorProgramId,
     ) -> Permission {
-        Permission::from(CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: fee_sponsor.account.clone(),
-            policy: fee_sponsor.policy.clone(),
-            domain: domain.clone(),
+        Permission::from(CanEnrollFeeSponsorProgram {
+            program_id: program_id.clone(),
         })
+    }
+
+    fn register_fee_sponsor_program_for_test(
+        app: &SharedAppState,
+        program_id: FeeSponsorProgramId,
+    ) {
+        let height = next_block_height(app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut stx = block.transaction();
+        iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
+            program: FeeSponsorProgram::new(program_id.clone()),
+        }
+        .execute(&program_id.sponsor, &mut stx)
+        .expect("sponsor may register its program");
+        stx.apply();
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block.commit().expect("commit fee sponsor program fixture");
     }
 
     fn onboarding_alias_test_app_with_role_permissions(
@@ -77546,7 +78273,7 @@ mod tests {
             allowed_permissions: BTreeSet::new(),
             alias_resolve_dataspaces: dataspaces,
             alias_resolve_domains: domains,
-            fee_sponsor: None,
+            fee_sponsor_program_id: None,
             alias_lease_term_years: 1,
             alias_auto_renew_enabled: false,
             alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -77588,21 +78315,21 @@ mod tests {
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
         let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
         let dataspace = recipient_lookup_sbp_dataspace_for_test();
-        let fee_sponsor = onboarding_fee_sponsor_for_test(&authority);
+        let fee_sponsor_program_id = onboarding_fee_sponsor_program_for_test(&authority);
+        register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
         grant_account_permissions_for_test(
             &app,
             &authority,
             onboarding_credential_domain_permissions(&hbl, dataspace)
                 .into_iter()
                 .chain(onboarding_credential_domain_permissions(&ubl, dataspace))
-                .chain([
-                    onboarding_fee_sponsor_enrollment_permission(&fee_sponsor, &hbl),
-                    onboarding_fee_sponsor_enrollment_permission(&fee_sponsor, &ubl),
-                ]),
+                .chain([onboarding_fee_sponsor_enrollment_permission(
+                    &fee_sponsor_program_id,
+                )]),
         );
         let mut signer =
             onboarding_alias_signer_for_test(&key_pair, BTreeSet::new(), BTreeSet::new());
-        signer.fee_sponsor = Some(fee_sponsor);
+        signer.fee_sponsor_program_id = Some(fee_sponsor_program_id);
         signer.api_token_hashes_by_domain.insert(hbl, [0xA5; 32]);
         signer.api_token_hashes_by_domain.insert(ubl, [0xA6; 32]);
 
@@ -77624,21 +78351,21 @@ mod tests {
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
         let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
         let dataspace = recipient_lookup_sbp_dataspace_for_test();
-        let fee_sponsor = onboarding_fee_sponsor_for_test(&domain_owner);
+        let fee_sponsor_program_id = onboarding_fee_sponsor_program_for_test(&domain_owner);
         let app = onboarding_alias_test_app_with_role_permissions(
             &authority,
             &domain_owner,
             onboarding_credential_domain_permissions(&hbl, dataspace)
                 .into_iter()
                 .chain(onboarding_credential_domain_permissions(&ubl, dataspace))
-                .chain([
-                    onboarding_fee_sponsor_enrollment_permission(&fee_sponsor, &hbl),
-                    onboarding_fee_sponsor_enrollment_permission(&fee_sponsor, &ubl),
-                ]),
+                .chain([onboarding_fee_sponsor_enrollment_permission(
+                    &fee_sponsor_program_id,
+                )]),
         );
+        register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
         let mut signer =
             onboarding_alias_signer_for_test(&key_pair, BTreeSet::new(), BTreeSet::new());
-        signer.fee_sponsor = Some(fee_sponsor);
+        signer.fee_sponsor_program_id = Some(fee_sponsor_program_id);
         signer.api_token_hashes_by_domain.insert(hbl, [0xA5; 32]);
         signer.api_token_hashes_by_domain.insert(ubl, [0xA6; 32]);
 
@@ -77737,52 +78464,40 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let sponsor_account = AccountId::new(sponsor_key_pair.public_key().clone());
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
-        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
         let dataspace = recipient_lookup_sbp_dataspace_for_test();
-        let fee_sponsor = onboarding_fee_sponsor_for_test(&sponsor_account);
+        let fee_sponsor_program_id = onboarding_fee_sponsor_program_for_test(&sponsor_account);
         let cases = [
             ("missing enrollment", None),
             (
-                "cross-domain enrollment",
-                Some(Permission::from(
-                    CanEnrollFeeSponsorPolicyForAccountDomain {
-                        sponsor: sponsor_account.clone(),
-                        policy: fee_sponsor.policy.clone(),
-                        domain: ubl,
-                    },
-                )),
-            ),
-            (
-                "cross-policy enrollment",
-                Some(Permission::from(
-                    CanEnrollFeeSponsorPolicyForAccountDomain {
-                        sponsor: sponsor_account.clone(),
-                        policy: "other".parse().expect("other policy"),
-                        domain: hbl.clone(),
-                    },
-                )),
+                "cross-program enrollment",
+                Some(Permission::from(CanEnrollFeeSponsorProgram {
+                    program_id: FeeSponsorProgramId::new(
+                        sponsor_account.clone(),
+                        "other".parse().expect("other program name"),
+                    ),
+                })),
             ),
             (
                 "cross-sponsor enrollment",
-                Some(Permission::from(
-                    CanEnrollFeeSponsorPolicyForAccountDomain {
-                        sponsor: authority.clone(),
-                        policy: fee_sponsor.policy.clone(),
-                        domain: hbl.clone(),
-                    },
-                )),
+                Some(Permission::from(CanEnrollFeeSponsorProgram {
+                    program_id: FeeSponsorProgramId::new(
+                        authority.clone(),
+                        fee_sponsor_program_id.name.clone(),
+                    ),
+                })),
             ),
         ];
 
         for (label, enrollment) in cases {
             let app = onboarding_alias_test_app(&authority, &sponsor_account);
+            register_fee_sponsor_program_for_test(&app, fee_sponsor_program_id.clone());
             let mut permissions =
                 onboarding_credential_domain_permissions(&hbl, dataspace).to_vec();
             permissions.extend(enrollment);
             grant_account_permissions_for_test(&app, &authority, permissions);
             let mut signer =
                 onboarding_alias_signer_for_test(&key_pair, BTreeSet::new(), BTreeSet::new());
-            signer.fee_sponsor = Some(fee_sponsor.clone());
+            signer.fee_sponsor_program_id = Some(fee_sponsor_program_id.clone());
             signer
                 .api_token_hashes_by_domain
                 .insert(hbl.clone(), [0xA5; 32]);
@@ -77795,7 +78510,7 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_alias_fee_sponsor_rejects_unregistered_sponsor_account() {
+    fn onboarding_alias_fee_sponsor_rejects_unregistered_program() {
         let key_pair = checked_torii_test_ed25519_keypair(
             0x9E,
             "derive unregistered onboarding fee sponsor fixture key",
@@ -77809,14 +78524,15 @@ mod tests {
         let app = onboarding_alias_test_app(&authority, &authority);
         let mut signer =
             onboarding_alias_signer_for_test(&key_pair, BTreeSet::new(), BTreeSet::new());
-        signer.fee_sponsor = Some(onboarding_fee_sponsor_for_test(&absent_sponsor));
+        signer.fee_sponsor_program_id =
+            Some(onboarding_fee_sponsor_program_for_test(&absent_sponsor));
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             validate_onboarding_alias_resolve_grants(app.state.as_ref(), &signer);
         }));
         assert!(
             result.is_err(),
-            "an unregistered configured onboarding fee sponsor must fail startup validation"
+            "an unregistered configured onboarding fee sponsor program must fail startup validation"
         );
     }
 
@@ -78521,79 +79237,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fee_sponsor_policy_by_id_returns_the_exact_direct_configured_policy() {
+    async fn fee_sponsor_program_by_id_returns_the_exact_on_chain_program() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let sponsor_keypair = checked_torii_test_ed25519_keypair(
             0x9c,
-            "derive fee sponsor policy endpoint fixture key",
+            "derive fee sponsor program endpoint fixture key",
         );
         let sponsor = AccountId::new(sponsor_keypair.public_key().clone());
-        let policy_name: Name = "wallet_fx".parse().expect("policy name");
-        let policy_id = FeeSponsorPolicyId::new(sponsor.clone(), policy_name.clone());
-        let policy = FeeSponsorPolicy {
-            id: policy_id,
-            enabled: true,
-            max_fee: Some("0.01".parse().expect("canonical fee cap")),
-            rules: vec![iroha_data_model::nexus::FeeSponsorRule {
-                effect: iroha_data_model::nexus::FeeSponsorRuleEffect::Allow,
-                max_fee: None,
-                dataspaces: BTreeSet::from([DataSpaceId::UNIVERSAL]),
-                executable_kinds: BTreeSet::from([
-                    iroha_data_model::nexus::FeeSponsorExecutableKind::Instructions,
-                ]),
-                instruction_wire_ids: BTreeSet::from([
-                    "iroha.settlement.fx_corridor.settle".to_owned()
-                ]),
-                asset_transfer_definition_ids: BTreeSet::new(),
-                contract_selectors: Vec::new(),
-            }],
-        };
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
-        let nexus = actual::Nexus {
-            enabled: true,
-            dataspace_fee_sponsors: BTreeMap::from([(DataSpaceId::UNIVERSAL, sponsor.to_string())]),
-            dataspace_fee_sponsor_policies: BTreeMap::from([(DataSpaceId::UNIVERSAL, policy_name)]),
-            ..actual::Nexus::default()
-        };
-        {
-            let app_state = Arc::get_mut(&mut app).expect("unique app state");
-            let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-            state.set_nexus(nexus).expect("apply sponsor configuration");
-        }
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
-            policy: policy.clone(),
-        }
-        .execute(&sponsor, &mut stx)
-        .expect("sponsor may publish its exact policy");
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit sponsor policy fixture");
+        let program_id =
+            FeeSponsorProgramId::new(sponsor.clone(), "wallet_fx".parse().expect("program name"));
+        let program = FeeSponsorProgram::new(program_id.clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
+        register_fee_sponsor_program_for_test(&app, program_id.clone());
 
-        let body = norito::json::to_vec(&routing::FeeSponsorPolicyByIdRequestDto {
-            sponsor_account_id: sponsor.to_string(),
-            policy_name: "wallet_fx".to_owned(),
-        })
-        .expect("encode sponsor policy request");
+        let body = norito::json::to_vec(&FeeSponsorProgramByIdRequest::new(&program_id))
+            .expect("encode sponsor program request");
         let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/fee-sponsor-policies/by-id"
+        let uri: axum::http::Uri = "/v1/fee-sponsor-programs/by-id"
             .parse()
-            .expect("fee sponsor policy uri");
+            .expect("fee sponsor program uri");
         let headers = signed_app_headers(&sponsor, &sponsor_keypair, &method, &uri, &body);
-        let response = handler_fee_sponsor_policy_by_id(
+        let response = handler_fee_sponsor_program_by_id(
             State(app),
             method,
             uri,
@@ -78601,36 +79265,88 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("configured sponsor policy lookup")
+        .expect("on-chain sponsor program lookup")
         .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
-            .expect("fee sponsor policy response body");
-        let payload: Value = norito::json::from_slice(&body).expect("policy response JSON");
+            .expect("fee sponsor program response body");
+        let payload: Value = norito::json::from_slice(&body).expect("program response JSON");
         assert_eq!(
             payload,
-            norito::json::to_value(&policy).expect("canonical direct policy JSON")
+            norito::json::to_value(&program).expect("canonical direct program JSON")
         );
         let object = payload.as_object().expect("policy response object");
         assert_eq!(
             object.keys().cloned().collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "enabled".to_owned(),
-                "id".to_owned(),
-                "max_fee".to_owned(),
-                "rules".to_owned(),
-            ])
+            BTreeSet::from(["id".to_owned(), "lifecycle".to_owned()])
         );
         assert!(
-            !object.contains_key("policy"),
+            !object.contains_key("program"),
             "response must not use an envelope"
         );
     }
 
     #[tokio::test]
-    async fn retail_recipient_route_and_sponsor_policy_reject_noncanonical_or_malformed_bodies() {
+    async fn fee_quote_returns_exact_routing_observation_and_fixed_point_intent() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair =
+            checked_torii_test_ed25519_keypair(0x9d, "derive successful fee quote fixture key");
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+        let payload = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            caller.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "quote fixture".to_owned(),
+        )])
+        .into_payload()
+        .expect("build exact unsigned quote payload");
+        let body = norito::json::to_vec(&FeeQuoteRequest {
+            payload: payload.clone(),
+        })
+        .expect("encode exact fee quote request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/fees/quote".parse().expect("fee quote uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+
+        let response = handler_fee_quote(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("successful typed fee quote")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("fee quote response body");
+        let quote: FeeQuoteResponse =
+            norito::json::from_slice(&body).expect("decode typed fee quote response");
+        assert_eq!(quote.intent, payload.fee_payment);
+        assert_eq!(quote.observation.route_dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(quote.observation.next_block_height, 1);
+        assert!(quote.components.is_empty());
+        assert!(quote.capacities.is_empty());
+        assert!(matches!(
+            quote.decision,
+            FeeQuoteDecision::Accepted {
+                debit_source: iroha_data_model::nexus::FeeDebitSource::Account(ref account),
+                program_revision: None,
+            } if account == &caller
+        ));
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_route_and_sponsor_program_reject_noncanonical_or_malformed_bodies() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x9a,
             "derive recipient validation caller fixture key",
@@ -78746,14 +79462,15 @@ mod tests {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
 
-        let whitespace_sponsor = norito::json::to_vec(&routing::FeeSponsorPolicyByIdRequestDto {
-            sponsor_account_id: format!("{target} "),
-            policy_name: "wallet_fx ".to_owned(),
+        let program_id =
+            FeeSponsorProgramId::new(target.clone(), "wallet_fx".parse().expect("program name"));
+        let whitespace_sponsor = norito::json::to_vec(&FeeSponsorProgramByIdRequest {
+            program_id: format!("{program_id} "),
         })
-        .expect("encode whitespace sponsor request");
-        let sponsor_uri: axum::http::Uri = "/v1/fee-sponsor-policies/by-id"
+        .expect("encode whitespace sponsor program request");
+        let sponsor_uri: axum::http::Uri = "/v1/fee-sponsor-programs/by-id"
             .parse()
-            .expect("fee sponsor policy uri");
+            .expect("fee sponsor program uri");
         let headers = signed_app_headers(
             &caller,
             &caller_keypair,
@@ -78761,7 +79478,7 @@ mod tests {
             &sponsor_uri,
             &whitespace_sponsor,
         );
-        let response = handler_fee_sponsor_policy_by_id(
+        let response = handler_fee_sponsor_program_by_id(
             State(app.clone()),
             method.clone(),
             sponsor_uri.clone(),
@@ -78772,7 +79489,7 @@ mod tests {
         .expect("whitespace sponsor response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let malformed_body = br#"{"policy_name":"#;
+        let malformed_body = br#"{"program_id":"#;
         let headers = signed_app_headers(
             &caller,
             &caller_keypair,
@@ -78780,7 +79497,7 @@ mod tests {
             &sponsor_uri,
             malformed_body,
         );
-        let malformed = handler_fee_sponsor_policy_by_id(
+        let malformed = handler_fee_sponsor_program_by_id(
             State(app.clone()),
             method.clone(),
             sponsor_uri.clone(),
@@ -78793,14 +79510,8 @@ mod tests {
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
 
         for invalid_body in [
-            format!(
-                r#"{{"sponsor_account_id":"{target}","policy_name":"wallet_fx","extra":true}}"#
-            )
-            .into_bytes(),
-            format!(
-                r#"{{"sponsor_account_id":"{target}","policy_name":"wallet_fx","policy_name":"wallet_fx"}}"#
-            )
-            .into_bytes(),
+            format!(r#"{{"program_id":"{program_id}","extra":true}}"#).into_bytes(),
+            format!(r#"{{"program_id":"{program_id}","program_id":"{program_id}"}}"#).into_bytes(),
             br#"[]"#.to_vec(),
         ] {
             let headers = signed_app_headers(
@@ -78810,7 +79521,7 @@ mod tests {
                 &sponsor_uri,
                 &invalid_body,
             );
-            let response = handler_fee_sponsor_policy_by_id(
+            let response = handler_fee_sponsor_program_by_id(
                 State(app.clone()),
                 method.clone(),
                 sponsor_uri.clone(),
@@ -78821,6 +79532,38 @@ mod tests {
             .map_or_else(IntoResponse::into_response, |response| response);
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
+
+        let quote_uri: axum::http::Uri = "/v1/fees/quote".parse().expect("fee quote uri");
+        let malformed_quote = br#"{"payload":"#;
+        let headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &method,
+            &quote_uri,
+            malformed_quote,
+        );
+        let response = handler_fee_quote(
+            State(app),
+            method,
+            quote_uri,
+            headers,
+            axum::body::Bytes::from_static(malformed_quote),
+        )
+        .await
+        .expect("malformed signed fee quote rejection")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("fee quote rejection body");
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("typed fee quote error envelope");
+        let fee = envelope
+            .details
+            .and_then(|details| details.fee)
+            .expect("stable fee rejection details");
+        assert_eq!(fee.code, FeeRejectionCode::InvalidFeeIntent.as_str());
+        assert!(!fee.retryable);
     }
 
     #[tokio::test]
@@ -78961,27 +79704,52 @@ mod tests {
             Some("Signature")
         );
 
-        let sponsor = handler_fee_sponsor_policy_by_id(
-            State(app),
-            method,
-            "/v1/fee-sponsor-policies/by-id"
+        let sponsor = handler_fee_sponsor_program_by_id(
+            State(app.clone()),
+            method.clone(),
+            "/v1/fee-sponsor-programs/by-id"
                 .parse()
-                .expect("fee sponsor policy uri"),
+                .expect("fee sponsor program uri"),
             HeaderMap::new(),
             axum::body::Bytes::from_static(b"{"),
         )
         .await
-        .expect("unsigned fee sponsor policy rejection");
+        .expect("unsigned fee sponsor program rejection");
         assert_eq!(sponsor.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             sponsor
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("fee_sponsor_policy_signature_required")
+            Some("fee_sponsor_program_signature_required")
         );
         assert_eq!(
             sponsor
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Signature")
+        );
+
+        let quote = handler_fee_quote(
+            State(app),
+            method,
+            "/v1/fees/quote".parse().expect("fee quote uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(b"{"),
+        )
+        .await
+        .expect("unsigned fee quote rejection");
+        assert_eq!(quote.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            quote
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("fee_quote_signature_required")
+        );
+        assert_eq!(
+            quote
                 .headers()
                 .get(axum::http::header::WWW_AUTHENTICATE)
                 .and_then(|value| value.to_str().ok()),
@@ -85083,16 +85851,11 @@ mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let bytecode = IvmBytecode::from_compiled(program);
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_limit").expect("static gas_limit key"),
-            iroha_primitives::json::Json::new(50_000_000_u64),
-        );
-
         let req = ZkIvmDeriveRequestDto {
             vk_ref: vk_id,
             authority: authority.clone(),
-            metadata,
+            fee_payment: sample_ivm_fee_payment(),
+            metadata: iroha_data_model::metadata::Metadata::default(),
             bytecode: bytecode.clone(),
         };
         let body = norito::json::to_vec(&req).expect("json encode request");

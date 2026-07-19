@@ -1378,7 +1378,7 @@ object SumeragiV2Wire {
     enum class QueueKind(@JvmField val discriminant: Long) {
         INGRESS(0), DEFERRED_NORMAL(1), DEFERRED_PROGRESS(2), DEFERRED_COMPLETION(3),
         RUNTIME_NORMAL(4), RUNTIME_PROGRESS(5), RUNTIME_COMPLETION(6), EFFECT_COMPLETION(7),
-        NETWORK_INGRESS(8),
+        NETWORK_INGRESS(8), EFFECT_DISPATCH(9),
         ;
 
         internal fun encode(): ByteArray = u32(discriminant)

@@ -36,6 +36,13 @@ function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");
 }
 
+function authorityFeePayment(gasLimit = null) {
+  return {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: gasLimit },
+  };
+}
+
 function noncanonicalStandardBase64PadBitAlias(encoded) {
   assert.equal(encoded.endsWith("=="), true);
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -210,8 +217,7 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
     },
     multisigSpec: spec,
     strictSignerCheck: true,
-    gasAssetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    gasLimit: 5,
+    feePayment: authorityFeePayment(5),
   });
 
   assert.deepEqual(payload, {
@@ -228,8 +234,7 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
         amount_i64: 10,
       },
     },
-    gas_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    gas_limit: 5,
+    fee_payment: authorityFeePayment(5),
   });
 });
 
@@ -239,6 +244,7 @@ test("buildMultisigContractCallApproveRequest normalizes selector and lookup key
     signerAccountId: BOB_ID,
     instructionsHash: "AA".repeat(32),
     signatureB64: "AQ==",
+    feePayment: authorityFeePayment(),
   });
 
   assert.deepEqual(payload, {
@@ -246,6 +252,7 @@ test("buildMultisigContractCallApproveRequest normalizes selector and lookup key
     signer_account_id: BOB_ID,
     instructions_hash: "aa".repeat(32),
     signature_b64: "AQ==",
+    fee_payment: authorityFeePayment(),
   });
 });
 
@@ -266,6 +273,7 @@ test("multisig contract-call request builders reject noncanonical signatureB64",
           trigger: "staged_mint_request_hbl",
           args: { request_id: "req-signature" },
           signatureB64,
+          feePayment: authorityFeePayment(5),
         }),
       /exact standard-base64/,
     );
@@ -276,6 +284,7 @@ test("multisig contract-call request builders reject noncanonical signatureB64",
           signerAccountId: BOB_ID,
           instructionsHash: "AA".repeat(32),
           signatureB64,
+          feePayment: authorityFeePayment(),
         }),
       /exact standard-base64/,
     );
@@ -290,6 +299,7 @@ test("buildMultisigContractCallProposeRequest accepts detached private key varia
     entrypoint: "execute",
     trigger: "staged_mint_request_hbl",
     args: { request_id: "req-7" },
+    feePayment: authorityFeePayment(5),
     privateKeyHex: "AA".repeat(32),
     privateKeyAlgorithm: "ml-dsa",
   });
@@ -302,6 +312,7 @@ test("buildMultisigContractCallProposeRequest accepts detached private key varia
     entrypoint: "execute",
     trigger: "staged_mint_request_hbl",
     args: { request_id: "req-8" },
+    feePayment: authorityFeePayment(5),
     privateKeyBytes: Buffer.alloc(32, 0x11),
   });
   assert.equal(fromBytes.private_key, `ed25519:${"11".repeat(32)}`);
@@ -313,6 +324,7 @@ test("buildMultisigContractCallProposeRequest accepts detached private key varia
     entrypoint: "execute",
     trigger: "staged_mint_request_hbl",
     args: { request_id: "req-9" },
+    feePayment: authorityFeePayment(5),
     privateKeyMultihash: "ed25519:prebuilt",
   });
   assert.equal(multihash.private_key, "ed25519:prebuilt");
@@ -325,6 +337,7 @@ test("buildMultisigContractCallApproveRequest accepts snake_case detached key fi
     instructions_hash: "AA".repeat(32),
     private_key_hex: "22".repeat(32),
     private_key_algorithm: "sm2",
+    fee_payment: authorityFeePayment(),
   });
 
   assert.deepEqual(payload, {
@@ -332,5 +345,6 @@ test("buildMultisigContractCallApproveRequest accepts snake_case detached key fi
     signer_account_id: BOB_ID,
     instructions_hash: "aa".repeat(32),
     private_key: `sm2:${"22".repeat(32)}`,
+    fee_payment: authorityFeePayment(),
   });
 });

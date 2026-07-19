@@ -719,8 +719,8 @@ fn builtin_query_registry() -> &'static QueryRegistry {
             ErasedIterQuery<crate::block::SignedBlock>,
             ErasedIterQuery<crate::block::BlockHeader>,
             ErasedIterQuery<crate::proof::ProofRecord>,
-            ErasedIterQuery<crate::nexus::FeeSponsorPolicy>,
-            ErasedIterQuery<crate::nexus::FeeSponsorPolicyId>,
+            ErasedIterQuery<crate::nexus::FeeSponsorProgram>,
+            ErasedIterQuery<crate::nexus::FeeSponsorProgramId>,
         ]
     })
 }
@@ -976,10 +976,10 @@ mod model {
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of native anonymous asset escrow records.
         AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
-        /// Batch of fee sponsor policies.
-        FeeSponsorPolicy(Vec<crate::nexus::FeeSponsorPolicy>),
-        /// Batch of fee sponsor policy identifiers.
-        FeeSponsorPolicyId(Vec<crate::nexus::FeeSponsorPolicyId>),
+        /// Batch of fee sponsor programs.
+        FeeSponsorProgram(Vec<crate::nexus::FeeSponsorProgram>),
+        /// Batch of fee sponsor program identifiers.
+        FeeSponsorProgramId(Vec<crate::nexus::FeeSponsorProgramId>),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema)]
@@ -1055,8 +1055,8 @@ mod model {
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
         /// Fetch a verified lane relay record by its canonical relay reference.
         FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
-        /// Fetch a fee sponsor policy by identifier.
-        FindFeeSponsorPolicyById(self::nexus::prelude::FindFeeSponsorPolicyById),
+        /// Fetch a fee sponsor program by identifier.
+        FindFeeSponsorProgramById(self::nexus::prelude::FindFeeSponsorProgramById),
         /// Fetch the protected native FX corridor policy registry.
         FindFxCorridorPolicyRegistry(self::settlement::prelude::FindFxCorridorPolicyRegistry),
         /// Fetch one native FX corridor policy by identifier.
@@ -1206,7 +1206,7 @@ mod model {
         /// Verified lane relay payload.
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Fee sponsor policy payload.
-        FeeSponsorPolicy(crate::nexus::FeeSponsorPolicy),
+        FeeSponsorProgram(crate::nexus::FeeSponsorProgram),
         /// Active authoritative `SoraFS` orderbook policy payload.
         SorafsOrderbookPolicy(crate::sorafs::orderbook::OrderbookAdmissionPolicyRecord),
         /// Authoritative `SoraFS` order payload.
@@ -1410,8 +1410,8 @@ mod model {
                 try_build!(crate::block::SignedBlock, SignedBlock);
                 try_build!(crate::block::BlockHeader, BlockHeader);
                 try_build!(crate::proof::ProofRecord, ProofRecord);
-                try_build!(crate::nexus::FeeSponsorPolicy, FeeSponsorPolicy);
-                try_build!(crate::nexus::FeeSponsorPolicyId, FeeSponsorPolicyId);
+                try_build!(crate::nexus::FeeSponsorProgram, FeeSponsorProgram);
+                try_build!(crate::nexus::FeeSponsorProgramId, FeeSponsorProgramId);
                 try_build!(crate::permission::Permission, Permission);
                 try_build!(crate::oracle::FeedConfig, OracleFeedConfig);
                 try_build!(
@@ -1543,9 +1543,9 @@ mod model {
         /// Native anonymous asset escrow records.
         AnonymousAssetEscrowRecord,
         /// Fee sponsor policy records.
-        FeeSponsorPolicy,
-        /// Fee sponsor policy identifier records.
-        FeeSponsorPolicyId,
+        FeeSponsorProgram,
+        /// Fee sponsor program identifier records.
+        FeeSponsorProgramId,
     }
 
     /// Trait mapping item types to a `QueryItemKind` marker.
@@ -1726,15 +1726,15 @@ mod model {
         }
     }
     #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::nexus::FeeSponsorPolicy {
+    impl ItemKindTag for crate::nexus::FeeSponsorProgram {
         fn kind() -> QueryItemKind {
-            QueryItemKind::FeeSponsorPolicy
+            QueryItemKind::FeeSponsorProgram
         }
     }
     #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::nexus::FeeSponsorPolicyId {
+    impl ItemKindTag for crate::nexus::FeeSponsorProgramId {
         fn kind() -> QueryItemKind {
-            QueryItemKind::FeeSponsorPolicyId
+            QueryItemKind::FeeSponsorProgramId
         }
     }
     // Manual schema for QueryWithParams: represent only `params` field.
@@ -2444,8 +2444,8 @@ impl QueryOutputBatchBox {
             (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
                 v1.extend(v2)
             }
-            (Self::FeeSponsorPolicy(v1), Self::FeeSponsorPolicy(v2)) => v1.extend(v2),
-            (Self::FeeSponsorPolicyId(v1), Self::FeeSponsorPolicyId(v2)) => v1.extend(v2),
+            (Self::FeeSponsorProgram(v1), Self::FeeSponsorProgram(v2)) => v1.extend(v2),
+            (Self::FeeSponsorProgramId(v1), Self::FeeSponsorProgramId(v2)) => v1.extend(v2),
             _ => return Err(QueryOutputBatchBoxTypeMismatch),
         }
         Ok(())
@@ -2500,8 +2500,8 @@ impl QueryOutputBatchBox {
             Self::DefiOracleAttestation(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
             Self::AnonymousAssetEscrowRecord(v) => v.len(),
-            Self::FeeSponsorPolicy(v) => v.len(),
-            Self::FeeSponsorPolicyId(v) => v.len(),
+            Self::FeeSponsorProgram(v) => v.len(),
+            Self::FeeSponsorProgramId(v) => v.len(),
         }
     }
 
@@ -3926,9 +3926,9 @@ impl_iter_queries! {
     escrow::FindAnonymousAssetEscrowsBySeller => crate::escrow::AnonymousAssetEscrowRecord,
     escrow::FindAnonymousAssetEscrowsByBuyer => crate::escrow::AnonymousAssetEscrowRecord,
     escrow::FindAnonymousAssetEscrowsByStatus => crate::escrow::AnonymousAssetEscrowRecord,
-    nexus::prelude::FindFeeSponsorPolicies => crate::nexus::FeeSponsorPolicy,
-    nexus::prelude::FindFeeSponsorPolicyIds => crate::nexus::FeeSponsorPolicyId,
-    nexus::prelude::FindFeeSponsorPoliciesBySponsor => crate::nexus::FeeSponsorPolicy,
+    nexus::prelude::FindFeeSponsorPrograms => crate::nexus::FeeSponsorProgram,
+    nexus::prelude::FindFeeSponsorProgramIds => crate::nexus::FeeSponsorProgramId,
+    nexus::prelude::FindFeeSponsorProgramsBySponsor => crate::nexus::FeeSponsorProgram,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
     FindBlockHeaders => crate::block::BlockHeader,
@@ -3975,7 +3975,7 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
-    nexus::prelude::FindFeeSponsorPolicyById => crate::nexus::FeeSponsorPolicy,
+    nexus::prelude::FindFeeSponsorProgramById => crate::nexus::FeeSponsorProgram,
     settlement::prelude::FindFxCorridorPolicyRegistry => crate::isi::settlement::FxCorridorPolicyRegistry,
     settlement::prelude::FindFxCorridorPolicyById => crate::isi::settlement::FxCorridorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
@@ -4875,7 +4875,7 @@ pub mod nexus {
 
     use crate::{
         AccountId,
-        nexus::{FeeSponsorPolicyId, LaneRelayEnvelopeRef},
+        nexus::{FeeSponsorProgramId, LaneRelayEnvelopeRef},
     };
 
     queries! {
@@ -4886,39 +4886,39 @@ pub mod nexus {
             pub relay_ref: LaneRelayEnvelopeRef,
         }
 
-        /// Find all fee sponsor policies.
+        /// Find all fee sponsor programs.
         #[derive(Copy)]
-        pub struct FindFeeSponsorPolicies;
+        pub struct FindFeeSponsorPrograms;
 
-        /// Find all fee sponsor policy identifiers.
+        /// Find all fee sponsor program identifiers.
         #[derive(Copy)]
-        pub struct FindFeeSponsorPolicyIds;
+        pub struct FindFeeSponsorProgramIds;
 
-        /// Find all fee sponsor policies owned by a sponsor account.
+        /// Find all fee sponsor programs owned by a sponsor account.
         #[repr(transparent)]
-        pub struct FindFeeSponsorPoliciesBySponsor {
+        pub struct FindFeeSponsorProgramsBySponsor {
             /// Sponsor account identifier.
             pub sponsor: AccountId,
         }
 
-        /// Fetch one fee sponsor policy by identifier.
+        /// Fetch one fee sponsor program by identifier.
         #[repr(transparent)]
-        pub struct FindFeeSponsorPolicyById {
-            /// Policy identifier to look up.
-            pub id: FeeSponsorPolicyId,
+        pub struct FindFeeSponsorProgramById {
+            /// Program identifier to look up.
+            pub id: FeeSponsorProgramId,
         }
     }
 
-    impl FindFeeSponsorPoliciesBySponsor {
+    impl FindFeeSponsorProgramsBySponsor {
         /// Return the sponsor account identifier.
         pub fn sponsor(&self) -> &AccountId {
             &self.sponsor
         }
     }
 
-    impl FindFeeSponsorPolicyById {
-        /// Return the queried policy identifier.
-        pub fn id(&self) -> &FeeSponsorPolicyId {
+    impl FindFeeSponsorProgramById {
+        /// Return the queried program identifier.
+        pub fn id(&self) -> &FeeSponsorProgramId {
             &self.id
         }
     }
@@ -4926,8 +4926,8 @@ pub mod nexus {
     pub mod prelude {
         //! Prelude re-exports for Nexus queries.
         pub use super::{
-            FindFeeSponsorPolicies, FindFeeSponsorPoliciesBySponsor, FindFeeSponsorPolicyById,
-            FindFeeSponsorPolicyIds, FindLaneRelayEnvelopeByRef,
+            FindFeeSponsorProgramById, FindFeeSponsorProgramIds, FindFeeSponsorPrograms,
+            FindFeeSponsorProgramsBySponsor, FindLaneRelayEnvelopeByRef,
         };
     }
 }
@@ -6325,9 +6325,13 @@ mod certified_merge_inclusion_tests {
         let key_pair = KeyPair::random();
         let chain_id: crate::ChainId = "merge-query-proof".parse().expect("chain id");
         let authority = AccountId::new(key_pair.public_key().clone());
-        let signed = TransactionBuilder::new(chain_id, authority)
-            .with_instructions::<crate::isi::InstructionBox>([])
-            .sign(key_pair.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<crate::isi::InstructionBox>([])
+        .sign(key_pair.private_key());
         let entrypoint = TransactionEntrypoint::External(signed);
         let result = TransactionResult::from(Ok(DataTriggerSequence::default()));
         let entrypoint_hash = entrypoint.hash();

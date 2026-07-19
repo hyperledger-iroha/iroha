@@ -82,13 +82,13 @@ pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
 
-/// Active ABI-20 V4 recursive StepEq verifier selected at the readiness snapshot.
+/// Active ABI-21 V4 recursive StepEq verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 
-/// Active ABI-20 V4 recursive StepEp verifier selected at the readiness snapshot.
+/// Active ABI-21 V4 recursive StepEp verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 
-/// Authenticated ABI-20 recursive release selected at a readiness snapshot.
+/// Authenticated ABI-21 recursive release selected at a readiness snapshot.
 ///
 /// Every digest is lowercase hexadecimal, non-zero, and distinct in public
 /// JSON. The identity is emitted only after Core authenticates the release
@@ -234,7 +234,7 @@ pub struct OfflineReadiness {
     pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
     /// Active recursive StepEp verifier at the evaluated height.
     pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
-    /// Exact authenticated ABI-20 release identity, or `None` with a recursive
+    /// Exact authenticated ABI-21 release identity, or `None` with a recursive
     /// registry blocker.
     pub artifact_set: Option<OfflineAuthenticatedArtifactSet>,
     /// Whether the authenticated V4 material constructs the production backend.
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
-            required_bridge_abi_version: 20,
+            required_bridge_abi_version: 21,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),

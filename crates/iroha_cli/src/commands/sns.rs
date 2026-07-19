@@ -355,12 +355,13 @@ fn submission_metadata<C: RunContext>(context: &C) -> Metadata {
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
+        let fee_payment = context.transaction_fee_payment()?;
         let request = self.build_request(&context.config().account, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
         let response = client
             .sns()
-            .register_with_metadata(&request, submission_metadata(context))?;
+            .register_with_metadata(&request, fee_payment, submission_metadata(context))?;
         context.print_data(&response)
     }
 }
@@ -385,6 +386,7 @@ impl RenewArgs {
 impl Run for RenewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
+        let fee_payment = context.transaction_fee_payment()?;
         let request = self.build_request(&context.config().account, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
@@ -393,6 +395,7 @@ impl Run for RenewArgs {
             SnsNamespacePath::Domain,
             literal,
             &request,
+            fee_payment,
             submission_metadata(context),
         )?;
         context.print_data(&record)
@@ -427,10 +430,12 @@ impl Run for TransferArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request(&|literal| crate::resolve_account_id(context, literal))?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
+        let fee_payment = context.transaction_fee_payment()?;
         let record = context.client_from_config().sns().transfer_with_metadata(
             SnsNamespacePath::Domain,
             literal,
             &request,
+            fee_payment,
             submission_metadata(context),
         )?;
         context.print_data(&record)
@@ -469,6 +474,7 @@ impl Run for UpdateControllersArgs {
             crate::resolve_account_id(context, literal)
         })?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
+        let fee_payment = context.transaction_fee_payment()?;
         let record = context
             .client_from_config()
             .sns()
@@ -476,6 +482,7 @@ impl Run for UpdateControllersArgs {
                 SnsNamespacePath::Domain,
                 literal,
                 &request,
+                fee_payment,
                 submission_metadata(context),
             )?;
         context.print_data(&record)
@@ -501,10 +508,12 @@ impl Run for FreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
+        let fee_payment = context.transaction_fee_payment()?;
         let record = context.client_from_config().sns().freeze_with_metadata(
             SnsNamespacePath::Domain,
             literal,
             &request,
+            fee_payment,
             submission_metadata(context),
         )?;
         context.print_data(&record)
@@ -530,10 +539,12 @@ impl Run for UnfreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let hook = self.governance()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
+        let fee_payment = context.transaction_fee_payment()?;
         let record = context.client_from_config().sns().unfreeze_with_metadata(
             SnsNamespacePath::Domain,
             literal,
             &hook,
+            fee_payment,
             submission_metadata(context),
         )?;
         context.print_data(&record)

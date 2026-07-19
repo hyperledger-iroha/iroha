@@ -20,7 +20,7 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::*,
     transaction::signed::{TransactionPayload, TransactionSignature},
-    transaction::{Executable, IvmBytecode, TransactionBuilder},
+    transaction::{Executable, FeePaymentIntent, IvmBytecode, TransactionBuilder},
 };
 
 #[cfg(feature = "kaigi-fixtures")]
@@ -145,6 +145,7 @@ struct RawPayload {
     executable: RawExecutable,
     ttl_ms: Option<u64>,
     nonce: Option<u32>,
+    fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
 }
 
@@ -441,7 +442,11 @@ impl RawPayload {
         let chain_id = ChainId::from_str(&self.chain).expect("ChainId infallible");
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            self.fee_payment.clone(),
+        );
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if let Some(ttl) = self.ttl_ms {
             builder.set_ttl(Duration::from_millis(ttl));
@@ -590,6 +595,16 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     let executable = parse_executable(executable_value)?;
     let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
     let nonce = parse_optional_u32(obj, "nonce")?;
+    let fee_payment = obj
+        .get("fee_payment")
+        .ok_or_else(|| anyhow::anyhow!("missing fee_payment"))
+        .and_then(|value| {
+            json::from_value::<FeePaymentIntent>(value.clone())
+                .map_err(|err| anyhow::anyhow!(err.to_string()))
+        })?;
+    fee_payment
+        .validate()
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let metadata = match obj.get("metadata") {
         Some(value) => parse_metadata_object(value)?,
         None => Vec::new(),
@@ -602,6 +617,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         executable,
         ttl_ms,
         nonce,
+        fee_payment,
         metadata,
     })
 }
@@ -939,28 +955,6 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     Ok(out)
 }
 
-fn wire_payloads_from_raw_payload(raw: &RawPayload) -> Result<Vec<WireInstructionPayload>> {
-    let RawExecutable::Instructions(instructions) = &raw.executable else {
-        return Ok(Vec::new());
-    };
-
-    let registry = iroha_data_model::instruction_registry::default();
-    let mut out = Vec::with_capacity(instructions.len());
-    for raw_instruction in instructions {
-        let instruction = build_instruction(raw_instruction)?;
-        let type_name = Instruction::id(&*instruction);
-        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
-        let payload = Instruction::dyn_encode(&*instruction);
-        let framed = frame_instruction_payload(type_name, &payload)
-            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-        out.push(WireInstructionPayload {
-            wire_name: wire_name.to_owned(),
-            payload_base64: BASE64.encode(framed),
-        });
-    }
-    Ok(out)
-}
-
 fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Result<Value> {
     let fixtures_by_name: std::collections::BTreeMap<&str, &Fixture> = fixtures
         .iter()
@@ -1020,11 +1014,7 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
 
         if let Some(mut payload) = raw.payload_json.clone() {
             if payload_json_uses_instruction_list(&payload) {
-                let wire_payloads = if let Some(raw_payload) = raw.payload.as_ref() {
-                    wire_payloads_from_raw_payload(raw_payload)
-                } else {
-                    wire_payloads_from_encoded(&fixture.encoded)
-                }?;
+                let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
                 apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
             }
             entry.insert("payload".to_owned(), payload);
@@ -1050,17 +1040,18 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
                 RawExecutable::Ivm(bytes) => {
                     executable_obj.insert("Ivm".to_owned(), Value::String(BASE64.encode(bytes)));
                 }
-                RawExecutable::Instructions(instructions) => {
-                    let mut values = Vec::with_capacity(instructions.len());
-                    for raw_instruction in instructions {
+                RawExecutable::Instructions(_) => {
+                    let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
+                    let mut values = Vec::with_capacity(wire_payloads.len());
+                    for wire_payload in wire_payloads {
                         let mut inst_obj = Map::new();
                         inst_obj.insert(
                             "wire_name".to_owned(),
-                            Value::String(raw_instruction.wire_name.clone()),
+                            Value::String(wire_payload.wire_name),
                         );
                         inst_obj.insert(
                             "payload_base64".to_owned(),
-                            Value::String(raw_instruction.payload_base64.clone()),
+                            Value::String(wire_payload.payload_base64),
                         );
                         values.push(Value::Object(inst_obj));
                     }
@@ -1390,6 +1381,7 @@ mod tests {
             executable: RawExecutable::Instructions(vec![raw_instruction.clone()]),
             ttl_ms: Some(1_000),
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Vec::new(),
         };
 
@@ -1431,10 +1423,7 @@ mod tests {
             .clone()
             .into_fixture(&keypair, true, true)
             .expect("fixture");
-        let expected_wire = wire_payloads_from_raw_payload(
-            raw.payload.as_ref().expect("raw payload must be present"),
-        )
-        .expect("wire payloads");
+        let expected_wire = wire_payloads_from_encoded(&fixture.encoded).expect("wire payloads");
 
         let value =
             build_fixtures_json(&[raw], std::slice::from_ref(&fixture)).expect("fixtures json");
@@ -1533,6 +1522,7 @@ mod tests {
                 executable: RawExecutable::Ivm(vec![1, 2, 3, 4]),
                 ttl_ms: Some(1_000),
                 nonce: None,
+                fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 metadata: Vec::new(),
             }),
             payload_json: None,

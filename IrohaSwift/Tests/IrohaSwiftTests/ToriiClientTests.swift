@@ -5,6 +5,15 @@ import Combine
 #endif
 @testable import IrohaSwift
 
+private func testFeePayment(gasLimit: UInt64? = nil) -> FeePaymentIntent {
+    .authority(chargeLimits: [], gasLimit: gasLimit)
+}
+
+private func testFeePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {
+    let data = try! intent.canonicalJSONData()
+    return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+}
+
 private final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
 
@@ -408,7 +417,7 @@ final class ToriiContractAPITests: XCTestCase {
     private func detachedSignatureB64() throws -> String {
         try signingKeypair.sign(Data(repeating: 0x5a, count: 32)).base64EncodedString()
     }
-    private let feeSponsor = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+    private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     private let contractAlias = "bisp::hbl.sbp"
     private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
     private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -496,8 +505,7 @@ final class ToriiContractAPITests: XCTestCase {
             "entrypoint": "spend_to_merchant",
             "entrypoint_hash_hex": entrypointHash,
             "gas_limit": 500_000,
-            "gas_asset_id": assetId,
-            "fee_sponsor": feeSponsor,
+            "fee_payment": testFeePaymentObject(testFeePayment(gasLimit: 500_000)),
             "payload_digest_hex": payloadDigest,
         ]
         if submitted {
@@ -543,14 +551,12 @@ final class ToriiContractAPITests: XCTestCase {
             contractAlias: contractAlias,
             entrypoint: "spend_to_merchant",
             payload: .object([
-                "merchant_account_id": .string(feeSponsor),
+                "merchant_account_id": .string(merchantAccount),
                 "amount": .string("750"),
             ]),
             creationTimeMs: detachedCreationTimeMs,
             transactionTtlMs: 120_000,
-            gasAssetId: assetId,
-            feeSponsor: feeSponsor,
-            gasLimit: 500_000
+            feePayment: testFeePayment(gasLimit: 500_000)
         )
     }
 
@@ -736,7 +742,7 @@ final class ToriiContractAPITests: XCTestCase {
         )
     }
 
-    func testDetachedPreparationRejectsUnboundedOrImplicitFeeAssetBeforeNetwork() async {
+    func testDetachedPreparationRejectsUnboundedOrMissingGasLimitBeforeNetwork() async {
         var calls = 0
         StubURLProtocol.handler = { request in
             calls += 1
@@ -751,14 +757,14 @@ final class ToriiContractAPITests: XCTestCase {
             { $0.creationTimeMs = nil },
             { $0.creationTimeMs = 1 },
             { $0.creationTimeMs = UInt64.max },
-            { $0.gasAssetId = nil },
+            { $0.feePayment = testFeePayment() },
         ]
         for mutation in mutations {
             var request = detachedRequest()
             mutation(&request)
             do {
                 _ = try await makeClient().prepareDetachedContractCall(request)
-                XCTFail("unbounded or implicit detached request was accepted")
+                XCTFail("unbounded detached request was accepted")
             } catch {}
         }
         XCTAssertEqual(calls, 0)
@@ -838,12 +844,12 @@ final class ToriiContractAPITests: XCTestCase {
             },
             {
                 var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["fee_sponsor"] = self.authority
+                receipt["fee_payment"] = testFeePaymentObject(testFeePayment(gasLimit: 500_001))
                 $0["operation_receipt"] = receipt
             },
             {
                 var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["gas_asset_id"] = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                receipt["unexpected_fee_field"] = "legacy"
                 $0["operation_receipt"] = receipt
             },
         ]
@@ -1421,7 +1427,7 @@ final class ToriiClientTests: XCTestCase {
 
     private var currentKagemushaReadinessFields: String {
         """
-        "required_bridge_abi_version": 20,
+        "required_bridge_abi_version": 21,
         "max_hops": 8,
         "active_unshield_verifier": {
           "id": {"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
@@ -8859,9 +8865,10 @@ final class ToriiClientTests: XCTestCase {
                         "contract_alias": "benefits::paynet",
                         "contract_entrypoint": "claim",
                         "contract_payload": {"amount": 500},
-                        "gas_asset_id": "gas#paynet",
-                        "fee_sponsor": "sponsor@paynet",
-                        "gas_limit": 50000
+                        "fee_payment": {
+                            "payer": "authority",
+                            "value": {"charge_limits": [], "gas_limit": 50000}
+                        }
                     }
                 ],
                 "total": 1
@@ -8885,6 +8892,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(list.items.first?.contractAlias, "benefits::paynet")
         XCTAssertEqual(list.items.first?.contractEntrypoint, "claim")
         XCTAssertEqual(list.items.first?.timestampMs, 1234)
+        XCTAssertEqual(list.items.first?.feePayment, testFeePayment(gasLimit: 50_000))
         guard case let .object(payload)? = list.items.first?.contractPayload,
               case let .number(amount)? = payload["amount"] else {
             return XCTFail("Expected numeric contract payload.")
@@ -8933,9 +8941,10 @@ final class ToriiClientTests: XCTestCase {
                         "asset_ids": ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
                         "numeric_fields": {"amount": 125},
                         "payload": {"amount": 125, "merchant_account": "merchant@paynet"},
-                        "gas_asset_id": "gas#paynet",
-                        "fee_sponsor": "sponsor@paynet",
-                        "gas_limit": 70000
+                        "fee_payment": {
+                            "payer": "authority",
+                            "value": {"charge_limits": [], "gas_limit": 70000}
+                        }
                     }
                 ],
                 "total": 1
@@ -8960,6 +8969,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(list.items.first?.eventId, "0xabc:0")
         XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@paynet", "merchant@paynet"])
         XCTAssertEqual(list.items.first?.assetIds ?? [], ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"])
+        XCTAssertEqual(list.items.first?.feePayment, testFeePayment(gasLimit: 70_000))
         guard case let .number(amount)? = list.items.first?.numericFields?["amount"] else {
             return XCTFail("Expected numeric field.")
         }
@@ -10948,7 +10958,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetPipelinePreflightAsync() async throws {
         let payload = """
-        {"schema_version":1,"chain_height":42,"sumeragi":{"block_time_ms":1000,"commit_time_ms":2000,"stall_threshold_ms":6000},"admission":{"max_signatures":32,"max_instructions":4096,"max_tx_bytes":1048576,"max_decompressed_bytes":1048576,"max_metadata_depth":16},"block":{"max_transactions":512},"pipeline":{"signature_batch_max":0,"signature_batch_max_ed25519":64,"signature_batch_max_secp256k1":16,"signature_batch_max_pqc":8,"signature_batch_max_bls":16,"overlay_max_instructions":0,"ivm_max_decoded_instructions":1048576},"queue":{"size":2,"queued":1,"inflight":1},"fees":{"fee_asset_id":"xor#sora","fee_sink_account_id":"fees@system","base_fee":"0","per_byte_fee":"0","per_instruction_fee":"0","per_gas_unit_fee":"0","sponsorship_enabled":false,"sponsor_max_fee":"0","sponsor_verified_balance_safety_floor":"0","canonical_sponsor_account_id":null,"fee_receipts_activation_height":7,"external_settlement_enabled":false,"burn_from_unix_timestamp_ms":0,"settlement_mode":"direct","successful_claim_fee_exempt_authorities":["authority@system"]}}
+        {"schema_version":1,"chain_height":42,"sumeragi":{"block_time_ms":1000,"commit_time_ms":2000,"stall_threshold_ms":6000},"admission":{"max_signatures":32,"max_instructions":4096,"max_tx_bytes":1048576,"max_decompressed_bytes":1048576,"max_metadata_depth":16},"block":{"max_transactions":512},"pipeline":{"signature_batch_max":0,"signature_batch_max_ed25519":64,"signature_batch_max_secp256k1":16,"signature_batch_max_pqc":8,"signature_batch_max_bls":16,"overlay_max_instructions":0,"ivm_max_decoded_instructions":1048576},"queue":{"size":2,"queued":1,"inflight":1},"fees":{"fee_asset_id":"xor#sora","fee_sink_account_id":"fees@system","base_fee":"0","per_byte_fee":"0","per_instruction_fee":"0","per_gas_unit_fee":"0","sponsor_vault_custody_account_id":"sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53","settlement_mode":"direct","successful_claim_fee_exempt_authorities":["authority@system"]}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -10974,6 +10984,10 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(preflight.pipeline.signatureBatchMaxEd25519, 64)
         XCTAssertEqual(preflight.queue.queued, 1)
         XCTAssertEqual(preflight.fees.baseFee, .string("0"))
+        XCTAssertEqual(
+            preflight.fees.sponsorVaultCustodyAccountId,
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+        )
         XCTAssertEqual(preflight.fees.successfulClaimFeeExemptAuthorities, ["authority@system"])
         XCTAssertTrue(preflight.isStatusStalled(status))
     }
@@ -11204,7 +11218,7 @@ final class ToriiClientTests: XCTestCase {
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
-        XCTAssertEqual(readiness.requiredBridgeAbiVersion, 20)
+        XCTAssertEqual(readiness.requiredBridgeAbiVersion, 21)
         XCTAssertEqual(readiness.maxHops, 8)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, 19)
@@ -11306,12 +11320,12 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(blockedReadiness.ready)
 
         let mutations: [((inout [String: Any]) -> Void, String)] = [
-            ({ $0["required_bridge_abi_version"] = 19 }, "required_bridge_abi_version"),
+            ({ $0["required_bridge_abi_version"] = 20 }, "required_bridge_abi_version"),
             ({ $0["max_hops"] = 9 }, "max_hops"),
             ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
             (
                 { $0["recursive_lineage_supported"] = false },
-                "exact authenticated ABI-20 lineage conjunction"
+                "exact authenticated ABI-21 lineage conjunction"
             ),
             (
                 { $0["ready"] = false },
@@ -11324,7 +11338,7 @@ final class ToriiClientTests: XCTestCase {
                         "message": "Offline transfers are disabled",
                     ]]
                 },
-                "ready must equal the complete ABI-20 runtime conjunction"
+                "ready must equal the complete ABI-21 runtime conjunction"
             ),
             (
                 { $0["active_recursive_step_ep_verifier"] = NSNull() },
@@ -11528,11 +11542,11 @@ final class ToriiClientTests: XCTestCase {
             ),
             (
                 changingArtifact { $0["max_proof_bytes"] = 0 },
-                "max_proof_bytes must be within the ABI-20 V4 absolute proof limit"
+                "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
                 changingArtifact { $0["max_proof_bytes"] = 16 * 1_024 * 1_024 + 1 },
-                "max_proof_bytes must be within the ABI-20 V4 absolute proof limit"
+                "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
                 changingArtifact { $0["asset_scale"] = 29 },
@@ -11839,7 +11853,7 @@ final class ToriiClientTests: XCTestCase {
                     ready: "true",
                     blockers: "[{\"code\":\"blocked\",\"message\":\"no\"}]"
                 ),
-                "ready must equal the complete ABI-20 runtime conjunction"
+                "ready must equal the complete ABI-21 runtime conjunction"
             ),
             (
                 payload(ready: "false", blockers: "[]"),
@@ -12237,7 +12251,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
-          "required_bridge_abi_version": 20,
+          "required_bridge_abi_version": 21,
           "max_hops": 8,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
@@ -18175,7 +18189,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
               let contractAlias = boundary["contract_alias"] as? String,
               let entrypoint = boundary["entrypoint"] as? String,
               let fixturePayload = boundary["payload"] as? [String: Any],
-              let gasLimit = (boundary["gas_limit"] as? NSNumber)?.uint64Value,
+              let fixtureFeePayment = boundary["fee_payment"] as? [String: Any],
               let schema = fixture["entrypoint_argument_schema_v1"] as? [String: Any],
               let schemaHash = schema["schema_hash_hex"] as? String,
               let record = fixture["entrypoint_argument_record_v1"] as? [String: Any],
@@ -18189,12 +18203,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         let payloadData = try JSONSerialization.data(withJSONObject: fixturePayload)
         let payload = try JSONDecoder().decode(ToriiJSONValue.self, from: payloadData)
+        let feePaymentData = try JSONSerialization.data(withJSONObject: fixtureFeePayment)
+        let feePayment = try JSONDecoder().decode(FeePaymentIntent.self, from: feePaymentData)
         let request = ToriiContractCallRequest(
             authority: authority,
             contractAlias: contractAlias,
             entrypoint: entrypoint,
             payload: payload,
-            gasLimit: gasLimit
+            feePayment: feePayment
         )
         let encoded = try JSONEncoder().encode(request)
         guard let submitted = try JSONSerialization.jsonObject(with: encoded) as? [String: Any],
@@ -18207,13 +18223,18 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertNil(submitted["contract_address"])
         XCTAssertEqual(submitted["entrypoint"] as? String, entrypoint)
         XCTAssertEqual(submittedPayload as NSDictionary, fixturePayload as NSDictionary)
-        XCTAssertEqual((submitted["gas_limit"] as? NSNumber)?.uint64Value, gasLimit)
+        XCTAssertEqual(
+            submitted["fee_payment"] as? NSDictionary,
+            fixtureFeePayment as NSDictionary
+        )
+        XCTAssertNil(submitted["gas_limit"])
         XCTAssertNil(submitted["argument_record"])
         XCTAssertNil(submitted["argument_record_norito_hex"])
     }
 
     func testCallContractParsesResponse() {
         let expectation = expectation(description: "call contract")
+        let feePayment = testFeePayment(gasLimit: 7)
         let codeHash = String(repeating: "d", count: 64)
         let abiHash = String(repeating: "e", count: 64)
         let txHash = String(repeating: "f", count: 64)
@@ -18234,15 +18255,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
             XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
-            XCTAssertEqual(json["gas_limit"] as? Int, 7)
-            XCTAssertEqual(json["gas_asset_id"] as? String, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-            XCTAssertEqual(json["fee_sponsor"] as? String, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+            XCTAssertEqual(
+                json["fee_payment"] as? NSDictionary,
+                testFeePaymentObject(feePayment) as NSDictionary
+            )
+            XCTAssertNil(json["gas_limit"])
+            XCTAssertNil(json["gas_asset_id"])
+            XCTAssertNil(json["fee_sponsor"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"gas_asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","fee_sponsor":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18255,9 +18280,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             entrypoint: "create",
             payload: .object(["amount": .string("10")]),
             creationTimeMs: 321,
-            gasAssetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            feeSponsor: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            gasLimit: 7
+            feePayment: feePayment
         )
         makeClient().callContract(request) { result in
             switch result {
@@ -18282,6 +18305,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.operationReceipt.operationKind, "contract_call")
                 XCTAssertEqual(response.operationReceipt.gasLimit, 7)
                 XCTAssertEqual(response.operationReceipt.gasUsed, 3)
+                XCTAssertEqual(response.operationReceipt.feePayment, feePayment)
                 XCTAssertEqual(response.operationReceipt.payloadDigestHex, payloadDigest)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
@@ -18296,7 +18320,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             contractAlias: "mint::universal",
             entrypoint: "create",
-            gasLimit: 0
+            feePayment: testFeePayment(gasLimit: 0)
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -18311,7 +18335,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
             contractAlias: "mint::universal",
             entrypoint: "create",
-            gasLimit: 7
+            feePayment: testFeePayment(gasLimit: 7)
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -18325,7 +18349,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             contractAlias: "mint::universal",
             entrypoint: "   ",
-            gasLimit: 7
+            feePayment: testFeePayment(gasLimit: 7)
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -18347,6 +18371,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testProposeMultisigEncodesStructuredJsonInstructions() throws {
         let expectation = expectation(description: "propose multisig")
         let proposalId = String(repeating: "a", count: 64)
+        let feePayment = testFeePayment()
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18360,11 +18385,15 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@banka")
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["creation_time_ms"] as? Int, 123)
-            XCTAssertEqual(json["fee_sponsor"] as? String, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
-            XCTAssertEqual(json["validation_fee_policy_version"] as? String, "7")
-            XCTAssertEqual(json["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
-            XCTAssertEqual(json["validation_fee_instruction_index"] as? String, "1")
-            XCTAssertEqual(json["validation_fee_transfer_entry_index"] as? String, "2")
+            XCTAssertEqual(
+                json["fee_payment"] as? NSDictionary,
+                testFeePaymentObject(feePayment) as NSDictionary
+            )
+            XCTAssertNil(json["fee_sponsor"])
+            XCTAssertNil(json["validation_fee_policy_version"])
+            XCTAssertNil(json["validation_fee_policy_hash"])
+            XCTAssertNil(json["validation_fee_instruction_index"])
+            XCTAssertNil(json["validation_fee_transfer_entry_index"])
             let instructions = json["instructions"] as? [[String: Any]]
             XCTAssertEqual(instructions?.first?["kind"] as? String, "Transfer")
             let response = HTTPURLResponse(url: request.url!,
@@ -18381,14 +18410,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             creationTimeMs: 123,
-            feeSponsor: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            validationFeePolicyVersion: 7,
-            validationFeePolicyHash: "0x\(String(repeating: "AB", count: 32))",
-            validationFeeInstructionIndex: 1,
-            validationFeeTransferEntryIndex: 2,
             instructions: [
                 try ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
-            ]
+            ],
+            feePayment: feePayment
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -18465,7 +18490,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             input: NexusTransferInput(
                 sourceAssetID: sourceAsset,
                 quantity: "5",
-                destinationAccountID: destination
+                destinationAccountID: destination,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             )
         )
         let nativeMagic = Data([0x4e, 0x52, 0x54, 0x30])
@@ -18495,7 +18521,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 multisigAccountAlias: "cbdc@banka"
             ),
             signerAccountId: signer,
-            instructions: [instruction]
+            instructions: [instruction],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         XCTAssertThrowsError(try JSONEncoder().encode(ambiguousSelectorRequest)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -18506,7 +18533,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let emptyBatchRequest = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: signer,
-            instructions: []
+            instructions: [],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         XCTAssertThrowsError(try JSONEncoder().encode(emptyBatchRequest)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -18514,68 +18542,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             }
         }
 
-        let missingPolicyHashRequest = ToriiMultisigProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
-            signerAccountId: signer,
-            validationFeePolicyVersion: 7,
-            instructions: [instruction]
-        )
-        XCTAssertThrowsError(try JSONEncoder().encode(missingPolicyHashRequest)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-
-        let coordinateWithoutPolicyRequest = ToriiMultisigProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
-            signerAccountId: signer,
-            validationFeeInstructionIndex: 1,
-            instructions: [instruction]
-        )
-        XCTAssertThrowsError(try JSONEncoder().encode(coordinateWithoutPolicyRequest)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-
-        let transferEntryWithoutPolicyRequest = ToriiMultisigProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
-            signerAccountId: signer,
-            validationFeeTransferEntryIndex: 2,
-            instructions: [instruction]
-        )
-        XCTAssertThrowsError(try JSONEncoder().encode(transferEntryWithoutPolicyRequest)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-
-        let transferEntryWithoutInstructionRequest = ToriiMultisigProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
-            signerAccountId: signer,
-            validationFeePolicyVersion: 7,
-            validationFeePolicyHash: String(repeating: "ab", count: 32),
-            validationFeeTransferEntryIndex: 2,
-            instructions: [instruction]
-        )
-        XCTAssertThrowsError(try JSONEncoder().encode(transferEntryWithoutInstructionRequest)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-
-        let malformedPolicyHashRequest = ToriiMultisigProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
-            signerAccountId: signer,
-            validationFeePolicyVersion: 7,
-            validationFeePolicyHash: "zz",
-            instructions: [instruction]
-        )
-        XCTAssertThrowsError(try JSONEncoder().encode(malformedPolicyHashRequest)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
     }
 
     func testProposeMultisigRejectsMalformedResponseFields() {
@@ -18596,7 +18562,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            instructions: [instruction]
+            instructions: [instruction],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -18664,7 +18631,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            instructions: [instruction]
+            instructions: [instruction],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -18698,7 +18666,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            instructions: [instruction]
+            instructions: [instruction],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -18732,7 +18701,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            instructions: [instruction]
+            instructions: [instruction],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -18751,6 +18721,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testProposeMultisigContractCallEncodesAliasSelector() {
         let expectation = expectation(description: "propose multisig contract call")
         let proposalId = String(repeating: "a", count: 64)
+        let feePayment = testFeePayment(gasLimit: 5)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18764,7 +18735,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "execute")
-            XCTAssertEqual(json["gas_limit"] as? Int, 5)
+            XCTAssertEqual(
+                json["fee_payment"] as? NSDictionary,
+                testFeePaymentObject(feePayment) as NSDictionary
+            )
+            XCTAssertNil(json["gas_limit"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -18781,9 +18756,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             contractAlias: "mint::universal",
             entrypoint: "execute",
             payload: .object(["amount": .string("10")]),
-            gasAssetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            feeSponsor: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            gasLimit: 5
+            feePayment: feePayment
         )
         makeClient().proposeMultisigContractCall(request) { result in
             switch result {
@@ -18819,7 +18792,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         signatureB64: signatureB64,
                         contractAlias: "mint::universal",
                         entrypoint: "create",
-                        gasLimit: 1
+                        feePayment: testFeePayment(gasLimit: 1)
                     )
                 )
             ) { error in
@@ -18832,7 +18805,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         selector: ToriiMultisigAccountSelector(multisigAccountId: account),
                         signerAccountId: signer,
                         signatureB64: signatureB64,
-                        instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")]
+                        instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")],
+                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                     )
                 )
             ) { error in
@@ -18846,7 +18820,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         signerAccountId: signer,
                         signatureB64: signatureB64,
                         contractAlias: "mint::universal",
-                        entrypoint: "create"
+                        entrypoint: "create",
+                        feePayment: testFeePayment(gasLimit: 1)
                     )
                 )
             ) { error in
@@ -18859,7 +18834,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         selector: ToriiMultisigAccountSelector(multisigAccountId: account),
                         signerAccountId: signer,
                         signatureB64: signatureB64,
-                        proposalId: String(repeating: "b", count: 64)
+                        proposalId: String(repeating: "b", count: 64),
+                        feePayment: testFeePayment()
                     )
                 )
             ) { error in
@@ -18900,7 +18876,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             selector: ToriiMultisigAccountSelector(multisigAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
             signerAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             signatureB64: "AQ==",
-            proposalId: proposalId
+            proposalId: proposalId,
+            feePayment: testFeePayment()
         )
         makeClient().approveMultisigContractCall(request) { result in
             switch result {

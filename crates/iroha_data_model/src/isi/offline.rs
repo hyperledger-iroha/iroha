@@ -61,7 +61,7 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Atomically publish one device-attestation policy and activate one signed ABI-20 release.
+    /// Atomically publish one device-attestation policy and activate one signed ABI-21 release.
     pub struct ActivateKagemushaRecursiveReleaseV4 {
         /// Complete authenticated release activation payload.
         pub activation: KagemushaRecursiveSpendReleaseActivationV4,
@@ -105,7 +105,7 @@ impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 
 impl TopUpKagemushaRecursiveV4 {
-    /// Construct a scale-bound ABI-20 Kagemusha top-up instruction.
+    /// Construct a scale-bound ABI-21 Kagemusha top-up instruction.
     #[must_use]
     pub fn new(request: KagemushaRecursiveSpendTopUpRequestV4) -> Self {
         Self { request }
@@ -113,7 +113,7 @@ impl TopUpKagemushaRecursiveV4 {
 }
 
 impl RedeemKagemushaRecursiveV4 {
-    /// Construct a branch-safe ABI-20 Kagemusha redemption instruction.
+    /// Construct a branch-safe ABI-21 Kagemusha redemption instruction.
     #[must_use]
     pub fn new(request: KagemushaRecursiveSpendRedeemRequestV4) -> Self {
         Self { request }
@@ -121,7 +121,7 @@ impl RedeemKagemushaRecursiveV4 {
 }
 
 impl ActivateKagemushaRecursiveReleaseV4 {
-    /// Construct an atomic device-policy and ABI-20 release activation instruction.
+    /// Construct an atomic device-policy and ABI-21 release activation instruction.
     #[must_use]
     pub fn new(
         activation: KagemushaRecursiveSpendReleaseActivationV4,

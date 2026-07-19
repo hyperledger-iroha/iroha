@@ -103,9 +103,13 @@ fn build_block_with_txs(
 ) -> SignedBlock {
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, kp: &KeyPair| {
-        TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(kp.private_key())
+        TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(kp.private_key())
     };
     let txs = vec![
         mk("ok-1", good_kp),
@@ -147,7 +151,11 @@ fn mk_tx_with_creation_time(
     pop_authority: &KeyPair,
 ) -> SignedTransaction {
     use core::time::Duration;
-    let mut b = TransactionBuilder::new(chain.clone(), authority.clone());
+    let mut b = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     b.set_creation_time(Duration::from_millis(ct_ms));
     let mut tx = b
         .with_instructions([Log::new(Level::INFO, msg.to_string())])
@@ -419,14 +427,22 @@ fn bls_multi_message_aggregate_ok() {
     let leader = good.clone();
 
     // Two distinct messages with current creation time (avoid TTL rejection)
-    let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "m1".to_string())])
-        .with_metadata(bls_pop_metadata(&good))
-        .sign(good.private_key());
-    let tx2 = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "m2".to_string())])
-        .with_metadata(bls_pop_metadata(&good))
-        .sign(good.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "m1".to_string())])
+    .with_metadata(bls_pop_metadata(&good))
+    .sign(good.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "m2".to_string())])
+    .with_metadata(bls_pop_metadata(&good))
+    .sign(good.private_key());
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
@@ -669,9 +685,13 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
     );
     let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
 
-    let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "secp attempt".to_owned())])
-        .sign(secp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "secp attempt".to_owned())])
+    .sign(secp.private_key());
 
     let mut crypto_cfg = (*state.crypto()).clone();
     crypto_cfg
@@ -710,9 +730,13 @@ fn accepts_transaction_once_algorithm_whitelisted() {
     );
     let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
 
-    let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "secp allowed".to_owned())])
-        .sign(secp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "secp allowed".to_owned())])
+    .sign(secp.private_key());
 
     let mut crypto_cfg = (*state.crypto()).clone();
     if !crypto_cfg.allowed_signing.contains(&Algorithm::Secp256k1) {
@@ -740,7 +764,11 @@ fn rejects_transaction_when_ttl_expired() {
         default_limits.max_metadata_depth(),
     );
 
-    let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+    let mut builder = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder = builder.with_instructions([Log::new(Level::INFO, "expired ttl".to_owned())]);
     builder.set_creation_time(Duration::from_secs(0));
     builder.set_ttl(Duration::from_secs(1));
@@ -772,7 +800,11 @@ fn accepts_transaction_with_valid_ttl() {
         .unwrap_or_else(|_| Duration::from_secs(0));
     let creation_time = now.saturating_sub(Duration::from_secs(1));
 
-    let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+    let mut builder = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder = builder.with_instructions([Log::new(Level::INFO, "valid ttl".to_owned())]);
     builder.set_creation_time(creation_time);
     builder.set_ttl(Duration::from_secs(10));

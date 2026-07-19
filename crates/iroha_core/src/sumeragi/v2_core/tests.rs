@@ -4106,6 +4106,85 @@ fn delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress() {
 }
 
 #[test]
+fn timeout_elapsed_cannot_start_durable_timeout_after_decision() {
+    let context = context();
+    let subject = Subject::repeat(0x91);
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(4)), Generation::new(45)).expect("reducer");
+    install_decision(
+        &mut reducer,
+        qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]),
+    );
+
+    let before = reducer.clone();
+    let ignored = reducer
+        .step(Event::TimeoutElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("a local timeout is terminal after decision");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::AlreadyDecided)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(reducer, before);
+}
+
+#[test]
+fn quorum_completing_timeout_vote_cannot_form_tc_after_decision() {
+    let context = context();
+    let round = Round::new(context.height(), 0);
+    let subject = Subject::repeat(0x92);
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(4)), Generation::new(46)).expect("reducer");
+
+    for signer in [1_u8, 2] {
+        let admitted = reducer
+            .step(Event::TimeoutVoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), round, id(signer), None),
+                    signature(signer),
+                ),
+            })
+            .expect("a partial timeout quorum is admitted before decision");
+        assert!(admitted.effects().is_empty());
+    }
+    assert!(matches!(
+        reducer.timeout_pool_snapshots().as_slice(),
+        [TimeoutPoolSnapshot {
+            round: pooled_round,
+            signers,
+            signed_power,
+            certificate_formed: false,
+        }] if *pooled_round == round
+            && signers == &[id(1), id(2)]
+            && *signed_power == VotingPower::new(2)
+    ));
+    install_decision(
+        &mut reducer,
+        qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]),
+    );
+
+    let before = reducer.clone();
+    let ignored = reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedTimeoutVote::new(
+                TimeoutVote::new(context.id(), round, id(3), None),
+                signature(3),
+            ),
+        })
+        .expect("a quorum-completing timeout vote is terminal after decision");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::AlreadyDecided)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(reducer, before);
+}
+
+#[test]
 fn timeout_certificate_cannot_advance_a_decided_height() {
     let context = context();
     let subject = Subject::repeat(0x8a);

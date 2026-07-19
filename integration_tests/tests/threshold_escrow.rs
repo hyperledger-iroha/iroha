@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
 
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
 
 use base64::Engine as _;
 use eyre::{Result, eyre};
@@ -217,7 +220,13 @@ async fn submit_contract_call_json(
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
-        body.insert("gas_limit".into(), CONTRACT_GAS_LIMIT.into());
+        body.insert(
+            "fee_payment".into(),
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(CONTRACT_GAS_LIMIT),
+            ))?,
+        );
 
         let response = http
             .post(url.clone())
@@ -464,7 +473,12 @@ async fn setup_ledger_for_sample(
     );
     tokio::task::spawn_blocking({
         let client = client.clone();
-        move || client.submit_all_blocking(instructions)
+        move || {
+            client.submit_all_blocking(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await
     .expect("setup ledger task")?;
@@ -479,9 +493,13 @@ async fn setup_ledger_for_sample(
                 },
                 ALICE_ID.clone(),
             );
-            let tx = TransactionBuilder::new(client.chain.clone(), BOB_ID.clone())
-                .with_instructions([grant_transfer])
-                .sign(BOB_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                client.chain.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([grant_transfer])
+            .sign(BOB_KEYPAIR.private_key());
             client.submit_transaction_blocking(&tx)
         }
     })

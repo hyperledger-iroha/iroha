@@ -560,12 +560,8 @@ enum DetachedFallbackReason {
 fn transaction_requires_fee_postprocessing(
     pipeline_cfg: &iroha_config::parameters::actual::Pipeline,
     nexus_cfg: &iroha_config::parameters::actual::Nexus,
-    tx: &iroha_data_model::transaction::SignedTransaction,
 ) -> bool {
     if !pipeline_cfg.gas.accepted_assets.is_empty() {
-        return true;
-    }
-    if tx.metadata().get("gas_asset_id").is_some() {
         return true;
     }
     if nexus_cfg.enabled {
@@ -3970,12 +3966,20 @@ mod new {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
-            let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_instructions([Log::new(Level::INFO, "first".to_owned())])
-                .sign(keypair.private_key());
-            let tx2 = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "second".to_owned())])
-                .sign(keypair.private_key());
+            let tx1 = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_owned())])
+            .sign(keypair.private_key());
+            let tx2 = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_owned())])
+            .sign(keypair.private_key());
 
             let mut expected = vec![
                 (tx1.hash_as_entrypoint(), 0usize, tx1.clone()),
@@ -4012,9 +4016,13 @@ mod new {
         fn block_builder_sign_with_index_sets_signature_index() {
             let chain: ChainId = "new-block-sign-index".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
-            let tx = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
+            .sign(keypair.private_key());
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
@@ -4033,9 +4041,13 @@ mod new {
         fn block_builder_try_sign_with_index_sets_verifiable_signature() {
             let chain: ChainId = "new-block-try-sign-index".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
-            let tx = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
+            .sign(keypair.private_key());
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
@@ -4061,12 +4073,20 @@ mod new {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
-            let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_instructions([Log::new(Level::INFO, "first".to_owned())])
-                .sign(keypair.private_key());
-            let tx2 = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "second".to_owned())])
-                .sign(keypair.private_key());
+            let tx1 = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_owned())])
+            .sign(keypair.private_key());
+            let tx2 = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_owned())])
+            .sign(keypair.private_key());
 
             let expected = vec![tx1.clone(), tx2.clone()];
             let accepted = vec![
@@ -9707,10 +9727,8 @@ pub(crate) mod valid {
                     )));
                 }
             }
-            let nexus_fee_receipts_active = state_block
-                .nexus
-                .fees
-                .lane_relay_burn_receipts_active_at(block.header().height().get());
+            let nexus_fee_receipts_active = state_block.nexus.fees.settlement_mode
+                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
                 LaneSettlementBuilder,
@@ -11468,11 +11486,10 @@ pub(crate) mod valid {
 
             let fee_postprocessing_required: Vec<bool> = txs
                 .iter()
-                .map(|tx| {
+                .map(|_| {
                     transaction_requires_fee_postprocessing(
                         &state_block.pipeline,
                         &state_block.nexus,
-                        tx,
                     )
                 })
                 .collect();
@@ -15419,14 +15436,18 @@ pub(crate) mod valid {
             }
             .encode();
             bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-            let tx = TransactionBuilder::new(sccp_chain_id(), account_id)
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: IvmBytecode::from_compiled(bytecode),
-                    overlay: overlay.into(),
-                    events_commitment: Hash::new(b"events"),
-                    gas_policy_commitment: Hash::new(b"gas"),
-                }))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                sccp_chain_id(),
+                account_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(bytecode),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(keypair.private_key());
             AcceptedTransaction::new_unchecked(Cow::Owned(tx))
         }
 
@@ -15517,8 +15538,12 @@ pub(crate) mod valid {
         #[test]
         fn sccp_commitment_root_validation_rejects_short_result_vector() {
             let (plain_account, plain_keypair) = gen_account_in("sccp");
-            let plain_tx = TransactionBuilder::new(sccp_chain_id(), plain_account)
-                .sign(plain_keypair.private_key());
+            let plain_tx = TransactionBuilder::new(
+                sccp_chain_id(),
+                plain_account,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(plain_keypair.private_key());
             let plain_hash = plain_tx.hash_as_entrypoint();
             let sccp_entrypoint = sccp_accepted_transaction().entrypoint().clone();
             let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx.clone()));
@@ -16127,6 +16152,10 @@ pub(crate) mod valid {
                         state.chain_id.clone(),
                         authority,
                         &time_source,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                     )
                     .with_instructions([Log::new(Level::INFO, format!("lane-predecessor-{index}"))])
                     .sign(signer.private_key()),
@@ -16419,6 +16448,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, label.to_owned())])
             .sign(signer.private_key());
@@ -16531,6 +16561,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, format!("{label}-{idx}"))])
                 .sign(signer.private_key());
@@ -17947,6 +17978,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 alice_id,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "test".to_string())])
             .sign(alice_keypair.private_key());
@@ -18039,6 +18071,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "duplicate".to_owned())])
             .sign(signer.private_key());
@@ -18127,6 +18160,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -18193,6 +18227,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -19170,6 +19205,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -19310,6 +19346,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(
@@ -19428,6 +19465,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, format!("elastic-context-{attempt}"))])
                 .sign(signer.private_key());
@@ -19543,6 +19581,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -19882,6 +19921,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -20019,6 +20059,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -20205,9 +20246,13 @@ pub(crate) mod valid {
                 (params.sumeragi().max_clock_drift(), params.transaction())
             };
 
-            let tx = TransactionBuilder::new(chain_id.clone(), alice_id)
-                .with_instructions([Log::new(Level::INFO, "test".to_string())])
-                .sign(alice_keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                alice_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "test".to_string())])
+            .sign(alice_keypair.private_key());
             let crypto_cfg = state.crypto();
             let tx = AcceptedTransaction::accept(
                 tx,
@@ -21381,6 +21426,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "overlap-grace".to_owned())])
             .sign(signer.private_key());
@@ -22173,6 +22219,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "reject-only".to_owned())])
             .sign(signer.private_key());
@@ -22241,6 +22288,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "forged-fragment-count".to_owned())])
             .sign(signer.private_key());
@@ -22324,6 +22372,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(
                 Level::INFO,
@@ -22399,6 +22448,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );
             builder.set_ttl(Duration::from_millis(100));
             let tx = builder
@@ -22458,6 +22508,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22520,6 +22571,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22692,6 +22744,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22759,6 +22812,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "prevalidated".to_owned())])
             .sign(signer.private_key());
@@ -22876,6 +22930,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22933,6 +22988,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -23015,6 +23071,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "fraud-check".to_owned())])
             .with_metadata(Metadata::default())
@@ -23068,9 +23125,13 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx],
@@ -23090,9 +23151,13 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let record = DaCommitmentRecord::new(
                 LaneId::new(0),
                 1,
@@ -23134,11 +23199,15 @@ pub(crate) mod valid {
             );
             let asset_name = asset_definition_id.name().to_string();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Register::asset_definition(
-                    AssetDefinition::numeric(asset_definition_id).with_name(asset_name),
-                )])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id).with_name(asset_name),
+            )])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx],
@@ -23235,12 +23304,20 @@ pub(crate) mod valid {
             let chain_b = ChainId::from("11111111-1111-1111-1111-111111111111");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx_a = TransactionBuilder::new(chain_a.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "tx_a".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let tx_b = TransactionBuilder::new(chain_b, genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "tx_b".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx_a = TransactionBuilder::new(
+                chain_a.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "tx_a".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx_b = TransactionBuilder::new(
+                chain_b,
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "tx_b".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx_a, tx_b],
@@ -23285,7 +23362,11 @@ pub(crate) mod valid {
 
         // Create a signed block with only leader signature
         let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(chain_id.clone(), account_id);
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -25623,6 +25704,7 @@ mod event {
             let inner_tx = iroha_data_model::prelude::TransactionBuilder::new(
                 chain_id.clone(),
                 authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .sign(keypair.private_key());
             let commitment =
@@ -25646,9 +25728,12 @@ mod event {
                     ),
                 );
             let sealed_hash = sealed_entrypoint.hash();
-            let rejected_tx =
-                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority)
-                    .sign(keypair.private_key());
+            let rejected_tx = iroha_data_model::prelude::TransactionBuilder::new(
+                chain_id,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(keypair.private_key());
             let rejected_hash = rejected_tx.hash_as_entrypoint();
             let header = iroha_data_model::block::BlockHeader::new(
                 nonzero_ext::nonzero!(1_u64),
@@ -25714,9 +25799,12 @@ mod event {
             let chain_id: iroha_data_model::ChainId =
                 "event-routing-plan-first".parse().expect("chain id");
             let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-            let tx =
-                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority.clone())
-                    .sign(keypair.private_key());
+            let tx = iroha_data_model::prelude::TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(keypair.private_key());
             let hash = tx.hash();
             let plan_route =
                 crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
@@ -26280,7 +26368,6 @@ mod tests {
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
-        nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect},
         prelude::*,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
@@ -26400,24 +26487,16 @@ mod tests {
             .parse()
             .expect("valid chain id");
         let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(chain_id, account_id);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
-    }
-
-    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
-        FeeSponsorPolicy {
-            id: FeeSponsorPolicyId::new(
-                sponsor.clone(),
-                "default".parse().expect("default fee sponsor policy"),
-            ),
-            enabled: true,
-            max_fee: None,
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
-        }
     }
 
     #[test]
@@ -27057,9 +27136,13 @@ mod tests {
                 )))
             })
             .collect::<Vec<_>>();
-        let tx = TransactionBuilder::new(chain_id, authority_id)
-            .with_instructions(instructions)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            authority_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)
     }
@@ -27788,6 +27871,7 @@ mod tests {
             chain_id.clone(),
             authority.clone(),
             &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([
             InstructionBox::from(Register::domain(Domain::new(
@@ -28053,17 +28137,25 @@ mod tests {
         let log = Log::new(Level::INFO, "test".to_string());
 
         let tx1 = Box::new(
-            TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-                .with_instructions([log.clone()])
-                .sign(alice_keypair.private_key()),
+            TransactionBuilder::new(
+                chain_id.clone(),
+                alice_id.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([log.clone()])
+            .sign(alice_keypair.private_key()),
         );
         let tx1: &'static SignedTransaction = Box::leak(tx1);
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx1));
 
         let tx2 = Box::new(
-            TransactionBuilder::new(chain_id, alice_id.clone())
-                .with_instructions([log])
-                .sign(alice_keypair.private_key()),
+            TransactionBuilder::new(
+                chain_id,
+                alice_id.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([log])
+            .sign(alice_keypair.private_key()),
         );
         let tx2: &'static SignedTransaction = Box::leak(tx2);
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx2));
@@ -28342,16 +28434,24 @@ mod tests {
             "coin".parse().unwrap(),
         );
         let a_coin = AssetId::of(rose.clone(), alice_id.clone());
-        let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-        let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
-            .with_instructions([SetKeyValue::account(
-                bob_id.clone(),
-                "k".parse().unwrap(),
-                iroha_primitives::json::Json::new("v"),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain_id.clone(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::account(
+            bob_id.clone(),
+            "k".parse().unwrap(),
+            iroha_primitives::json::Json::new("v"),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let acc: Vec<_> = vec![tx1, tx2]
             .into_iter()
             .map(|t| crate::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
@@ -28457,7 +28557,11 @@ mod tests {
         reveal_deadline_height: u64,
         metadata_key: Name,
     ) -> (TransactionEntrypoint, TransactionEntrypoint) {
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let signed = builder
             .with_instructions([SetKeyValue::account(
@@ -28492,9 +28596,13 @@ mod tests {
         let chain_id = ChainId::from("external-only-borrowed-validation");
         let (authority, keypair) = gen_account_in("wonderland");
         let state = state_with_transaction_policy(&chain_id, &authority, false, false);
-        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
+        .sign(keypair.private_key());
         let entrypoint_hash = TransactionEntrypoint::External(signed.clone()).hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
         let block = BlockBuilder::new(vec![accepted])
@@ -28529,9 +28637,13 @@ mod tests {
                 .into()
         };
 
-        let instructions_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "plain".to_owned())])
-            .sign(keypair.private_key());
+        let instructions_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "plain".to_owned())])
+        .sign(keypair.private_key());
         let instructions_block: SignedBlock = make_block(instructions_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&instructions_block).is_none(),
@@ -28545,39 +28657,51 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let contract_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
-                    entrypoint: "increment".to_owned(),
-                    arguments: None,
-                },
-            ))
-            .sign(keypair.private_key());
+        let contract_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
+                entrypoint: "increment".to_owned(),
+                arguments: None,
+            },
+        ))
+        .sign(keypair.private_key());
         let contract_block: SignedBlock = make_block(contract_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_none(),
             "contract calls use the overlay scheduler; durable reads are validated before merge"
         );
 
-        let ivm_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x01])))
-            .sign(keypair.private_key());
+        let ivm_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x01])))
+        .sign(keypair.private_key());
         let ivm_block: SignedBlock = make_block(ivm_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
             "raw IVM calls use the same durable-read validation as deployed contracts"
         );
 
-        let proved_tx = TransactionBuilder::new(chain_id, authority)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-                overlay: Vec::<InstructionBox>::new().into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }))
-            .sign(keypair.private_key());
+        let proved_tx = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(keypair.private_key());
         let proved_block: SignedBlock = make_block(proved_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
@@ -28645,22 +28769,23 @@ seiyaku GuardedOverlay {
             .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
             .transpose()
             .expect("bounded guarded arguments");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "gas_limit".parse().expect("gas_limit name"),
-            Json::new(100_000_u64),
-        );
-        let transaction = TransactionBuilder::new(chain_id, authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash: code_hash,
-                    entrypoint: "write".to_owned(),
-                    arguments,
-                },
-            ))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(100_000),
+            ),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash: code_hash,
+                entrypoint: "write".to_owned(),
+                arguments,
+            },
+        ))
+        .sign(keypair.private_key());
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
@@ -28782,11 +28907,6 @@ seiyaku DynamicAccessCounter {
         state.set_pipeline(pipeline);
 
         let make_call = |authority: AccountId, keypair: &KeyPair, entrypoint: &str, delta: i64| {
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                "gas_limit".parse().expect("gas_limit name"),
-                Json::new(1_000_000_u64),
-            );
             let payload = Json::new(norito::json!({
                 "key": "7",
                 "delta": (delta.to_string()),
@@ -28802,17 +28922,23 @@ seiyaku DynamicAccessCounter {
                     .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
                     .transpose()
                     .expect("bounded contract arguments");
-            TransactionBuilder::new(chain_id.clone(), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::ContractCall(
-                    iroha_data_model::transaction::executable::ContractInvocation {
-                        contract_address: contract_address.clone(),
-                        expected_code_hash: code_hash,
-                        entrypoint: entrypoint.to_owned(),
-                        arguments,
-                    },
-                ))
-                .sign(keypair.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    core::num::NonZeroU64::new(1_000_000),
+                ),
+            )
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
+                    entrypoint: entrypoint.to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key())
         };
         let direct = make_call(alice.clone(), &alice_keypair, "bump_direct", 3);
         let helper = make_call(bob, &bob_keypair, "bump_via_helper", 5);
@@ -28957,10 +29083,6 @@ seiyaku DynamicTarget {
                          fixture_nonce: u64| {
             let mut metadata = Metadata::default();
             metadata.insert(
-                "gas_limit".parse().expect("gas_limit name"),
-                Json::new(1_000_000_u64),
-            );
-            metadata.insert(
                 "dynamic_target_fixture_nonce"
                     .parse()
                     .expect("fixture nonce name"),
@@ -28977,17 +29099,24 @@ seiyaku DynamicTarget {
                     .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
                     .transpose()
                     .expect("bounded contract arguments");
-            TransactionBuilder::new(chain_id.clone(), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::ContractCall(
-                    iroha_data_model::transaction::executable::ContractInvocation {
-                        contract_address: contract_address.clone(),
-                        expected_code_hash: code_hash,
-                        entrypoint: entrypoint.to_owned(),
-                        arguments,
-                    },
-                ))
-                .sign(keypair.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    core::num::NonZeroU64::new(1_000_000),
+                ),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
+                    entrypoint: entrypoint.to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key())
         };
         let choose = (0_u64..)
             .find_map(|nonce| {
@@ -29144,9 +29273,13 @@ seiyaku DynamicTarget {
         let mut world = World::with([domain], [account], []);
         let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
         let tx_key = Name::from_str("sequential_tx_pipeline_trigger").expect("metadata key");
-        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
-            .sign(keypair.private_key());
+        let external_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+        .sign(keypair.private_key());
         let external_hash = external_signed.hash();
         add_pipeline_metadata_trigger(
             &mut world,
@@ -29314,9 +29447,13 @@ seiyaku DynamicTarget {
         let tx_key = Name::from_str("sealed_only_tx_pipeline_trigger").expect("metadata key");
         let any_tx_key =
             Name::from_str("sealed_only_any_tx_pipeline_trigger").expect("metadata key");
-        let dummy_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
-            .sign(keypair.private_key());
+        let dummy_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+        .sign(keypair.private_key());
         add_pipeline_metadata_trigger(
             &mut world,
             &authority,
@@ -29440,11 +29577,15 @@ seiyaku DynamicTarget {
         let wrong_dataspace_key =
             Name::from_str("sequential_wrong_dataspace_rejected_tx_pipeline_trigger")
                 .expect("metadata key");
-        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Unregister::domain(
-                DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
-            )])
-            .sign(keypair.private_key());
+        let external_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Unregister::domain(
+            DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
+        )])
+        .sign(keypair.private_key());
         let external_hash = external_signed.hash();
         let wrong_hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
@@ -29817,7 +29958,11 @@ seiyaku DynamicTarget {
             Json::from(2_u64),
         );
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "expired".to_owned())])
@@ -29856,7 +30001,11 @@ seiyaku DynamicTarget {
             Json::from(5_u64),
         );
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "sequence".to_owned())])
@@ -29908,9 +30057,13 @@ seiyaku DynamicTarget {
         );
 
         // Making two transactions that have the same instruction
-        let tx = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions([create_asset_definition])
-            .sign(alice_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([create_asset_definition])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -29965,9 +30118,13 @@ seiyaku DynamicTarget {
         let domain_a = Register::domain(Domain::new(domain_a_id));
         let domain_b = Register::domain(Domain::new(domain_b_id));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([domain_a.into()])
-            .sign(alice_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([domain_a.into()])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -29982,9 +30139,13 @@ seiyaku DynamicTarget {
         let fail_instruction = Unregister::domain(fail_domain_id);
         let succeed_instruction = domain_b;
 
-        let tx0 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([fail_instruction.into()])
-            .sign(alice_keypair.private_key());
+        let tx0 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([fail_instruction.into()])
+        .sign(alice_keypair.private_key());
         let tx0 = AcceptedTransaction::accept(
             tx0,
             &chain_id,
@@ -29994,9 +30155,13 @@ seiyaku DynamicTarget {
         )
         .expect("Valid");
 
-        let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions::<InstructionBox>([succeed_instruction.into()])
-            .sign(alice_keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([succeed_instruction.into()])
+        .sign(alice_keypair.private_key());
         let tx2 = AcceptedTransaction::accept(
             tx2,
             &chain_id,
@@ -30082,9 +30247,13 @@ seiyaku DynamicTarget {
             AssetDefinition::numeric(asset_definition_id).with_name("coin".to_owned()),
         );
         let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-        let tx_fail = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
-            .sign(alice_keypair.private_key());
+        let tx_fail = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx_fail = AcceptedTransaction::accept(
             tx_fail,
@@ -30094,9 +30263,13 @@ seiyaku DynamicTarget {
             crypto_cfg.as_ref(),
         )
         .expect("Valid");
-        let tx_accept = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions::<InstructionBox>([create_domain.into(), create_asset.into()])
-            .sign(alice_keypair.private_key());
+        let tx_accept = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([create_domain.into(), create_asset.into()])
+        .sign(alice_keypair.private_key());
         let tx_accept = AcceptedTransaction::accept(
             tx_accept,
             &chain_id,
@@ -30194,7 +30367,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
@@ -30212,7 +30384,15 @@ seiyaku DynamicTarget {
         let create_domain = Register::domain(Domain::new(created_domain_id.clone()));
         let fail_instruction =
             Unregister::domain(DomainId::try_new("missing-domain", "universal").unwrap());
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            None,
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions::<InstructionBox>([create_domain.into(), fail_instruction.into()])
@@ -30323,7 +30503,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30338,7 +30517,15 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            None,
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30445,7 +30632,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30461,7 +30647,11 @@ seiyaku DynamicTarget {
         let latest_signed: SignedBlock = latest_valid.into();
 
         let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([SetKeyValue::account(
@@ -30575,7 +30765,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30590,7 +30779,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30703,7 +30896,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
@@ -30744,7 +30936,11 @@ seiyaku DynamicTarget {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30868,7 +31064,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30883,7 +31078,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30985,7 +31184,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31000,7 +31198,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -31108,7 +31310,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31123,7 +31324,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut first_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut first_builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         first_builder.set_creation_time(Duration::from_millis(0));
         let first_tx = first_builder
             .with_instructions([Transfer::asset_quantity(
@@ -31141,7 +31346,11 @@ seiyaku DynamicTarget {
         )
         .expect("first transaction should pass stateless admission");
 
-        let mut second_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut second_builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         second_builder.set_creation_time(Duration::from_millis(1));
         let second_tx = second_builder
             .with_instructions([Transfer::asset_quantity(
@@ -31270,7 +31479,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31285,7 +31493,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let missing_domain_id = DomainId::try_new("missing-domain", "universal").unwrap();
         let tx = builder
@@ -31419,7 +31631,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31439,7 +31650,11 @@ seiyaku DynamicTarget {
             Name::from_str("tx_sequence").expect("metadata key"),
             Json::from(5_u64),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_metadata(metadata)
@@ -31508,14 +31723,14 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit() {
+    fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
 
-        let chain_id = ChainId::from("fee-detached-unauthorized-sponsor-test");
+        let chain_id = ChainId::from("legacy-fee-sponsor-metadata-disabled-fees-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
         let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -31560,299 +31775,116 @@ seiyaku DynamicTarget {
         install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
+            nexus.enabled = false;
             nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("metadata key"),
             Json::new(sponsor_id.to_string()),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "unauthorized fee sponsor metadata must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&sponsor_fee_asset)
-                .expect("sponsor xor after sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "unauthorized sponsor rejection must not debit the sponsor"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_disabled_sponsor_rejects_without_transfer_or_sponsor_debit() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-disabled-sponsor-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, sponsor, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = false;
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("metadata key"),
-            Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "fee_sponsor metadata must reject when sponsorship is disabled"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after disabled sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after disabled sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&sponsor_fee_asset)
-                .expect("sponsor xor after disabled sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "disabled sponsorship must not debit the requested sponsor"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_sponsor_cap_rejects_without_transfer_or_sponsor_debit() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-sponsor-cap-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let mut world = test_world_with_assets(
-            [domain],
-            [payer, sponsor, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let fee_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                sponsor: sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            }
-            .into();
-        world.account_permissions.insert(
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
             payer_id.clone(),
-            std::collections::BTreeSet::from([fee_permission]),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        let policy = default_fee_sponsor_policy(&sponsor_id);
-        world.fee_sponsor_policies.insert(policy.id.clone(), policy);
+        builder.set_creation_time(Duration::from_millis(0));
+        let error = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_quantity(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .try_sign(payer_keypair.private_key())
+            .expect_err("retired fee_sponsor metadata must fail before block admission");
+        assert!(
+            matches!(
+                &error,
+                iroha_data_model::transaction::signed::TransactionSignatureError::InvalidFeePaymentIntent(message)
+                    if message.contains("legacy transaction metadata key `fee_sponsor`")
+            ),
+            "unexpected signing error: {error}"
+        );
+
+        let state_view = state.world.view();
+        let assets = state_view.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after signing rejection")
+                .0,
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after signing rejection")
+                .0,
+            Quantity::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&sponsor_fee_asset)
+                .expect("sponsor xor after signing rejection")
+                .0,
+            Quantity::from(10_u32),
+            "signing rejection must not debit the legacy sponsor"
+        );
+    }
+
+    #[test]
+    fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("legacy-fee-sponsor-metadata-enabled-fees-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
+        let world = test_world_with_assets(
+            [domain],
+            [payer, sponsor, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
+            ],
+            [],
+        );
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
         let mut state =
@@ -31861,94 +31893,66 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(2_u32);
+            nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.sponsor_max_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("metadata key"),
             Json::new(sponsor_id.to_string()),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
+        let error = builder
             .with_metadata(metadata)
             .with_instructions([Transfer::asset_quantity(
                 payer_transfer_asset.clone(),
                 1_u32,
                 recipient_id,
             )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "fee_sponsor metadata must reject when computed fee exceeds sponsor_max_fee"
+            .try_sign(payer_keypair.private_key())
+            .expect_err("retired fee_sponsor metadata must fail before block admission");
+        assert!(
+            matches!(
+                &error,
+                iroha_data_model::transaction::signed::TransactionSignatureError::InvalidFeePaymentIntent(message)
+                    if message.contains("legacy transaction metadata key `fee_sponsor`")
+            ),
+            "unexpected signing error: {error}"
         );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
 
-        let assets = state_block.world.assets();
+        let state_view = state.world.view();
+        let assets = state_view.assets();
         assert_eq!(
             assets
                 .get(&payer_transfer_asset)
-                .expect("payer rose after sponsor cap rejection")
+                .expect("payer rose after signing rejection")
                 .0,
             Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
-                .expect("recipient rose after sponsor cap rejection")
+                .expect("recipient rose after signing rejection")
                 .0,
             Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
-                .expect("sponsor xor after sponsor cap rejection")
+                .expect("sponsor xor after signing rejection")
                 .0,
             Quantity::from(10_u32),
-            "sponsor cap rejection must not debit the sponsor"
+            "signing rejection must not debit the legacy sponsor"
         );
     }
 
@@ -32003,7 +32007,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -32018,7 +32021,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -32073,687 +32080,6 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn fee_enabled_malformed_sponsor_metadata_rejects_without_transfer_or_fee() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-malformed-sponsor-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("metadata key"),
-            Json::from(true),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "malformed fee_sponsor metadata must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after malformed sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after malformed sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_fee_asset)
-                .expect("payer xor after malformed sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "malformed sponsor metadata must not fall back to payer debit"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_missing_gas_asset_metadata_rejects_without_partial_transfer() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-missing-gas-asset-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let gas_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, gas_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "gas policy must reject a transaction missing gas_asset_id metadata"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after missing gas asset rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after missing gas asset rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_gas_asset)
-                .expect("payer gas asset after missing gas metadata rejection")
-                .0,
-            Quantity::from(10_u32)
-        );
-    }
-
-    #[test]
-    fn fee_enabled_missing_gas_rate_mapping_rejects_without_partial_transfer() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-missing-gas-rate-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let gas_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, gas_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
-        state.pipeline.gas.units_per_gas.clear();
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_asset_id").expect("metadata key"),
-            Json::new(gas_asset_definition_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "accepted gas_asset_id without units_per_gas mapping must reject"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after missing gas rate rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after missing gas rate rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_gas_asset)
-                .expect("payer gas asset after missing gas rate rejection")
-                .0,
-            Quantity::from(10_u32)
-        );
-    }
-
-    #[test]
-    fn signed_block_sponsored_fee_burns_when_sponsor_is_fee_sink() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-
-        let chain_id = ChainId::from("sponsored-block-fee-burn-test");
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority_id);
-        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
-        let world = test_world_with_assets(
-            [domain],
-            [authority, sponsor],
-            [asset_definition],
-            [sponsor_asset],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        {
-            let fee_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                }
-                .into();
-            let mut world = state.world.block();
-            world.account_permissions.insert(
-                authority_id.clone(),
-                std::collections::BTreeSet::from([fee_permission]),
-            );
-            let policy = default_fee_sponsor_policy(&sponsor_id);
-            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
-            world.commit();
-        }
-
-        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-            .chain(0, None)
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let genesis_signed: SignedBlock = genesis_block.clone().into();
-        let mut genesis_state_block = state.block(genesis_block.header);
-        let _valid_genesis = genesis_block
-            .validate_and_record_transactions(&mut genesis_state_block)
-            .unpack(|_| {});
-        genesis_state_block.commit().expect("commit first block");
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static name"),
-            iroha_primitives::json::Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
-            .sign(authority_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&genesis_signed))
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert!(
-            valid_block.as_ref().errors().next().is_none(),
-            "sponsored transaction should be approved"
-        );
-        state_block.commit().expect("commit sponsored fee block");
-
-        let committed_balance_after = state
-            .view()
-            .world()
-            .assets()
-            .get(&sponsor_asset_id)
-            .expect("sponsor asset exists after block commit")
-            .0
-            .as_numeric()
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(committed_balance_after, 9);
-    }
-
-    #[test]
-    fn routed_signed_block_sponsored_fee_burns_global_sponsor_asset() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-
-        let chain_id = ChainId::from("routed-sponsored-block-fee-burn-test");
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority_id);
-        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
-        let world = test_world_with_assets(
-            [domain],
-            [authority, sponsor],
-            [asset_definition],
-            [sponsor_asset],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        let paynet_lane = LaneId::new(3);
-        let paynet_dataspace = DataSpaceId::new(10);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-            nexus.lane_catalog = LaneCatalog::new(
-                nonzero!(4_u32),
-                vec![
-                    LaneConfig::default(),
-                    LaneConfig {
-                        id: paynet_lane,
-                        dataspace_id: paynet_dataspace,
-                        alias: "paynet".to_string(),
-                        ..LaneConfig::default()
-                    },
-                ],
-            )
-            .expect("lane catalog");
-            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
-                iroha_data_model::nexus::DataSpaceMetadata::default(),
-                iroha_data_model::nexus::DataSpaceMetadata {
-                    id: paynet_dataspace,
-                    alias: "paynet".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog");
-            nexus.routing_policy.default_lane = paynet_lane;
-            nexus.routing_policy.default_dataspace = paynet_dataspace;
-        }
-        install_test_lane_manifests(&state);
-
-        {
-            let fee_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                }
-                .into();
-            let mut world = state.world.block();
-            world.account_permissions.insert(
-                authority_id.clone(),
-                std::collections::BTreeSet::from([fee_permission]),
-            );
-            let policy = default_fee_sponsor_policy(&sponsor_id);
-            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
-            world.commit();
-        }
-
-        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-            .chain(0, None)
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let genesis_signed: SignedBlock = genesis_block.clone().into();
-        let mut genesis_state_block = state.block(genesis_block.header);
-        let _valid_genesis = genesis_block
-            .validate_and_record_transactions(&mut genesis_state_block)
-            .unpack(|_| {});
-        genesis_state_block.commit().expect("commit first block");
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static name"),
-            iroha_primitives::json::Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
-            .sign(authority_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&genesis_signed))
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert!(
-            valid_block.as_ref().errors().next().is_none(),
-            "routed sponsored transaction should be approved"
-        );
-        state_block
-            .commit()
-            .expect("commit routed sponsored fee block");
-
-        let committed_balance_after = state
-            .view()
-            .world()
-            .assets()
-            .get(&sponsor_asset_id)
-            .expect("sponsor asset exists after block commit")
-            .0
-            .as_numeric()
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(committed_balance_after, 9);
-    }
-
-    #[test]
     fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -32801,7 +32127,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         {
             let mut world = state.world.block();
@@ -32840,7 +32165,11 @@ seiyaku DynamicTarget {
                 DataEventFilter::Any,
             ),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions::<InstructionBox>([
@@ -32931,12 +32260,16 @@ seiyaku DynamicTarget {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
 
-        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([
-                InstructionBox::from(Register::account(Account::new(authority.clone()))),
-                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
-            ])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+        ])
+        .sign(keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -33032,6 +32365,10 @@ seiyaku DynamicTarget {
                         chain_id.clone(),
                         authority.clone(),
                         &time_source,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                     )
                     .with_metadata(transaction_metadata)
                     .with_instructions(instructions)
@@ -33277,9 +32614,13 @@ seiyaku DynamicTarget {
         // Create genesis transaction
         // Sign with `genesis_wrong_key` as peer which has incorrect genesis key pair
         // Bypass `accept_genesis` check to allow signing with wrong key
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_wrong_account_id.clone())
-            .with_instructions([isi])
-            .sign(genesis_wrong_key.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_wrong_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([isi])
+        .sign(genesis_wrong_key.private_key());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
         // Create genesis block
@@ -33356,9 +32697,13 @@ seiyaku DynamicTarget {
             AssetDefinition::numeric(asset_definition_id).with_name("xor".to_owned()),
         );
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
-            .with_instructions([instruction])
-            .sign(genesis_key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(genesis_key_pair.private_key());
         let block = SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),
@@ -33405,9 +32750,13 @@ seiyaku DynamicTarget {
 
         let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
-            .with_instructions([instruction])
-            .sign(genesis_key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(genesis_key_pair.private_key());
         let block = SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),
@@ -33902,10 +33251,9 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
             let instructions: Vec<_> = batch.iter().cloned().collect();
             crate::gas::meter_instructions(&instructions)
         }
-        Executable::ContractCall(_) => crate::executor::parse_gas_limit(tx.metadata())
-            .ok()
-            .flatten()
-            .unwrap_or(IVM_TEU_FALLBACK),
+        Executable::ContractCall(_) => {
+            crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
+        }
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {
                 let max_cycles = parsed.metadata.max_cycles;

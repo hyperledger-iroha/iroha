@@ -1671,7 +1671,7 @@ public final class SumeragiV2Wire {
   public enum QueueKind {
     INGRESS(0), DEFERRED_NORMAL(1), DEFERRED_PROGRESS(2), DEFERRED_COMPLETION(3),
     RUNTIME_NORMAL(4), RUNTIME_PROGRESS(5), RUNTIME_COMPLETION(6), EFFECT_COMPLETION(7),
-    NETWORK_INGRESS(8);
+    NETWORK_INGRESS(8), EFFECT_DISPATCH(9);
     public final long discriminant;
     QueueKind(long discriminant) { this.discriminant = discriminant; }
     byte[] encode() { return u32(discriminant); }

@@ -265,17 +265,43 @@ impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     }
 }
 
-impl JsonKeyCodec for crate::nexus::FeeSponsorPolicyId {
+impl JsonKeyCodec for crate::nexus::FeeSponsorProgramId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
-            .parse::<crate::nexus::FeeSponsorPolicyId>()
+            .parse::<crate::nexus::FeeSponsorProgramId>()
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
+
+macro_rules! impl_fee_sponsor_struct_key_codec {
+    ($($ty:path),+ $(,)?) => {
+        $(
+            impl JsonKeyCodec for $ty {
+                fn encode_json_key(&self, out: &mut String) {
+                    let mut encoded = String::new();
+                    norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+                    json::write_json_string(&encoded, out);
+                }
+
+                fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+                    let mut parser = json::Parser::new(encoded);
+                    norito::json::JsonDeserialize::json_deserialize(&mut parser)
+                }
+            }
+        )+
+    };
+}
+
+impl_fee_sponsor_struct_key_codec!(
+    crate::nexus::FeeSponsorProgramRevisionKey,
+    crate::nexus::FeeSponsorEnrollmentKey,
+    crate::nexus::FeeSponsorVaultKey,
+    crate::nexus::FeeSponsorBudgetCounterKey,
+);
 
 impl JsonKeyCodec for crate::account::OpaqueAccountId {
     fn encode_json_key(&self, out: &mut String) {

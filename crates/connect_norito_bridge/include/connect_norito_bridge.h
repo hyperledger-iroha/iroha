@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 20
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 21
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -133,7 +133,7 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Kagemusha recursive spend ABI 20/V4 ----------------
+// ---------------- Kagemusha recursive spend ABI 21/V4 ----------------
 // JVM/Android projection tuples use an exact four-byte big-endian version and
 // carry canonical exact-state claim archives plus the authenticated output
 // artifact binding. Append builders accept this ABI's full one-or-two input
@@ -467,7 +467,7 @@ int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
     uint8_t** out_summary_ptr,
     unsigned long* out_summary_len);
 
-// Canonical ABI-20 append-only frontier. Construction recomputes the supplied
+// Canonical ABI-21 append-only frontier. Construction recomputes the supplied
 // empty-leaf path with the consensus Poseidon domains before returning it.
 int32_t connect_norito_kagemusha_output_membership_frontier_build_v4(
     uint32_t leaf_index,
@@ -1182,6 +1182,7 @@ int32_t connect_norito_encode_confidential_encrypted_payload(
 // -10  allocation failure while writing output
 // -11  provided hash buffer shorter than 32 bytes
 // -31  invalid nonce (zero when present)
+// -34  missing or invalid typed fee-payment JSON
 int32_t connect_norito_encode_transfer_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -1193,22 +1194,7 @@ int32_t connect_norito_encode_transfer_signed_transaction(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    uint32_t nonce,
-    uint8_t nonce_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* quantity, unsigned long quantity_len,
-    const char* destination, unsigned long destination_len,
-    const char* fee_sponsor, unsigned long fee_sponsor_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1224,23 +1210,7 @@ int32_t connect_norito_encode_transfer_signed_transaction_alg(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    uint32_t nonce,
-    uint8_t nonce_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* quantity, unsigned long quantity_len,
-    const char* destination, unsigned long destination_len,
-    const char* fee_sponsor, unsigned long fee_sponsor_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1252,30 +1222,6 @@ int32_t connect_norito_encode_transfer_instruction_box(
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
     uint8_t** out_instruction_ptr, unsigned long* out_instruction_len);
-
-int32_t connect_norito_encode_validation_fee_transfer_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    uint32_t nonce,
-    uint8_t nonce_present,
-    const char* principal_asset_definition, unsigned long principal_asset_definition_len,
-    const char* principal_quantity, unsigned long principal_quantity_len,
-    const char* destination, unsigned long destination_len,
-    const char* fee_asset_definition, unsigned long fee_asset_definition_len,
-    const char* fee_quantity, unsigned long fee_quantity_len,
-    const char* treasury, unsigned long treasury_len,
-    uint64_t policy_version,
-    const char* policy_hash, unsigned long policy_hash_len,
-    uint64_t fee_instruction_index,
-    const char* fee_sponsor, unsigned long fee_sponsor_len,
-    const char* memo, unsigned long memo_len,
-    const char* metadata_json, unsigned long metadata_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_shield_signed_transaction(
     const char* chain_id, unsigned long chain_len,
@@ -1290,6 +1236,7 @@ int32_t connect_norito_encode_shield_signed_transaction(
     const uint8_t* payload_ephemeral, unsigned long payload_ephemeral_len,
     const uint8_t* payload_nonce, unsigned long payload_nonce_len,
     const uint8_t* payload_ciphertext, unsigned long payload_ciphertext_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1307,6 +1254,7 @@ int32_t connect_norito_encode_shield_signed_transaction_alg(
     const uint8_t* payload_ephemeral, unsigned long payload_ephemeral_len,
     const uint8_t* payload_nonce, unsigned long payload_nonce_len,
     const uint8_t* payload_ciphertext, unsigned long payload_ciphertext_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1324,6 +1272,7 @@ int32_t connect_norito_encode_unshield_signed_transaction(
     const uint8_t* inputs, unsigned long inputs_len,
     const char* proof_json, unsigned long proof_json_len,
     const uint8_t* root_hint, unsigned long root_hint_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1340,6 +1289,7 @@ int32_t connect_norito_encode_unshield_signed_transaction_alg(
     const uint8_t* inputs, unsigned long inputs_len,
     const char* proof_json, unsigned long proof_json_len,
     const uint8_t* root_hint, unsigned long root_hint_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1356,6 +1306,7 @@ int32_t connect_norito_encode_zk_transfer_signed_transaction(
     const uint8_t* outputs, unsigned long outputs_len,
     const char* proof_json, unsigned long proof_json_len,
     const uint8_t* root_hint, unsigned long root_hint_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1371,6 +1322,71 @@ int32_t connect_norito_encode_zk_transfer_signed_transaction_alg(
     const uint8_t* outputs, unsigned long outputs_len,
     const char* proof_json, unsigned long proof_json_len,
     const uint8_t* root_hint, unsigned long root_hint_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_register_zk_asset_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    uint8_t mode_code,
+    uint8_t allow_shield,
+    uint8_t allow_unshield,
+    const char* vk_transfer, unsigned long vk_transfer_len, uint8_t vk_transfer_present,
+    const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
+    const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_register_zk_asset_signed_transaction_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    uint8_t mode_code,
+    uint8_t allow_shield,
+    uint8_t allow_unshield,
+    const char* vk_transfer, unsigned long vk_transfer_len, uint8_t vk_transfer_present,
+    const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
+    const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_multisig_register_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* spec_json, unsigned long spec_json_len,
+    const char* account_id, unsigned long account_id_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_multisig_register_signed_transaction_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* spec_json, unsigned long spec_json_len,
+    const char* account_id, unsigned long account_id_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1384,6 +1400,7 @@ int32_t connect_norito_encode_claim_identifier_signed_transaction(
     uint8_t ttl_present,
     const char* account_id, unsigned long account_id_len,
     const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1396,6 +1413,7 @@ int32_t connect_norito_encode_claim_identifier_signed_transaction_alg(
     uint8_t ttl_present,
     const char* account_id, unsigned long account_id_len,
     const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1411,6 +1429,7 @@ int32_t connect_norito_encode_set_key_value_signed_transaction(
     const char* object_id, unsigned long object_len,
     const char* key, unsigned long key_len,
     const uint8_t* value_json, unsigned long value_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1425,6 +1444,7 @@ int32_t connect_norito_encode_set_key_value_signed_transaction_alg(
     const char* object_id, unsigned long object_len,
     const char* key, unsigned long key_len,
     const uint8_t* value_json, unsigned long value_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1439,6 +1459,7 @@ int32_t connect_norito_encode_remove_key_value_signed_transaction(
     uint8_t target_kind,
     const char* object_id, unsigned long object_len,
     const char* key, unsigned long key_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1452,6 +1473,7 @@ int32_t connect_norito_encode_remove_key_value_signed_transaction_alg(
     uint8_t target_kind,
     const char* object_id, unsigned long object_len,
     const char* key, unsigned long key_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1469,6 +1491,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction(
     const char* abi_version, unsigned long abi_version_len,
     uint64_t window_lower, uint64_t window_upper, uint8_t window_present,
     uint8_t mode_code, uint8_t mode_present,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1485,6 +1508,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
     const char* abi_version, unsigned long abi_version_len,
     uint64_t window_lower, uint64_t window_upper, uint8_t window_present,
     uint8_t mode_code, uint8_t mode_present,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1501,6 +1525,7 @@ int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
     const char* amount, unsigned long amount_len,
     uint64_t duration_blocks,
     uint8_t direction,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1516,6 +1541,7 @@ int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction_al
     const char* amount, unsigned long amount_len,
     uint64_t duration_blocks,
     uint8_t direction,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1530,6 +1556,7 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
     const char* election_id, unsigned long election_id_len,
     const char* proof_b64, unsigned long proof_b64_len,
     const uint8_t* public_inputs_json, unsigned long public_inputs_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1543,6 +1570,7 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
     const char* election_id, unsigned long election_id_len,
     const char* proof_b64, unsigned long proof_b64_len,
     const uint8_t* public_inputs_json, unsigned long public_inputs_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1557,6 +1585,7 @@ int32_t connect_norito_encode_governance_enact_referendum_signed_transaction(
     const char* referendum_id_hex, unsigned long referendum_id_len,
     const char* preimage_hash_hex, unsigned long preimage_hash_len,
     uint64_t window_lower, uint64_t window_upper,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1570,6 +1599,7 @@ int32_t connect_norito_encode_governance_enact_referendum_signed_transaction_alg
     const char* referendum_id_hex, unsigned long referendum_id_len,
     const char* preimage_hash_hex, unsigned long preimage_hash_len,
     uint64_t window_lower, uint64_t window_upper,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1583,6 +1613,7 @@ int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction(
     uint8_t ttl_present,
     const char* referendum_id, unsigned long referendum_id_len,
     const char* proposal_id_hex, unsigned long proposal_id_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1595,6 +1626,7 @@ int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction_
     uint8_t ttl_present,
     const char* referendum_id, unsigned long referendum_id_len,
     const char* proposal_id_hex, unsigned long proposal_id_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1610,6 +1642,7 @@ int32_t connect_norito_encode_governance_persist_council_signed_transaction(
     uint32_t candidates_count,
     uint8_t derived_by,
     const uint8_t* members_json, unsigned long members_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1624,6 +1657,7 @@ int32_t connect_norito_encode_governance_persist_council_signed_transaction_alg(
     uint32_t candidates_count,
     uint8_t derived_by,
     const uint8_t* members_json, unsigned long members_json_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1640,6 +1674,7 @@ int32_t connect_norito_encode_mint_signed_transaction(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1655,6 +1690,7 @@ int32_t connect_norito_encode_mint_signed_transaction_alg(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1671,6 +1707,7 @@ int32_t connect_norito_encode_burn_signed_transaction(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
@@ -1686,6 +1723,7 @@ int32_t connect_norito_encode_burn_signed_transaction_alg(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,

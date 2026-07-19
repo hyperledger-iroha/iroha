@@ -455,7 +455,7 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   assert.match(requestType, /private_key: string;/);
   assert.match(requestType, /manifest_payload: string;/);
   assert.match(requestType, /submitted_epoch: NumericLike;/);
-  assert.match(requestType, /gas_asset_id\?: string \| null;/);
+  assert.doesNotMatch(requestType, /gas_asset_id|gasAssetId/);
   assert.doesNotMatch(
     requestType,
     /manifestBytes|manifest_b64|chunker|pinPolicy|pin_policy|contentLength|content_length/,

@@ -51,9 +51,12 @@ fn transactions_should_be_applied() -> Result<()> {
         };
 
         iroha
-            .submit(SetParameter::new(Parameter::Block(
-                BlockParameter::MaxTransactions(nonzero!(1_u64)),
-            )))
+            .submit(
+                SetParameter::new(Parameter::Block(BlockParameter::MaxTransactions(nonzero!(
+                    1_u64
+                )))),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err_with(|| {
                 format!(
                     "submit set_parameter; torii={torii}, env_dir={}",
@@ -72,12 +75,17 @@ fn transactions_should_be_applied() -> Result<()> {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
 
         let create_domain = Register::domain(Domain::new(domain_id.clone()));
-        iroha.submit(create_domain).wrap_err_with(|| {
-            format!(
-                "submit create_domain; torii={torii}, env_dir={}",
-                env_dir.display()
+        iroha
+            .submit(
+                create_domain,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-        })?;
+            .wrap_err_with(|| {
+                format!(
+                    "submit create_domain; torii={torii}, env_dir={}",
+                    env_dir.display()
+                )
+            })?;
         target_height += 1;
         wait_for_height(target_height, "after create_domain")?;
 
@@ -86,22 +94,32 @@ fn transactions_should_be_applied() -> Result<()> {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        iroha.submit(create_asset).wrap_err_with(|| {
-            format!(
-                "submit create_asset; torii={torii}, env_dir={}",
-                env_dir.display()
+        iroha
+            .submit(
+                create_asset,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-        })?;
+            .wrap_err_with(|| {
+                format!(
+                    "submit create_asset; torii={torii}, env_dir={}",
+                    env_dir.display()
+                )
+            })?;
         target_height += 1;
         wait_for_height(target_height, "after create_asset")?;
 
         let create_account = Register::account(Account::new(account_id.clone()));
-        iroha.submit(create_account).wrap_err_with(|| {
-            format!(
-                "submit create_account; torii={torii}, env_dir={}",
-                env_dir.display()
+        iroha
+            .submit(
+                create_account,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-        })?;
+            .wrap_err_with(|| {
+                format!(
+                    "submit create_account; torii={torii}, env_dir={}",
+                    env_dir.display()
+                )
+            })?;
         target_height += 1;
         wait_for_height(target_height, "after create_account")?;
 
@@ -109,22 +127,32 @@ fn transactions_should_be_applied() -> Result<()> {
             57_787_013_353_273_097_936_105_299_296_u128,
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         );
-        iroha.submit(mint_asset).wrap_err_with(|| {
-            format!(
-                "submit first mint; torii={torii}, env_dir={}",
-                env_dir.display()
+        iroha
+            .submit(
+                mint_asset,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-        })?;
+            .wrap_err_with(|| {
+                format!(
+                    "submit first mint; torii={torii}, env_dir={}",
+                    env_dir.display()
+                )
+            })?;
         target_height += 1;
         wait_for_height(target_height, "after first mint")?;
 
         let mint_asset = Mint::asset_quantity(1_u32, AssetId::new(asset_definition_id, account_id));
-        iroha.submit(mint_asset).wrap_err_with(|| {
-            format!(
-                "submit second mint; torii={torii}, env_dir={}",
-                env_dir.display()
+        iroha
+            .submit(
+                mint_asset,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-        })?;
+            .wrap_err_with(|| {
+                format!(
+                    "submit second mint; torii={torii}, env_dir={}",
+                    env_dir.display()
+                )
+            })?;
         target_height += 1;
         wait_for_height(target_height, "after second mint")?;
 

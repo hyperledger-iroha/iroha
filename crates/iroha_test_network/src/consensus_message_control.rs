@@ -238,9 +238,17 @@ pub struct ConsensusMessageControlAck {
 pub struct ConsensusMessageControl {
     root: PathBuf,
     root_identity: RootIdentity,
-    initial_digest: CryptoHash,
+    initial_command: InitialCommand,
     next_revision: Mutex<u64>,
     operation: tokio::sync::Mutex<()>,
+}
+
+#[derive(Clone, Debug)]
+struct InitialCommand {
+    command_digest: CryptoHash,
+    rules: Vec<ConsensusMessageControlRule>,
+    queue_capacity: usize,
+    staged: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,12 +283,17 @@ impl ConsensusMessageControl {
         let mut control = Self {
             root,
             root_identity,
-            initial_digest: CryptoHash::new(b""),
+            initial_command: InitialCommand {
+                command_digest: CryptoHash::new(b""),
+                rules: Vec::new(),
+                queue_capacity: DEFAULT_QUEUE_CAPACITY,
+                staged: false,
+            },
             next_revision: Mutex::new(1),
             operation: tokio::sync::Mutex::new(()),
         };
-        control.initial_digest =
-            control.write_command(1, &[], &[], DEFAULT_QUEUE_CAPACITY, false)?;
+        let command_digest = control.write_command(1, &[], &[], DEFAULT_QUEUE_CAPACITY, false)?;
+        control.initial_command.command_digest = command_digest;
         Ok(control)
     }
 
@@ -295,14 +308,59 @@ impl ConsensusMessageControl {
         &self.root
     }
 
+    /// Replace the initial command before the daemon starts.
+    ///
+    /// The staged rules remain revision 1, so daemon initialization applies and
+    /// acknowledges them before authenticated consensus ingress can run. This
+    /// fails closed once an acknowledgement exists or another initial command
+    /// has already been staged.
+    pub(crate) fn stage_initial_rules(
+        &mut self,
+        rules: &[ConsensusMessageControlRule],
+        queue_capacity: usize,
+    ) -> Result<()> {
+        let next_revision = self
+            .next_revision
+            .get_mut()
+            .expect("message-control revision lock poisoned");
+        if *next_revision != 1 {
+            return Err(eyre!(
+                "cannot stage initial consensus message-control rules after an update"
+            ));
+        }
+        match fs::symlink_metadata(self.root.join(ACK_FILE)) {
+            Ok(_) => {
+                return Err(eyre!(
+                    "cannot stage initial consensus message-control rules after daemon startup"
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        if self.initial_command.staged {
+            return Err(eyre!(
+                "initial consensus message-control rules were already staged"
+            ));
+        }
+        let command_digest = self.write_command(1, rules, &[], queue_capacity, false)?;
+        self.initial_command = InitialCommand {
+            command_digest,
+            rules: rules.to_vec(),
+            queue_capacity,
+            staged: true,
+        };
+        Ok(())
+    }
+
     /// Wait until the daemon has pinned the directory and applied its initial command.
     pub async fn wait_until_ready(&self, timeout: Duration) -> Result<ConsensusMessageControlAck> {
         self.wait_for_revision(
             ExpectedAck {
                 revision: 1,
-                command_digest: self.initial_digest,
-                rules: &[],
-                queue_capacity: DEFAULT_QUEUE_CAPACITY,
+                command_digest: self.initial_command.command_digest,
+                rules: &self.initial_command.rules,
+                queue_capacity: self.initial_command.queue_capacity,
                 drain: false,
             },
             timeout,
@@ -1167,6 +1225,52 @@ mod tests {
                 .write_command(2, &[], &[], MAX_HOLDS + 1, false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn staged_initial_rules_replace_revision_one_before_startup() {
+        let parent = tempdir().expect("temporary parent");
+        let mut control =
+            ConsensusMessageControl::create(parent.path().join("control")).expect("create control");
+        let key = KeyPair::try_from_seed(vec![9_u8; 32], Algorithm::Ed25519)
+            .expect("deterministic peer key");
+        let rule = ConsensusMessageControlRule::exact(
+            PeerId::new(key.public_key().clone()),
+            ConsensusMessageControlKind::CommitVote,
+            2,
+            0,
+            ConsensusMessageControlAction::Drop,
+        );
+
+        control
+            .stage_initial_rules(std::slice::from_ref(&rule), 17)
+            .expect("stage initial rule");
+
+        let bytes = fs::read(control.root.join(CONTROL_FILE)).expect("read staged command");
+        let value: Value = norito::json::from_slice(&bytes).expect("parse staged command");
+        assert_eq!(value.get("revision").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("queue_capacity").and_then(Value::as_u64),
+            Some(17)
+        );
+        assert_eq!(
+            value.get("rules").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(control.initial_command.rules, vec![rule]);
+        assert_eq!(control.initial_command.queue_capacity, 17);
+        assert_eq!(
+            control.initial_command.command_digest,
+            CryptoHash::new(&bytes)
+        );
+        assert_eq!(
+            *control
+                .next_revision
+                .lock()
+                .expect("revision lock is healthy"),
+            1
+        );
+        assert!(control.stage_initial_rules(&[], 17).is_err());
     }
 
     fn empty_ack(digest: CryptoHash) -> ConsensusMessageControlAck {

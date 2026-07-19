@@ -1,8 +1,12 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
-    nexus::UniversalAccountId,
-    transaction::error::TransactionRejectionReason,
+    asset::AssetDefinitionId,
+    nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
+    prelude::Quantity,
+    transaction::{
+        FeeChargeKind, FeePaymentIntent, TransactionPayload, error::TransactionRejectionReason,
+    },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
@@ -17,6 +21,128 @@ pub mod route_catalog;
 
 /// Required WebSocket subprotocol for canonical Norito event and block streams.
 pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
+
+/// Canonical request body for account-signed `POST /v1/fees/quote`.
+///
+/// The draft fixes every non-fee transaction field and selects the payer,
+/// sponsor-program revision, and gas bound. Before signing, replace only its
+/// `fee_payment` field with the response's fixed-point [`FeePaymentIntent`].
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+pub struct FeeQuoteRequest {
+    /// Exact canonical unsigned transaction payload to evaluate.
+    pub payload: TransactionPayload,
+}
+
+/// Ledger observation used for a deterministic fee quote.
+#[derive(
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+)]
+pub struct FeeQuoteObservation {
+    /// Creation time of the latest committed block, in Unix milliseconds.
+    pub ledger_time_ms: u64,
+    /// Height at which this payload would next be admitted.
+    pub next_block_height: u64,
+    /// Dataspace selected by canonical transaction routing.
+    pub route_dataspace_id: DataSpaceId,
+}
+
+/// One canonically ordered maximum fee component.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct FeeQuoteComponent {
+    /// Fee component represented by this bound.
+    pub kind: FeeChargeKind,
+    /// Exact asset definition in which this component is charged.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Maximum deterministic charge at the observed state.
+    pub max_amount: Quantity,
+}
+
+/// Remaining sponsor-program capacity for one fee asset.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct FeeQuoteCapacity {
+    /// Asset definition governed by this capacity snapshot.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Current isolated program-vault balance.
+    pub vault_balance: Quantity,
+    /// Balance that must remain after settlement.
+    pub reserve_floor: Quantity,
+    /// Remaining program capacity in the observed block window.
+    pub block_remaining: Quantity,
+    /// Remaining program capacity in the observed program epoch.
+    pub program_epoch_remaining: Quantity,
+    /// Remaining beneficiary capacity in the observed beneficiary epoch.
+    pub beneficiary_epoch_remaining: Quantity,
+}
+
+/// Successful deterministic fee-admission decision.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(tag = "status", content = "value", rename_all = "snake_case")]
+pub enum FeeQuoteDecision {
+    /// The payload is admissible at the observed state.
+    #[norito(rename = "accepted")]
+    Accepted {
+        /// Exact account or isolated program vault that will be debited.
+        debit_source: FeeDebitSource,
+        /// Exact active immutable sponsor revision, when sponsored.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        program_revision: Option<u64>,
+    },
+}
+
+/// Successful response returned by account-signed `POST /v1/fees/quote`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct FeeQuoteResponse {
+    /// Exact signature-bound intent evaluated by Core.
+    pub intent: FeePaymentIntent,
+    /// Ledger observation that fixes the state-dependent result.
+    pub observation: FeeQuoteObservation,
+    /// Canonically ordered maximum charge components.
+    pub components: Vec<FeeQuoteComponent>,
+    /// Canonically ordered sponsor capacities; empty for authority payment.
+    pub capacities: Vec<FeeQuoteCapacity>,
+    /// Successful admission decision and selected debit source.
+    pub decision: FeeQuoteDecision,
+}
+
+/// Canonical request body for exact sponsor-program lookup.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+pub struct FeeSponsorProgramByIdRequest {
+    /// Canonical `sponsor/program` literal.
+    pub program_id: String,
+}
+
+impl FeeSponsorProgramByIdRequest {
+    /// Construct a lookup request from a typed program identifier.
+    #[must_use]
+    pub fn new(program_id: &FeeSponsorProgramId) -> Self {
+        Self {
+            program_id: program_id.to_string(),
+        }
+    }
+}
 
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
@@ -37,6 +163,11 @@ pub mod uri {
     pub const TRANSACTION_ENTRYPOINT: &str = "/v1/pipeline/transaction-entrypoints";
     /// Batched transaction URI is used to handle multiple signed transaction submissions.
     pub const TRANSACTIONS_BATCH: &str = "/v1/pipeline/transactions/batch";
+    /// URI used to quote the exact fee intent of an unsigned transaction payload.
+    pub const FEES_QUOTE: &str = crate::route_catalog::fees::QUOTE_PATH;
+    /// URI used to read one exact on-chain sponsor program.
+    pub const FEE_SPONSOR_PROGRAM_BY_ID: &str =
+        crate::route_catalog::fees::SPONSOR_PROGRAM_BY_ID_PATH;
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
@@ -209,6 +340,49 @@ pub struct AxtErrorDetails {
     pub next_min_sub_nonce: Option<u64>,
 }
 
+/// Structured fee-payment rejection metadata returned to authorized callers.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
+)]
+pub struct FeeErrorDetails {
+    /// Stable snake-case [`iroha_data_model::nexus::FeeRejectionCode`] label.
+    pub code: String,
+    /// Whether retrying after a state or capacity change can succeed unchanged.
+    pub retryable: bool,
+    /// Exact sponsor program selected by the signed transaction, when applicable.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub program_id: Option<String>,
+    /// Exact sponsor-program revision selected by the signed transaction.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub program_revision: Option<u64>,
+    /// Canonical fee asset involved in the rejection.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub asset_definition_id: Option<String>,
+    /// Deterministic amount required at the observation state.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub required: Option<String>,
+    /// Deterministic amount available at the observation state.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub available: Option<String>,
+    /// Stable matching rule identifier, when disclosure is authorized.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    /// Consensus height at which this decision was evaluated.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub observation_height: Option<u64>,
+    /// Concrete repair or retry guidance.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
 /// Structured metadata carried by [`ErrorEnvelope`].
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
@@ -270,6 +444,10 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub axt: Option<AxtErrorDetails>,
+    /// Fee-payment rejection metadata when admission or settlement failed.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fee: Option<FeeErrorDetails>,
 }
 
 impl ErrorDetails {
@@ -290,6 +468,7 @@ impl ErrorDetails {
             && self.last_status.is_none()
             && self.hint.is_none()
             && self.axt.is_none()
+            && self.fee.is_none()
     }
 }
 
@@ -723,15 +902,16 @@ mod tests {
         ValidationFail,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         name::Name,
-        nexus::DataSpaceId,
-        transaction::error::TransactionRejectionReason,
+        nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
+        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
     };
 
     use super::{
-        AccountReadResponse, ErrorDetails, ErrorEnvelope, MINAMOTO_CHAIN_DISCRIMINANT,
-        NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA, PipelineTransactionStatus,
-        PipelineTransactionStatusResponse, QueueErrorSnapshot, TAIRA_CHAIN_DISCRIMINANT,
-        network_profile, network_profile_for_discriminant,
+        AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteDecision,
+        FeeQuoteObservation, FeeQuoteResponse, FeeSponsorProgramByIdRequest,
+        MINAMOTO_CHAIN_DISCRIMINANT, NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA,
+        PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
+        TAIRA_CHAIN_DISCRIMINANT, network_profile, network_profile_for_discriminant,
     };
 
     fn checked_test_keypair(seed: u8) -> KeyPair {
@@ -744,6 +924,40 @@ mod tests {
         let envelope = ErrorEnvelope::new("test_code", "test message");
         assert_eq!(envelope.code(), "test_code");
         assert_eq!(envelope.message(), "test message");
+    }
+
+    #[test]
+    fn fee_program_selector_and_quote_response_roundtrip_canonically() {
+        let account = AccountId::new(checked_test_keypair(0x24).public_key().clone());
+        let program_id = FeeSponsorProgramId::new(
+            account.clone(),
+            "retail".parse().expect("canonical sponsor-program name"),
+        );
+        let selector = FeeSponsorProgramByIdRequest::new(&program_id);
+        let selector_json = norito::json::to_vec(&selector).expect("encode program selector");
+        let decoded_selector: FeeSponsorProgramByIdRequest =
+            norito::json::from_slice(&selector_json).expect("decode program selector");
+        assert_eq!(decoded_selector, selector);
+        assert_eq!(decoded_selector.program_id, program_id.to_string());
+
+        let quote = FeeQuoteResponse {
+            intent: FeePaymentIntent::authority(Vec::new(), None),
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 42,
+                next_block_height: 7,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(account),
+                program_revision: None,
+            },
+        };
+        let quote_json = norito::json::to_vec(&quote).expect("encode typed fee quote");
+        let decoded_quote: FeeQuoteResponse =
+            norito::json::from_slice(&quote_json).expect("decode typed fee quote");
+        assert_eq!(decoded_quote, quote);
     }
 
     #[test]
@@ -812,6 +1026,40 @@ mod tests {
     }
 
     #[test]
+    fn error_envelope_roundtrip_preserves_fee_details() {
+        let envelope = ErrorEnvelope::new("fee_payment_rejected", "fee payment rejected")
+            .with_details(ErrorDetails {
+                fee: Some(FeeErrorDetails {
+                    code: "vault_insufficient".to_owned(),
+                    retryable: true,
+                    program_id: Some("sponsor/default".to_owned()),
+                    program_revision: Some(3),
+                    asset_definition_id: Some("xor#fees".to_owned()),
+                    required: Some("10".to_owned()),
+                    available: Some("4".to_owned()),
+                    observation_height: Some(42),
+                    remediation: Some("fund the program vault".to_owned()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+
+        let bytes = norito::to_bytes(&envelope).expect("encode fee error envelope");
+        let decoded: ErrorEnvelope =
+            norito::decode_from_bytes(&bytes).expect("decode fee error envelope");
+        let fee = decoded
+            .details
+            .and_then(|details| details.fee)
+            .expect("fee error details");
+        assert_eq!(fee.code, "vault_insufficient");
+        assert!(fee.retryable);
+        assert_eq!(fee.program_revision, Some(3));
+        assert_eq!(fee.required.as_deref(), Some("10"));
+        assert_eq!(fee.available.as_deref(), Some("4"));
+        assert_eq!(fee.observation_height, Some(42));
+    }
+
+    #[test]
     fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
             r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
@@ -865,6 +1113,12 @@ mod tests {
         assert!(!details.is_empty());
         details = ErrorDetails::default();
         details.last_status = Some("Expired".to_owned());
+        assert!(!details.is_empty());
+        details = ErrorDetails::default();
+        details.fee = Some(FeeErrorDetails {
+            code: "invalid_fee_intent".to_owned(),
+            ..Default::default()
+        });
         assert!(!details.is_empty());
     }
 

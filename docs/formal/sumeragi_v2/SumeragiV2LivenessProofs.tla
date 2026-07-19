@@ -46,6 +46,12 @@ RotatingLeaderProgressProperty(specification) ==
                  /\ ~ResponsiveNodesDecide)
              ~> ResponsiveNodesDecide
 
+ApplicationCompletionProgressProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters:
+         (gst /\ NodeHasDecision(node))
+           ~> NodeHasApplication(node)
+
 ApplicationLivenessProperty(specification) ==
   specification
     => /\ \A node \in AsyncCurrentResponsiveVoters:
@@ -564,14 +570,23 @@ HistoricalLockedCommitRecoveryProgress ==
                         generation[node], qc.subject))
       => HistoricalLockedCommitRecoveryWitness(node, qc)
 
+(***************************************************************************
+Only an exact completion owner for the current reducer consumer epoch counts
+as Decision-pipeline progress.  In particular, PersistDecision's immediate
+FetchBody successor is a real recovery frontier, while a scheduled occurrence
+left behind by a view or generation change is not: the runtime will discard
+that stale occurrence instead of executing it.
+***************************************************************************)
 DecisionPipelineCandidate(node, qc, candidate) ==
+  /\ candidate.class = "Completion"
   /\ candidate.node = node
   /\ candidate.height = qc.context.height
   /\ candidate.view = qc.view
   /\ candidate.subject = qc.subject
   /\ candidate.kind \in
-       {"RequestCertifiedBody", "FetchCertifiedBody", "StoreBody",
+       {"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody", "StoreBody",
         "ValidateBody", "Apply"}
+  /\ CandidateConsumerCurrent(candidate)
   /\ CandidateScheduled(candidate)
 
 DecisionCompletionWitness(node, qc) ==

@@ -119,7 +119,7 @@ print(
 
 All five verifier fields are required nullable snapshots for distinct roles.
 Each is null exactly with its matching unavailable blocker. Readiness requires
-exact bridge ABI 20. The recursive records use the exact logical V4 roles
+exact bridge ABI 21. The recursive records use the exact logical V4 roles
 `kagemusha_recursive_step_eq_v4_verifier_record` and
 `kagemusha_recursive_step_ep_v4_verifier_record`, with circuits
 `kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and

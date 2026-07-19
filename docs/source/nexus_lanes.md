@@ -475,18 +475,20 @@ LaneConfigEntry {
   dataspace, or routing overrides, enable autoscale, enable lane-relay
   emergency overrides, or enable the relay worker,
   matching the user-config parser's single-lane disabled profile. Relay worker
-  configs must also use lane-relay-burn fee settlement with a canonical sponsor
-  account at the state boundary. Activated lane-relay-burn fee receipts require
-  a canonical sponsor even without the worker, and emergency relay multisig
-  thresholds cannot exceed member count. Per-dataspace fee sponsor maps require
-  fee sponsorship, enabled Nexus, and dataspace keys present in the active
-  catalog. Runtime config swaps also enforce the parser's fee-shape contract:
+  configs must also use lane-relay-burn fee settlement at the state boundary.
+  Authority-paid Nexus fees are rejected in this mode until an authenticated
+  authority spend-lease protocol exists; sponsor receipts require a verified
+  source allocation for the exact program revision and asset. Emergency relay
+  multisig thresholds cannot exceed member count. Per-dataspace defaults name
+  one exact `fee_sponsor_program_id` and require enabled Nexus plus dataspace
+  keys present in the active catalog; there is no sponsorship toggle or account
+  fallback. Runtime config swaps also enforce the parser's fee-shape contract:
   the fee asset selector must be the canonical XOR asset definition id or
   `xor#universal`/`xor#universal.universal` after genesis binds the alias to a
-  canonical Base58 asset definition, and is trimmed to the
-  parser-normalized selector, the fee sink literal must be non-empty, blank
-  canonical sponsors are normalized to absence, and sponsored contract
-  allowlist entries must carry a target plus non-empty entrypoints.
+  canonical Base58 asset definition, and is trimmed to the parser-normalized
+  selector, while the fee sink literal must be non-empty. Operation allow/deny
+  selectors and asset budgets live on immutable on-chain sponsor-program
+  revisions rather than in runtime configuration.
 - Unresolved routing is deterministic: if a rule resolves to an unknown lane,
   unknown dataspace, or lane/dataspace mismatch, admission is rejected with an
   unresolved-route error (no fallback-to-default rewrite for ambiguous inputs).

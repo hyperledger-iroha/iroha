@@ -13,7 +13,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
  * Strict first-release model for one finalized platform device attestation.
  *
  * This mirrors `OfflineDeviceAttestationRegistration` exactly and exposes only the canonical
- * Kagemusha model. Native attestation acquisition uses bridge ABI 20;
+ * Kagemusha model. Native attestation acquisition uses bridge ABI 21;
  * the on-chain registration format marker remains version 1.
  */
 class DeviceAttestationRegistration(
@@ -257,7 +257,7 @@ class DeviceAttestationRegistration(
 
     companion object {
         /** Sole native bridge ABI supported by the first-release client. */
-        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21
         /** Sole on-chain registration format marker. */
         const val REGISTRATION_VERSION: Int = 1
         const val ANDROID_KEYMINT_PLATFORM: String = "android-keymint"

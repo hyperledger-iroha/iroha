@@ -172,8 +172,9 @@ use iroha_data_model::{
     name::{self, Name},
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
+        UniversalAccountId,
     },
     peer::{Peer, PeerId},
     role::RoleId,
@@ -199,11 +200,7 @@ use crate::{
     snapshot::Mode as SnapshotMode,
 };
 
-type DataSpaceCatalogBuild = (
-    DataSpaceCatalog,
-    BTreeMap<DataSpaceId, String>,
-    BTreeMap<DataSpaceId, Name>,
-);
+type DataSpaceCatalogBuild = (DataSpaceCatalog, BTreeMap<DataSpaceId, FeeSponsorProgramId>);
 
 /// P2P relay role configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -9416,10 +9413,8 @@ pub struct DataSpaceDescriptor {
     /// Fault tolerance value (f) used to size per-dataspace committees (3f + 1).
     /// Must be at least 1.
     pub fault_tolerance: Option<u32>,
-    /// Optional default fee sponsor account literal for this data space.
-    pub fee_sponsor_account_id: Option<String>,
-    /// Optional default fee sponsor policy name for this data space.
-    pub fee_sponsor_policy: Option<String>,
+    /// Optional default fee sponsor program literal for this data space.
+    pub fee_sponsor_program_id: Option<String>,
 }
 
 /// User-level configuration container for lane manifest registry.
@@ -9653,26 +9648,9 @@ pub struct NexusFees {
     /// Per-gas-unit fee multiplier applied to measured gas usage.
     #[config(default = "defaults::nexus::fees::per_gas_unit_fee()")]
     pub per_gas_unit_fee: Quantity,
-    /// Whether fee sponsorship is permitted.
-    #[config(default = "defaults::nexus::fees::SPONSORSHIP_ENABLED")]
-    pub sponsorship_enabled: bool,
-    /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
-    #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
-    pub sponsor_max_fee: Quantity,
-    /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
-    #[config(default = "defaults::nexus::fees::sponsor_verified_balance_safety_floor()")]
-    pub sponsor_verified_balance_safety_floor: Quantity,
-    /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
-    pub canonical_sponsor_account_id: Option<String>,
-    /// First block height whose lane commitments include Nexus fee receipts.
-    #[config(default = "defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT")]
-    pub fee_receipts_activation_height: u64,
-    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
-    #[config(default = "defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED")]
-    pub external_settlement_enabled: bool,
-    /// Retained for configuration compatibility; direct Nexus fee settlement burns immediately.
-    #[config(default = "defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS")]
-    pub burn_from_unix_timestamp_ms: u64,
+    /// Protocol account that physically custodies isolated sponsor-program vault assets.
+    #[config(default = "defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_string()")]
+    pub sponsor_vault_custody_account_id: String,
     /// Fee settlement mode: `direct` or `lane_relay_burn`.
     #[config(default = "defaults::nexus::fees::SETTLEMENT_MODE.to_string()")]
     pub settlement_mode: String,
@@ -9862,15 +9840,8 @@ impl Default for NexusFees {
             per_byte_fee: defaults::nexus::fees::per_byte_fee(),
             per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
-            sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
-            sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
-            sponsor_verified_balance_safety_floor:
-                defaults::nexus::fees::sponsor_verified_balance_safety_floor(),
-            canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
-                .map(str::to_owned),
-            fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
-            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
-            burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
+            sponsor_vault_custody_account_id:
+                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_owned(),
             settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
             successful_claim_fee_exempt_authorities: Vec::new(),
         }
@@ -9906,26 +9877,10 @@ impl NexusFees {
                 return None;
             }
         };
-        let canonical_sponsor_account_id = self.canonical_sponsor_account_id.and_then(|raw| {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        });
-        if settlement_mode == actual::NexusFeeSettlementMode::LaneRelayBurn
-            && self.fee_receipts_activation_height != u64::MAX
-            && canonical_sponsor_account_id.is_none()
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.fees.canonical_sponsor_account_id must be set when lane-relay-burn fee receipts are activated"
-                        .to_string(),
-                ),
-            );
-            return None;
-        }
+        let sponsor_vault_custody_account_id = parse_account_id_literal(
+            self.sponsor_vault_custody_account_id.trim(),
+            "invalid nexus.fees.sponsor_vault_custody_account_id",
+        );
         Some(actual::NexusFees {
             fee_asset_id,
             fee_sink_account_id: self.fee_sink_account_id,
@@ -9933,13 +9888,7 @@ impl NexusFees {
             per_byte_fee: self.per_byte_fee,
             per_instruction_fee: self.per_instruction_fee,
             per_gas_unit_fee: self.per_gas_unit_fee,
-            sponsorship_enabled: self.sponsorship_enabled,
-            sponsor_max_fee: self.sponsor_max_fee,
-            sponsor_verified_balance_safety_floor: self.sponsor_verified_balance_safety_floor,
-            canonical_sponsor_account_id,
-            fee_receipts_activation_height: self.fee_receipts_activation_height,
-            external_settlement_enabled: self.external_settlement_enabled,
-            burn_from_unix_timestamp_ms: self.burn_from_unix_timestamp_ms,
+            sponsor_vault_custody_account_id,
             settlement_mode,
             successful_claim_fee_exempt_authorities: self
                 .successful_claim_fee_exempt_authorities
@@ -10107,6 +10056,33 @@ mod nexus_asset_selector_tests {
     }
 
     #[test]
+    fn nexus_fees_parse_uses_typed_sponsor_vault_custody_account() {
+        let cfg = NexusFees::default();
+        let mut emitter = Emitter::new();
+        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
+
+        assert_eq!(
+            parsed.sponsor_vault_custody_account_id,
+            defaults::nexus::fees::sponsor_vault_custody_account_id()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_invalid_sponsor_vault_custody_account() {
+        let result = std::panic::catch_unwind(|| {
+            let cfg = NexusFees {
+                sponsor_vault_custody_account_id: "not-an-account".to_owned(),
+                ..NexusFees::default()
+            };
+            let mut emitter = Emitter::new();
+            let _ = cfg.parse(&mut emitter);
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn nexus_fees_parse_rejects_non_xor_asset_selector() {
         let cfg = NexusFees {
             fee_asset_id: "pkr#paynet".to_owned(),
@@ -10126,8 +10102,6 @@ mod nexus_asset_selector_tests {
             &cfg.per_byte_fee,
             &cfg.per_instruction_fee,
             &cfg.per_gas_unit_fee,
-            &cfg.sponsor_max_fee,
-            &cfg.sponsor_verified_balance_safety_floor,
         ] {
             value
                 .as_numeric()
@@ -11253,7 +11227,7 @@ impl Nexus {
             ..
         } = self;
 
-        let (dataspace_catalog, dataspace_fee_sponsors, dataspace_fee_sponsor_policies) =
+        let (dataspace_catalog, dataspace_fee_sponsor_program_ids) =
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
@@ -11271,17 +11245,9 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
-        if !dataspace_fee_sponsors.is_empty() && !fees.sponsorship_enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.dataspace_catalog fee_sponsor_account_id requires nexus.fees.sponsorship_enabled = true",
-                ),
-            );
-            return None;
-        }
-        if !dataspace_fee_sponsors.is_empty() && !enabled {
+        if !dataspace_fee_sponsor_program_ids.is_empty() && !enabled {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.dataspace_catalog fee_sponsor_account_id requires nexus.enabled = true",
+                "nexus.dataspace_catalog fee_sponsor_program_id requires nexus.enabled = true",
             ));
             return None;
         }
@@ -11325,13 +11291,11 @@ impl Nexus {
             return None;
         }
         if relay_worker.enabled
-            && (fees.settlement_mode != actual::NexusFeeSettlementMode::LaneRelayBurn
-                || fees.canonical_sponsor_account_id.is_none())
+            && fees.settlement_mode != actual::NexusFeeSettlementMode::LaneRelayBurn
         {
             emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.relay_worker.enabled requires lane-relay-burn settlement and nexus.fees.canonical_sponsor_account_id",
-                ),
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.relay_worker.enabled requires lane-relay-burn settlement"),
             );
             return None;
         }
@@ -11386,8 +11350,7 @@ impl Nexus {
             lane_catalog,
             lane_config,
             dataspace_catalog,
-            dataspace_fee_sponsors,
-            dataspace_fee_sponsor_policies,
+            dataspace_fee_sponsor_program_ids,
             routing_policy,
             registry,
             governance,
@@ -11615,8 +11578,7 @@ impl Nexus {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<DataSpaceCatalogBuild> {
         let mut dataspace_entries = Vec::new();
-        let mut dataspace_fee_sponsors = BTreeMap::new();
-        let mut dataspace_fee_sponsor_policies = BTreeMap::new();
+        let mut dataspace_fee_sponsor_program_ids = BTreeMap::new();
         let mut dataspace_errors = false;
 
         if descriptors.is_empty() {
@@ -11759,35 +11721,23 @@ impl Nexus {
                     manifest_id
                 };
 
-                let sponsor = Self::normalize_opt(descriptor.fee_sponsor_account_id);
-                let policy = Self::normalize_opt(descriptor.fee_sponsor_policy);
-                match (sponsor, policy) {
-                    (Some(sponsor), Some(policy)) => {
-                        let Ok(policy) = Name::from_str(&policy) else {
-                            dataspace_errors = true;
-                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                                format!("dataspace[{idx}] fee_sponsor_policy is not a valid Name"),
-                            ));
-                            continue;
-                        };
-                        dataspace_fee_sponsors.insert(id, sponsor);
-                        dataspace_fee_sponsor_policies.insert(id, policy);
-                    }
-                    (Some(_), None) => {
+                if let Some(raw_program_id) = Self::normalize_opt(descriptor.fee_sponsor_program_id)
+                {
+                    let Ok(program_id) = raw_program_id.parse::<FeeSponsorProgramId>() else {
                         dataspace_errors = true;
                         emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                            "dataspace[{idx}] fee_sponsor_account_id requires fee_sponsor_policy"
+                            "dataspace[{idx}] fee_sponsor_program_id is not a valid canonical sponsor program literal"
+                        )));
+                        continue;
+                    };
+                    if raw_program_id != program_id.to_string() {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] fee_sponsor_program_id `{raw_program_id}` must be canonical `{program_id}`"
                         )));
                         continue;
                     }
-                    (None, Some(_)) => {
-                        dataspace_errors = true;
-                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                            "dataspace[{idx}] fee_sponsor_policy requires fee_sponsor_account_id"
-                        )));
-                        continue;
-                    }
-                    (None, None) => {}
+                    dataspace_fee_sponsor_program_ids.insert(id, program_id);
                 }
                 dataspace_entries.push(DataSpaceMetadata {
                     id,
@@ -11813,11 +11763,7 @@ impl Nexus {
         }
 
         match DataSpaceCatalog::new(dataspace_entries) {
-            Ok(catalog) => Some((
-                catalog,
-                dataspace_fee_sponsors,
-                dataspace_fee_sponsor_policies,
-            )),
+            Ok(catalog) => Some((catalog, dataspace_fee_sponsor_program_ids)),
             Err(error) => {
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
@@ -12927,18 +12873,66 @@ impl SoracloudRuntimeInrou {
 /// User-level runtime-originated transaction submission settings.
 #[derive(Debug, Clone, Default, ReadConfig, norito::JsonDeserialize)]
 pub struct SoracloudRuntimeSubmission {
-    /// Gas asset definition id used for runtime-originated Soracloud submissions.
-    pub gas_asset_id: Option<String>,
+    /// Exact fee payer: `authority` or `sponsor`.
+    pub fee_payer: Option<String>,
+    /// Canonical sponsor/program id, required only when `fee_payer = "sponsor"`.
+    pub fee_program_id: Option<String>,
+    /// Exact immutable sponsor revision, required only when `fee_payer = "sponsor"`.
+    pub fee_program_revision: Option<u64>,
 }
 
 impl SoracloudRuntimeSubmission {
     fn parse(self) -> actual::SoracloudRuntimeSubmission {
-        actual::SoracloudRuntimeSubmission {
-            gas_asset_id: self
-                .gas_asset_id
-                .map(|asset_id| asset_id.trim().to_owned())
-                .filter(|asset_id| !asset_id.is_empty()),
-        }
+        let fee_payer = match self
+            .fee_payer
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("authority")
+        {
+            "authority" => {
+                assert!(
+                    self.fee_program_id.is_none() && self.fee_program_revision.is_none(),
+                    "soracloud_runtime.submission authority payer forbids fee_program_id and fee_program_revision"
+                );
+                actual::SoracloudRuntimeFeePayer::Authority
+            }
+            "sponsor" => {
+                let program_id_literal = self
+                    .fee_program_id
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| {
+                        panic!("soracloud_runtime.submission sponsor payer requires fee_program_id")
+                    });
+                let program_id = program_id_literal
+                    .parse::<FeeSponsorProgramId>()
+                    .unwrap_or_else(|error| {
+                        panic!("invalid soracloud_runtime.submission.fee_program_id: {error}")
+                    });
+                assert_eq!(
+                    program_id_literal,
+                    program_id.to_string(),
+                    "soracloud_runtime.submission.fee_program_id must use its canonical literal"
+                );
+                let program_revision = self.fee_program_revision.unwrap_or_else(|| {
+                    panic!(
+                        "soracloud_runtime.submission sponsor payer requires fee_program_revision"
+                    )
+                });
+                assert!(
+                    program_revision > 0,
+                    "soracloud_runtime.submission.fee_program_revision must be greater than zero"
+                );
+                actual::SoracloudRuntimeFeePayer::Sponsor {
+                    program_id,
+                    program_revision,
+                }
+            }
+            payer => panic!(
+                "invalid soracloud_runtime.submission.fee_payer `{payer}`; expected authority or sponsor"
+            ),
+        };
+        actual::SoracloudRuntimeSubmission { fee_payer }
     }
 }
 
@@ -15082,14 +15076,8 @@ pub struct ToriiOnboarding {
     #[config(default)]
     #[norito(default)]
     pub alias_resolve_domains: Vec<String>,
-    /// Optional sponsor account used for exact per-account policy enrollment.
-    ///
-    /// Must be configured together with `fee_sponsor_policy`; neither field has a fallback.
-    pub fee_sponsor_account: Option<String>,
-    /// Optional explicit sponsor-local policy used for exact per-account enrollment.
-    ///
-    /// Must be configured together with `fee_sponsor_account`; neither field has a fallback.
-    pub fee_sponsor_policy: Option<String>,
+    /// Optional exact sponsor program enrolled for each newly onboarded account.
+    pub fee_sponsor_program_id: Option<String>,
     /// Default alias lease term applied during onboarding.
     #[config(default = "1")]
     #[norito(default = "default_torii_onboarding_alias_lease_term_years")]
@@ -15192,32 +15180,20 @@ impl ToriiOnboarding {
                 parsed
             })
             .collect();
-        let fee_sponsor = match (self.fee_sponsor_account, self.fee_sponsor_policy) {
-            (None, None) => None,
-            (Some(account), Some(policy)) => {
-                let account = AccountId::parse_encoded(&account).map_or_else(
-                    |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
-                    iroha_data_model::account::ParsedAccountId::into_account_id,
-                );
-                let parsed_policy = policy
-                    .parse::<iroha_data_model::name::Name>()
-                    .unwrap_or_else(|err| {
-                        panic!("invalid torii.onboarding.fee_sponsor_policy `{policy}`: {err}")
-                    });
-                assert_eq!(
-                    policy,
-                    parsed_policy.to_string(),
-                    "torii.onboarding.fee_sponsor_policy `{policy}` must be canonical `{parsed_policy}`"
-                );
-                Some(actual::ToriiOnboardingFeeSponsor {
-                    account,
-                    policy: parsed_policy,
-                })
-            }
-            _ => panic!(
-                "torii.onboarding.fee_sponsor_account and torii.onboarding.fee_sponsor_policy must be configured together"
-            ),
-        };
+        let fee_sponsor_program_id = self.fee_sponsor_program_id.map(|raw| {
+            let canonical = raw.trim();
+            let parsed = canonical
+                .parse::<FeeSponsorProgramId>()
+                .unwrap_or_else(|err| {
+                    panic!("invalid torii.onboarding.fee_sponsor_program_id `{raw}`: {err}")
+                });
+            assert_eq!(
+                raw,
+                parsed.to_string(),
+                "torii.onboarding.fee_sponsor_program_id `{raw}` must be canonical `{parsed}`"
+            );
+            parsed
+        });
         let alias_auto_renew_subscription_domain =
             self.alias_auto_renew_subscription_domain.map(|domain| {
                 DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
@@ -15234,7 +15210,7 @@ impl ToriiOnboarding {
             allowed_permissions,
             alias_resolve_dataspaces,
             alias_resolve_domains,
-            fee_sponsor,
+            fee_sponsor_program_id,
             alias_lease_term_years: self.alias_lease_term_years,
             alias_auto_renew_enabled: self.alias_auto_renew_enabled,
             alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
@@ -20445,10 +20421,7 @@ api_token_hashes_by_domain = {{ "{first_domain}" = "{first_hash}", "{second_doma
         );
     }
 
-    fn table_with_onboarding_fee_sponsor(
-        sponsor_account: Option<&str>,
-        sponsor_policy: Option<&str>,
-    ) -> Table {
+    fn table_with_onboarding_fee_sponsor_program(program_id: Option<&str>) -> Table {
         let mut table = table_with_onboarding_token_hashes(
             "hbl.sbp",
             &"ab".repeat(32),
@@ -20461,63 +20434,53 @@ api_token_hashes_by_domain = {{ "{first_domain}" = "{first_hash}", "{second_doma
             .and_then(|torii| torii.get_mut("onboarding"))
             .and_then(Value::as_table_mut)
             .expect("torii onboarding table");
-        if let Some(account) = sponsor_account {
+        if let Some(program_id) = program_id {
             onboarding.insert(
-                "fee_sponsor_account".into(),
-                Value::String(account.to_owned()),
-            );
-        }
-        if let Some(policy) = sponsor_policy {
-            onboarding.insert(
-                "fee_sponsor_policy".into(),
-                Value::String(policy.to_owned()),
+                "fee_sponsor_program_id".into(),
+                Value::String(program_id.to_owned()),
             );
         }
         table
     }
 
     #[test]
-    fn onboarding_fee_sponsor_requires_and_parses_one_explicit_exact_pair() {
+    fn onboarding_fee_sponsor_parses_one_explicit_program_id() {
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         );
-        let actual = load_user_root(table_with_onboarding_fee_sponsor(
-            Some(&sponsor.to_string()),
-            Some("retail"),
-        ))
-        .parse()
-        .expect("parse exact onboarding fee sponsor pair");
-        let fee_sponsor = actual
+        let program_id = format!("{sponsor}/retail");
+        let actual = load_user_root(table_with_onboarding_fee_sponsor_program(Some(&program_id)))
+            .parse()
+            .expect("parse exact onboarding fee sponsor program");
+        let parsed_program_id = actual
             .torii
             .onboarding
             .expect("onboarding enabled")
-            .fee_sponsor
-            .expect("fee sponsor configured");
-        assert_eq!(fee_sponsor.account, sponsor);
-        assert_eq!(fee_sponsor.policy.to_string(), "retail");
+            .fee_sponsor_program_id
+            .expect("fee sponsor program configured");
+        assert_eq!(parsed_program_id.sponsor, sponsor);
+        assert_eq!(parsed_program_id.name.to_string(), "retail");
     }
 
     #[test]
-    fn onboarding_fee_sponsor_rejects_partial_or_implicit_configuration() {
+    fn onboarding_fee_sponsor_rejects_malformed_or_noncanonical_program_id() {
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         )
         .to_string();
-        for (account, policy) in [
-            (Some(sponsor.as_str()), None),
-            (None, Some("retail")),
-            (Some(sponsor.as_str()), Some(" retail")),
-        ] {
+        for program_id in ["retail".to_owned(), format!(" {sponsor}/retail")] {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = load_user_root(table_with_onboarding_fee_sponsor(account, policy)).parse();
+                let _ =
+                    load_user_root(table_with_onboarding_fee_sponsor_program(Some(&program_id)))
+                        .parse();
             }));
             assert!(
                 result.is_err(),
-                "partial or noncanonical fee sponsor configuration must fail closed"
+                "malformed or noncanonical fee sponsor program must fail closed"
             );
         }
     }
@@ -21186,7 +21149,10 @@ initial_delay_seconds = 17
             actual.soracloud_runtime.inrou.proxy_only,
             defaults::soracloud_runtime::INROU_PROXY_ONLY
         );
-        assert!(actual.soracloud_runtime.submission.gas_asset_id.is_none());
+        assert!(matches!(
+            actual.soracloud_runtime.submission.fee_payer,
+            actual::SoracloudRuntimeFeePayer::Authority
+        ));
         assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
@@ -21240,10 +21206,7 @@ initial_delay_seconds = 17
         inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
         runtime.insert("inrou".into(), Value::Table(inrou));
         let mut submission = Table::new();
-        submission.insert(
-            "gas_asset_id".into(),
-            Value::String("xor#wonderland".into()),
-        );
+        submission.insert("fee_payer".into(), Value::String("authority".into()));
         runtime.insert("submission".into(), Value::Table(submission));
 
         let _ = load_root(table);
@@ -21266,10 +21229,7 @@ initial_delay_seconds = 17
         inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
         runtime.insert("inrou".into(), Value::Table(inrou));
         let mut submission = Table::new();
-        submission.insert(
-            "gas_asset_id".into(),
-            Value::String("xor#wonderland".into()),
-        );
+        submission.insert("fee_payer".into(), Value::String("authority".into()));
         runtime.insert("submission".into(), Value::Table(submission));
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(false));
@@ -21307,24 +21267,80 @@ initial_delay_seconds = 17
     }
 
     #[test]
-    #[should_panic(expected = "submission.gas_asset_id")]
-    fn soracloud_runtime_production_mode_requires_submission_gas_asset() {
+    #[should_panic(expected = "sponsor payer requires fee_program_id")]
+    fn soracloud_runtime_sponsor_payer_requires_exact_program() {
         let mut table = base_table();
         let runtime = table
             .entry("soracloud_runtime")
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(false));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
+        let mut submission = Table::new();
+        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
+        runtime.insert("submission".into(), Value::Table(submission));
 
         let _ = load_root(table);
+    }
+
+    #[test]
+    fn soracloud_runtime_sponsor_payer_parses_exact_program_revision() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
+        let program_id = format!("{sponsor}/runtime");
+        let mut submission = Table::new();
+        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
+        submission.insert("fee_program_id".into(), Value::String(program_id.clone()));
+        submission.insert("fee_program_revision".into(), Value::Integer(7));
+        runtime.insert("submission".into(), Value::Table(submission));
+
+        let actual = load_root(table);
+        let actual::SoracloudRuntimeFeePayer::Sponsor {
+            program_id: parsed,
+            program_revision,
+        } = actual.soracloud_runtime.submission.fee_payer
+        else {
+            panic!("expected exact sponsor payer");
+        };
+        assert_eq!(parsed.to_string(), program_id);
+        assert_eq!(program_revision, 7);
+    }
+
+    #[test]
+    fn soracloud_runtime_sponsor_payer_rejects_noncanonical_program_literal() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
+        let mut submission = Table::new();
+        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
+        submission.insert(
+            "fee_program_id".into(),
+            Value::String(format!(" {sponsor}/runtime")),
+        );
+        submission.insert("fee_program_revision".into(), Value::Integer(7));
+        runtime.insert("submission".into(), Value::Table(submission));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_root(table)));
+        assert!(
+            result.is_err(),
+            "noncanonical sponsor program literals must fail closed"
+        );
     }
 
     #[test]
@@ -21344,10 +21360,7 @@ initial_delay_seconds = 17
         egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
         runtime.insert("egress".into(), Value::Table(egress));
         let mut submission = Table::new();
-        submission.insert(
-            "gas_asset_id".into(),
-            Value::String("xor#wonderland".into()),
-        );
+        submission.insert("fee_payer".into(), Value::String("authority".into()));
         runtime.insert("submission".into(), Value::Table(submission));
         let mut inrou = Table::new();
         inrou.insert("enabled".into(), Value::Boolean(true));
@@ -21437,10 +21450,7 @@ initial_delay_seconds = 17
         inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
         runtime.insert("inrou".into(), Value::Table(inrou));
         let mut submission = Table::new();
-        submission.insert(
-            "gas_asset_id".into(),
-            Value::String(" xor#wonderland ".to_string()),
-        );
+        submission.insert("fee_payer".into(), Value::String(" authority ".to_string()));
         runtime.insert("submission".into(), Value::Table(submission));
 
         let mut egress = Table::new();
@@ -21529,10 +21539,10 @@ initial_delay_seconds = 17
         assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
         assert!(actual.soracloud_runtime.inrou.enabled);
         assert!(actual.soracloud_runtime.inrou.proxy_only);
-        assert_eq!(
-            actual.soracloud_runtime.submission.gas_asset_id.as_deref(),
-            Some("xor#wonderland")
-        );
+        assert!(matches!(
+            actual.soracloud_runtime.submission.fee_payer,
+            actual::SoracloudRuntimeFeePayer::Authority
+        ));
         assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(7_500)

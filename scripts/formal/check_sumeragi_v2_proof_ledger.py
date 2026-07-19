@@ -22,6 +22,170 @@ VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "763bf3c1826d77a4cf206f43d5aa16775da1da33"
 EVIDENCE_SCHEMA_VERSION = 1
 
+# Exact source seal for the bounded effect-capacity ownership mutation matrix.
+# This matrix is finite regression evidence only; it is intentionally separate
+# from the deductive release-proof inventory below.
+EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2EffectCapacityOwnershipMutation.tla",
+    "SumeragiV2EffectCapacityRetirementMutation.tla",
+    "SumeragiV2EffectPreemptionPriorityMutation.tla",
+    "SumeragiV2RetainedEffectBatchMutation.tla",
+    "effect_batch_bound_fixed.cfg",
+    "effect_batch_decision_filter_fixed.cfg",
+    "effect_batch_decision_no_filter_bug.cfg",
+    "effect_batch_oversize_accepted_bug.cfg",
+    "effect_batch_partial_fifo_fixed.cfg",
+    "effect_batch_partial_fifo_reverse_bug.cfg",
+    "effect_batch_second_accepted_bug.cfg",
+    "effect_batch_second_rejected_fixed.cfg",
+    "effect_capacity_decided_retirement_fixed.cfg",
+    "effect_capacity_full_fetch_hol_bug.cfg",
+    "effect_capacity_non_fetch_retirement_fixed.cfg",
+    "effect_capacity_retirement_disabled_bug.cfg",
+    "effect_capacity_timeout_sign_fixed.cfg",
+    "effect_capacity_timeout_sign_lost_bug.cfg",
+    "effect_capacity_timeout_sign_refill_bug.cfg",
+    "effect_preemption_decided_victim_bug.cfg",
+    "effect_preemption_priority_fixed.cfg",
+    "effect_preemption_wrong_class_bug.cfg",
+    "effect_preemption_wrong_work_id_bug.cfg",
+)
+EFFECT_CAPACITY_MUTATION_RUNNER = (
+    "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
+)
+EFFECT_CAPACITY_MUTATION_SHA256 = {
+    "SumeragiV2EffectCapacityOwnershipMutation.tla": (
+        "de3b89fc0946f138f3ed9d62505f8aab592b907fd8e97b13f3056086edf051d9"
+    ),
+    "SumeragiV2EffectCapacityRetirementMutation.tla": (
+        "72bdbd0799656e9e5a331adeb356239ca572d7efc25e5c6bf59503831a0733e9"
+    ),
+    "SumeragiV2EffectPreemptionPriorityMutation.tla": (
+        "32396b744ca2d2c8fec54f91de4d1e78656dc6e5364da46a44bcb43a3c783522"
+    ),
+    "SumeragiV2RetainedEffectBatchMutation.tla": (
+        "26cf90833350a80b96510202c504c3891d528996e871d30a4bbdf2d54e182028"
+    ),
+    "effect_batch_bound_fixed.cfg": (
+        "3438875c639e882c745e61a2f75bf7202c81dd08c1f48f1de3931c67bad74498"
+    ),
+    "effect_batch_decision_filter_fixed.cfg": (
+        "6aad405ab805b96e1a46097c09a0f6d75ec92734592251076a70dd278ccbbdbf"
+    ),
+    "effect_batch_decision_no_filter_bug.cfg": (
+        "26330118d0840577dbd517f1471a13bcbcfad5470128d5e51b5ea752b3c836ba"
+    ),
+    "effect_batch_oversize_accepted_bug.cfg": (
+        "ddf015a1f351a6ca9b6720efb9341db4672b58fb18cb65df5c1e56118da69b7e"
+    ),
+    "effect_batch_partial_fifo_fixed.cfg": (
+        "61cec19cb64d13e8de940b9e1c4b990df954fdb8f4c24e022b91f693ec60b649"
+    ),
+    "effect_batch_partial_fifo_reverse_bug.cfg": (
+        "4fc57917c8126fb53f014bf892b28cdd9b190da9a1e531b0d1d80edd44919d4e"
+    ),
+    "effect_batch_second_accepted_bug.cfg": (
+        "8e79c97babe1d4cb198986174d1081d5a35d7420ed6187410db65df2876aa938"
+    ),
+    "effect_batch_second_rejected_fixed.cfg": (
+        "463cc383fe9230f44c7f8d78c13acaa1d31994a797d33a37890167a834bc600e"
+    ),
+    "effect_capacity_decided_retirement_fixed.cfg": (
+        "5a340c3f1bfe9b2f626781994e2b449117f02f3f70ef08a42cb132dfa960de8e"
+    ),
+    "effect_capacity_full_fetch_hol_bug.cfg": (
+        "d55cb48d22f4e0f60b8c0e4e37826cac2e8191ec72da5a4eebbb64c0b25c3487"
+    ),
+    "effect_capacity_non_fetch_retirement_fixed.cfg": (
+        "f14d63f9cb0c78b656d77257b609a98fda05e71cf46db588c73180e03a4261b2"
+    ),
+    "effect_capacity_retirement_disabled_bug.cfg": (
+        "eab66435ee1e925d6943ef9080c1adc079da2db42ff59fdebb43d9b8b1dbd53e"
+    ),
+    "effect_capacity_timeout_sign_fixed.cfg": (
+        "c873052717fc8e1da6655775e49d7eb63b9376cefa09b83ed05df95c842313af"
+    ),
+    "effect_capacity_timeout_sign_lost_bug.cfg": (
+        "cb08947e12b74abc3778186e81da968430f7fd56efb034a3668bc0e6b2200e29"
+    ),
+    "effect_capacity_timeout_sign_refill_bug.cfg": (
+        "1d0fbde5d0ee2cd5ba75524567126e5c63981732b94cbbac5479cd7a21dc275b"
+    ),
+    "effect_preemption_decided_victim_bug.cfg": (
+        "9e10343b44b3c4297e94729ce56390e1b420764cdf9664131464dde003646e48"
+    ),
+    "effect_preemption_priority_fixed.cfg": (
+        "550fe02c86e36e146e7e2f84099fa85eda0a130c2407db06e1ba0e87b53c85d7"
+    ),
+    "effect_preemption_wrong_class_bug.cfg": (
+        "379a44761f19a7df7aaa0cd114fbb6968a241ab8e34085e3ad8b71317f8f5609"
+    ),
+    "effect_preemption_wrong_work_id_bug.cfg": (
+        "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
+    ),
+    EFFECT_CAPACITY_MUTATION_RUNNER: (
+        "4ea8abe7d8bac89b23f64c4edc95587e6197ba7ebc070aeb95d40f5512b0d082"
+    ),
+}
+EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
+    "SumeragiV2EffectCapacity*.tla",
+    "SumeragiV2EffectPreemption*.tla",
+    "SumeragiV2RetainedEffectBatch*.tla",
+    "effect_capacity_*.cfg",
+    "effect_preemption_*.cfg",
+    "effect_batch_*.cfg",
+)
+
+# Exact source seal for the finite post-Decision timeout/TC mutation matrix.
+# The matrix guards production/formal refinement seams; it remains bounded TLC
+# evidence and must never promote a deductive proof-ledger obligation.
+POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2PostDecisionTimeoutMutation.tla",
+    "post_decision_begin_install_tc_guard_bug.cfg",
+    "post_decision_begin_timeout_guard_bug.cfg",
+    "post_decision_form_tc_guard_bug.cfg",
+    "post_decision_tc_receive_bug.cfg",
+    "post_decision_tc_successor_bug.cfg",
+    "post_decision_timeout_fixed.cfg",
+    "post_decision_timeout_receive_bug.cfg",
+    "post_decision_timeout_successor_bug.cfg",
+)
+POST_DECISION_TIMEOUT_MUTATION_RUNNER = (
+    "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh"
+)
+POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
+    "SumeragiV2PostDecisionTimeoutMutation.tla": (
+        "ce6b6879e4e118848577d59de022749636e3469391ab64145af50f0396d0e386"
+    ),
+    "post_decision_begin_install_tc_guard_bug.cfg": (
+        "815e41cd50d0078be2590574eb9f044d8aff8f808d93d17df4f723f1d1ccf018"
+    ),
+    "post_decision_begin_timeout_guard_bug.cfg": (
+        "1a640160d6eef841c7b9daf67bc19adec07b8119e256d320a10c65760d3bc971"
+    ),
+    "post_decision_form_tc_guard_bug.cfg": (
+        "c8e823582dbbbff160eb1406e359cc5c8384d4d4beafeecad5688f220a5c8abd"
+    ),
+    "post_decision_tc_receive_bug.cfg": (
+        "617949a3724958bf59159bdc68c72a80ee8923cc05beccbe8d93001691ebfcdd"
+    ),
+    "post_decision_tc_successor_bug.cfg": (
+        "ff012051c21e24f9cdddf0195aa8aaa04a77ba74dc3230bf940569c9fcbcd4cf"
+    ),
+    "post_decision_timeout_fixed.cfg": (
+        "f609d628853ce714bea15f8a0311cccf4c01cc3984fb9f1ae2112ca2ed44ee73"
+    ),
+    "post_decision_timeout_receive_bug.cfg": (
+        "9b7be05a92c60df32750a95a6d29cebbc33a66c5aef9305bb37b433c97c13c17"
+    ),
+    "post_decision_timeout_successor_bug.cfg": (
+        "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
+    ),
+    POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
+        "28b1ea3541f730d50af9ba9fb69e1df47bc769b5a3d081ffda369fdf4f083423"
+    ),
+}
+
 STATUS_VALUES = (
     "tlaps_proved",
     "specified_unproved",
@@ -155,6 +319,14 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
     ),
+    "post-decision-timeout-exclusion": (
+        "SumeragiV2AsyncLivenessProofs",
+        "PostDecisionTimeoutExclusionObligation",
+    ),
+    "decision-recovery-across-restart": (
+        "SumeragiV2AsyncLivenessProofs",
+        "DecisionRecoveryAcrossRestartObligation",
+    ),
     "async-fair-action-refinement": (
         "SumeragiV2AsyncFairnessRefinementProofs",
         "AsyncFairActionsRefineAsyncNextObligation",
@@ -162,6 +334,10 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "generation-scoped-vote-delivery": (
         "SumeragiV2AsyncLivenessProofs",
         "GenerationScopedVoteDeliveryObligation",
+    ),
+    "progress-witness-production-refinement": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProgressWitnessProductionRefinementObligation",
     ),
     "progress-witness-preservation": (
         "SumeragiV2AsyncLivenessProofs",
@@ -189,7 +365,7 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     ),
     "application-liveness": (
         "SumeragiV2AsyncLivenessProofs",
-        "ApplicationLivenessObligation",
+        "ApplicationCompletionProgressObligation",
     ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
@@ -340,6 +516,8 @@ ARBITRARY_CONTEXT_SAFETY_PROPERTY_WRAPPERS = {
 # These are properties of the concrete asynchronous scheduler and transport,
 # not wrappers that may be stated in an upstream safety module.
 ASYNC_LIVENESS_OBLIGATIONS = {
+    "post-decision-timeout-exclusion": "PostDecisionTimeoutExclusionObligation",
+    "decision-recovery-across-restart": "DecisionRecoveryAcrossRestartObligation",
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryObligation",
     "progress-witness-preservation": "ProgressWitnessObligation",
     "post-gst-deadlock-freedom": "DeadlockFreedomObligation",
@@ -347,17 +525,19 @@ ASYNC_LIVENESS_OBLIGATIONS = {
     "post-gst-starvation-freedom": "StarvationFreedomObligation",
     "timeout-view-liveness": "TimeoutViewProgressObligation",
     "rotating-leader-liveness": "RotatingLeaderProgressObligation",
-    "application-liveness": "ApplicationLivenessObligation",
+    "application-liveness": "ApplicationCompletionProgressObligation",
 }
 ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
+    "post-decision-timeout-exclusion": "PostDecisionTimeoutExclusionProperty",
+    "decision-recovery-across-restart": "DecisionRecoveryAcrossRestartProperty",
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
-    "progress-witness-preservation": "ProgressWitnessProperty",
+    "progress-witness-preservation": "AsyncProgressWitnessProperty",
     "post-gst-deadlock-freedom": "DeadlockFreedomProperty",
     "protected-service-rank": "ProtectedServiceRanksProgressProperty",
     "post-gst-starvation-freedom": "StarvationFreedomProperty",
     "timeout-view-liveness": "TimeoutViewProgressProperty",
     "rotating-leader-liveness": "RotatingLeaderProgressProperty",
-    "application-liveness": "ApplicationLivenessProperty",
+    "application-liveness": "ApplicationCompletionProgressProperty",
 }
 
 # These obligations are release-architecture seams, not declarations that may
@@ -384,6 +564,18 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
     "effective-lock-body-acquisition-production-refinement": (
         "SumeragiV2AsyncLivenessProofs",
         "EffectiveLockBodyAcquisitionProductionRefinementObligation",
+    ),
+    "post-decision-timeout-exclusion": (
+        "SumeragiV2AsyncLivenessProofs",
+        "PostDecisionTimeoutExclusionObligation",
+    ),
+    "decision-recovery-across-restart": (
+        "SumeragiV2AsyncLivenessProofs",
+        "DecisionRecoveryAcrossRestartObligation",
+    ),
+    "progress-witness-production-refinement": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProgressWitnessProductionRefinementObligation",
     ),
     "async-type-invariant": (
         "SumeragiV2AsyncLivenessProofs",
@@ -413,9 +605,14 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
 PROOF_STATUS_DEPENDENCIES = {
     "timeout-protection": ("historical-tc-lock-commit",),
     "async-type-invariant": ("async-runner-scheduler-preservation",),
+    "post-decision-timeout-exclusion": ("async-type-invariant",),
+    "decision-recovery-across-restart": ("async-type-invariant",),
     "progress-witness-preservation": (
         "async-type-invariant",
         "generation-scoped-vote-delivery",
+        "post-decision-timeout-exclusion",
+        "decision-recovery-across-restart",
+        "progress-witness-production-refinement",
     ),
     "post-gst-deadlock-freedom": (
         "async-type-invariant",
@@ -510,6 +707,31 @@ class LedgerValidation:
     machine_checked_completion: bool
 
 
+@dataclass(frozen=True)
+class RustItem:
+    """One brace-delimited Rust or Verus function item."""
+
+    name: str
+    line: int
+    source: str
+    body: str
+    structural_source: str
+    brace_context: tuple[tuple[str, ...], ...]
+    delimiter_context: tuple[tuple[str, int, tuple[str, ...]], ...]
+    attributes: tuple[str, ...]
+    ancestor_inner_attributes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RustStatement:
+    """One semicolon-terminated statement at Rust file depth zero."""
+
+    line: int
+    source: str
+    tokens: tuple[str, ...]
+    ancestor_inner_attributes: tuple[str, ...]
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -593,6 +815,541 @@ def strip_tla_comments(
     return "".join(output)
 
 
+def _rust_literal_end(source: str, start: int) -> int | None:
+    """Return the exclusive end of a Rust string/character literal."""
+
+    length = len(source)
+    raw_marker: int | None = None
+    if source.startswith(("br", "rb", "cr", "rc"), start):
+        raw_marker = start + (1 if source[start] != "r" else 0)
+    elif start < length and source[start] == "r":
+        raw_marker = start
+    if raw_marker is not None:
+        quote = raw_marker + 1
+        hashes = 0
+        while quote + hashes < length and source[quote + hashes] == "#":
+            hashes += 1
+        opening_quote = quote + hashes
+        if opening_quote >= length or source[opening_quote] != '"':
+            return None
+        terminator = '"' + ("#" * hashes)
+        closing = source.find(terminator, opening_quote + 1)
+        return None if closing < 0 else closing + len(terminator)
+
+    quote = start + 1 if start < length and source[start] in "bc" else start
+    if quote >= length or source[quote] != '"':
+        return None
+    index = quote + 1
+    while index < length:
+        char = source[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == '"':
+            return index + 1
+        index += 1
+    return None
+
+
+def _rust_char_literal_end(source: str, start: int) -> int | None:
+    """Return a Rust char/byte-char end without mistaking lifetimes for chars."""
+
+    length = len(source)
+    quote = start + 1 if source.startswith("b'", start) else start
+    if quote >= length or source[quote] != "'" or quote + 2 >= length:
+        return None
+    index = quote + 1
+    if source[index] == "\\":
+        index += 1
+        if index >= length:
+            return None
+        if source[index] == "x":
+            index += 3
+        elif source[index] == "u" and index + 1 < length and source[index + 1] == "{":
+            closing = source.find("}", index + 2)
+            if closing < 0:
+                return None
+            index = closing + 1
+        else:
+            index += 1
+    else:
+        if source[index] in "'\n\r":
+            return None
+        index += 1
+    return index + 1 if index < length and source[index] == "'" else None
+
+
+@lru_cache(maxsize=32)
+def mask_rust_comments_and_literals(source: str) -> str:
+    """Mask Rust comments and literals while preserving byte offsets and lines.
+
+    Rust block comments nest. Raw strings may use an arbitrary number of hash
+    delimiters. Character handling intentionally recognizes only complete
+    one-scalar/escaped literals, so lifetimes such as ``'a`` remain code.
+    """
+
+    output = list(source)
+
+    def mask(start: int, end: int) -> None:
+        for offset in range(start, end):
+            if output[offset] != "\n":
+                output[offset] = " "
+
+    index = 0
+    length = len(source)
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end < 0 else end
+            mask(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            depth = 1
+            end = index + 2
+            while end < length and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            mask(index, end)
+            index = end
+            continue
+
+        literal_end = _rust_literal_end(source, index)
+        if literal_end is None and (source[index] == "'" or source.startswith("b'", index)):
+            literal_end = _rust_char_literal_end(source, index)
+        if literal_end is not None:
+            mask(index, literal_end)
+            index = literal_end
+            continue
+        index += 1
+    return "".join(output)
+
+
+_RUST_TOKEN_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:_[0-9]+)*|"
+    r"&&&|=~=|\.\.=|::|->|=>|==|!=|<=|>=|&&|\|\||\.\.|[^\s]"
+)
+
+# Exact token-stream digests for the nontrivial Verus projection theorems and
+# their concrete mutation witnesses. Unlike raw substrings, these bind the
+# declaration, contract, and proof body of one real, context-checked item while
+# remaining insensitive to comments, literals, and formatting.
+_PRODUCTION_CAUSAL_FIFO_VERUS_ITEM_SHA256 = {
+    "production_stable_subsequence": (
+        "820ed299168153274ca3457e3446bd8bd2c433b49286bd9f5e4c57975af252ba"
+    ),
+    "production_fresh_causal_successors_excludes_prior_owners": (
+        "dc2d3e3d4cb2d65f4a4d936e10f0cd799097ac29831cd0b75e03c624f9b0b00d"
+    ),
+    "production_fresh_causal_successors_keeps_every_fresh_value": (
+        "0ff2376b08c3a96cb0c82f3d87404796a4d863f919c9cf58ddee5858c3ebf898"
+    ),
+    "production_fresh_causal_successors_has_unique_values": (
+        "030db5f75b6cbddc32ba57aa8eac66169b993b3b067105232005d0985ee83daa"
+    ),
+    "production_fresh_causal_successors_preserves_first_owner_order": (
+        "14ef7781949552882dda3fb35f066ea89e0a943bb40dcca2b7464b0a05d81109"
+    ),
+    "production_async_causal_fifo_after_batch_preserves_fresh_tail": (
+        "ef11350ee44c0551a2a34f091f3197559a684075b3c86a28d0d4a9528acc6a6e"
+    ),
+    "production_inverted_owner_filter_mutant": (
+        "550fa68ae21e42cf9bd1c9756e229ed40b23e28ebc417cd7907d9b805e634bec"
+    ),
+    "production_inverted_owner_filter_mutant_is_rejected": (
+        "898288a0767a678bd7080abe09995de2ec2e7c406c796ab79202b28e200d0a41"
+    ),
+    "production_reversed_fresh_order_mutant": (
+        "e14bf30fb8489b4922e8f81c79e305a0f2c07d57f2abd3101bff581c915760a7"
+    ),
+    "production_reversed_fresh_order_mutant_is_rejected": (
+        "a0b995d9442eb0fef330eb7383c258f16dab35b61b84e02716437f758214a6f5"
+    ),
+}
+
+# Exact comment/literal-free token digests for the production Rust items whose
+# control flow establishes the persisted-continuation and TC recovery seam.
+# These whole-item bindings prevent an attacker from preserving the reviewed
+# snippets in a dead branch while changing the executable path around them.
+_PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
+    "drive_effects": (
+        "5c84d120b5e939117355818cf387b3400ab07bd25ebbfda2a8bfb47660febfa2"
+    ),
+    "tc_promoted_historical_commit_is_fsynced_before_sign_and_status": (
+        "1a7a40ec9ad7773c8a52ab8ac9e8d19b2a64d86109e4ccb314f19df54ff148c0"
+    ),
+}
+
+# The retained executor queue is the concrete FIFO consumer for reducer
+# batches. Bind the complete reviewed methods, then additionally check the
+# semantic ordering fragments below so failures identify the violated seam.
+_PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
+    "consume_effects": (
+        "57365ecb69bb8520c54f01efcc059c8c43f76a86499a5ed7b2d689dc151aedc2"
+    ),
+    "drain_retained_effect_batch": (
+        "42c05e167c74dab0182d52f0ca671c500803f26ff70b2f4870fc20f38ae620b3"
+    ),
+    "step": "009cdc9058a8577205ea0598d88fb2d1c8257a9de2f7d5a711c280b508bd0e79",
+}
+
+
+def rust_code_tokens(source: str) -> tuple[str, ...]:
+    """Tokenize Rust/Verus structure after removing comments and literals."""
+
+    return tuple(_RUST_TOKEN_RE.findall(mask_rust_comments_and_literals(source)))
+
+
+def _rust_item_token_sha256(item: RustItem) -> str:
+    """Hash one comment/literal-free item token stream unambiguously."""
+
+    encoded = "\0".join(rust_code_tokens(item.source)).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _rust_delimiter_context(
+    structural_source: str, end: int
+) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """Return every unmatched delimiter ancestor enclosing ``end``."""
+
+    stack: list[tuple[str, int, tuple[str, ...]]] = []
+    matching = {')': '(', ']': '[', '}': '{'}
+    last_boundary = 0
+    for index, char in enumerate(structural_source[:end]):
+        if char in "([{":
+            stack.append(
+                (
+                    char,
+                    index,
+                    rust_code_tokens(structural_source[last_boundary:index]),
+                )
+            )
+            if char == "{":
+                last_boundary = index + 1
+        elif char in ")]}":
+            if stack and stack[-1][0] == matching[char]:
+                stack.pop()
+            else:
+                stack.append((f"unmatched:{char}", index, ()))
+            if char == "}":
+                last_boundary = index + 1
+        elif char == ";":
+            last_boundary = index + 1
+    return tuple(stack)
+
+
+def _rust_brace_context(
+    structural_source: str, end: int
+) -> tuple[tuple[str, ...], ...]:
+    """Return tokenized headers for curly-brace ancestors enclosing ``end``."""
+
+    return tuple(
+        header
+        for opener, _position, header in _rust_delimiter_context(
+            structural_source, end
+        )
+        if opener == "{"
+    )
+
+
+def _rust_attribute_end(structural_source: str, start: int) -> int:
+    """Return the exclusive end of one bracketed Rust attribute."""
+
+    opening = structural_source.find("[", start)
+    if opening < 0:
+        return start
+    depth = 0
+    for index in range(opening, len(structural_source)):
+        if structural_source[index] == "[":
+            depth += 1
+        elif structural_source[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(structural_source)
+
+
+def _rust_ancestor_inner_cfg_attributes(
+    source: str,
+    structural_source: str,
+    start: int,
+    item_context: tuple[tuple[str, int, tuple[str, ...]], ...],
+) -> tuple[str, ...]:
+    """Collect file/ancestor inner cfg attributes that suppress an item."""
+
+    item_positions = tuple(position for _opener, position, _header in item_context)
+    attributes: list[str] = []
+    pattern = re.compile(r"#\s*!\s*\[\s*cfg(?:_attr)?\b")
+    for match in pattern.finditer(structural_source, 0, start):
+        context = _rust_delimiter_context(structural_source, match.start())
+        positions = tuple(position for _opener, position, _header in context)
+        if positions != item_positions[: len(positions)]:
+            continue
+        end = _rust_attribute_end(structural_source, match.start())
+        attributes.append(source[match.start() : end])
+    return tuple(attributes)
+
+
+def _leading_rust_attributes(
+    source: str, structural_source: str, start: int
+) -> tuple[str, ...]:
+    """Collect contiguous attributes immediately preceding an item."""
+
+    attributes: list[str] = []
+    cursor = start
+    while True:
+        while cursor > 0 and structural_source[cursor - 1].isspace():
+            cursor -= 1
+        if cursor == 0 or structural_source[cursor - 1] != "]":
+            break
+        depth = 1
+        opening = cursor - 2
+        while opening >= 0 and depth:
+            if structural_source[opening] == "]":
+                depth += 1
+            elif structural_source[opening] == "[":
+                depth -= 1
+            opening -= 1
+        if depth:
+            break
+        opening += 1
+        hash_index = opening - 1
+        if hash_index >= 0 and structural_source[hash_index] == "!":
+            hash_index -= 1
+        if hash_index < 0 or structural_source[hash_index] != "#":
+            break
+        attributes.append(source[hash_index:cursor])
+        cursor = hash_index
+    attributes.reverse()
+    return tuple(attributes)
+
+
+def _token_sequence_count(
+    haystack: Sequence[str], needle: Sequence[str]
+) -> int:
+    """Count contiguous token sequences without accepting comment stuffing."""
+
+    width = len(needle)
+    if width == 0:
+        return 0
+    return sum(
+        tuple(haystack[index : index + width]) == tuple(needle)
+        for index in range(len(haystack) - width + 1)
+    )
+
+
+def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
+    """Extract all real Rust/Verus function items named ``name``."""
+
+    structural = mask_rust_comments_and_literals(source)
+    declaration = re.compile(
+        rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
+        rf"(?:(?:open|closed|broadcast|tracked|exec|spec|proof)[ \t]+)*"
+        rf"fn[ \t]+{re.escape(name)}\b"
+    )
+    items: list[RustItem] = []
+    for match in declaration.finditer(structural):
+        body_start = structural.find("{", match.end())
+        semicolon = structural.find(";", match.end())
+        if body_start < 0 or (0 <= semicolon < body_start):
+            continue
+        depth = 0
+        body_end = -1
+        for index in range(body_start, len(structural)):
+            if structural[index] == "{":
+                depth += 1
+            elif structural[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = index + 1
+                    break
+        if body_end < 0:
+            continue
+        start = match.start()
+        item_source = source[start:body_end]
+        delimiter_context = _rust_delimiter_context(structural, start)
+        items.append(
+            RustItem(
+                name=name,
+                line=source.count("\n", 0, start) + 1,
+                source=item_source,
+                body=source[body_start + 1 : body_end - 1],
+                structural_source=structural[start:body_end],
+                brace_context=_rust_brace_context(structural, start),
+                delimiter_context=delimiter_context,
+                attributes=_leading_rust_attributes(source, structural, start),
+                ancestor_inner_attributes=_rust_ancestor_inner_cfg_attributes(
+                    source,
+                    structural,
+                    start,
+                    delimiter_context,
+                ),
+            )
+        )
+    return tuple(items)
+
+
+def rust_top_level_statements(source: str) -> tuple[RustStatement, ...]:
+    """Extract real semicolon-terminated statements at file brace depth zero."""
+
+    structural = mask_rust_comments_and_literals(source)
+    statements: list[RustStatement] = []
+    stack: list[str] = []
+    matching = {')': '(', ']': '[', '}': '{'}
+    start = 0
+    for index, char in enumerate(structural):
+        if char in "([{":
+            stack.append(char)
+        elif char in ")]}":
+            if stack and stack[-1] == matching[char]:
+                stack.pop()
+            else:
+                stack.append(f"unmatched:{char}")
+            if char == "}" and not stack:
+                lookahead = index + 1
+                while lookahead < len(structural) and structural[lookahead].isspace():
+                    lookahead += 1
+                if lookahead >= len(structural) or structural[lookahead] != ";":
+                    start = index + 1
+        elif char == ";" and not stack:
+            statement_source = source[start : index + 1]
+            tokens = rust_code_tokens(statement_source)
+            if tokens:
+                statements.append(
+                    RustStatement(
+                        line=source.count("\n", 0, start) + 1,
+                        source=statement_source,
+                        tokens=tokens,
+                        ancestor_inner_attributes=(
+                            _rust_ancestor_inner_cfg_attributes(
+                                source,
+                                structural,
+                                start,
+                                (),
+                            )
+                        ),
+                    )
+                )
+            start = index + 1
+    return tuple(statements)
+
+
+def _require_rust_item(
+    path: Path,
+    source: str,
+    name: str,
+    errors: list[str],
+) -> RustItem | None:
+    """Return one named item, recording a fail-closed cardinality error."""
+
+    items = rust_items(source, name)
+    if len(items) != 1:
+        errors.append(
+            f"{path}: require exactly one real Rust/Verus function item "
+            f"named {name}; found {len(items)}"
+        )
+        return None
+    return items[0]
+
+
+def _require_rust_item_context(
+    path: Path,
+    item: RustItem | None,
+    expected_context: tuple[tuple[str, ...], ...],
+    description: str,
+    errors: list[str],
+    *,
+    expected_attributes: tuple[str, ...] = (),
+) -> None:
+    """Reject macro nesting and disabled replacements for a reviewed item."""
+
+    if item is None:
+        return
+    if item.brace_context != expected_context:
+        errors.append(
+            f"{path}:{item.line}: {description} must have reviewed brace context "
+            f"{expected_context!r}; found {item.brace_context!r}"
+        )
+    delimiter_context = tuple(
+        (opener, header)
+        for opener, _position, header in item.delimiter_context
+    )
+    expected_delimiters = tuple(("{", header) for header in expected_context)
+    if delimiter_context != expected_delimiters:
+        errors.append(
+            f"{path}:{item.line}: {description} must have reviewed all-delimiter "
+            f"context {expected_delimiters!r}; found {delimiter_context!r}"
+        )
+    if item.ancestor_inner_attributes:
+        errors.append(
+            f"{path}:{item.line}: {description} may not be suppressed by "
+            "file/module/ancestor inner cfg/cfg_attr attributes: "
+            f"{item.ancestor_inner_attributes!r}"
+        )
+    gated = [
+        attribute
+        for attribute in item.attributes
+        if re.search(r"(?s)^#\s*\[\s*cfg(?:_attr)?\b", attribute)
+    ]
+    if gated:
+        errors.append(
+            f"{path}:{item.line}: {description} may not be disabled or replaced "
+            f"through cfg/cfg_attr attributes: {gated!r}"
+        )
+    elif item.attributes != expected_attributes:
+        errors.append(
+            f"{path}:{item.line}: {description} must have exact reviewed "
+            f"attributes {expected_attributes!r}; found {item.attributes!r}"
+        )
+
+
+def _require_exact_rust_tokens(
+    path: Path,
+    item: RustItem | None,
+    expected_source: str,
+    description: str,
+    errors: list[str],
+) -> None:
+    """Require one extracted item to equal an exact code-token contract."""
+
+    if item is not None and rust_code_tokens(item.source) != rust_code_tokens(
+        expected_source
+    ):
+        errors.append(
+            f"{path}:{item.line}: {description} must match the exact reviewed "
+            "Rust/Verus item body"
+        )
+
+
+def _require_rust_token_sequence(
+    path: Path,
+    item: RustItem | None,
+    expected_source: str,
+    description: str,
+    errors: list[str],
+    *,
+    count: int = 1,
+) -> None:
+    """Require an exact token subsequence in one extracted real item."""
+
+    if item is None:
+        return
+    observed = _token_sequence_count(
+        rust_code_tokens(item.source), rust_code_tokens(expected_source)
+    )
+    if observed != count:
+        errors.append(
+            f"{path}:{item.line}: {description} must occur exactly {count} "
+            f"time(s) in the real {item.name} item; found {observed}"
+        )
+
+
 def tla_shortcut_errors(path: Path, source: str) -> list[str]:
     """Find unchecked top-level assumptions, axioms, and omitted proofs."""
 
@@ -641,9 +1398,10 @@ def tla_shortcut_errors(path: Path, source: str) -> list[str]:
 def verus_shortcut_errors(path: Path, source: str) -> list[str]:
     """Find Verus assumption/admission and unreviewed trusted-body escapes."""
 
+    structural = mask_rust_comments_and_literals(source)
     errors: list[str] = []
-    for match in VERUS_ESCAPE_RE.finditer(source):
-        line = source.count("\n", 0, match.start()) + 1
+    for match in VERUS_ESCAPE_RE.finditer(structural):
+        line = structural.count("\n", 0, match.start()) + 1
         token = " ".join(match.group(0).split())
         errors.append(f"{path}:{line}: Verus proof escape is prohibited: {token}")
     return errors
@@ -1521,6 +2279,165 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "proofs to ServiceRankCarrier or ServiceRankOrdering"
                 )
 
+        # The Serve FIFO rank is already a natural occurrence position.  Its
+        # rank-progress theorem must therefore be composed through the
+        # well-founded natural ordering, not replaced by an independent Serve
+        # starvation assumption.  The final scheduler theorem must consume the
+        # named conjunction so neither the candidate nor Serve half can be
+        # silently dropped.
+        rank_composition_contracts = {
+            "ProtectedServeRankProgressImpliesStarvation": (
+                "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+                "/\\ ProtectedServeRankProgressProperty("
+                "AsyncSpecAt(initialContext)) => "
+                "ProtectedServeStarvationProperty(AsyncSpecAt(initialContext))"
+            ),
+            "ProtectedServiceRankProgressImpliesStarvation": (
+                "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+                "/\\ ProtectedServiceRanksProgressProperty("
+                "AsyncSpecAt(initialContext)) => "
+                "StarvationFreedomProperty(AsyncSpecAt(initialContext))"
+            ),
+        }
+        for symbol, expected_statement in rank_composition_contracts.items():
+            extracted = _top_level_theorem_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{path}: missing rank composition theorem {symbol}")
+                continue
+            body, line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            normalized = " ".join(statement.split())
+            if normalized != expected_statement:
+                errors.append(
+                    f"{path}:{line}: {symbol} must derive starvation from the "
+                    f"complete rank-progress premise {expected_statement!r}; "
+                    f"found {normalized!r}"
+                )
+
+        serve_rank_proof_dependencies = {
+            "ProtectedServeRankExitHasWellFoundedSuccessor": (
+                "SetLessThan",
+                "OpToRel(<, Nat)",
+            ),
+            "ProtectedServeRankProgressSuppliesWellFoundedPositionStep": (
+                "ProtectedServeRankExitHasWellFoundedSuccessor",
+                "SetLessThan",
+                "OpToRel(<, Nat)",
+            ),
+            "ProtectedServeRankProgressImpliesStarvation": (
+                "ProtectedServeRankProgressSuppliesWellFoundedPositionStep",
+                "NatLessThanWellFounded",
+                "WellFoundedLeadsTo",
+            ),
+            "ProtectedServiceRankProgressImpliesStarvation": (
+                "ProtectedServiceRanksProgressProperty",
+                "ProtectedServeRankProgressImpliesStarvation",
+            ),
+        }
+        for symbol, required_fragments in serve_rank_proof_dependencies.items():
+            extracted = _top_level_theorem_body(source, symbol)
+            if extracted is None:
+                continue
+            body, line = extracted
+            for fragment in required_fragments:
+                if fragment not in body:
+                    errors.append(
+                        f"{path}:{line}: {symbol} must retain Serve rank "
+                        f"composition dependency {fragment!r}"
+                    )
+
+        # Candidate and frozen-context values are records, not naturals (and
+        # not auxiliary-rank tuples).  A grouped bounded quantifier such as
+        # ``\A initialContext, candidate, position \in Nat`` makes the rank
+        # theorem vacuous for every reachable candidate while still looking
+        # superficially universal.  Pin the exact split binders used by the
+        # proof bodies so this release-critical weakening fails closed.
+        rank_binder_contracts = {
+            "FairProtectedStage5RankDescent": (
+                "\\A initialContext, candidate: \\A position \\in Nat: "
+                "AsyncSpecAt(initialContext) => "
+                "(ProtectedOwnedAtServiceRank(candidate, <<5, position>>) "
+                "~> ProtectedRankProgressExit(candidate, <<5, position>>))"
+            ),
+            "FairProtectedStage4RankDescent": (
+                "\\A initialContext, candidate: \\A position \\in Nat: "
+                "AsyncSpecAt(initialContext) => "
+                "(ProtectedOwnedAtServiceRank(candidate, <<4, position>>) "
+                "~> ProtectedRankProgressExit(candidate, <<4, position>>))"
+            ),
+            "FairStage4AuxOneStep": (
+                "\\A initialContext, candidate, position: "
+                "\\A rank \\in ReadyRunAuxCarrier: "
+                "AsyncSpecAt(initialContext) => "
+                "(ReadyBlockedAtAux(candidate, position, rank) "
+                "~> Stage4AuxProgress(candidate, position, rank))"
+            ),
+            "FairStage4CapacityOneStep": (
+                "\\A initialContext, candidate, position: "
+                "\\A rank \\in Stage4CapacityCarrier: "
+                "AsyncSpecAt(initialContext) => "
+                "(Stage4CapacityBlockedAtRank(candidate, position, rank) "
+                "~> Stage4CapacityProgress(candidate, position, rank))"
+            ),
+            "FairProtectedServeStage5RankDescent": (
+                "\\A initialContext, node, job: \\A position \\in Nat: "
+                "AsyncSpecAt(initialContext) => "
+                "(ProtectedServeOwnedAtServiceRank("
+                "node, job, <<5, position>>) ~> "
+                "ProtectedServeRankProgressExit("
+                "node, job, <<5, position>>))"
+            ),
+        }
+        for symbol, expected_statement in rank_binder_contracts.items():
+            extracted = _top_level_theorem_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{path}: missing non-vacuous rank theorem {symbol}")
+                continue
+            body, line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            normalized = " ".join(statement.split())
+            if normalized != expected_statement:
+                errors.append(
+                    f"{path}:{line}: {symbol} must leave record-valued "
+                    "context/candidate/job binders unbounded and bound only "
+                    f"its rank carrier; found {normalized!r}"
+                )
+
+        # TLA+ applies one bounded carrier to every comma-separated name in a
+        # quantifier group.  Contexts, candidates, positions, and ingress
+        # source sets are heterogeneous values, so grouping them with the
+        # numeric/tuple variable makes the supporting theorem vacuous on the
+        # reachable records used by its proof.  Guard the complete auxiliary
+        # proof families, not only their release-facing wrapper theorems.
+        heterogeneous_bounded_binders = {
+            "initialContext grouped into a bounded carrier": re.compile(
+                r"\\A\s+initialContext\s*,[^:]*\\in\s+[^:]+:"
+            ),
+            "ingress source set grouped into Nat": re.compile(
+                r"\\A\s+sources\s*,\s*capacity\s+\\in\s+Nat\s*:"
+            ),
+            "candidate grouped into the owned-rank carrier": re.compile(
+                r"\\A\s+candidate\s*,\s*rank\s+\\in\s+"
+                r"OwnedServiceRankCarrier\s*:"
+            ),
+            "candidate/position grouped into a stage-4 rank carrier": re.compile(
+                r"\\A\s+candidate\s*,\s*position\s*,\s*rank\s+\\in\s+"
+                r"(?:ReadyRunAuxCarrier|Stage4CapacityCarrier)\s*:"
+            ),
+        }
+        for description, pattern in heterogeneous_bounded_binders.items():
+            for match in pattern.finditer(stripped):
+                line = stripped.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{path}:{line}: heterogeneous grouped bounded quantifier "
+                    f"({description}) makes the theorem vacuous; split the "
+                    "unbounded record/set values from the final bounded value"
+                )
+
         parent_disjoint = _top_level_theorem_body(
             source,
             "CommandSuccessorParentDisjoint",
@@ -1660,6 +2577,26 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "ProtectedStage5UnlessProgress",
                 "AsyncFairnessAt",
             ),
+            "ProtectedServeStage5UnlessProgress": (
+                "ServeOccurrenceIndexAfterNonTargetHead",
+                "TailRemovesUniqueServeOccurrence",
+                "DrainFairIngressSelected",
+                "DrainHistoricalIngressSelected",
+                "ServiceIoWorker",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueIoLocalControl",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "FairProtectedServeStage5RankDescent": (
+                "PostGstServiceIoWorker",
+                "ProtectedServeStage5WorkerStrictlyProgresses",
+                "ProtectedServeStage5UnlessProgress",
+                "AsyncFairnessAt",
+            ),
+            "ProtectedServeRankProgressFromFairFifo": (
+                "FairProtectedServeStage5RankDescent",
+                "ProtectedServeRankProgressProperty",
+            ),
             "FairCommitCertificateDiscoveryPublishesOrDecides": (
                 "CommitCertificateDiscoveryPendingEnablesFairPrefix",
                 "DirectCommitCertificateDiscoveryPublishes",
@@ -1689,6 +2626,15 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "AsyncNonRunnerStepPreservesDiscoveryClockThreshold",
                 "PreGstCrash",
                 "UNCHANGED AsyncAllVars",
+            ),
+            "ApplicationCompletionProgressImpliesAggregateApplication": (
+                "ApplicationCompletionReachesEveryResponsivePrefix",
+                "AsyncSpecAlwaysKeepsFrozenContext",
+                "FrozenContextFullApplicationPrefixImpliesResponsiveApply",
+            ),
+            "ApplicationLivenessObligation": (
+                "ApplicationCompletionProgressObligation",
+                "ApplicationCompletionProgressImpliesAggregateApplication",
             ),
             "OneHeightCompletionObligation": (
                 "RotatingLeaderProgressObligation",
@@ -1743,6 +2689,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"ResponsiveNodesDecide) /\ (gst /\ "
                 r"ResponsiveHonestLeaderViewReached /\ "
                 r"~ResponsiveNodesDecide) ~> ResponsiveNodesDecide"
+            ),
+            "ApplicationCompletionProgressProperty": (
+                r"specification => \A node \in "
+                r"AsyncCurrentResponsiveVoters: (gst /\ "
+                r"NodeHasDecision(node)) ~> NodeHasApplication(node)"
             ),
             "ApplicationLivenessProperty": (
                 r"specification => /\ \A node \in "
@@ -2111,6 +3062,144 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
+def _application_completion_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the per-validator application debt and its finite composition."""
+
+    proof_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    vocabulary_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if not proof_path.is_file() or not vocabulary_path.is_file():
+        return []
+
+    proof_source = proof_path.read_text(encoding="utf-8")
+    vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+
+    operator_contracts = {
+        "ApplicationCompletionProgressProperty": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters: "
+            "(gst /\\ NodeHasDecision(node)) ~> NodeHasApplication(node)"
+        ),
+        "ResponsiveApplicationPrefixAt": (
+            "\\A node \\in AsyncVotersAt(initialContext) \\cap (0..limit): "
+            "NodeHasApplication(node)"
+        ),
+    }
+    for symbol, exact_body in operator_contracts.items():
+        is_vocabulary = symbol == "ApplicationCompletionProgressProperty"
+        source = vocabulary_source if is_vocabulary else proof_source
+        path = vocabulary_path if is_vocabulary else proof_path
+        extracted = _top_level_operator_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing application-completion operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    proofless_symbol = "ApplicationCompletionProgressObligation"
+    proofless = _top_level_theorem_body(proof_source, proofless_symbol)
+    exact_proofless_statement = (
+        "\\A initialContext: ApplicationCompletionProgressProperty("
+        "AsyncSpecAt(initialContext))"
+    )
+    if proofless is None:
+        errors.append(f"{proof_path}: missing {proofless_symbol}")
+    else:
+        body, line = proofless
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        normalized = " ".join(parts[0].split())
+        if normalized != exact_proofless_statement:
+            errors.append(
+                f"{proof_path}:{line}: {proofless_symbol} must state only "
+                f"{exact_proofless_statement!r}; found {normalized!r}"
+            )
+        if len(parts) != 1:
+            errors.append(
+                f"{proof_path}:{line}: {proofless_symbol} must remain the "
+                "explicit proofless per-validator application debt"
+            )
+
+    reviewed_proofs = {
+        "ApplicationCompletionProgressImpliesAggregateApplication": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ApplicationCompletionProgressProperty( "
+            "AsyncSpecAt(initialContext)) => (gst /\\ ResponsiveNodesDecide) "
+            "~> ResponsiveNodesApply",
+            (
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "ModelConfigurationMakesLastValidatorNatural",
+                "ApplicationCompletionReachesEveryResponsivePrefix",
+                "AsyncSpecAlwaysKeepsFrozenContext",
+                "FrozenContextFullApplicationPrefixImpliesResponsiveApply",
+            ),
+        ),
+        "ApplicationLivenessObligation": (
+            "\\A initialContext: ApplicationLivenessProperty("
+            "AsyncSpecAt(initialContext))",
+            (
+                "ApplicationCompletionProgressObligation",
+                "ApplicationCompletionProgressImpliesAggregateApplication",
+            ),
+        ),
+    }
+    forbidden_assertions = re.compile(
+        r"(?i)\b(?:AXIOM|OBVIOUS|OMITTED)\b"
+    )
+    for symbol, (exact_statement, dependencies) in reviewed_proofs.items():
+        extracted = _top_level_theorem_body(proof_source, symbol)
+        if extracted is None:
+            errors.append(f"{proof_path}: missing {symbol}")
+            continue
+        body, line = extracted
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        normalized = " ".join(parts[0].split())
+        if normalized != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized!r}"
+            )
+        if len(parts) != 2 or re.search(r"(?m)^[ \t]*PROOF\b", body) is None:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must have the reviewed "
+                "deductive application-completion proof"
+            )
+            continue
+        proof = parts[1]
+        if forbidden_assertions.search(proof):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} may not replace the reviewed "
+                "application-completion proof with an asserted result"
+            )
+        positions = [proof.find(dependency) for dependency in dependencies]
+        if any(position < 0 for position in positions) or positions != sorted(
+            positions
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof must compose the reviewed "
+                f"application dependencies in order {dependencies!r}"
+            )
+        repeated = [
+            dependency for dependency in dependencies if proof.count(dependency) != 1
+        ]
+        if repeated:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof must consume each reviewed "
+                f"application dependency exactly once; found {repeated!r}"
+            )
+
+    return errors
+
+
 def _generalized_context_init_errors(formal_dir: Path) -> list[str]:
     """Require the deductive Core entry point to cover every admissible height."""
 
@@ -2299,7 +3388,7 @@ def _historical_timeout_derivation_errors(formal_dir: Path) -> list[str]:
 
 
 def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
-    """Require decision recovery owners to match the decided block height."""
+    """Pin executable progress witnesses and the post-Decision timeout boundary."""
 
     if not (formal_dir / "proof_coverage.json").is_file():
         return []
@@ -2307,25 +3396,1855 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     if not path.is_file():
         return []
     source = path.read_text(encoding="utf-8")
-    required = {
-        "DecisionPipelineCandidate": "candidate.height = qc.context.height",
+    errors: list[str] = []
+
+    exact_liveness_operators = {
+        "DecisionPipelineCandidate": (
+            '/\\ candidate.class = "Completion" '
+            "/\\ candidate.node = node "
+            "/\\ candidate.height = qc.context.height "
+            "/\\ candidate.view = qc.view "
+            "/\\ candidate.subject = qc.subject "
+            "/\\ candidate.kind \\in "
+            '{"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody", '
+            '"StoreBody", "ValidateBody", "Apply"} '
+            "/\\ CandidateConsumerCurrent(candidate) "
+            "/\\ CandidateScheduled(candidate)"
+        ),
         "DecisionCompletionWitness": (
-            "request.envelope.height = qc.context.height"
+            "\\/ NodeHasApplication(node) "
+            "\\/ \\E request \\in asyncActiveRequests: "
+            '/\\ request.kind = "CertifiedRequest" '
+            "/\\ request.source = node "
+            "/\\ request.envelope.height = qc.context.height "
+            "/\\ request.envelope.view = qc.view "
+            "/\\ request.envelope.subject = qc.subject "
+            "\\/ \\E candidate \\in AsyncCandidateSet: "
+            "DecisionPipelineCandidate(node, qc, candidate)"
         ),
     }
-    errors: list[str] = []
-    for symbol, required_equality in required.items():
-        extracted = _top_level_operator_body(source, symbol)
+    for symbol, exact_body in exact_liveness_operators.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
         if extracted is None:
             errors.append(f"{path}: missing source-fidelity operator {symbol}")
             continue
         body, line = extracted
         normalized = " ".join(body.split())
-        if required_equality not in normalized:
+        if normalized != exact_body:
             errors.append(
-                f"{path}:{line}: {symbol} must require exact decision-height "
-                f"ownership via {required_equality!r}"
+                f"{path}:{line}: {symbol} must equal only the exact "
+                f"current-consumer Decision recovery contract {exact_body!r}; "
+                f"found {normalized!r}"
             )
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    if core_path.is_file():
+        core_source = core_path.read_text(encoding="utf-8")
+        exact_core_operators = {
+            "NoDecisionForNode": (
+                "~\\E decision \\in decisions: "
+                "/\\ decision.node = node "
+                "/\\ decision.qc.context = context"
+            ),
+        }
+        for symbol, exact_body in exact_core_operators.items():
+            extracted = _top_level_operator_body(
+                core_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{core_path}: missing post-Decision guard operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{core_path}:{line}: {symbol} must equal only "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
+
+        guarded_actions = {
+            "BeginTimeout": (
+                "/\\ node \\in Honest \\cap up \\cap CurrentVoters "
+                "/\\ NodeIdle(node) "
+                "/\\ NoDecisionForNode(node) "
+                "/\\ ~NodeTimedOut(node, roundView)"
+            ),
+            "FormTC": (
+                "/\\ node \\in up "
+                "/\\ NodeIdle(node) "
+                "/\\ NoDecisionForNode(node) "
+                "/\\ roundView + 1 \\in Views"
+            ),
+            "BeginInstallTC": (
+                "/\\ tc.view + 1 \\in Views "
+                "/\\ tc.view >= nodeView[node] "
+                "/\\ NodeIdle(node) "
+                "/\\ NoDecisionForNode(node) "
+                "/\\ pendingInstallTC' = pendingInstallTC \\cup {request}"
+            ),
+        }
+        for symbol, exact_guard_sequence in guarded_actions.items():
+            extracted = _top_level_operator_body(
+                core_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{core_path}: missing post-Decision guarded action {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if (
+                normalized.count("NoDecisionForNode(node)") != 1
+                or exact_guard_sequence not in normalized
+                or "\\/" in normalized
+            ):
+                errors.append(
+                    f"{core_path}:{line}: {symbol} must have one direct, "
+                    "non-disjunctive NoDecisionForNode guard in the reviewed "
+                    f"action prefix {exact_guard_sequence!r}"
+                )
+
+        exact_delivery_contracts = {
+            "DeliverTimeout": (
+                "/\\ timeoutNetwork' = timeoutNetwork \\ {envelope} "
+                "/\\ receivedTimeoutVotes' = "
+                "IF ~NoDecisionForNode(envelope.recipient) "
+                "\\/ TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote) "
+                "THEN receivedTimeoutVotes "
+                "ELSE receivedTimeoutVotes \\cup {received}"
+            ),
+            "DeliverTC": (
+                "/\\ tcNetwork' = tcNetwork \\ {envelope} "
+                "/\\ receivedTCs' = "
+                "IF NoDecisionForNode(envelope.recipient) "
+                "THEN receivedTCs \\cup {received} "
+                "ELSE receivedTCs"
+            ),
+        }
+        for symbol, exact_fragment in exact_delivery_contracts.items():
+            extracted = _top_level_operator_body(
+                core_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{core_path}: missing post-Decision delivery action {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized.count(exact_fragment) != 1:
+                errors.append(
+                    f"{core_path}:{line}: {symbol} must consume the exact "
+                    "authenticated envelope while leaving its receive pool "
+                    f"unchanged after Decision via {exact_fragment!r}"
+                )
+
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if network_path.is_file():
+        network_source = network_path.read_text(encoding="utf-8")
+        extracted = _top_level_operator_body(
+            network_source, "CommandSuccessors", preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{network_path}: missing post-Decision CommandSuccessors relation"
+            )
+        else:
+            body, line = extracted
+            exact_branches = {
+                "DeliverTimeout": (
+                    "FormTC",
+                    'IF NoDecisionForNode(command.node) '
+                    'THEN <<CausalCandidate("Progress", "FormTC", command)>> '
+                    "ELSE <<>>",
+                ),
+                "DeliverTC": (
+                    "BeginInstallTC",
+                    'IF NoDecisionForNode(command.node) '
+                    'THEN <<CausalCandidate("Progress", "BeginInstallTC", command)>> '
+                    "ELSE <<>>",
+                ),
+            }
+            for symbol, (next_symbol, exact_body) in exact_branches.items():
+                branch = re.search(
+                    rf'\[\] command\.kind = "{re.escape(symbol)}"\s*->'
+                    rf'(?P<body>.*?)(?=\n\s*\[\] command\.kind = '
+                    rf'"{re.escape(next_symbol)}")',
+                    body,
+                    re.DOTALL,
+                )
+                if branch is None:
+                    errors.append(
+                        f"{network_path}:{line}: CommandSuccessors is missing "
+                        f"the post-Decision {symbol} branch"
+                    )
+                    continue
+                normalized = " ".join(branch.group("body").split())
+                if normalized != exact_body:
+                    errors.append(
+                        f"{network_path}:{line}: post-Decision {symbol} must "
+                        "emit no causal successor and otherwise emit exactly "
+                        f"its reviewed progress child; found {normalized!r}"
+                    )
+
+    async_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    if not async_path.is_file():
+        return errors
+    async_source = async_path.read_text(encoding="utf-8")
+
+    exact_decision_recovery_operators = {
+        "ProductionProgressWitnessTraceRefinement": (
+            "/\\ ProductionDurableIntentTraceRefinesProgressWitness = TRUE "
+            "/\\ ProductionDecisionTraceRefinesRecoveryWitness = TRUE "
+            "/\\ ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
+            "/\\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE"
+        ),
+        "PendingTimeoutExcludesDecision": (
+            "\\A request \\in pendingTimeout: NoDecisionForNode(request.node)"
+        ),
+        "PendingInstallExcludesDecision": (
+            "\\A request \\in pendingInstallTC: NoDecisionForNode(request.node)"
+        ),
+        "TimeoutSigningExcludesDecision": (
+            "\\A request \\in signTimeouts: NoDecisionForNode(request.node)"
+        ),
+        "PendingDecisionExcludesTimeoutWork": (
+            "\\A request \\in pendingDecision: "
+            "/\\ request.node \\notin RequestNodeSet(pendingTimeout) "
+            "/\\ request.node \\notin RequestNodeSet(pendingInstallTC) "
+            "/\\ request.node \\notin RequestNodeSet(signTimeouts)"
+        ),
+        "DecisionTimeoutFrontierInvariant": (
+            "/\\ PendingTimeoutExcludesDecision "
+            "/\\ PendingInstallExcludesDecision "
+            "/\\ TimeoutSigningExcludesDecision "
+            "/\\ PendingDecisionExcludesTimeoutWork"
+        ),
+        "PostDecisionTimeoutControlExcluded": (
+            "\\A node: ~NoDecisionForNode(node) "
+            "=> /\\ ~BeginTimeout(node) "
+            "/\\ \\A roundView: ~FormTC(node, roundView) "
+            "/\\ \\A tc: ~BeginInstallTC(node, tc)"
+        ),
+        "PostDecisionTimeoutTrafficConsumeOnly": (
+            "/\\ \\A envelope: "
+            "/\\ ~NoDecisionForNode(envelope.recipient) "
+            "/\\ DeliverTimeout(envelope) "
+            "=> /\\ timeoutNetwork' = timeoutNetwork \\ {envelope} "
+            "/\\ receivedTimeoutVotes' = receivedTimeoutVotes "
+            "/\\ \\A envelope: "
+            "/\\ ~NoDecisionForNode(envelope.recipient) "
+            "/\\ DeliverTC(envelope) "
+            "=> /\\ tcNetwork' = tcNetwork \\ {envelope} "
+            "/\\ receivedTCs' = receivedTCs"
+        ),
+        "PostDecisionTimeoutCausalSuccessorsExcluded": (
+            "\\A command \\in AsyncCandidateSet: "
+            "~NoDecisionForNode(command.node) "
+            '=> /\\ (command.kind = "DeliverTimeout" '
+            "=> CommandSuccessors(command) = <<>>) "
+            '/\\ (command.kind = "DeliverTC" '
+            "=> CommandSuccessors(command) = <<>>)"
+        ),
+        "PostDecisionTimeoutExclusionProperty": (
+            "/\\ specification => []DecisionTimeoutFrontierInvariant "
+            "/\\ specification "
+            "=> [][PostDecisionTimeoutControlExcluded]_AsyncAllVars "
+            "/\\ specification "
+            "=> [][PostDecisionTimeoutTrafficConsumeOnly]_AsyncAllVars "
+            "/\\ specification => []PostDecisionTimeoutCausalSuccessorsExcluded"
+        ),
+        "DecisionFetchBodyOwned": (
+            "\\E candidate \\in AsyncCandidateSet: "
+            '/\\ candidate.kind = "FetchBody" '
+            "/\\ DecisionPipelineCandidate(node, qc, candidate)"
+        ),
+        "DecisionSourceRetentionInvariant": (
+            "\\A decision \\in decisions: "
+            "(decision.node \\in AsyncCurrentResponsiveVoters "
+            "/\\ decision.qc.context = context) "
+            "=> DecisionRecoveryStage(decision.node, decision.qc)"
+        ),
+        "DecisionsUniqueByNodeContext": (
+            "\\A left, right \\in decisions: "
+            "/\\ left.node = right.node "
+            "/\\ left.qc.context = right.qc.context => left = right"
+        ),
+        "DecisionRecoveryAuthority": (
+            "/\\ asyncRecoveryPhase \\in "
+            '{"RestartRequired", "ReplayRequired", "Replaying"} '
+            "/\\ asyncRecoveryNode = node "
+            "/\\ generation[node] = asyncRecoveryGeneration "
+            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node)"
+        ),
+        "AsyncDecisionRecoveryStage": (
+            "\\/ DecisionRecoveryStage(node, qc) "
+            "\\/ DecisionRecoveryAuthority(node, qc)"
+        ),
+        "AsyncDecisionCompletionWitness": (
+            "\\/ DecisionCompletionWitness(node, qc) "
+            "\\/ DecisionRecoveryAuthority(node, qc)"
+        ),
+        "AsyncDurableDecisionProgressWitness": (
+            "\\A decision \\in decisions: "
+            "(decision.node \\in AsyncCurrentResponsiveVoters "
+            "/\\ decision.qc.context = context) "
+            "=> AsyncDecisionCompletionWitness(decision.node, decision.qc)"
+        ),
+        "AsyncDecisionSourceRetentionInvariant": (
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ \\A decision \\in decisions: "
+            "(decision.node \\in AsyncCurrentResponsiveVoters "
+            "/\\ decision.qc.context = context) "
+            "=> AsyncDecisionRecoveryStage(decision.node, decision.qc)"
+        ),
+        "DecisionRecoveryLifecycleTransition": (
+            "/\\ \\A node, qc: "
+            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node) "
+            "/\\ PreGstResponsiveCrash(node) "
+            "=> DecisionRecoveryAuthority(node, qc)' "
+            "/\\ \\A node, qc: "
+            "/\\ DecisionRecoveryAuthority(node, qc) "
+            "/\\ PreGstResponsiveRestart "
+            "=> /\\ generation'[node] = generation[node] + 1 "
+            "/\\ DecisionRecoveryAuthority(node, qc)' "
+            "/\\ \\A node, qc: "
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ DecisionRecoveryAuthority(node, qc) "
+            '/\\ asyncRecoveryPhase = "ReplayRequired" '
+            "/\\ PreGstResponsiveReplay "
+            "=> DecisionRecoveryStage(node, qc)'"
+        ),
+        "DecisionRecoveryAcrossRestartProperty": (
+            "/\\ specification => []AsyncDecisionSourceRetentionInvariant "
+            "/\\ specification "
+            "=> [][DecisionRecoveryLifecycleTransition]_AsyncAllVars"
+        ),
+    }
+    for symbol, exact_body in exact_decision_recovery_operators.items():
+        extracted = _top_level_operator_body(
+            async_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{async_path}: missing exact Decision recovery owner {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{async_path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    persist_decision_theorem = _top_level_theorem_body(
+        async_source,
+        "PersistDecisionRecoveryUsesCompletionFetchBody",
+        preserve_string_contents=True,
+    )
+    exact_persist_decision_statement = (
+        "\\A command: "
+        'command.kind = "PersistDecision" '
+        "=> /\\ CommandSuccessors(command) = "
+        '<<CausalCandidate("Completion", "FetchBody", command)>> '
+        "/\\ Len(CommandSuccessors(command)) = 1 "
+        '/\\ CommandSuccessors(command)[1].kind = "FetchBody" '
+        '/\\ CommandSuccessors(command)[1].class = "Completion" '
+        "/\\ (CandidateConsumerCurrent(command) "
+        "=> CandidateConsumerCurrent( CommandSuccessors(command)[1]))"
+    )
+    exact_persist_decision_proof_tokens = (
+        "CommandSuccessors",
+        "CausalCandidate",
+        "AsyncCandidateFrom",
+        "AsyncCandidateWithIdentity",
+        "CandidateConsumerCurrent",
+    )
+    if persist_decision_theorem is None:
+        errors.append(
+            f"{async_path}: missing exact singleton PersistDecision recovery theorem"
+        )
+    else:
+        body, line = persist_decision_theorem
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = " ".join(parts[0].split())
+        if statement != exact_persist_decision_statement:
+            errors.append(
+                f"{async_path}:{line}: PersistDecision recovery theorem must "
+                "state only the exact singleton Completion FetchBody frontier "
+                f"{exact_persist_decision_statement!r}; found {statement!r}"
+            )
+        if len(parts) != 2 or not all(
+            re.search(rf"\b{re.escape(token)}\b", parts[1])
+            for token in exact_persist_decision_proof_tokens
+        ):
+            errors.append(
+                f"{async_path}:{line}: PersistDecision recovery theorem must "
+                "derive the singleton frontier and current-consumer identity "
+                "from the concrete CommandSuccessors/CausalCandidate chain"
+            )
+
+    production_refinement_theorem = _top_level_theorem_body(
+        async_source, "ProgressWitnessProductionRefinementObligation"
+    )
+    exact_production_refinement_statement = (
+        "ProductionProgressWitnessTraceRefinement"
+    )
+    if production_refinement_theorem is None:
+        errors.append(
+            f"{async_path}: missing production progress-witness refinement sentinel"
+        )
+    else:
+        body, line = production_refinement_theorem
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_production_refinement_statement:
+            errors.append(
+                f"{async_path}:{line}: production progress-witness refinement "
+                "must state only the exact external trace sentinel "
+                f"{exact_production_refinement_statement!r}; "
+                f"found {normalized!r}"
+            )
+    exact_async_operators = {
+        "CommitRecoveryAuthority": (
+            '/\\ asyncRecoveryPhase \\in {"RestartRequired", '
+            '"ReplayRequired", "Replaying"} '
+            "/\\ asyncRecoveryNode = node "
+            "/\\ generation[node] = asyncRecoveryGeneration"
+        ),
+        "AsyncCommitIntentProgressWitness": (
+            "\\/ CommitIntentProgressWitness(node, vote) "
+            "\\/ CommitRecoveryAuthority(node)"
+        ),
+        "AsyncDurableCommitProgressWitness": (
+            "\\A node \\in AsyncCurrentResponsiveVoters, vote \\in "
+            "commitIntents: ActiveLockedCommitIntent(node, vote) => "
+            "AsyncCommitIntentProgressWitness(node, vote)"
+        ),
+        "AsyncProgressWitnessInvariant": (
+            "/\\ AsyncDurableCommitProgressWitness "
+            "/\\ HistoricalLockedCommitRecoveryProgress "
+            "/\\ DecisionsUniqueByNodeContext "
+            "/\\ AsyncDurableDecisionProgressWitness "
+            "/\\ ProtectedDeferredProgressInvariant"
+        ),
+        "AsyncProgressWitnessProperty": (
+            "specification => []AsyncProgressWitnessInvariant"
+        ),
+    }
+    for symbol, exact_body in exact_async_operators.items():
+        extracted = _top_level_operator_body(
+            async_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{async_path}: missing crash-aware progress operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{async_path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    crash_theorem = _top_level_theorem_body(
+        async_source,
+        "PreGstResponsiveCrashReplacesCommitSignatureWithRecoveryAuthority",
+    )
+    exact_crash_statement = (
+        "\\A node \\in ValidatorIds, vote \\in VoteRecordSet: "
+        "/\\ VoteSign(node, vote) \\in signVotes "
+        "/\\ PreGstResponsiveCrash(node) => "
+        "/\\ VoteSign(node, vote) \\notin signVotes' "
+        "/\\ CommitRecoveryAuthority(node)' "
+        "/\\ AsyncCommitIntentProgressWitness(node, vote)'"
+    )
+    if crash_theorem is None:
+        errors.append(
+            f"{async_path}: missing exact responsive-crash Commit carrier theorem"
+        )
+    else:
+        body, line = crash_theorem
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = " ".join(parts[0].split())
+        if statement != exact_crash_statement:
+            errors.append(
+                f"{async_path}:{line}: responsive crash theorem must state only "
+                f"{exact_crash_statement!r}; found {statement!r}"
+            )
+        if len(parts) != 2 or not all(
+            token in parts[1]
+            for token in (
+                "PreGstResponsiveCrash",
+                "Crash",
+                "CommitRecoveryAuthority",
+                "AsyncCommitIntentProgressWitness",
+            )
+        ):
+            errors.append(
+                f"{async_path}:{line}: responsive crash theorem must derive the "
+                "volatile-to-recovery carrier transition from the concrete crash "
+                "and exact recovery authority"
+            )
+
+    progress_obligation = _top_level_theorem_body(
+        async_source, "ProgressWitnessObligation"
+    )
+    exact_progress_obligation = (
+        "\\A initialContext: "
+        "AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))"
+    )
+    if progress_obligation is None:
+        errors.append(f"{async_path}: missing ProgressWitnessObligation")
+    else:
+        body, line = progress_obligation
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_progress_obligation:
+            errors.append(
+                f"{async_path}:{line}: ProgressWitnessObligation must use the "
+                "crash-aware async property and state only "
+                f"{exact_progress_obligation!r}; found {normalized!r}"
+            )
+    return errors
+
+
+def _effective_lock_acquisition_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the executable locked-body owner and its adversarial TLC seams."""
+
+    model_path = formal_dir / "SumeragiV2EffectiveLockAcquisition.tla"
+    proof_path = formal_dir / "SumeragiV2EffectiveLockAcquisitionProofs.tla"
+    mutation_path = formal_dir / "SumeragiV2EffectiveLockAcquisitionMutation.tla"
+    errors: list[str] = []
+    if not model_path.is_file():
+        return [f"{model_path}: missing executable effective-lock acquisition model"]
+    if not proof_path.is_file():
+        errors.append(f"{proof_path}: missing effective-lock deductive proof module")
+    if not mutation_path.is_file():
+        errors.append(f"{mutation_path}: missing effective-lock mutation module")
+
+    source = model_path.read_text(encoding="utf-8")
+    stripped = strip_tla_comments(source, preserve_string_contents=True)
+    if ANY_THEOREM_DECLARATION_RE.search(stripped):
+        errors.append(
+            f"{model_path}: executable acquisition model must remain theorem-free; "
+            "deductive claims belong in SumeragiV2EffectiveLockAcquisitionProofs"
+        )
+
+    expected_operators = {
+        "ExactAcquisitionIdentityInvariant": (
+            r"/\ PhysicalLoadIds = 0..(nextPhysicalId - 1) "
+            r"/\ \A left, right \in issuedLoads: left.id = right.id => "
+            r"left.subject = right.subject "
+            r"/\ AcquisitionLoad(physicalId, physicalSubject) \in issuedLoads "
+            r"/\ physicalId < nextPhysicalId "
+            r"/\ physicalSubject # desiredSubject => acquisitionPhase = \"Loading\" "
+            r"/\ acquisitionPhase \in {\"Waiting\", \"Ready\"} => "
+            r"physicalSubject = desiredSubject"
+        ),
+        "PhysicalCompletionDisposition": (
+            r"IF completionId < physicalId THEN \"Stale\" "
+            r"ELSE IF completionId > physicalId THEN \"FailClosed\" "
+            r"ELSE IF acquisitionPhase # \"Loading\" THEN \"FailClosed\" "
+            r"ELSE IF completionSubject # physicalSubject THEN \"FailClosed\" "
+            r"ELSE IF physicalSubject # desiredSubject THEN \"Replace\" "
+            r"ELSE \"Owned\""
+        ),
+        "CompletionClassificationInvariant": (
+            r"/\ \A completionId \in (physicalId + 1)..MaxAcquisitionId, "
+            r"completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(completionId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ \A completionId \in 0..(physicalId - 1), "
+            r"completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(completionId, completionSubject) "
+            r"= \"Stale\" "
+            r"/\ acquisitionPhase # \"Loading\" => "
+            r"\A completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(physicalId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ acquisitionPhase = \"Loading\" => "
+            r"/\ \A completionSubject \in AcquisitionSubjects "
+            r"\ {physicalSubject}: "
+            r"PhysicalCompletionDisposition(physicalId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ PhysicalCompletionDisposition(physicalId, physicalSubject) "
+            r"= IF physicalSubject = desiredSubject THEN \"Owned\" ELSE \"Replace\""
+        ),
+        "RebindSameLock": (
+            r"/\ ~decided "
+            r"/\ nextView \in (consumerView + 1)..MaxAcquisitionConsumerView "
+            r"/\ nextGeneration \in "
+            r"(consumerGeneration + 1)..MaxAcquisitionGeneration "
+            r"/\ consumerView' = nextView "
+            r"/\ consumerGeneration' = nextGeneration "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, physicalId, "
+            r"nextPhysicalId, physicalSubject, acquisitionPhase, issuedLoads, "
+            r"durableSubjects, DeliveryVars, decided>>"
+        ),
+        "InstallHigherLock": (
+            r"/\ ~decided "
+            r"/\ nextRound \in (desiredRound + 1)..MaxAcquisitionLockRound "
+            r"/\ nextSubject \in AcquisitionSubjects "
+            r"/\ nextView \in consumerView..MaxAcquisitionConsumerView "
+            r"/\ nextGeneration \in consumerGeneration..MaxAcquisitionGeneration "
+            r"/\ nextRound <= nextView "
+            r"/\ \/ /\ nextView = consumerView "
+            r"/\ nextGeneration = consumerGeneration "
+            r"\/ /\ nextView > consumerView "
+            r"/\ nextGeneration > consumerGeneration "
+            r"/\ (nextSubject = desiredSubject \/ acquisitionPhase = \"Loading\" "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ desiredRound' = nextRound "
+            r"/\ desiredSubject' = nextSubject "
+            r"/\ consumerView' = nextView "
+            r"/\ consumerGeneration' = nextGeneration "
+            r"/\ IF nextSubject = desiredSubject \/ acquisitionPhase = \"Loading\" "
+            r"THEN UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads>> "
+            r"ELSE StartPhysicalLoad(nextSubject) "
+            r"/\ UNCHANGED <<durableSubjects, DeliveryVars, decided>>"
+        ),
+        "CompleteAvailableLoad": (
+            r"/\ ~decided /\ acquisitionPhase = \"Loading\" "
+            r"/\ physicalSubject \in durableSubjects "
+            r"/\ (physicalSubject = desiredSubject "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ IF physicalSubject = desiredSubject "
+            r"THEN /\ acquisitionPhase' = \"Ready\" "
+            r"/\ UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"issuedLoads>> ELSE StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "CompleteUnavailableLoad": (
+            r"/\ ~decided /\ acquisitionPhase = \"Loading\" "
+            r"/\ physicalSubject \notin durableSubjects "
+            r"/\ (physicalSubject = desiredSubject "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ IF physicalSubject = desiredSubject "
+            r"THEN /\ acquisitionPhase' = \"Waiting\" "
+            r"/\ UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"issuedLoads>> ELSE StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "RecoverDesiredBody": (
+            r"/\ ~decided /\ desiredSubject \notin durableSubjects "
+            r"/\ durableSubjects' = durableSubjects \cup {desiredSubject} "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads, DeliveryVars, decided>>"
+        ),
+        "RetryRecoveredBody": (
+            r"/\ ~decided /\ acquisitionPhase = \"Waiting\" "
+            r"/\ physicalSubject = desiredSubject "
+            r"/\ desiredSubject \in durableSubjects "
+            r"/\ StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "DeliverReadyBody": (
+            r"/\ ~decided /\ acquisitionPhase = \"Ready\" "
+            r"/\ physicalSubject = desiredSubject "
+            r"/\ ~CurrentConsumerDelivered "
+            r"/\ deliveryValid' = TRUE /\ deliveredRound' = desiredRound "
+            r"/\ deliveredSubject' = desiredSubject "
+            r"/\ deliveredView' = consumerView "
+            r"/\ deliveredGeneration' = consumerGeneration "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads, durableSubjects, decided>>"
+        ),
+        "AcquisitionNext": (
+            r"\/ \E nextView \in 0..MaxAcquisitionConsumerView, "
+            r"nextGeneration \in 0..MaxAcquisitionGeneration: "
+            r"RebindSameLock(nextView, nextGeneration) "
+            r"\/ \E nextRound \in 0..MaxAcquisitionLockRound, "
+            r"nextSubject \in AcquisitionSubjects, "
+            r"nextView \in 0..MaxAcquisitionConsumerView, "
+            r"nextGeneration \in 0..MaxAcquisitionGeneration: "
+            r"InstallHigherLock(nextRound, nextSubject, nextView, nextGeneration) "
+            r"\/ CompleteOwnedLoad \/ RecoverDesiredBody "
+            r"\/ RetryRecoveredBody \/ DeliverReadyBody \/ RecordDecision"
+        ),
+        "AcquisitionSpec": (
+            r"AcquisitionInit /\ [][AcquisitionNext]_acquisitionVars "
+            r"/\ WF_acquisitionVars(CompleteOwnedLoad) "
+            r"/\ WF_acquisitionVars(RecoverDesiredBody) "
+            r"/\ WF_acquisitionVars(RetryRecoveredBody) "
+            r"/\ WF_acquisitionVars(DeliverReadyBody)"
+        ),
+        "EffectiveLockAcquisitionProgress": (
+            r"\A round \in 0..MaxAcquisitionLockRound, "
+            r"subject \in AcquisitionSubjects: DesiredLock(round, subject) "
+            r"~> (decided \/ desiredRound > round \/ LockReady(round, subject))"
+        ),
+        "StableEffectiveLockDelivery": (
+            r"\A round \in 0..MaxAcquisitionLockRound, "
+            r"subject \in AcquisitionSubjects: "
+            r"(<>[](DesiredLock(round, subject) /\ ~decided)) "
+            r"=> []<>(decided \/ /\ DesiredLock(round, subject) "
+            r"/\ CurrentConsumerDelivered)"
+        ),
+    }
+    for symbol, expected in expected_operators.items():
+        expected = expected.replace(r'\"', '"')
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{model_path}: missing reviewed acquisition operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{model_path}:{line}: {symbol} must match the reviewed "
+                "effective-lock acquisition transition"
+            )
+
+    if proof_path.is_file():
+        proof_source = proof_path.read_text(encoding="utf-8")
+        theorem = _top_level_theorem_body(
+            proof_source, "EffectiveLockAcquisitionModelObligation"
+        )
+        expected_statement = (
+            r"AcquisitionSpec => /\ []AcquisitionTypeInvariant "
+            r"/\ EffectiveLockAcquisitionProgress "
+            r"/\ StableEffectiveLockDelivery"
+        )
+        if theorem is None:
+            errors.append(
+                f"{proof_path}: missing EffectiveLockAcquisitionModelObligation"
+            )
+        else:
+            body, line = theorem
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            if " ".join(statement.split()) != expected_statement:
+                errors.append(
+                    f"{proof_path}:{line}: EffectiveLockAcquisitionModelObligation "
+                    "must state type closure plus both temporal properties"
+                )
+
+    acquisition_cfg = formal_dir / "effective_lock_acquisition.cfg"
+    if acquisition_cfg.is_file():
+        cfg_source = acquisition_cfg.read_text(encoding="utf-8")
+        for clause in (
+            "INVARIANT AcquisitionTypeInvariant\n",
+            "INVARIANT CompletionClassificationInvariant\n",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+            "PROPERTY StableEffectiveLockDelivery\n",
+        ):
+            if cfg_source.count(clause) != 1:
+                errors.append(
+                    f"{acquisition_cfg}: executable acquisition search must "
+                    f"contain exactly one {clause.strip()}"
+                )
+
+    if mutation_path.is_file():
+        mutation_source = mutation_path.read_text(encoding="utf-8")
+        mutation_contracts = {
+            "BuggyRebindSameLock": (
+                "StartPhysicalLoad(desiredSubject)",
+                "consumerGeneration' = nextGeneration",
+            ),
+            "NoRetryNext": (
+                r"CompleteOwnedLoad \/ RecoverDesiredBody",
+            ),
+            "BuggyPhysicalCompletionDisposition": (
+                "IF completionId # physicalId",
+                'THEN "Stale"',
+            ),
+            "BuggyFutureCompletionFailsClosed": (
+                "(physicalId + 1)..MaxAcquisitionId",
+                '= "FailClosed"',
+            ),
+        }
+        for symbol, clauses in mutation_contracts.items():
+            extracted = _top_level_operator_body(
+                mutation_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{mutation_path}: missing reviewed acquisition mutation {symbol}"
+                )
+                continue
+            normalized = " ".join(extracted[0].split())
+            for clause in clauses:
+                if clause not in normalized:
+                    errors.append(
+                        f"{mutation_path}:{extracted[1]}: {symbol} must retain "
+                        f"adversarial clause {clause!r}"
+                    )
+
+    mutation_cfg_contracts = {
+        "effective_lock_rebind_fixed.cfg": (
+            "SPECIFICATION CorrectRebindOnlySpec\n",
+            "INVARIANT AcquisitionTypeInvariant\n",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+        ),
+        "effective_lock_rebind_bug.cfg": (
+            "SPECIFICATION BuggyRebindOnlySpec\n",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+        ),
+        "effective_lock_no_retry_bug.cfg": (
+            "SPECIFICATION NoRetrySpec\n",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+        ),
+        "effective_lock_future_completion_bug.cfg": (
+            "INIT AcquisitionInit\n",
+            "NEXT AcquisitionNext\n",
+            "INVARIANT BuggyFutureCompletionFailsClosed\n",
+        ),
+    }
+    for name, clauses in mutation_cfg_contracts.items():
+        config_path = formal_dir / name
+        if not config_path.is_file():
+            errors.append(f"{config_path}: missing effective-lock mutation config")
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        for clause in clauses:
+            if config_source.count(clause) != 1:
+                errors.append(
+                    f"{config_path}: mutation config must contain exactly one "
+                    f"{clause.strip()}"
+                )
+    return errors
+
+
+def _causal_fifo_rank_mutation_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the Stage-6 doubled-FIFO arithmetic and its compact mutation."""
+
+    liveness_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    mutation_path = formal_dir / "SumeragiV2CausalFifoRankMutation.tla"
+    errors: list[str] = []
+
+    if not liveness_path.is_file():
+        errors.append(f"{liveness_path}: missing service-rank vocabulary")
+    else:
+        source = liveness_path.read_text(encoding="utf-8")
+        expected_operators = {
+            "LocalSourceDistance": (
+                'IF PreferredLocalSource(node) = source THEN 0 ELSE 1'
+            ),
+            "CausalCandidatePosition": (
+                "2 * CandidateSequenceIndex( candidate, "
+                "asyncCausalQueues[candidate.node]) + "
+                'LocalSourceDistance(candidate.node, "Causal")'
+            ),
+        }
+        for symbol, expected in expected_operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{liveness_path}: missing Stage-6 rank operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != expected:
+                errors.append(
+                    f"{liveness_path}:{line}: {symbol} must match the reviewed "
+                    "doubled-FIFO Stage-6 rank"
+                )
+
+    if not mutation_path.is_file():
+        errors.append(f"{mutation_path}: missing causal FIFO-rank mutation model")
+    else:
+        source = mutation_path.read_text(encoding="utf-8")
+        for exact_declaration in (
+            "CONSTANT RankMultiplier\n",
+            "ASSUME RankMultiplier \\in {1, 2}\n",
+        ):
+            if source.count(exact_declaration) != 1:
+                errors.append(
+                    f"{mutation_path}: mutation model must contain exactly one "
+                    f"{exact_declaration.strip()}"
+                )
+
+        expected_operators = {
+            "EarlierCandidate": (
+                '[node |-> "validator", class |-> "Progress", kind |-> "Earlier"]'
+            ),
+            "TargetCandidate": (
+                '[node |-> "validator", class |-> "Progress", kind |-> "Target"]'
+            ),
+            "CandidateSequenceIndex": (
+                "CHOOSE index \\in 1..Len(queue): queue[index] = candidate"
+            ),
+            "LocalSourceDistance": (
+                'IF preferredLocalSource = source THEN 0 ELSE 1'
+            ),
+            "CausalCandidatePosition": (
+                "RankMultiplier * CandidateSequenceIndex(candidate, causalQueue) "
+                '+ LocalSourceDistance("Causal")'
+            ),
+            "TargetRank": "CausalCandidatePosition(TargetCandidate)",
+            "InitialTargetRank": "RankMultiplier * 2",
+            "TypeInvariant": (
+                "/\\ causalQueue \\in {<<EarlierCandidate, TargetCandidate>>, "
+                "<<TargetCandidate>>} "
+                '/\\ preferredLocalSource \\in {"Causal", "Producer"} '
+                "/\\ earlierHeadRemoved \\in BOOLEAN "
+                "/\\ TargetCandidate \\in {causalQueue[index]: "
+                "index \\in 1..Len(causalQueue)}"
+            ),
+            "TargetIndexIsNatural": (
+                "CandidateSequenceIndex(TargetCandidate, causalQueue) \\in Nat"
+            ),
+            "Init": (
+                "/\\ causalQueue = <<EarlierCandidate, TargetCandidate>> "
+                '/\\ preferredLocalSource = "Causal" '
+                "/\\ earlierHeadRemoved = FALSE"
+            ),
+            "RemoveEarlierHead": (
+                "/\\ ~earlierHeadRemoved "
+                "/\\ causalQueue = <<EarlierCandidate, TargetCandidate>> "
+                "/\\ causalQueue' = Tail(causalQueue) "
+                "/\\ preferredLocalSource' = \"Producer\" "
+                "/\\ earlierHeadRemoved' = TRUE"
+            ),
+            "EarlierHeadRemovalStrictlyDropsTargetRank": (
+                "earlierHeadRemoved => TargetRank < InitialTargetRank"
+            ),
+        }
+        for symbol, expected in expected_operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{mutation_path}: missing reviewed FIFO-rank operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != expected:
+                errors.append(
+                    f"{mutation_path}:{line}: {symbol} must match the reviewed "
+                    "causal FIFO/cursor mutation"
+                )
+
+    config_contracts = {
+        "causal_fifo_rank_multiplier_one_bug.cfg": (
+            "CONSTANT RankMultiplier = 1\n"
+            "SPECIFICATION Spec\n"
+            "CHECK_DEADLOCK FALSE\n"
+            "INVARIANT TypeInvariant\n"
+            "INVARIANT TargetIndexIsNatural\n"
+            "INVARIANT EarlierHeadRemovalStrictlyDropsTargetRank\n"
+        ),
+        "causal_fifo_rank_doubled.cfg": (
+            "CONSTANT RankMultiplier = 2\n"
+            "SPECIFICATION Spec\n"
+            "CHECK_DEADLOCK FALSE\n"
+            "INVARIANT TypeInvariant\n"
+            "INVARIANT TargetIndexIsNatural\n"
+            "INVARIANT EarlierHeadRemovalStrictlyDropsTargetRank\n"
+        ),
+    }
+    for name, expected in config_contracts.items():
+        path = formal_dir / name
+        if not path.is_file():
+            errors.append(f"{path}: missing causal FIFO-rank mutation config")
+            continue
+        observed = path.read_text(encoding="utf-8")
+        if observed != expected:
+            errors.append(
+                f"{path}: causal FIFO-rank mutation config must equal the exact "
+                "reviewed TLC contract"
+            )
+    return errors
+
+
+def _causal_fifo_rank_mutation_runner_errors(repo_root: Path) -> list[str]:
+    """Pin the exact red/green TLC outcomes for the Stage-6 rank slice."""
+
+    path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    if not path.is_file():
+        return [f"{path}: missing protected-progress mutation runner"]
+    source = path.read_text(encoding="utf-8")
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    cases = (
+        (
+            "causal-fifo-rank-multiplier-one-bug",
+            "SumeragiV2CausalFifoRankMutation.tla",
+            "causal_fifo_rank_multiplier_one_bug.cfg",
+            "12",
+            (
+                "Invariant EarlierHeadRemovalStrictlyDropsTargetRank is violated.",
+                "State 2: <RemoveEarlierHead",
+                "earlierHeadRemoved = TRUE",
+                "2 states generated, 2 distinct states found, 0 states left on queue.",
+            ),
+        ),
+        (
+            "causal-fifo-rank-doubled",
+            "SumeragiV2CausalFifoRankMutation.tla",
+            "causal_fifo_rank_doubled.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "2 states generated, 2 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 2",
+            ),
+        ),
+    )
+    errors: list[str] = []
+    offsets: list[int] = []
+    for label, model, config, expected_status, markers in cases:
+        pattern = re.compile(
+            rf"run_case\s+{re.escape(label)}\s+"
+            rf"{re.escape(model)}\s+"
+            rf"{re.escape(config)}\s+{re.escape(expected_status)}\s+"
+            + r'(?P<markers>(?:"[^"\n]*"\s*)+)'
+        )
+        matches = list(pattern.finditer(normalized_source))
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: mutation runner must invoke {label} exactly once with "
+                f"status {expected_status}"
+            )
+            continue
+        match = matches[0]
+        offsets.append(match.start())
+        observed_markers = tuple(
+            re.findall(r'"([^"\n]*)"', match.group("markers"))
+        )
+        if observed_markers != markers:
+            errors.append(
+                f"{path}: {label} must require exact markers {markers!r}; "
+                f"found {observed_markers!r}"
+            )
+    if len(offsets) == len(cases) and offsets != sorted(offsets):
+        errors.append(
+            f"{path}: causal FIFO-rank cases must keep multiplier-one bug "
+            "before the doubled repair"
+        )
+    return errors
+
+
+def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[str]:
+    """Pin exact successor and effective-lock production mutation outcomes."""
+
+    path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    if not path.is_file():
+        return [f"{path}: missing protected-progress mutation runner"]
+    source = path.read_text(encoding="utf-8")
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    cases = (
+        (
+            "successor-stale-token-bug",
+            "SumeragiV2SuccessorStaleTokenMutation.tla",
+            "successor_stale_token_bug.cfg",
+            "12",
+            (
+                "Invariant SuccessorActivationProtocolInvariantProjection "
+                "is violated.",
+                "2 states generated, 2 distinct states found, 0 states left "
+                "on queue.",
+                "BuggyBeginSuccessorActivation",
+            ),
+        ),
+        (
+            "successor-stale-token-fixed",
+            "SumeragiV2SuccessorStaleTokenMutation.tla",
+            "successor_stale_token_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "2 states generated, 2 distinct states found, 0 states left "
+                "on queue.",
+                "depth of the complete state graph search is 2",
+            ),
+        ),
+        (
+            "effective-lock-rebind-fixed",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "effective_lock_rebind_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "10 distinct states",
+                "depth of the complete state graph search is 2",
+            ),
+        ),
+        (
+            "effective-lock-rebind-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "effective_lock_rebind_bug.cfg",
+            "12",
+            (
+                "Invariant ViewRebindKeepsOnePhysicalLoad is violated.",
+                "BuggyRebindSameLock",
+            ),
+        ),
+        (
+            "effective-lock-no-retry-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "effective_lock_no_retry_bug.cfg",
+            "13",
+            (
+                "Temporal properties were violated.",
+                "5 distinct states",
+                "State 4: Stuttering",
+            ),
+        ),
+        (
+            "effective-lock-future-completion-bug",
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "effective_lock_future_completion_bug.cfg",
+            "12",
+            (
+                "Invariant BuggyFutureCompletionFailsClosed is violated by the "
+                "initial state",
+            ),
+        ),
+    )
+    errors: list[str] = []
+    offsets: list[int] = []
+    for label, model, config, expected_status, markers in cases:
+        pattern = re.compile(
+            rf"run_case\s+{re.escape(label)}\s+"
+            rf"{re.escape(model)}\s+"
+            rf"{re.escape(config)}\s+{re.escape(expected_status)}\s+"
+            + r"(?P<markers>(?:\"[^\"\n]*\"\s*)+)"
+        )
+        matches = list(pattern.finditer(normalized_source))
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: mutation runner must invoke {label} exactly once with "
+                f"status {expected_status}"
+            )
+            continue
+        match = matches[0]
+        offsets.append(match.start())
+        marker_source = match.group("markers")
+        observed_markers = tuple(re.findall(r'"([^"\n]*)"', marker_source))
+        if observed_markers != markers:
+            errors.append(
+                f"{path}: {label} must require exact markers {markers!r}; "
+                f"found {observed_markers!r}"
+            )
+    if len(offsets) == len(cases) and offsets != sorted(offsets):
+        errors.append(
+            f"{path}: successor stale-token cases must keep bug-before-fixed "
+            "order, followed by fixed-before-bug effective-lock order"
+        )
+    return errors
+
+
+def _effect_capacity_mutation_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the complete bounded effect-capacity mutation corpus by digest."""
+
+    errors: list[str] = []
+    expected_formal = set(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS)
+    expected_all = expected_formal | {EFFECT_CAPACITY_MUTATION_RUNNER}
+    digest_names = set(EFFECT_CAPACITY_MUTATION_SHA256)
+    model_count = sum(name.endswith(".tla") for name in expected_formal)
+    config_count = sum(name.endswith(".cfg") for name in expected_formal)
+    if (
+        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 23
+        or model_count != 4
+        or config_count != 19
+    ):
+        errors.append(
+            "effect-capacity mutation source seal must name exactly four models "
+            "and nineteen configurations; found "
+            f"models={model_count}, configurations={config_count}, "
+            f"total={len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS)}"
+        )
+    if digest_names != expected_all:
+        errors.append(
+            "effect-capacity mutation digest inventory must equal the exact "
+            f"24-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"extra={sorted(digest_names - expected_all)}"
+        )
+
+    observed_formal: set[str] = set()
+    for pattern in EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS:
+        observed_formal.update(path.name for path in formal_dir.glob(pattern))
+    for name in sorted(expected_formal - observed_formal):
+        errors.append(
+            f"{formal_dir / name}: missing effect-capacity mutation artifact"
+        )
+    for name in sorted(observed_formal - expected_formal):
+        errors.append(
+            f"{formal_dir / name}: extra effect-capacity mutation artifact"
+        )
+
+    runner_dir = repo_root / "scripts" / "formal"
+    observed_runners = {
+        path.relative_to(repo_root).as_posix()
+        for path in runner_dir.glob(
+            "run_sumeragi_v2_effect_capacity*_mutation.sh"
+        )
+    }
+    expected_runners = {EFFECT_CAPACITY_MUTATION_RUNNER}
+    for name in sorted(expected_runners - observed_runners):
+        errors.append(
+            f"{repo_root / name}: missing effect-capacity mutation runner"
+        )
+    for name in sorted(observed_runners - expected_runners):
+        errors.append(
+            f"{repo_root / name}: extra effect-capacity mutation runner"
+        )
+
+    for name, expected_sha256 in EFFECT_CAPACITY_MUTATION_SHA256.items():
+        path = repo_root / name if "/" in name else formal_dir / name
+        if not path.is_file() or path.is_symlink():
+            if path.exists() or path.is_symlink():
+                errors.append(
+                    f"{path}: effect-capacity mutation artifact must be a regular file"
+                )
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: effect-capacity mutation artifact must match exact "
+                f"reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+    return errors
+
+
+def _post_decision_timeout_mutation_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Seal the complete bounded post-Decision timeout mutation corpus."""
+
+    errors: list[str] = []
+    expected_formal = set(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS)
+    expected_all = expected_formal | {POST_DECISION_TIMEOUT_MUTATION_RUNNER}
+    digest_names = set(POST_DECISION_TIMEOUT_MUTATION_SHA256)
+    model_count = sum(name.endswith(".tla") for name in expected_formal)
+    config_count = sum(name.endswith(".cfg") for name in expected_formal)
+    if (
+        len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) != 9
+        or model_count != 1
+        or config_count != 8
+    ):
+        errors.append(
+            "post-Decision timeout mutation source seal must name exactly one "
+            "model and eight configurations; found "
+            f"models={model_count}, configurations={config_count}, "
+            f"total={len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS)}"
+        )
+    if digest_names != expected_all:
+        errors.append(
+            "post-Decision timeout mutation digest inventory must equal the "
+            f"exact 10-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"extra={sorted(digest_names - expected_all)}"
+        )
+
+    observed_formal = {
+        path.name
+        for pattern in (
+            "SumeragiV2PostDecision*.tla",
+            "post_decision_*.cfg",
+        )
+        for path in formal_dir.glob(pattern)
+    }
+    for name in sorted(expected_formal - observed_formal):
+        errors.append(
+            f"{formal_dir / name}: missing post-Decision timeout mutation artifact"
+        )
+    for name in sorted(observed_formal - expected_formal):
+        errors.append(
+            f"{formal_dir / name}: extra post-Decision timeout mutation artifact"
+        )
+
+    runner_dir = repo_root / "scripts" / "formal"
+    observed_runners = {
+        path.relative_to(repo_root).as_posix()
+        for path in runner_dir.glob(
+            "run_sumeragi_v2_post_decision*_mutation.sh"
+        )
+    }
+    expected_runners = {POST_DECISION_TIMEOUT_MUTATION_RUNNER}
+    for name in sorted(expected_runners - observed_runners):
+        errors.append(
+            f"{repo_root / name}: missing post-Decision timeout mutation runner"
+        )
+    for name in sorted(observed_runners - expected_runners):
+        errors.append(
+            f"{repo_root / name}: extra post-Decision timeout mutation runner"
+        )
+
+    for name, expected_sha256 in POST_DECISION_TIMEOUT_MUTATION_SHA256.items():
+        path = repo_root / name if "/" in name else formal_dir / name
+        if not path.is_file() or path.is_symlink():
+            if path.exists() or path.is_symlink():
+                errors.append(
+                    f"{path}: post-Decision timeout mutation artifact must be a "
+                    "regular file"
+                )
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: post-Decision timeout mutation artifact must match "
+                f"exact reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+    return errors
+
+
+def _production_causal_fifo_source_fidelity_errors(
+    formal_dir: Path = FORMAL_DIR,
+) -> list[str]:
+    """Pin the real persisted-continuation and projected causal-FIFO seam."""
+
+    repo_root = formal_dir.parents[2]
+    errors: list[str] = []
+
+    adapter_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    if not adapter_path.is_file():
+        errors.append(f"{adapter_path}: production adapter source is required")
+    else:
+        adapter_source = adapter_path.read_text(encoding="utf-8")
+        drive = _require_rust_item(
+            adapter_path, adapter_source, "drive_effects", errors
+        )
+        _require_rust_item_context(
+            adapter_path,
+            drive,
+            (("impl", "SumeragiV2Adapter"),),
+            "drive_effects adapter method",
+            errors,
+        )
+        if drive is not None:
+            expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
+                "drive_effects"
+            ]
+            observed_sha256 = _rust_item_token_sha256(drive)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{adapter_path}:{drive.line}: drive_effects declaration, "
+                    "contract, and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found {observed_sha256}"
+                )
+        drive_contract = (
+            "while let Some(effect) = pending.pop_front()",
+            "self.wal.append(&payload)",
+            "let persisted = reducer::Event::Persisted { tag, id };",
+            "let continuation = match self.reducer.step(persisted.clone())",
+            "reducer::prepend_causal_continuation("
+            "&mut pending, continuation.into_effects());",
+        )
+        drive_tokens = () if drive is None else rust_code_tokens(drive.source)
+        drive_positions: list[int] = []
+        for contract in drive_contract:
+            contract_tokens = rust_code_tokens(contract)
+            positions = [
+                index
+                for index in range(len(drive_tokens) - len(contract_tokens) + 1)
+                if drive_tokens[index : index + len(contract_tokens)]
+                == contract_tokens
+            ]
+            if len(positions) != 1:
+                errors.append(
+                    f"{adapter_path}: drive_effects must contain exactly one "
+                    f"reviewed causal-persistence token sequence {contract!r}; "
+                    f"found {len(positions)}"
+                )
+            else:
+                drive_positions.append(positions[0])
+        if len(drive_positions) == len(drive_contract) and drive_positions != sorted(
+            drive_positions
+        ):
+            errors.append(
+                f"{adapter_path}: drive_effects must append the WAL record, deliver "
+                "Persisted, and prepend its continuation in the reviewed order"
+            )
+
+        tc_test = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "tc_promoted_historical_commit_is_fsynced_before_sign_and_status",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            tc_test,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "strengthened TC-order regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        if tc_test is not None:
+            expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
+                "tc_promoted_historical_commit_is_fsynced_before_sign_and_status"
+            ]
+            observed_sha256 = _rust_item_token_sha256(tc_test)
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{adapter_path}:{tc_test.line}: strengthened TC regression "
+                    "declaration and complete control flow must match the exact "
+                    f"reviewed token digest {expected_sha256}; found {observed_sha256}"
+                )
+        exact_tc_block = r"""
+assert!(
+    installed.iter().all(|effect| !matches!(effect, AdapterEffect::Sign { .. })),
+    "the TC cannot expose Commit signing before local body validation"
+);
+let fetch_tag = match installed.as_slice() {
+    [
+        AdapterEffect::EnterView {
+            tag: enter_tag,
+            protected_body: Some((protected_round, protected_subject)),
+            ..
+        },
+        AdapterEffect::FetchBody {
+            tag,
+            round: fetched_round,
+            subject: fetched_subject,
+            certificate: Some(certificate),
+            ..
+        },
+    ] if enter_tag == tag
+        && *protected_round == round
+        && *protected_subject == subject
+        && *fetched_round == round
+        && *fetched_subject == subject
+        && certificate.as_ref() == prepare.as_ref() =>
+    {
+        *tag
+    }
+    effects => panic!(
+        "TC acknowledgement must expose EnterView before its exact body fetch: {effects:?}"
+    ),
+};
+"""
+        _require_rust_token_sequence(
+            adapter_path,
+            tc_test,
+            exact_tc_block,
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+            errors,
+        )
+        exact_tc_body_pipeline = r"""
+assert!(matches!(
+    adapter
+        .body_available(fetch_tag, manifest)
+        .expect("recover the TC-protected body")
+        .effects(),
+    [AdapterEffect::StoreBody {
+        tag,
+        round: stored_round,
+        subject: stored_subject,
+    }] if *tag == fetch_tag
+        && *stored_round == round
+        && *stored_subject == subject
+));
+assert!(matches!(
+    adapter
+        .body_stored(fetch_tag, round, subject, &durable)
+        .expect("store the TC-protected body")
+        .effects(),
+    [AdapterEffect::ValidateBody {
+        tag,
+        round: validated_round,
+        subject: validated_subject,
+    }] if *tag == fetch_tag
+        && *validated_round == round
+        && *validated_subject == subject
+));
+"""
+        _require_rust_token_sequence(
+            adapter_path,
+            tc_test,
+            exact_tc_body_pipeline,
+            "TC regression must pin exact StoreBody/ValidateBody tags, rounds, and subjects",
+            errors,
+        )
+        exact_tc_commit_witness = r"""
+let sign = adapter
+    .validation_succeeded(fetch_tag, round, subject, &validated)
+    .expect("validated TC lock crosses the historical Commit WAL boundary")
+    .into_effects();
+let commit_vote = match sign.as_slice() {
+    [
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        },
+    ] if *tag == fetch_tag
+        && vote.round == round
+        && vote.phase == wire::GlobalPhase::Commit
+        && vote.subject == subject
+        && vote.execution_commitment == execution_commitment
+        && vote.signer == 0 =>
+    {
+        vote
+    }
+    effects => panic!("unexpected historical Commit effects: {effects:?}"),
+};
+assert!(commit_vote.signature.is_empty());
+assert_eq!(
+    adapter.wal.recovered_records().len(),
+    3,
+    "LockAndCommit must be fsynced before the adapter returns Sign"
+);
+assert_eq!(adapter.reducer.durable_state().last_id().get(), 3);
+let core_round = reducer::Round::new(round.height, round.view);
+let core_commit_vote = adapter
+    .registry
+    .vote_to_core(commit_vote, &adapter.wire_context)
+    .expect("convert the exact emitted Commit vote");
+assert_eq!(
+    adapter.reducer.durable_state().commit_intent(core_round),
+    Some(core_commit_vote.vote()),
+    "the acknowledged WAL frame is the signing authority"
+);
+let status = adapter.status().expect("historical Commit status");
+assert!(status.liveness.outbound_intents.iter().any(|intent| {
+    intent.kind == wire::SumeragiV2OutboundIntentKind::CommitVote
+        && intent.round == round
+        && intent.subject == Some(subject)
+        && intent.execution_commitment == Some(execution_commitment)
+        && intent.stage == wire::SumeragiV2OutboundIntentStage::PendingSignature
+}));
+"""
+        _require_rust_token_sequence(
+            adapter_path,
+            tc_test,
+            exact_tc_commit_witness,
+            "TC regression must pin the post-validation Commit signing authority, WAL, and status witness",
+            errors,
+        )
+        tc_pipeline = (
+            "adapter.body_available(fetch_tag, manifest)",
+            "adapter.body_stored(fetch_tag, round, subject, &durable)",
+            "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
+        )
+        tc_tokens = () if tc_test is None else rust_code_tokens(tc_test.source)
+        tc_positions: list[int] = []
+        for contract in tc_pipeline:
+            contract_tokens = rust_code_tokens(contract)
+            positions = [
+                index
+                for index in range(len(tc_tokens) - len(contract_tokens) + 1)
+                if tc_tokens[index : index + len(contract_tokens)] == contract_tokens
+            ]
+            if len(positions) != 1:
+                errors.append(
+                    f"{adapter_path}: strengthened TC regression must contain "
+                    f"exactly one {contract}; found {len(positions)}"
+                )
+            else:
+                tc_positions.append(positions[0])
+        if len(tc_positions) == len(tc_pipeline) and tc_positions != sorted(tc_positions):
+            errors.append(
+                f"{adapter_path}: strengthened TC regression must recover, store, "
+                "and validate the protected body in order"
+            )
+
+    refinement_path = (
+        repo_root / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    )
+    if not refinement_path.is_file():
+        errors.append(
+            f"{refinement_path}: source-linked causal FIFO kernel is required"
+        )
+    else:
+        refinement_source = refinement_path.read_text(encoding="utf-8")
+        helper = _require_rust_item(
+            refinement_path,
+            refinement_source,
+            "prepend_causal_continuation",
+            errors,
+        )
+        _require_rust_item_context(
+            refinement_path,
+            helper,
+            (),
+            "prepend_causal_continuation kernel",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            refinement_path,
+            helper,
+            """
+pub fn prepend_causal_continuation<T>(
+    pending: &mut VecDeque<T>,
+    continuation: Vec<T>
+) {
+    for item in continuation.into_iter().rev() {
+        pending.push_front(item);
+    }
+}
+""",
+            "prepend_causal_continuation reverse-iteration/push-front FIFO kernel",
+            errors,
+        )
+
+    core_path = repo_root / "crates/iroha_core/src/sumeragi/v2_core.rs"
+    if not core_path.is_file():
+        errors.append(f"{core_path}: causal FIFO kernel export is required")
+    else:
+        core_source = core_path.read_text(encoding="utf-8")
+        export_prefix = rust_code_tokens("pub(crate) use refinement::{")
+        refinement_exports = [
+            statement
+            for statement in rust_top_level_statements(core_source)
+            if statement.tokens[: len(export_prefix)] == export_prefix
+        ]
+        if len(refinement_exports) != 1:
+            errors.append(
+                f"{core_path}: require exactly one direct top-level "
+                "pub(crate) use refinement::{...} export; found "
+                f"{len(refinement_exports)}"
+            )
+        else:
+            export = refinement_exports[0]
+            if export.ancestor_inner_attributes:
+                errors.append(
+                    f"{core_path}:{export.line}: the real top-level refinement "
+                    "export may not be suppressed by file/module/ancestor inner "
+                    "cfg/cfg_attr attributes: "
+                    f"{export.ancestor_inner_attributes!r}"
+                )
+            export_count = _token_sequence_count(
+                export.tokens, rust_code_tokens("prepend_causal_continuation,")
+            )
+            if export_count != 1:
+                errors.append(
+                    f"{core_path}:{export.line}: the real top-level refinement "
+                    "export must name prepend_causal_continuation exactly once; "
+                    f"found {export_count}"
+                )
+
+    verus_path = repo_root / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    if not verus_path.is_file():
+        errors.append(
+            f"{verus_path}: production causal FIFO refinement proof is required"
+        )
+    else:
+        verus_source = verus_path.read_text(encoding="utf-8")
+        reverse_spec = _require_rust_item(
+            verus_path,
+            verus_source,
+            "production_reverse_push_front",
+            errors,
+        )
+        _require_rust_item_context(
+            verus_path,
+            reverse_spec,
+            (("verus", "!"),),
+            "production reverse-push-front projection",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            verus_path,
+            reverse_spec,
+            """
+pub open spec fn production_reverse_push_front(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+) -> Seq<int> {
+    continuation.reverse().reverse().add(old_tail)
+}
+""",
+            "production reverse-push-front projection",
+            errors,
+        )
+        reverse_theorem = _require_rust_item(
+            verus_path,
+            verus_source,
+            "production_reverse_push_front_refines_fifo",
+            errors,
+        )
+        _require_rust_item_context(
+            verus_path,
+            reverse_theorem,
+            (("verus", "!"),),
+            "production reverse-push-front FIFO theorem",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            verus_path,
+            reverse_theorem,
+            """
+pub proof fn production_reverse_push_front_refines_fifo(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+)
+    ensures
+        production_reverse_push_front(old_tail, continuation)
+            =~= continuation.add(old_tail),
+{
+    assert(continuation.reverse().reverse() =~= continuation);
+}
+""",
+            "production reverse-push-front FIFO theorem",
+            errors,
+        )
+        fresh_spec = _require_rust_item(
+            verus_path,
+            verus_source,
+            "production_fresh_causal_successors",
+            errors,
+        )
+        _require_rust_item_context(
+            verus_path,
+            fresh_spec,
+            (("verus", "!"),),
+            "stable first-owner causal-successor filter",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            verus_path,
+            fresh_spec,
+            """
+pub open spec fn production_fresh_causal_successors(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors(owned, remaining)
+        } else {
+            seq![candidate].add(production_fresh_causal_successors(
+                owned.insert(candidate),
+                remaining,
+            ))
+        }
+    }
+}
+""",
+            "stable first-owner causal-successor filter",
+            errors,
+        )
+        batch_spec = _require_rust_item(
+            verus_path,
+            verus_source,
+            "production_async_causal_fifo_after_batch",
+            errors,
+        )
+        _require_rust_item_context(
+            verus_path,
+            batch_spec,
+            (("verus", "!"),),
+            "conditional abstract causal-FIFO tail append",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            verus_path,
+            batch_spec,
+            """
+pub open spec fn production_async_causal_fifo_after_batch(
+    old_queue: Seq<int>,
+    owned: Set<int>,
+    emitted: Seq<int>,
+) -> Seq<int> {
+    old_queue.add(production_fresh_causal_successors(owned, emitted))
+}
+""",
+            "conditional abstract causal-FIFO tail append",
+            errors,
+        )
+        for theorem_name, expected_sha256 in (
+            _PRODUCTION_CAUSAL_FIFO_VERUS_ITEM_SHA256.items()
+        ):
+            theorem = _require_rust_item(
+                verus_path, verus_source, theorem_name, errors
+            )
+            _require_rust_item_context(
+                verus_path,
+                theorem,
+                (("verus", "!"),),
+                theorem_name,
+                errors,
+            )
+            if theorem is not None:
+                observed_sha256 = _rust_item_token_sha256(theorem)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{verus_path}:{theorem.line}: {theorem_name} declaration, "
+                        "contract, and body must match the exact reviewed token "
+                        f"digest {expected_sha256}; found {observed_sha256}"
+                    )
+
+    verify_path = repo_root / "scripts/verify_sumeragi_v2.sh"
+    if not verify_path.is_file():
+        errors.append(
+            f"{verify_path}: pinned Verus root-condition inventory is required"
+        )
+    else:
+        verify_source = verify_path.read_text(encoding="utf-8")
+        focused_guard = re.findall(
+            r'(?m)^[ \t]*python3 "\$REPO_ROOT/scripts/formal/'
+            r'check_sumeragi_v2_proof_ledger\.py" '
+            r'--check-production-causal-fifo[ \t]*$',
+            verify_source,
+        )
+        if len(focused_guard) != 1:
+            errors.append(
+                f"{verify_path}: pinned Verus runner must invoke the focused "
+                "production causal-FIFO checker exactly once in executable shell code"
+            )
+
+    verification_doc_path = repo_root / "crates/iroha_sumeragi_core/VERIFICATION.md"
+    if not verification_doc_path.is_file():
+        errors.append(
+            f"{verification_doc_path}: conditional causal FIFO proof boundary "
+            "documentation is required"
+        )
+    else:
+        verification_doc = verification_doc_path.read_text(encoding="utf-8")
+        required_boundary_text = (
+            "prepend_causal_continuation",
+            "production_reverse_push_front_refines_fifo",
+            "first-owner filter remains conditional: `drive_effects` does not itself own",
+            "TODO: discharge the remaining machine-checked production effect-to-TLA",
+            "candidate identity/ownership mapping and the Completion-capacity",
+            "product-rank proof before promoting this seam",
+        )
+        missing = [
+            fragment
+            for fragment in required_boundary_text
+            if verification_doc.count(fragment) != 1
+        ]
+        if missing:
+            errors.append(
+                f"{verification_doc_path}: conditional causal FIFO boundary "
+                f"omits exact source-bound text {missing}"
+            )
+
     return errors
 
 
@@ -4386,45 +7305,45 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
     else:
         adapter_source = adapter_path.read_text(encoding="utf-8")
-        step_start = adapter_source.find("fn step_with_defer_policy(")
-        step_end = adapter_source.find("\n    fn record_ingress_delivery(", step_start)
-        step_body = (
-            ""
-            if step_start < 0 or step_end < 0
-            else adapter_source[step_start:step_end]
+        step = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "step_with_defer_policy",
+            errors,
         )
-        reducer_step = step_body.find("let outcome = self.reducer.step(event)?;")
-        causal_drive = step_body.find(
-            "self.drive_effects(outcome.into_effects())?", reducer_step
+        _require_rust_item_context(
+            adapter_path,
+            step,
+            (("impl", "SumeragiV2Adapter"),),
+            "step_with_defer_policy adapter method",
+            errors,
         )
-        if not (0 <= reducer_step < causal_drive):
+        step_tokens = () if step is None else rust_code_tokens(step.source)
+        reducer_tokens = rust_code_tokens("let outcome = self.reducer.step(event)?;")
+        drive_tokens = rust_code_tokens(
+            "self.drive_effects(outcome.into_effects())?"
+        )
+        reducer_positions = [
+            index
+            for index in range(len(step_tokens) - len(reducer_tokens) + 1)
+            if step_tokens[index : index + len(reducer_tokens)] == reducer_tokens
+        ]
+        drive_positions = [
+            index
+            for index in range(len(step_tokens) - len(drive_tokens) + 1)
+            if step_tokens[index : index + len(drive_tokens)] == drive_tokens
+        ]
+        if not (
+            len(reducer_positions) == 1
+            and len(drive_positions) == 1
+            and reducer_positions[0] < drive_positions[0]
+        ):
             errors.append(
                 f"{adapter_path}: reducer effects must enter drive_effects "
                 "synchronously before outer ingress resumes"
             )
 
-        drive_start = adapter_source.find("fn drive_effects(")
-        drive_end = adapter_source.find("\n    fn convert_effect(", drive_start)
-        drive_body = (
-            ""
-            if drive_start < 0 or drive_end < 0
-            else adapter_source[drive_start:drive_end]
-        )
-        drive_markers = (
-            "while let Some(effect) = pending.pop_front()",
-            "self.wal.append(&payload)",
-            "let persisted = reducer::Event::Persisted { tag, id }",
-            "self.reducer.step(persisted.clone())",
-            "pending.push_front(effect)",
-        )
-        positions = [drive_body.find(marker) for marker in drive_markers]
-        if any(position < 0 for position in positions) or positions != sorted(
-            positions
-        ):
-            errors.append(
-                f"{adapter_path}: drive_effects must synchronously consume "
-                "WAL Persisted continuations in emitted order"
-            )
+    errors.extend(_production_causal_fifo_source_fidelity_errors(formal_dir))
 
     effects_path = (
         formal_dir.parents[2]
@@ -4441,25 +7360,191 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
     else:
         effects_source = effects_path.read_text(encoding="utf-8")
-        consume_start = effects_source.find("fn consume_effects")
-        consume_end = effects_source.find(
-            "\n    /// Consume only the local", consume_start
+        executor_context = (
+            (
+                "impl",
+                "<",
+                "R",
+                ":",
+                "EffectRuntime",
+                ">",
+                "V2EffectExecutor",
+                "<",
+                "R",
+                ">",
+            ),
         )
-        consume_body = (
-            ""
-            if consume_start < 0 or consume_end < 0
-            else effects_source[consume_start:consume_end]
-        )
-        effect_loop = consume_body.find("for effect in effects")
-        consume_one = consume_body.find("self.consume_one(effect, services)")
-        step_dispatch = effects_source.find(
-            "let count = self.consume_effects(effects, services)?;"
-        )
-        if not (0 <= effect_loop < consume_one and step_dispatch >= 0):
-            errors.append(
-                f"{effects_path}: every AdapterEffect must be consumed in "
-                "vector order before the executor returns"
+        executor_items: dict[str, RustItem | None] = {}
+        for item_name in _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256:
+            item = _require_rust_item(
+                effects_path,
+                effects_source,
+                item_name,
+                errors,
             )
+            executor_items[item_name] = item
+            _require_rust_item_context(
+                effects_path,
+                item,
+                executor_context,
+                f"retained effect FIFO {item_name} method",
+                errors,
+            )
+            if item is not None:
+                expected_sha256 = _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[
+                    item_name
+                ]
+                observed_sha256 = _rust_item_token_sha256(item)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{effects_path}:{item.line}: retained effect FIFO "
+                        f"{item_name} declaration and complete control flow must "
+                        "match the exact reviewed token digest "
+                        f"{expected_sha256}; found {observed_sha256}"
+                    )
+
+        consume = executor_items["consume_effects"]
+        _require_rust_token_sequence(
+            effects_path,
+            consume,
+            """
+if let Err(error) = self.retain_effect_batch(effects) {
+    return Err(self.close(error, services));
+}
+self.drain_retained_effect_batch(services)
+    .map_err(|error| self.close(error, services))
+""",
+            "consume_effects must retain the complete reducer batch before draining it",
+            errors,
+        )
+        if consume is not None:
+            consume_tokens = rust_code_tokens(consume.source)
+            retain_tokens = rust_code_tokens("self.retain_effect_batch(effects)")
+            drain_tokens = rust_code_tokens(
+                "self.drain_retained_effect_batch(services)"
+            )
+            retain_positions = [
+                index
+                for index in range(len(consume_tokens) - len(retain_tokens) + 1)
+                if consume_tokens[index : index + len(retain_tokens)] == retain_tokens
+            ]
+            drain_positions = [
+                index
+                for index in range(len(consume_tokens) - len(drain_tokens) + 1)
+                if consume_tokens[index : index + len(drain_tokens)] == drain_tokens
+            ]
+            if not (
+                len(retain_positions) == 1
+                and len(drain_positions) == 1
+                and retain_positions[0] < drain_positions[0]
+            ):
+                errors.append(
+                    f"{effects_path}:{consume.line}: consume_effects must retain "
+                    "exactly once before its one retained-batch drain"
+                )
+
+        drain = executor_items["drain_retained_effect_batch"]
+        _require_rust_token_sequence(
+            effects_path,
+            drain,
+            """
+let Some(effect) = self
+    .retained_effect_batch
+    .as_ref()
+    .and_then(|batch| batch.effects.front())
+    .cloned()
+else {
+    break;
+};
+""",
+            "retained dispatch must clone only the FIFO head",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            drain,
+            """
+Err(EffectExecutorError::PendingWorkCapacity { .. }) => {
+    debug_assert!(pending_work_producer.is_some());
+    break;
+}
+""",
+            "pending-work capacity retry must leave the FIFO head retained and stop",
+            errors,
+        )
+        if drain is not None:
+            drain_tokens = rust_code_tokens(drain.source)
+            fifo_fragments = (
+                rust_code_tokens("batch.effects.front()"),
+                rust_code_tokens("self.consume_one(effect, services)"),
+                rust_code_tokens("batch.effects.pop_front()"),
+            )
+            fifo_positions: list[int] = []
+            fifo_cardinality_ok = True
+            for fragment in fifo_fragments:
+                positions = [
+                    index
+                    for index in range(len(drain_tokens) - len(fragment) + 1)
+                    if drain_tokens[index : index + len(fragment)] == fragment
+                ]
+                if len(positions) != 1:
+                    fifo_cardinality_ok = False
+                else:
+                    fifo_positions.append(positions[0])
+            if not (
+                fifo_cardinality_ok
+                and len(fifo_positions) == len(fifo_fragments)
+                and fifo_positions == sorted(fifo_positions)
+            ):
+                errors.append(
+                    f"{effects_path}:{drain.line}: retained effect dispatch must "
+                    "read front, consume_one, and pop_front exactly once in FIFO order"
+                )
+
+        step = executor_items["step"]
+        _require_rust_token_sequence(
+            effects_path,
+            step,
+            """
+if self.retained_effect_batch.is_some() {
+    let count = self
+        .drain_retained_effect_batch(services)
+        .map_err(|error| self.close(error, services))?;
+    return Ok(if count == 0 {
+        EffectExecutorStep::Idle
+    } else {
+        EffectExecutorStep::Advanced { effects: count }
+    });
+}
+""",
+            "step must drain retained causal debt and return before runtime stepping",
+            errors,
+        )
+        if step is not None:
+            step_tokens = rust_code_tokens(step.source)
+            drain_tokens = rust_code_tokens(
+                "self.drain_retained_effect_batch(services)"
+            )
+            runtime_tokens = rust_code_tokens("self.runtime.step_effects(now)")
+            drain_positions = [
+                index
+                for index in range(len(step_tokens) - len(drain_tokens) + 1)
+                if step_tokens[index : index + len(drain_tokens)] == drain_tokens
+            ]
+            runtime_positions = [
+                index
+                for index in range(len(step_tokens) - len(runtime_tokens) + 1)
+                if step_tokens[index : index + len(runtime_tokens)] == runtime_tokens
+            ]
+            if not (
+                len(drain_positions) == 1
+                and len(runtime_positions) == 1
+                and drain_positions[0] < runtime_positions[0]
+            ):
+                errors.append(
+                    f"{effects_path}:{step.line}: step must drain retained "
+                    "causal debt before its single runtime step"
+                )
 
     regular = _top_level_operator_body(
         source, "RegularCoreCommand", preserve_string_contents=True
@@ -5012,6 +8097,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "crash_replay_signature_fixed.cfg",
         "crash_replay_body_fixed.cfg",
         "crash_replay_application_fixed.cfg",
+        "crash_replay_signature_volatile_bug.cfg",
         "crash_replay_signature_drop_bug.cfg",
         "crash_replay_body_drop_bug.cfg",
         "crash_replay_application_drop_bug.cfg",
@@ -5031,6 +8117,22 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{config_path}: crash/replay TLC search must retain "
                     f"{invariant}"
                 )
+        required_witness = {
+            "crash_replay_signature_fixed.cfg": (
+                "CrashAwareSignatureProgressWitness"
+            ),
+            "crash_replay_signature_volatile_bug.cfg": (
+                "VolatileSignatureProgressWitness"
+            ),
+        }.get(config_name)
+        if (
+            required_witness is not None
+            and f"INVARIANT {required_witness}\n" not in config_source
+        ):
+            errors.append(
+                f"{config_path}: signature crash/replay search must check "
+                f"{required_witness}"
+            )
     return errors
 
 
@@ -5477,6 +8579,242 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     return errors
 
 
+def _successor_stale_token_mutation_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the depth-one stale-token successor-start mutation witness."""
+
+    model_path = formal_dir / "SumeragiV2SuccessorStaleTokenMutation.tla"
+    bug_cfg_path = formal_dir / "successor_stale_token_bug.cfg"
+    fixed_cfg_path = formal_dir / "successor_stale_token_fixed.cfg"
+    errors: list[str] = []
+
+    for path in (model_path, bug_cfg_path, fixed_cfg_path):
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: missing required successor stale-token mutation artifact"
+            )
+    if not model_path.is_file() or model_path.is_symlink():
+        return errors
+
+    source = model_path.read_text(encoding="utf-8")
+
+    def require_operator(
+        symbol: str,
+        *,
+        required: tuple[str, ...] = (),
+        forbidden: tuple[str, ...] = (),
+        exact: str | None = None,
+    ) -> None:
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{model_path}: missing mutation operator {symbol}")
+            return
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if exact is not None and normalized != exact:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} must equal "
+                f"only {exact!r}; found {normalized!r}"
+            )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} omits "
+                f"required stale-token behavior {missing}"
+            )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{model_path}:{line}: mutation operator {symbol} contains "
+                f"prohibited repaired behavior {present}"
+            )
+
+    require_operator(
+        "AppliedSuccessorActivationToken",
+        exact=(
+            '[kind |-> "Applied", parentContext |-> "Parent", '
+            'node |-> "Node", successorContext |-> "Successor"]'
+        ),
+    )
+    require_operator(
+        "ExactDurableParentApplicationWitness",
+        exact="TRUE",
+    )
+    require_operator(
+        "SuccessorActivationPipelineDistance",
+        required=(
+            'CASE activationStatus = "Queued" -> IF '
+            "activationFailureHistoryPresent THEN 9 ELSE 10",
+            '/\\ activationStatus = "Running" /\\ '
+            "~SuccessorActivationCredentialReady -> 9",
+            "/\\ SuccessorActivationCredentialReady /\\ "
+            "activationPrerequisites = {} -> 8",
+            "[] OTHER -> 0",
+        ),
+    )
+    require_operator(
+        "SuccessorActivationRank",
+        exact=(
+            "IF ~activationFailureHistoryPresent THEN 9 + "
+            "SuccessorActivationPipelineDistance ELSE "
+            "SuccessorActivationPipelineDistance"
+        ),
+    )
+    require_operator(
+        "MutationTypeInvariant",
+        required=(
+            "activationPrerequisites \\subseteq "
+            "SuccessorActivationRequiredPrerequisites",
+            "activationTokens \\subseteq {AppliedSuccessorActivationToken}",
+            "previousRank \\in 0..19",
+        ),
+    )
+    require_operator(
+        "SuccessorActivationProtocolInvariantProjection",
+        exact=(
+            "/\\ MutationTypeInvariant "
+            "/\\ ExactDurableParentApplicationWitness "
+            "/\\ (activationFailureHistoryPresent => "
+            'predecessorOwnership = "Absent") '
+            "/\\ SuccessorActivationPipelineDistance \\in 1..10"
+        ),
+    )
+    require_operator(
+        "StaleAppliedTokenState",
+        exact=(
+            '/\\ activationStatus = "Queued" '
+            '/\\ predecessorOwnership = "Published" '
+            '/\\ activationPrerequisites = {"IngressOpen"} '
+            "/\\ activationTokens = {AppliedSuccessorActivationToken} "
+            "/\\ ~activationFailurePresent "
+            "/\\ ~activationFailureHistoryPresent"
+        ),
+    )
+    require_operator(
+        "StaleAppliedTokenInit",
+        exact=(
+            '/\\ StaleAppliedTokenState /\\ lastTransition = "Initial" '
+            "/\\ previousRank = 19"
+        ),
+    )
+    require_operator(
+        "BuggyBeginSuccessorActivation",
+        required=(
+            'activationStatus = "Queued"',
+            'predecessorOwnership = "Published"',
+            "ExactDurableParentApplicationWitness",
+            'activationStatus\' = "Running"',
+            'lastTransition\' = "BuggyBegin"',
+            "previousRank' = SuccessorActivationRank",
+        ),
+        forbidden=(
+            "activationPrerequisites = {}",
+            "AppliedSuccessorActivationToken \\notin activationTokens",
+        ),
+    )
+    require_operator(
+        "FixedBeginSuccessorActivation",
+        required=(
+            'activationStatus = "Queued"',
+            'predecessorOwnership = "Published"',
+            "ExactDurableParentApplicationWitness",
+            "activationPrerequisites = {}",
+            "AppliedSuccessorActivationToken \\notin activationTokens",
+            'activationStatus\' = "Running"',
+        ),
+    )
+    require_operator(
+        "MutationFailClosedSuccessorStartup",
+        required=(
+            'activationStatus \\in {"Queued", "Running"}',
+            'predecessorOwnership = "Published"',
+            "~activationFailureHistoryPresent",
+            'activationStatus\' = "Queued"',
+            'predecessorOwnership\' = "Absent"',
+            "activationPrerequisites' = {}",
+            "activationTokens' = {}",
+            "activationFailurePresent'",
+            "activationFailureHistoryPresent'",
+            'lastTransition\' = "FailClosed"',
+            "previousRank' = SuccessorActivationRank",
+        ),
+    )
+    exact_operators = {
+        "StaleBuggyBeginIsEnabled": (
+            "StaleAppliedTokenState => ENABLED "
+            "BuggyBeginSuccessorActivation"
+        ),
+        "StaleFixedBeginIsDisabled": (
+            "StaleAppliedTokenState => ~ENABLED "
+            "FixedBeginSuccessorActivation"
+        ),
+        "StaleFailClosedIsEnabled": (
+            "StaleAppliedTokenState => ENABLED "
+            "MutationFailClosedSuccessorStartup"
+        ),
+        "BuggyBeginViolationWitness": (
+            'lastTransition = "BuggyBegin" => '
+            "~SuccessorActivationProtocolInvariantProjection"
+        ),
+        "FailClosedStrictlyDecreasesRankWitness": (
+            'lastTransition = "FailClosed" => '
+            "SuccessorActivationRank < previousRank"
+        ),
+        "BugMutationNext": "BuggyBeginSuccessorActivation",
+        "BugMutationSpec": (
+            "StaleAppliedTokenInit /\\ "
+            "[][BugMutationNext]_MutationVars"
+        ),
+        "FixedMutationNext": (
+            "\\/ FixedBeginSuccessorActivation "
+            "\\/ MutationFailClosedSuccessorStartup"
+        ),
+        "FixedMutationSpec": (
+            "StaleAppliedTokenInit /\\ "
+            "[][FixedMutationNext]_MutationVars"
+        ),
+    }
+    for symbol, exact in exact_operators.items():
+        require_operator(symbol, exact=exact)
+
+    cfg_contracts = {
+        bug_cfg_path: (
+            "SPECIFICATION BugMutationSpec",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT StaleBuggyBeginIsEnabled",
+            "INVARIANT StaleFixedBeginIsDisabled",
+            "INVARIANT StaleFailClosedIsEnabled",
+            "INVARIANT BuggyBeginViolationWitness",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection",
+        ),
+        fixed_cfg_path: (
+            "SPECIFICATION FixedMutationSpec",
+            "INVARIANT MutationTypeInvariant",
+            "INVARIANT StaleFixedBeginIsDisabled",
+            "INVARIANT StaleFailClosedIsEnabled",
+            "INVARIANT FailClosedStrictlyDecreasesRankWitness",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection",
+        ),
+    }
+    for cfg_path, expected_lines in cfg_contracts.items():
+        if not cfg_path.is_file() or cfg_path.is_symlink():
+            continue
+        actual_lines = tuple(
+            line.strip()
+            for line in cfg_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("\\*")
+        )
+        if actual_lines != expected_lines:
+            errors.append(
+                f"{cfg_path}: successor stale-token mutation configuration "
+                f"must equal {expected_lines!r}; found {actual_lines!r}"
+            )
+    return errors
+
+
 def _successor_activation_rank_source_fidelity_errors(
     formal_dir: Path,
 ) -> list[str]:
@@ -5687,15 +9025,52 @@ def _successor_activation_rank_source_fidelity_errors(
         errors.append(f"{proof_path}: missing {theorem_symbol}")
     else:
         body, line = theorem
-        statement = re.split(
+        theorem_parts = re.split(
             r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )[0]
+        )
+        statement = theorem_parts[0]
         normalized = " ".join(statement.split())
         if normalized != exact_statement:
             errors.append(
                 f"{proof_path}:{line}: {theorem_symbol} must state only "
                 f"{exact_statement!r}; found {normalized!r}"
             )
+        exact_proof = (
+            "<1>1. IndexedChainSpec "
+            "=> SuccessorActivationPendingStructureProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationPendingStructure "
+            "<1>2. IndexedChainSpec "
+            "=> SuccessorActivationStepDecreasesRankProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationStepDecrease "
+            "<1>3. IndexedChainSpec "
+            "=> SuccessorActivationPendingIsNotOrphanedProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationNonOrphaning "
+            "<1>4. IndexedChainSpec "
+            "=> SuccessorActivationOutcomeIsStableProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationOutcomeStability "
+            "<1>5. IndexedChainSpec "
+            "=> SuccessorActivationRankProgressProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationRankProgress "
+            "<1>6. IndexedChainSpec "
+            "=> SuccessorActivationStarvationFreedomProperty "
+            "BY IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom "
+            "<1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6"
+        )
+        if len(theorem_parts) != 2 or not re.search(
+            r"(?m)^[ \t]*PROOF\b", body
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {theorem_symbol} must have the "
+                "reviewed deductive composition proof"
+            )
+        else:
+            normalized_proof = " ".join(theorem_parts[1].split())
+            if normalized_proof != exact_proof:
+                errors.append(
+                    f"{proof_path}:{line}: {theorem_symbol} proof must "
+                    "compose exactly the six reviewed successor-activation "
+                    "theorems"
+                )
 
     equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
     equivalence = _top_level_theorem_body(
@@ -6579,8 +9954,11 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         require_chain_operator(
             "BeginSuccessorActivation",
             required=(
+                'LET token == SuccessorActivationToken( "Applied", parentContext, node, successorContext)',
                 'successorActivationStatus[parentContext][node] = "Queued"',
                 'successorPredecessorStatusOwnership[parentContext][node] = "Published"',
+                "successorActivationPrerequisites[parentContext][node] = {}",
+                "token \\notin successorActivationTokens",
                 '![parentContext][node] = "Running"',
                 "ExactDurableParentApplication(parentContext, node, application)",
             ),
@@ -6908,14 +10286,58 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 'successorActivationStatus[terminalContext][node] = "Idle"',
             ),
         )
+        production_trace_constants = (
+            "ProductionAppliedSuccessorTraceRefinesIndexedActivation",
+            "ProductionRecoveredSuccessorTraceRefinesIndexedActivation",
+            "ProductionStartupFailureRefinesFailClosedActivation",
+            "ProductionHistoricalCertificateTraceRefinesIndexedAsync",
+            "ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync",
+            "ProductionTerminalApplicationExcludesActivation",
+        )
+        production_constant_block = re.search(
+            rf"(?ms)^CONSTANTS\s+({re.escape(production_trace_constants[0])}"
+            r".*?)(?=^\S)",
+            strip_tla_comments(raw_source, preserve_string_contents=True),
+        )
+        if production_constant_block is None:
+            errors.append(
+                f"{refinement_path}: missing explicit production successor/exact-"
+                "recovery trace constants"
+            )
+        else:
+            declared_trace_constants = tuple(
+                re.findall(
+                    r"[A-Za-z_][A-Za-z0-9_]*",
+                    production_constant_block.group(1),
+                )
+            )
+            if declared_trace_constants != production_trace_constants:
+                errors.append(
+                    f"{refinement_path}: production successor/exact-recovery "
+                    "trace constants must equal the exact ordered six-claim "
+                    f"inventory {production_trace_constants!r}; found "
+                    f"{declared_trace_constants!r}"
+                )
+        require_chain_operator(
+            "ProductionSuccessorAndExactRecoveryTraceRefinement",
+            exact=(
+                "/\\ ProductionAppliedSuccessorTraceRefinesIndexedActivation = TRUE "
+                "/\\ ProductionRecoveredSuccessorTraceRefinesIndexedActivation = TRUE "
+                "/\\ ProductionStartupFailureRefinesFailClosedActivation = TRUE "
+                "/\\ ProductionHistoricalCertificateTraceRefinesIndexedAsync = TRUE "
+                "/\\ ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync = TRUE "
+                "/\\ ProductionTerminalApplicationExcludesActivation = TRUE"
+            ),
+        )
         production_obligation = _top_level_theorem_body(
             raw_source,
             "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
             preserve_string_contents=True,
         )
         exact_production_obligation = (
-            "IndexedChainSpec => []"
-            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant"
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
         )
         if production_obligation is None:
             errors.append(
@@ -6924,11 +10346,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
         else:
             obligation_body, obligation_line = production_obligation
-            obligation_statement = re.split(
-                r"(?m)^[ \\t]*(?:BY|PROOF|OBVIOUS)\\b",
+            obligation_parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
                 obligation_body,
                 maxsplit=1,
-            )[0]
+            )
+            obligation_statement = obligation_parts[0]
             obligation_normalized = " ".join(obligation_statement.split())
             if obligation_normalized != exact_production_obligation:
                 errors.append(
@@ -6936,6 +10359,13 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "historical-recovery production refinement obligation must "
                     f"state only {exact_production_obligation!r}; found "
                     f"{obligation_normalized!r}"
+                )
+            if len(obligation_parts) != 1:
+                errors.append(
+                    f"{refinement_path}:{obligation_line}: production successor/"
+                    "exact-recovery trace refinement must remain proofless until "
+                    "all six external source claims have machine-checked cross-tool "
+                    "evidence"
                 )
         if indexed_fairness is not None:
             fairness_normalized = " ".join(indexed_fairness[0].split())
@@ -7323,10 +10753,26 @@ def validate_ledger(
     errors.extend(_historical_timeout_derivation_errors(formal_dir))
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
+    errors.extend(_application_completion_source_fidelity_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
+    errors.extend(_effective_lock_acquisition_source_fidelity_errors(formal_dir))
+    errors.extend(_causal_fifo_rank_mutation_source_fidelity_errors(formal_dir))
+    errors.extend(_causal_fifo_rank_mutation_runner_errors(ROOT_DIR))
+    errors.extend(_effective_lock_acquisition_mutation_runner_errors(ROOT_DIR))
+    errors.extend(
+        _effect_capacity_mutation_source_fidelity_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
+        _post_decision_timeout_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
+    )
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))
+    errors.extend(
+        _successor_stale_token_mutation_source_fidelity_errors(formal_dir)
+    )
     errors.extend(_nightly_chaos_cold_cache_errors(ROOT_DIR))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name
@@ -7505,6 +10951,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the current canonical TLA+ source-manifest digest and exit",
     )
+    mode.add_argument(
+        "--check-production-causal-fifo",
+        action="store_true",
+        help=(
+            "check only the source-bound production persisted-continuation/"
+            "causal-FIFO seam and exit"
+        ),
+    )
     return parser
 
 
@@ -7515,6 +10969,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.print_source_manifest_sha256:
         print(_formal_source_manifest()["sha256"])
+        return 0
+    if args.check_production_causal_fifo:
+        errors = _production_causal_fifo_source_fidelity_errors()
+        if errors:
+            for error in errors:
+                print(f"error: {error}", file=sys.stderr)
+            return 1
+        print("production persisted-continuation/causal-FIFO seam is source-bound")
         return 0
     if args.write_evidence is not None:
         if args.evidence is not None:

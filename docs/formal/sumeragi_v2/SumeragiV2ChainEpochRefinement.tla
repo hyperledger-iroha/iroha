@@ -9,6 +9,13 @@ proof INSTANCE nonparameterized for TLAPS.
 ***************************************************************************)
 CONSTANT VerificationContext
 
+CONSTANTS ProductionAppliedSuccessorTraceRefinesIndexedActivation,
+          ProductionRecoveredSuccessorTraceRefinesIndexedActivation,
+          ProductionStartupFailureRefinesFailClosedActivation,
+          ProductionHistoricalCertificateTraceRefinesIndexedAsync,
+          ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync,
+          ProductionTerminalApplicationExcludesActivation
+
 (***************************************************************************
 Selected-height synchronous product.
 
@@ -1695,26 +1702,30 @@ SuccessorActivationCredentialReady(parentContext, node,
                parentContext, node, successorContext, application)
 
 BeginSuccessorActivation(parentContext, node, successorContext) ==
-  /\ successorContext =
-       CanonicalIndexedContext(parentContext.height + 1)
-  /\ successorActivationStatus[parentContext][node] = "Queued"
-  /\ successorPredecessorStatusOwnership[parentContext][node] = "Published"
-  /\ \E application \in Chain!DecisionEvidenceSet:
-       ExactDurableParentApplication(parentContext, node, application)
-  /\ successorActivationStatus' =
-       [successorActivationStatus EXCEPT
-          ![parentContext][node] = "Running"]
-  /\ UNCHANGED <<successorPredecessorStatusOwnership,
-                  successorActivationPrerequisites,
-                  successorActivationTokens,
-                  successorRecoveryAuthorities,
-                  preparedSuccessorActivationMarkers,
-                  publishedSuccessorActivationMarkers,
-                  successorActivationFailures,
-                  successorActivationFailureHistory,
-                  successorActivationCompletions,
-                  joinedByContext>>
-  /\ SuccessorActivationEnvironmentStutter
+  LET token == SuccessorActivationToken(
+                 "Applied", parentContext, node, successorContext)
+  IN /\ successorContext =
+          CanonicalIndexedContext(parentContext.height + 1)
+     /\ successorActivationStatus[parentContext][node] = "Queued"
+     /\ successorPredecessorStatusOwnership[parentContext][node] = "Published"
+     /\ successorActivationPrerequisites[parentContext][node] = {}
+     /\ token \notin successorActivationTokens
+     /\ \E application \in Chain!DecisionEvidenceSet:
+          ExactDurableParentApplication(parentContext, node, application)
+     /\ successorActivationStatus' =
+          [successorActivationStatus EXCEPT
+             ![parentContext][node] = "Running"]
+     /\ UNCHANGED <<successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     successorActivationTokens,
+                     successorRecoveryAuthorities,
+                     preparedSuccessorActivationMarkers,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailures,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
 
 BindAppliedSuccessorActivationToken(parentContext, node,
                                     successorContext) ==
@@ -5456,6 +5467,25 @@ SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant ==
                  = "Absent"
 
 (***************************************************************************
+External production-trace evidence is deliberately represented separately
+from the model-side invariant above.  These six booleans are not assigned by
+this module: source-order checks, adversarial tests, and source-manifest
+binding can constrain the trace claims, but none of those artifacts proves
+them.  A future cross-tool refinement proof must establish every conjunct
+before the release obligation below may receive a proof body.
+
+Keeping the source seam in the theorem statement prevents the already-proved
+abstract invariant from being reused as a vacuous Rust-to-TLA refinement.
+***************************************************************************)
+ProductionSuccessorAndExactRecoveryTraceRefinement ==
+  /\ ProductionAppliedSuccessorTraceRefinesIndexedActivation = TRUE
+  /\ ProductionRecoveredSuccessorTraceRefinesIndexedActivation = TRUE
+  /\ ProductionStartupFailureRefinesFailClosedActivation = TRUE
+  /\ ProductionHistoricalCertificateTraceRefinesIndexedAsync = TRUE
+  /\ ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync = TRUE
+  /\ ProductionTerminalApplicationExcludesActivation = TRUE
+
+(***************************************************************************
 This is the deliberately explicit Rust-to-TLA refinement seam. Its discharge
 must connect the production open_deferred_status adapter, serialized runtime,
 effect executor, service startup, startup/recovery effect consumption, clock
@@ -5471,8 +5501,9 @@ actions.  In particular, this declaration remains the external trace sentinel
 rather than being discharged from the state-side invariants alone.
 ***************************************************************************)
 THEOREM SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation ==
-  IndexedChainSpec
-    => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant
+  /\ ProductionSuccessorAndExactRecoveryTraceRefinement
+  /\ (IndexedChainSpec
+        => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)
 
 (***************************************************************************
 Exact indexed multi-height release theorem for the arbitrary free

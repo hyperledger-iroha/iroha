@@ -63,8 +63,7 @@ object ContractJsonParser {
             entrypointHashHex = optionalHash(receipt["entrypoint_hash_hex"], "$path.entrypoint_hash_hex"),
             gasLimit = gasLimit,
             gasUsed = asOptionalNonNegativeLong(receipt["gas_used"], "$path.gas_used"),
-            gasAssetId = optionalString(receipt["gas_asset_id"]),
-            feeSponsor = optionalString(receipt["fee_sponsor"]),
+            feePayment = receipt["fee_payment"]?.let { FeePaymentJson.parse(it, "$path.fee_payment") },
             payloadDigestHex = HttpClientTransport.normalizeHex32(
                 requiredString(receipt["payload_digest_hex"], "$path.payload_digest_hex"),
                 "payloadDigestHex",

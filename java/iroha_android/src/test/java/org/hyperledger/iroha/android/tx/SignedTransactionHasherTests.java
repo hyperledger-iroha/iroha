@@ -321,7 +321,7 @@ public final class SignedTransactionHasherTests {
   private static SignedTransaction newTransaction(final byte seed) throws NoritoException {
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId(String.format("%08x", seed))
             .setAuthority(TestAccountIds.ed25519Authority(0x2C))
             .setCreationTimeMs(1_700_000_000_000L + seed)

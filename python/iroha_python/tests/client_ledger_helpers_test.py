@@ -25,6 +25,7 @@ from iroha_python import (
     TransactionConfig,
     TransactionDraft,
     UaidPortfolioAsset,
+    authority_fee_payment,
 )
 from iroha_python._privacy_backends import (
     _is_pending_production_backend_label,
@@ -44,6 +45,9 @@ from iroha_python.tx import (
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
 )
+
+
+FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 
 
 class FakeSession:
@@ -1928,7 +1932,7 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
-        gas_limit=5000,
+        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
         wait=True,
         timeout_ms=1000,
         interval=0,
@@ -1985,7 +1989,7 @@ def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() 
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
-        gas_limit=5000,
+        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
         wait=True,
         timeout_ms=1000,
         interval=0,
@@ -2019,6 +2023,7 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     result = client.mint_assets_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         mints=[
             {"asset_id": f"{asset_definition_id}#{adult}", "quantity": "1.25"},
@@ -2043,13 +2048,21 @@ def test_transaction_draft_rejects_padded_chain_and_authority_before_signing() -
         ValueError,
         match="chain_id must not contain surrounding whitespace",
     ):
-        client._transaction_draft(chain_id=" chain", authority="authority@is")
+        client._transaction_draft(
+            chain_id=" chain",
+            authority="authority@is",
+            fee_payment=FEE_PAYMENT,
+        )
 
     with pytest.raises(
         ValueError,
         match="authority must not contain surrounding whitespace",
     ):
-        client._transaction_draft(chain_id="chain", authority=" authority@is ")
+        client._transaction_draft(
+            chain_id="chain",
+            authority=" authority@is ",
+            fee_payment=FEE_PAYMENT,
+        )
 
 
 def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
@@ -2079,6 +2092,7 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
     result = client.transfer_assets_and_wait(
         chain_id="chain",
         authority="source@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         transfers=[
             {
@@ -2117,20 +2131,22 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     grant = client.grant_account_permission_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
-        transaction_metadata={"purpose": "fee-sponsor"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
+        transaction_metadata={"purpose": "fee-sponsor-program"},
         wait=False,
     )
     revoke = client.revoke_account_permission_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
         wait=True,
     )
 
@@ -2140,7 +2156,7 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     revoke_draft, revoke_kwargs = captured[1]
     assert len(grant_draft) == 1
     assert len(revoke_draft) == 1
-    assert grant_draft.config.metadata == {"purpose": "fee-sponsor"}
+    assert grant_draft.config.metadata == {"purpose": "fee-sponsor-program"}
     assert grant_kwargs["private_key_hex"] == "11" * 32
     assert grant_kwargs["wait"] is False
     assert revoke_kwargs["private_key_hex"] == "22" * 32
@@ -2168,10 +2184,11 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
     assert client.grant_account_permission_and_wait(
         chain_id="chain",
         authority=account,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
         wait=False,
     ) == {"hash": "permission-taira"}
 
@@ -2204,6 +2221,7 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
     assert client.transfer_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         asset_id=f"{asset_definition_id}#{source}",
         destination=destination,
@@ -2241,6 +2259,7 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     assert client.transfer_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="23" * 32,
         asset_id=f"{asset_definition_id}#{source}#{scope}",
         destination=destination,
@@ -2295,6 +2314,7 @@ def test_zk_ace_transfer_helper_normalizes_configured_chain_discriminant_for_tra
     assert client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="24" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -2456,7 +2476,13 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
     encoded = [instruction.to_json() for instruction in instructions]
     assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
 
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=source))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=source,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     draft.open_asset_lock(
         "lock-sdk-2",
         asset_definition_id,
@@ -2531,7 +2557,13 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     amount: object,
 ) -> None:
     account = account_address(0x74)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     method = getattr(draft, method_name)
 
     with pytest.raises(ValueError, match="amount must be positive|quantity must be a finite"):
@@ -2540,7 +2572,13 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
 
 def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
 
     with pytest.raises(ValueError, match="escrow_id"):
         draft.cancel_asset_lock("")
@@ -2559,6 +2597,7 @@ def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:
         TransactionConfig(
             chain_id="chain",
             authority=account_address(0x65),
+            fee_payment=authority_fee_payment(charge_limits=[]),
         )
     )
 
@@ -3081,7 +3120,13 @@ def test_zk_transaction_draft_rejects_invalid_inputs(
     match: str,
 ) -> None:
     account = account_address(0x68)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     proof = {
         "backend": "halo2/ipa",
         "proof_bytes": b"proof-bytes",
@@ -3119,6 +3164,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_zk_asset_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
         vk_transfer="halo2/ipa:vk_transfer",
@@ -3129,6 +3175,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.shield_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         asset_definition_id=asset_definition_id,
         from_account_id=source,
@@ -3141,6 +3188,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.zk_transfer_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="33" * 32,
         asset_definition_id=asset_definition_id,
         inputs=["aa" * 32],
@@ -3151,6 +3199,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.unshield_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="44" * 32,
         asset_definition_id=asset_definition_id,
         to_account_id=destination,
@@ -3163,6 +3212,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="55" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="11" * 32,
@@ -3174,6 +3224,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.rotate_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="66" * 32,
         asset_definition_id=asset_definition_id,
         old_identity_commitment="11" * 32,
@@ -3186,6 +3237,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.revoke_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="77" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="12" * 32,
@@ -3195,6 +3247,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="88" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -3212,6 +3265,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_asset_hidden_zk_pool_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="99" * 32,
         pool_id="boi-masp-pool-v1",
         storage_asset=asset_definition_id,
@@ -3222,6 +3276,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.asset_hidden_zk_transfer_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="aa" * 32,
         pool_id="boi-masp-pool-v1",
         inputs=["66" * 32],
@@ -3233,6 +3288,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.verify_proof_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="bb" * 32,
         proof=proof,
         wait=False,
@@ -3285,6 +3341,7 @@ def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
     registration = client.register_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="55" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="11" * 32,
@@ -3315,6 +3372,7 @@ def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
     transfer = client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="88" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -3658,6 +3716,7 @@ def test_batch_helpers_reject_invalid_records(
         method(
             chain_id="chain",
             authority="authority@is",
+            fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
         )
@@ -3667,7 +3726,10 @@ def test_batch_helpers_reject_invalid_records(
     ("kwargs", "match"),
     [
         (
-            {"account_id": "adult@is", "permission_name": "CanUseFeeSponsor"},
+            {
+                "account_id": "adult@is",
+                "permission_name": "CanEnrollFeeSponsorProgram",
+            },
             "invalid account id",
         ),
         (
@@ -3677,7 +3739,7 @@ def test_batch_helpers_reject_invalid_records(
         (
             {
                 "account_id": account_address(0x4A),
-                "permission_name": "CanUseFeeSponsor",
+                "permission_name": "CanEnrollFeeSponsorProgram",
                 "permission_payload": object(),
             },
             "JSON",
@@ -3697,6 +3759,7 @@ def test_permission_helpers_reject_invalid_inputs(
         client.grant_account_permission_and_wait(
             chain_id="chain",
             authority="authority@is",
+            fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
         )

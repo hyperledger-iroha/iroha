@@ -575,7 +575,7 @@ for label in ("kotlin", "java"):
 
 require_regex(
     "kotlin",
-    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*20\b",
+    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*21\b",
     "exact ABI20 Kotlin constant",
 )
 require_regex(
@@ -779,7 +779,7 @@ require_regex(
 )
 require_regex(
     "java",
-    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*20\s*;",
+    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*21\s*;",
     "exact ABI20 Java constant",
 )
 require_regex(
@@ -839,7 +839,6 @@ base_bridge_symbols = (
     "connect_norito_free",
     "connect_norito_encode_transfer_signed_transaction",
     "connect_norito_encode_transfer_instruction_box",
-    "connect_norito_encode_validation_fee_transfer_signed_transaction",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
@@ -992,7 +991,7 @@ for symbol in c_symbols:
     for label in ("xcframework_build", "mobile_check", "mobile_check_test"):
         require(label, symbol)
 
-# First-release ABI-20 does not publish compatibility aliases for recursive
+# First-release ABI-21 does not publish compatibility aliases for recursive
 # lifecycle or artifact installation. Shared V2 leaf primitives above remain
 # intentionally legal because V4 reuses their unchanged wire types.
 forbidden_recursive_alias = re.compile(
@@ -1068,8 +1067,8 @@ if mode == "--self-test":
         "ABI20 cannot regress to ABI19",
         lambda fixture: replace_once(
             fixture / paths["kotlin"],
+            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21",
             "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20",
-            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19",
         ),
         "exact ABI20 Kotlin constant",
     )

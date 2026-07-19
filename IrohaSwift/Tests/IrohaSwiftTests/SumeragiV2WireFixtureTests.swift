@@ -190,7 +190,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.liveness.commitQuorums.count, 1)
         XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
-        XCTAssertEqual(decoded.liveness.queues.first?.queue, .networkIngress)
+        XCTAssertEqual(decoded.liveness.queues.count, 1)
+        XCTAssertEqual(decoded.liveness.queues.first?.queue, .effectDispatch)
         XCTAssertEqual(decoded.liveness.blocker, .localControlPending)
 
         // The fifth struct field follows four fixed-width fields and is the

@@ -148,18 +148,21 @@ impl<T: Write> RunArgs<T> for Args {
 
 /// Migrate one exact legacy private-profile manifest.
 ///
-/// The legacy generator mixed the universal payment-reserve mint with private
-/// SNS registrations, then placed universal and private permission grants in
-/// one final transaction. Target routing cannot execute either mixed batch in
-/// both worlds. This migration preserves every instruction and raw manifest
-/// field while splitting the SNS batch into a universal setup transaction and a
-/// private-SNS transaction, and replacing the permission tail with a
-/// private-only transaction. The universal setup combines the reserve with the
-/// universal permission grants and assigns a restricted-reader role to the
-/// client. This remains one lane-homogeneous transaction and keeps the migrated
-/// genesis within the protocol transaction limit. The private permission batch
+/// The legacy generator kept the universal payment-reserve mint with the
+/// private SNS registrations: every registration charges the global fee asset
+/// internally, so that mixed-target batch must execute atomically through the
+/// universal AMX coordinator. The opaque reserve mint cannot independently
+/// resolve that route before genesis state exists, so this migration inserts
+/// the universal permission grants immediately after it; their explicit
+/// universal targets anchor Native AMX before the original SNS registrations
+/// execute. It also replaces the legacy mixed permission tail with a
+/// private-only transaction and inserts a role-only universal setup transaction
+/// immediately before the atomic SNS/AMX batch. The private permission batch
 /// begins with a label-less registration of the same client so the private
-/// world has an account row before its direct grants execute.
+/// world has an account row before its direct grants execute. The original
+/// reserve/registration sequence stays ordered, as does the permission order
+/// within each routed group. The one added transaction keeps the migrated
+/// genesis within the protocol limit.
 pub fn migrate(
     mut manifest: RawGenesisTransaction,
     profile: Profile,
@@ -238,22 +241,27 @@ pub fn migrate(
         spec,
     )?;
 
-    let legacy_sns = manifest.transactions()[legacy_sns_index].instructions();
-    let reserve_mint = legacy_sns[0].clone();
-    let private_sns_batch = legacy_sns[1..].to_vec();
-
-    let mut universal_batch = Vec::with_capacity(universal_permissions.len() + 2);
-    universal_batch.push(reserve_mint);
-    universal_batch.extend(
+    // Keep the reserve mint and SNS registrations in one atomic batch. The mint's opaque asset
+    // destination cannot anchor routing before definitions exist, so place the explicit
+    // universal permission targets between it and the registrations. RegisterSnsName charges
+    // the global XOR asset internally, and the inserted grant routes the complete batch through
+    // the universal AMX coordinator without changing the legacy SNS inventory's relative order.
+    let legacy_sns_batch = manifest.transactions()[legacy_sns_index].instructions();
+    let mut sns_amx_batch =
+        Vec::with_capacity(legacy_sns_batch.len() + universal_permissions.len());
+    sns_amx_batch.push(legacy_sns_batch[0].clone());
+    sns_amx_batch.extend(
         universal_permissions.iter().cloned().map(|permission| {
             Grant::account_permission(permission, client_account_id.clone()).into()
         }),
     );
+    sns_amx_batch.extend(legacy_sns_batch[1..].iter().cloned());
+
     let private_dataspace = DataSpaceId::new(spec.dataspace_id);
     let restricted_read = Permission::from(CanReadRestrictedDataspace {
         dataspace: private_dataspace,
     });
-    universal_batch.push(
+    let reader_role_batch = vec![
         Register::role(
             Role::new(
                 crate::genesis::private_dataspace_reader_role_id(spec.alias, private_dataspace),
@@ -262,7 +270,7 @@ pub fn migrate(
             .add_permission(restricted_read),
         )
         .into(),
-    );
+    ];
     let mut private_batch = Vec::with_capacity(private_permissions.len() + 1);
     private_batch.push(Register::account(Account::new(client_account_id.clone())).into());
     private_batch.extend(
@@ -273,7 +281,7 @@ pub fn migrate(
 
     manifest.replace_instruction_only_transaction(
         legacy_sns_index,
-        vec![universal_batch, private_sns_batch],
+        vec![reader_role_batch, sns_amx_batch],
     )?;
     // Splitting the transaction immediately before the legacy tail shifts that tail forward by
     // exactly one slot.
@@ -286,7 +294,13 @@ pub fn migrate(
             manifest.transactions().len()
         ));
     }
-    validate_migrated_sns_bootstrap(&manifest, legacy_sns_index, &client_account_id, spec)?;
+    validate_migrated_sns_bootstrap(
+        &manifest,
+        legacy_sns_index,
+        &client_account_id,
+        &universal_permissions,
+        spec,
+    )?;
     validate_migrated_permission_tail(
         &manifest,
         legacy_sns_index,
@@ -304,7 +318,8 @@ fn expected_target_permissions(spec: ProfileSpec) -> Result<(Vec<Permission>, Ve
     // already granted it and the legacy private-profile append path deduplicated it.
     // Torii authorizes at universal ingress and re-authorizes the forwarded signed query on the
     // receiving private peer. The universal hop receives its restricted-read capability through
-    // a role registered in that transaction; only the private hop uses a direct account grant.
+    // a role registered in the preceding role-only setup transaction; only the private hop uses
+    // a direct account grant.
     let private_dataspace = DataSpaceId::new(spec.dataspace_id);
     let mut universal = vec![Permission::from(CanResolveAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -347,9 +362,9 @@ fn expected_legacy_permission_order(
     spec: ProfileSpec,
 ) -> Vec<Permission> {
     // The retained SBP generator appended CanRegisterDomain after every scoped alias grant,
-    // even though the corrected universal-only replacement must place it beside universal
-    // Resolve. Both retained profiles predate CanReadRestrictedDataspace, so their exact input
-    // order excludes the new role and private direct grant. CBUAE has no
+    // even though the corrected atomic SNS/AMX batch must place it beside universal Resolve.
+    // Both retained profiles predate CanReadRestrictedDataspace, so their exact input order
+    // excludes the new role and private direct grant. CBUAE has no
     // CanRegisterDomain grant, so its retained order is simply universal Resolve followed by its
     // legacy private grants.
     debug_assert_eq!(universal.len(), if spec.domains.is_empty() { 1 } else { 2 });
@@ -367,7 +382,7 @@ fn expected_legacy_permission_order(
 
 fn validate_migrated_permission_tail(
     manifest: &RawGenesisTransaction,
-    universal_index: usize,
+    reader_role_index: usize,
     private_index: usize,
     client_account_id: &AccountId,
     expected_universal: &[Permission],
@@ -375,42 +390,26 @@ fn validate_migrated_permission_tail(
     spec: ProfileSpec,
 ) -> Result<()> {
     let transactions = manifest.transactions();
-    if transactions.len() != private_index + 1 || private_index != universal_index + 2 {
+    if transactions.len() != private_index + 1 || private_index != reader_role_index + 2 {
         return Err(eyre!(
-            "{} migrated genesis must end with one private SNS transaction between its universal setup and private permission transaction",
+            "{} migrated genesis must end with one atomic SNS/AMX transaction between its role-only universal setup and private permission transaction",
             spec.profile_name
         ));
     }
 
-    let universal = transactions[universal_index].instructions();
-    if universal.len() != expected_universal.len() + 2 {
+    let reader_role_setup = transactions[reader_role_index].instructions();
+    if reader_role_setup.len() != 1 {
         return Err(eyre!(
-            "{} migrated universal setup transaction has an unexpected instruction count",
+            "{} migrated role-only universal setup transaction must contain exactly one instruction",
             spec.profile_name
         ));
     }
-    for (instruction_index, (instruction, expected_permission)) in
-        universal[1..].iter().zip(expected_universal).enumerate()
-    {
-        let Some((destination, permission)) = account_permission_grant(instruction) else {
-            return Err(eyre!(
-                "{} migrated universal permission instruction {instruction_index} is not an account permission grant",
-                spec.profile_name
-            ));
-        };
-        if destination != client_account_id || permission != expected_permission {
-            return Err(eyre!(
-                "{} migrated universal permission instruction {instruction_index} does not match the exact target destination and order",
-                spec.profile_name
-            ));
-        }
-    }
-    let Some(RegisterBox::Role(register)) = universal
-        .last()
+    let Some(RegisterBox::Role(register)) = reader_role_setup
+        .first()
         .and_then(|instruction| instruction.as_any().downcast_ref::<RegisterBox>())
     else {
         return Err(eyre!(
-            "{} migrated universal permission transaction must end with restricted-reader role registration",
+            "{} migrated role-only universal setup transaction must register the restricted-reader role",
             spec.profile_name
         ));
     };
@@ -429,6 +428,33 @@ fn validate_migrated_permission_tail(
             "{} migrated universal restricted-reader role does not exactly match its id, owner, and permission",
             spec.profile_name
         ));
+    }
+
+    let sns_amx = transactions[reader_role_index + 1].instructions();
+    let universal_grants_end = 1 + expected_universal.len();
+    if sns_amx.len() < universal_grants_end {
+        return Err(eyre!(
+            "{} migrated atomic SNS/AMX transaction cannot contain the complete universal permission prefix",
+            spec.profile_name
+        ));
+    }
+    for (instruction_index, (instruction, expected_permission)) in sns_amx[1..universal_grants_end]
+        .iter()
+        .zip(expected_universal)
+        .enumerate()
+    {
+        let Some((destination, permission)) = account_permission_grant(instruction) else {
+            return Err(eyre!(
+                "{} migrated atomic SNS/AMX universal permission instruction {instruction_index} is not an account permission grant",
+                spec.profile_name
+            ));
+        };
+        if destination != client_account_id || permission != expected_permission {
+            return Err(eyre!(
+                "{} migrated atomic SNS/AMX universal permission instruction {instruction_index} does not match the exact target destination and order",
+                spec.profile_name
+            ));
+        }
     }
 
     let private = transactions[private_index].instructions();
@@ -689,53 +715,46 @@ fn validate_sns_bootstrap(
 
 fn validate_migrated_sns_bootstrap(
     manifest: &RawGenesisTransaction,
-    reserve_index: usize,
+    reader_role_index: usize,
     client_account_id: &AccountId,
+    expected_universal: &[Permission],
     spec: ProfileSpec,
 ) -> Result<()> {
     let transactions = manifest.transactions();
-    let universal_setup = transactions
-        .get(reserve_index)
+    transactions.get(reader_role_index).ok_or_else(|| {
+        eyre!(
+            "{} migrated role-only universal setup transaction is absent",
+            spec.profile_name
+        )
+    })?;
+    let sns_amx_batch = transactions
+        .get(reader_role_index + 1)
         .ok_or_else(|| {
             eyre!(
-                "{} migrated universal setup transaction is absent",
+                "{} migrated atomic SNS/AMX transaction is absent",
                 spec.profile_name
             )
         })?
         .instructions();
-    if universal_setup.is_empty() {
-        return Err(eyre!(
-            "{} migrated universal setup transaction must begin with the reserve mint",
-            spec.profile_name
-        ));
-    }
-    let registrations = transactions
-        .get(reserve_index + 1)
-        .ok_or_else(|| eyre!("{} migrated SNS transaction is absent", spec.profile_name))?
-        .instructions();
     let expected_registration_count = spec.domains.len() + 1;
-    if registrations.len() != expected_registration_count
-        || registrations.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<RegisterSnsName>()
-                .is_none()
-        })
-    {
+    let expected_instruction_count = 1 + expected_universal.len() + expected_registration_count;
+    if sns_amx_batch.len() != expected_instruction_count {
         return Err(eyre!(
-            "{} migrated SNS transaction must contain exactly {expected_registration_count} registrations",
-            spec.profile_name
+            "{} migrated atomic SNS/AMX transaction must contain exactly one reserve mint, {} universal permission grants, and {expected_registration_count} registrations",
+            spec.profile_name,
+            expected_universal.len()
         ));
     }
 
-    // Reuse the exact legacy inventory validator after proving the new transaction boundary.
-    // This demonstrates that the split changes ordering boundaries only, not instruction data.
-    let combined = universal_setup[..1]
-        .iter()
-        .chain(registrations)
+    // Remove only the inserted universal routing anchors, then reuse the exact legacy validator.
+    // This proves that the original reserve mint remains first and every original SNS
+    // registration retains its inventory and relative order inside the atomic AMX boundary.
+    let registrations_start = 1 + expected_universal.len();
+    let legacy_sns_batch = std::iter::once(&sns_amx_batch[0])
+        .chain(sns_amx_batch[registrations_start..].iter())
         .cloned()
         .collect::<Vec<_>>();
-    validate_sns_bootstrap(&combined, client_account_id, spec)
+    validate_sns_bootstrap(&legacy_sns_batch, client_account_id, spec)
 }
 
 fn fee_asset_definition_id() -> AssetDefinitionId {
@@ -995,49 +1014,54 @@ mod tests {
                 migrated.transactions().len() <= PROTOCOL_MAX_GENESIS_TRANSACTIONS,
                 "migrated private genesis must remain signable under the protocol transaction limit"
             );
-            let universal = &migrated.transactions()[before_transactions - 2];
-            let private_sns = &migrated.transactions()[before_transactions - 1];
+            let reader_role_setup = &migrated.transactions()[before_transactions - 2];
+            let sns_amx = &migrated.transactions()[before_transactions - 1];
             let private = &migrated.transactions()[before_transactions];
             assert_eq!(
-                universal.instructions().len(),
-                expected_universal.len() + 2,
-                "universal setup must contain the reserve, grants, and reader role"
+                reader_role_setup.instructions().len(),
+                1,
+                "universal setup must contain only the reader role"
             );
-            assert_eq!(private_sns.instructions().len(), spec.domains.len() + 1);
+            let universal_grants_end = 1 + expected_universal.len();
+            assert_eq!(
+                sns_amx.instructions().len(),
+                before_sns.len() + expected_universal.len(),
+                "atomic SNS/AMX batch must add only the universal routing grants"
+            );
             assert!(
-                universal.instructions()[0]
+                sns_amx.instructions()[0]
                     .as_any()
                     .downcast_ref::<MintBox>()
                     .is_some()
             );
-            assert!(private_sns.instructions().iter().all(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RegisterSnsName>()
-                    .is_some()
-            }));
-            let after_sns = universal.instructions()[..1]
-                .iter()
-                .chain(private_sns.instructions())
+            assert_eq!(
+                grant_permissions(&sns_amx.instructions()[1..universal_grants_end]),
+                expected_universal
+            );
+            assert!(
+                sns_amx.instructions()[universal_grants_end..]
+                    .iter()
+                    .all(|instruction| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<RegisterSnsName>()
+                            .is_some()
+                    })
+            );
+            let after_sns = std::iter::once(&sns_amx.instructions()[0])
+                .chain(sns_amx.instructions()[universal_grants_end..].iter())
                 .map(iroha_genesis::genesis_instructions_json::instruction_value)
                 .collect::<Vec<_>>();
             assert_eq!(
                 after_sns, before_sns,
-                "migration must preserve the exact SNS instruction inventory and order while splitting its transaction boundary"
+                "migration must preserve the exact legacy reserve mint and SNS registration inventory and relative order"
             );
-            assert_eq!(
-                grant_permissions(&universal.instructions()[1..universal.instructions().len() - 1]),
-                expected_universal
-            );
-            let RegisterBox::Role(reader_role) = universal
-                .instructions()
-                .last()
-                .expect("universal batch has role registration")
+            let RegisterBox::Role(reader_role) = reader_role_setup.instructions()[0]
                 .as_any()
                 .downcast_ref::<RegisterBox>()
-                .expect("universal batch ends with registration")
+                .expect("universal setup contains registration")
             else {
-                panic!("universal batch must end with role registration");
+                panic!("universal setup must contain role registration");
             };
             let expected_read = Permission::from(CanReadRestrictedDataspace {
                 dataspace: DataSpaceId::new(spec.dataspace_id),
@@ -1091,11 +1115,10 @@ mod tests {
                 after_prefix, before_prefix,
                 "transactions before the legacy SNS and permission tail must remain unchanged"
             );
-            let split_tail =
-                grant_permissions(&universal.instructions()[1..universal.instructions().len() - 1])
-                    .into_iter()
-                    .chain(grant_permissions(&private.instructions()[1..]))
-                    .collect::<Vec<_>>();
+            let split_tail = grant_permissions(&sns_amx.instructions()[1..universal_grants_end])
+                .into_iter()
+                .chain(grant_permissions(&private.instructions()[1..]))
+                .collect::<Vec<_>>();
             assert_eq!(
                 split_tail,
                 expected_universal

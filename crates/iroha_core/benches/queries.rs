@@ -1093,7 +1093,11 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .expect("valid chain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])

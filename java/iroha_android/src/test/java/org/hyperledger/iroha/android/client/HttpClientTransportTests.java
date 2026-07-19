@@ -30,6 +30,8 @@ import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -66,6 +68,10 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
+
+  private static FeePaymentIntent feePayment(final Long gasLimit) {
+    return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
+  }
 
   private HttpClientTransportTests() {}
 
@@ -139,6 +145,10 @@ public final class HttpClientTransportTests {
     vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
     vpnRoutesRejectWrongSuccessfulStatusCodes();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
+    feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feeQuoteRejectsPayerRevisionAndGasSubstitution();
+    feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
+    feeSponsorProgramRejectsSubstitutedResponseId();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     verifierKeyRegisterAndUpdatePostSignedPayloads();
     verifierKeyRequestsRejectMalformedInputsBeforeRequest();
@@ -688,7 +698,7 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().build();
+    final TransactionPayload payload = TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "queued-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -733,7 +743,7 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().build();
+    final TransactionPayload payload = TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "skip-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -2624,6 +2634,172 @@ public final class HttpClientTransportTests {
     assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_000L, "vpn-nonce-1");
   }
 
+  private static void feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer()
+      throws Exception {
+    final String responseBody =
+        "{\"intent\":{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],"
+            + "\"gas_limit\":9000}},\"observation\":{\"schedule_revision\":4},"
+            + "\"components\":[],\"capacities\":[],\"decision\":{\"accepted\":true}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_020L, "fee-quote-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+    unsignedPayload.put("chain", "test-chain");
+    unsignedPayload.put("authority", "alice");
+    unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+
+    final FeeQuoteResponse quote = transport.quoteFees(unsignedPayload, auth).join();
+
+    assert quote.intent() instanceof FeePaymentIntent.Authority
+        : "fee quote payer must remain authority";
+    assert Long.valueOf(9_000L).equals(quote.intent().gasLimit())
+        : "fee quote gas bound mismatch";
+    assert ((Number) quote.observation().get("schedule_revision")).longValue() == 4L
+        : "fee quote observation mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert "POST".equals(request.method()) : "fee quote must use POST";
+    assert "https://torii.example/api/v1/fees/quote".equals(request.uri().toString())
+        : "fee quote URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> requestBody =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert unsignedPayload.equals(requestBody.get("payload")) : "unsigned payload changed";
+    assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_020L, "fee-quote-1");
+
+    expectIllegalArgument(
+        () ->
+            transport.quoteFees(
+                unsignedPayload, canonicalAuth("bob", keyPair, null, null)),
+        "fee quote must reject an auth payer mismatch");
+    assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
+  }
+
+  private static void feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle()
+      throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseBody =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},"
+            + "\"lifecycle\":{\"state\":\"active\",\"value\":null},"
+            + "\"active_revision\":3,\"staged_revision\":4,"
+            + "\"scheduled_activation\":{\"revision\":4,\"activate_at_height\":100}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_021L, "fee-program-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final FeeSponsorProgramResponse program =
+        transport
+            .getFeeSponsorProgram(new FeeSponsorProgramId(sponsor, "wallet_fx"), auth)
+            .join();
+
+    assert sponsor.equals(program.id().sponsor()) : "fee sponsor account mismatch";
+    assert "wallet_fx".equals(program.id().name()) : "fee sponsor program name mismatch";
+    assert program.lifecycle() == FeeSponsorProgramLifecycle.ACTIVE
+        : "fee sponsor lifecycle mismatch";
+    assert Long.valueOf(3L).equals(program.activeRevision())
+        : "fee sponsor active revision mismatch";
+    assert Long.valueOf(4L).equals(program.stagedRevision())
+        : "fee sponsor staged revision mismatch";
+    assert program.scheduledActivation() != null : "missing scheduled activation";
+    assert program.scheduledActivation().revision() == 4L
+        : "scheduled activation revision mismatch";
+    assert program.scheduledActivation().activateAtHeight() == 100L
+        : "scheduled activation height mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert "POST".equals(request.method()) : "fee sponsor lookup must use POST";
+    assert "https://torii.example/api/v1/fee-sponsor-programs/by-id"
+        .equals(request.uri().toString()) : "fee sponsor lookup URI mismatch";
+    assert ("{\"program_id\":\"" + sponsor + "/wallet_fx\"}").equals(readBody(request))
+        : "fee sponsor lookup body mismatch";
+    assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_021L, "fee-program-1");
+  }
+
+  private static void feeQuoteRejectsPayerRevisionAndGasSubstitution() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final FeePaymentIntent sponsorIntent =
+        FeePaymentIntent.sponsor(
+            new FeeSponsorProgramId(sponsor, "wallet_fx"),
+            3L,
+            Collections.emptyList(),
+            9_000L);
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth = canonicalAuth("alice", keyPair, null, null);
+
+    final Object[][] cases = {
+      {
+        feePayment(9_000L),
+        "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":9001}}"
+      },
+      {
+        sponsorIntent,
+        "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":9000}}"
+      },
+      {
+        sponsorIntent,
+        "{\"payer\":\"sponsor\",\"value\":{\"program_id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},\"program_revision\":4,"
+            + "\"charge_limits\":[],\"gas_limit\":9000}}"
+      }
+    };
+    for (final Object[] entry : cases) {
+      final FeePaymentIntent requested = (FeePaymentIntent) entry[0];
+      final String responseBody =
+          "{\"intent\":"
+              + entry[1]
+              + ",\"observation\":{},\"components\":[],\"capacities\":[],"
+              + "\"decision\":{}}";
+      final StubResponseExecutor executor =
+          new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              executor,
+              ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+      final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+      unsignedPayload.put("authority", "alice");
+      unsignedPayload.put("fee_payment", requested.toJsonMap());
+
+      expectCompletionIllegalArgument(
+          transport.quoteFees(unsignedPayload, auth),
+          "fee quote must reject a substituted payer, sponsor revision, or gas bound");
+    }
+  }
+
+  private static void feeSponsorProgramRejectsSubstitutedResponseId() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseBody =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"other\"},"
+            + "\"lifecycle\":{\"state\":\"active\",\"value\":null}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    expectCompletionIllegalArgument(
+        transport.getFeeSponsorProgram(
+            new FeeSponsorProgramId(sponsor, "wallet_fx"),
+            canonicalAuth("alice", keyPair, null, null)),
+        "fee sponsor lookup must reject a substituted response id");
+  }
+
   private static void vpnSessionAndReceiptRequestsUseNativeLeaseDtos() throws Exception {
     final String sessionId = "33".repeat(32);
     final String paymentTxHash = "44".repeat(32);
@@ -2962,7 +3138,8 @@ public final class HttpClientTransportTests {
                     + "77".repeat(32)
                     + "\","
                     + "\"gas_limit\":5000,\"gas_used\":17,"
-                    + "\"gas_asset_id\":\"xor#sora\",\"fee_sponsor\":\"alice\","
+                    + "\"fee_payment\":{\"payer\":\"authority\","
+                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":5000}},"
                     + "\"payload_digest_hex\":\""
                     + "88".repeat(32)
                     + "\"}}")
@@ -2981,12 +3158,11 @@ public final class HttpClientTransportTests {
             .callContract(
                 "alice",
                 "privkey",
-                5000L,
+                feePayment(5000L),
                 null,
                 "router::universal",
                 "contribute",
-                contractPayload,
-                "xor#sora")
+                contractPayload)
             .join();
 
     assert response.ok() : "Call response should be successful";
@@ -3019,13 +3195,17 @@ public final class HttpClientTransportTests {
         (Map<String, Object>) JsonParser.parse(readBody(request));
     assert "alice".equals(payload.get("authority")) : "Call authority mismatch";
     assert "privkey".equals(payload.get("private_key")) : "Call private key mismatch";
-    assert Long.valueOf(5000L).equals(((Number) payload.get("gas_limit")).longValue())
-        : "gas_limit mismatch";
+    assert !payload.containsKey("gas_limit") : "legacy gas_limit must be absent";
     assert "router::universal".equals(payload.get("contract_alias"))
         : "contract_alias mismatch";
     assert !payload.containsKey("contract_address") : "contract_address should be absent";
     assert "contribute".equals(payload.get("entrypoint")) : "Call entrypoint mismatch";
-    assert "xor#sora".equals(payload.get("gas_asset_id")) : "gas_asset_id mismatch";
+    assert !payload.containsKey("gas_asset_id") : "legacy gas_asset_id must be absent";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> feeValue =
+        (Map<String, Object>) ((Map<String, Object>) payload.get("fee_payment")).get("value");
+    assert ((Number) feeValue.get("gas_limit")).longValue() == 5000L
+        : "fee_payment gas limit mismatch";
     @SuppressWarnings("unchecked")
     final Map<String, Object> requestPayload = (Map<String, Object>) payload.get("payload");
     assert "alice".equals(requestPayload.get("buyer")) : "Nested buyer mismatch";
@@ -3049,16 +3229,17 @@ public final class HttpClientTransportTests {
         : "Argument record must be canonical lowercase hex bytes";
 
     final Map<String, Object> boundary = object(fixture, "torii_boundary");
+    final org.hyperledger.iroha.android.model.FeePaymentIntent boundaryFeePayment =
+        FeePaymentJson.parse(boundary.get("fee_payment"), "torii_boundary.fee_payment");
     final Map<String, Object> request =
         HttpClientTransport.buildContractCallPayload(
             string(boundary, "authority"),
             "fixture-private-key",
-            ((Number) boundary.get("gas_limit")).longValue(),
+            boundaryFeePayment,
             null,
             string(boundary, "contract_alias"),
             string(boundary, "entrypoint"),
-            boundary.get("payload"),
-            null);
+            boundary.get("payload"));
 
     assert string(boundary, "authority").equals(request.get("authority"))
         : "Shared call authority mismatch";
@@ -3071,9 +3252,8 @@ public final class HttpClientTransportTests {
         : "Shared call entrypoint mismatch";
     assert boundary.get("payload").equals(request.get("payload"))
         : "Shared call payload mismatch";
-    assert ((Number) boundary.get("gas_limit")).longValue()
-            == ((Number) request.get("gas_limit")).longValue()
-        : "Shared call gas limit mismatch";
+    assert boundaryFeePayment.toJsonMap().equals(request.get("fee_payment"))
+        : "Shared call fee payment mismatch";
     assert !request.containsKey("argument_record")
         : "Java must leave canonical argument-record encoding to Rust";
     assert !request.containsKey("argument_record_norito_hex")
@@ -3113,12 +3293,11 @@ public final class HttpClientTransportTests {
     final MultisigResponse response =
         transport
             .proposeMultisig(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instructionBytes)
                     .setCreationTimeMs(123L)
-                    .setFeeSponsor("fee-sponsor")
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
@@ -3146,7 +3325,8 @@ public final class HttpClientTransportTests {
     assert "cbdc@banka".equals(payload.get("multisig_account_alias"))
         : "multisig_account_alias mismatch";
     assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
-    assert "fee-sponsor".equals(payload.get("fee_sponsor")) : "fee_sponsor mismatch";
+    assert !payload.containsKey("fee_sponsor") : "legacy fee_sponsor must be absent";
+    assert payload.containsKey("fee_payment") : "typed fee payment must be present";
     assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
     assert "7".equals(payload.get("validation_fee_policy_version"))
         : "validation_fee_policy_version mismatch";
@@ -3167,7 +3347,7 @@ public final class HttpClientTransportTests {
     boolean failed = false;
     try {
       HttpClientTransport.buildMultisigProposePayload(
-          MultisigProposeRequest.builder()
+          MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
               .setMultisigAccountAlias("cbdc@banka")
               .setSignerAccountId("alice")
               .addInstructionBytes(new byte[0])
@@ -3183,7 +3363,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountId("aid:multisig")
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
@@ -3193,7 +3373,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
                     .build()),
@@ -3201,7 +3381,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3214,7 +3394,7 @@ public final class HttpClientTransportTests {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildMultisigProposePayload(
-                  MultisigProposeRequest.builder()
+                  MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                       .setMultisigAccountAlias("cbdc@banka")
                       .setSignerAccountId("alice")
                       .addInstructionBytes(instruction)
@@ -3225,7 +3405,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3235,7 +3415,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3245,7 +3425,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3255,7 +3435,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3265,7 +3445,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3276,7 +3456,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3287,7 +3467,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3297,7 +3477,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3307,7 +3487,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3319,7 +3499,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3331,7 +3511,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3441,11 +3621,10 @@ public final class HttpClientTransportTests {
       transport.callContract(
           "alice",
           "privkey",
-          5000L,
+          feePayment(5000L),
           "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           "router::universal",
           "contribute",
-          null,
           null);
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("Exactly one");
@@ -3458,21 +3637,13 @@ public final class HttpClientTransportTests {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildContractCallPayload(
-                  "alice", "privkey", 1L, null, "router::universal", entrypoint, null, null),
+                  "alice", "privkey", feePayment(1L), null, "router::universal", entrypoint, null),
           "blank contract entrypoint must be rejected");
     }
     for (final long gasLimit : new long[] {0L, -1L}) {
       expectIllegalArgument(
           () ->
-              HttpClientTransport.buildContractCallPayload(
-                  "alice",
-                  "privkey",
-                  gasLimit,
-                  null,
-                  "router::universal",
-                  "contribute",
-                  null,
-                  null),
+              feePayment(gasLimit),
           "non-positive contract gas limit must be rejected");
     }
   }
@@ -4913,6 +5084,17 @@ public final class HttpClientTransportTests {
     assert failed : message;
   }
 
+  private static void expectCompletionIllegalArgument(
+      final CompletableFuture<?> future, final String message) {
+    boolean failed = false;
+    try {
+      future.join();
+    } catch (final java.util.concurrent.CompletionException error) {
+      failed = error.getCause() instanceof IllegalArgumentException;
+    }
+    assert failed : message;
+  }
+
   private static void expectVerifierReject(
       final Runnable action, final CapturingExecutor executor, final String message) {
     final TransportRequest before = executor.lastRequest;
@@ -5895,7 +6077,7 @@ public final class HttpClientTransportTests {
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId(String.format("%08x", fillValue))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))

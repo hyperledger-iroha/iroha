@@ -1442,7 +1442,7 @@ fn minimal_config_snapshot() {
                     stop_grace: 10s,
                 },
                 submission: SoracloudRuntimeSubmission {
-                    gas_asset_id: None,
+                    fee_payer: SoracloudRuntimeFeePayer::Authority,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -1639,23 +1639,7 @@ fn minimal_config_snapshot() {
                             scale: 5,
                         },
                     ),
-                    sponsorship_enabled: false,
-                    sponsor_max_fee: Quantity(
-                        Numeric {
-                            mantissa: 0,
-                            scale: 0,
-                        },
-                    ),
-                    sponsor_verified_balance_safety_floor: Quantity(
-                        Numeric {
-                            mantissa: 0,
-                            scale: 0,
-                        },
-                    ),
-                    canonical_sponsor_account_id: None,
-                    fee_receipts_activation_height: 18446744073709551615,
-                    external_settlement_enabled: false,
-                    burn_from_unix_timestamp_ms: 0,
+                    sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
                 },
@@ -1789,8 +1773,7 @@ fn minimal_config_snapshot() {
                         },
                     ],
                 },
-                dataspace_fee_sponsors: {},
-                dataspace_fee_sponsor_policies: {},
+                dataspace_fee_sponsor_program_ids: {},
                 routing_policy: LaneRoutingPolicy {
                     default_lane: LaneId(
                         0,
@@ -2866,29 +2849,7 @@ fn nexus_rejects_zero_axt_slot_length() {
 }
 
 #[test]
-fn nexus_lane_relay_burn_activation_requires_canonical_sponsor() {
-    use iroha_config::parameters::user::{Nexus, NexusFees};
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        fees: NexusFees {
-            settlement_mode: "lane_relay_burn".to_owned(),
-            fee_receipts_activation_height: 42,
-            canonical_sponsor_account_id: None,
-            ..NexusFees::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
-    assert!(error.contains("canonical_sponsor_account_id"));
-}
-
-#[test]
-fn nexus_relay_worker_requires_lane_relay_burn_and_canonical_sponsor() {
+fn nexus_relay_worker_requires_lane_relay_burn() {
     use iroha_config::parameters::user::{Nexus, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
 
@@ -2908,7 +2869,7 @@ fn nexus_relay_worker_requires_lane_relay_burn_and_canonical_sponsor() {
 }
 
 #[test]
-fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
+fn nexus_relay_worker_parses_with_lane_relay_burn() {
     use iroha_config::parameters::actual::NexusFeeSettlementMode;
     use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
@@ -2918,8 +2879,6 @@ fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
         enabled: true,
         fees: NexusFees {
             settlement_mode: "lane_relay_burn".to_owned(),
-            fee_receipts_activation_height: 42,
-            canonical_sponsor_account_id: Some("ed0120abcdef@wonderland".to_owned()),
             ..NexusFees::default()
         },
         relay_worker: NexusRelayWorker {
@@ -2939,8 +2898,8 @@ fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
         NexusFeeSettlementMode::LaneRelayBurn
     );
     assert_eq!(
-        parsed.fees.canonical_sponsor_account_id.as_deref(),
-        Some("ed0120abcdef@wonderland")
+        parsed.fees.sponsor_vault_custody_account_id,
+        defaults::nexus::fees::sponsor_vault_custody_account_id()
     );
 }
 
@@ -3462,8 +3421,7 @@ fn routing_policy_dataspace_resolution() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
@@ -3516,8 +3474,7 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3566,8 +3523,7 @@ fn dataspace_fault_tolerance_zero_rejected() {
             ),
             description: None,
             fault_tolerance: Some(0),
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3592,8 +3548,7 @@ fn dataspace_manifest_hash_required_for_non_universal() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3619,8 +3574,7 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3632,16 +3586,20 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
+fn dataspace_fee_sponsor_program_id_parses() {
     use std::num::NonZeroU32;
 
     use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
     };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
 
     let mut emitter = Emitter::<ParseError>::new();
+    let program_id = format!(
+        "{}/default",
+        defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+    );
     let nexus = Nexus {
         enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -3660,13 +3618,8 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some(program_id.clone()),
         }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
             default_dataspace: Some("alpha".into()),
@@ -3680,111 +3633,16 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
         .expect("dataspace fee sponsor should parse");
     assert!(emitter.into_result().is_ok());
     assert_eq!(
-        parsed.dataspace_fee_sponsors.get(&DataSpaceId::new(1)),
-        Some(&"sponsor@alpha".to_owned())
+        parsed
+            .dataspace_fee_sponsor_program_ids
+            .get(&DataSpaceId::new(1))
+            .map(ToString::to_string),
+        Some(program_id)
     );
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_requires_policy() {
-    use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
-    };
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("primary".into()),
-            dataspace: Some("alpha".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: None,
-        }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
-        routing_policy: RoutingPolicy {
-            default_lane: Some(0),
-            default_dataspace: Some("alpha".into()),
-            ..RoutingPolicy::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter.into_result().expect_err("parse error expected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "fee_sponsor_policy");
-}
-
-#[test]
-fn dataspace_fee_sponsor_policy_requires_account_id() {
-    use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
-    };
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("primary".into()),
-            dataspace: Some("alpha".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: Some("default".into()),
-        }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
-        routing_policy: RoutingPolicy {
-            default_lane: Some(0),
-            default_dataspace: Some("alpha".into()),
-            ..RoutingPolicy::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter.into_result().expect_err("parse error expected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "fee_sponsor_account_id");
-}
-
-#[test]
-fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
+fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
     use std::num::NonZeroU32;
 
     use iroha_config::parameters::user::{
@@ -3811,8 +3669,7 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some("missing-program-separator".into()),
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3825,12 +3682,12 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "sponsorship_enabled");
+    assert_contains!(debug, "fee_sponsor_program_id");
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
-    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus, NexusFees};
+fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
 
@@ -3843,13 +3700,11 @@ fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@universal".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some(format!(
+                "{}/default",
+                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+            )),
         }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
         ..Nexus::default()
     };
 
@@ -4461,10 +4316,10 @@ fn taira_config_enables_untrusted_cid_hosting() {
         runtime
             .get("submission")
             .and_then(TomlValue::as_table)
-            .and_then(|submission| submission.get("gas_asset_id"))
+            .and_then(|submission| submission.get("fee_payer"))
             .and_then(TomlValue::as_str),
-        Some("xor#universal"),
-        "Soracloud production mode requires an explicit runtime submission gas asset"
+        Some("sponsor"),
+        "Taira Soracloud submissions should use the exact genesis sponsor program"
     );
 }
 

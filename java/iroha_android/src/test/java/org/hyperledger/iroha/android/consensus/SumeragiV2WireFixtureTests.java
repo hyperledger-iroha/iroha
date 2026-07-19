@@ -356,7 +356,8 @@ public final class SumeragiV2WireFixtureTests {
     assertEquals(1, decoded.liveness.timeoutQuorums.size());
     assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE,
         decoded.liveness.outboundIntents.get(0).kind);
-    assertEquals(SumeragiV2Wire.QueueKind.NETWORK_INGRESS,
+    assertEquals(1, decoded.liveness.queues.size());
+    assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH,
         decoded.liveness.queues.get(0).queue);
     assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING,
         decoded.liveness.blocker);

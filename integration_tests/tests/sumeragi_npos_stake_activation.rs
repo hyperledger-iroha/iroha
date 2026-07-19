@@ -574,8 +574,11 @@ async fn submit_progress_log(
     message: String,
 ) -> eyre::Result<()> {
     let candidate_indices = submit_peer_indices_for_network(network, probe);
-    let transaction =
-        probe.build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default());
+    let transaction = probe.build_transaction_from_items(
+        [Log::new(Level::INFO, message)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
 
     let mut accepted = false;
     let mut errors = Vec::new();

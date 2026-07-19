@@ -1,6 +1,7 @@
 import type { Buffer } from "buffer";
 
 import type {
+  BrowserFeePayment,
   BrowserTransactionMetadataValue,
   BrowserTransactionUnsigned,
 } from "./transaction-codec.js";
@@ -91,14 +92,14 @@ export interface BrowserDeploymentSubmission {
 
 export interface BrowserDeploymentNodeCapabilities {
   abi_version: 1;
-  data_model_version: 1;
+  data_model_version: 2;
   signed_transaction_schema_hash_hex: string;
   readonly [key: string]: unknown;
 }
 
 export interface ValidatedBrowserDeploymentNodeCapabilities {
   readonly abiVersion: 1;
-  readonly dataModelVersion: 1;
+  readonly dataModelVersion: 2;
   readonly signedTransactionSchemaHashHex: string;
 }
 
@@ -129,6 +130,12 @@ export interface BrowserContractDeploymentOptions
   contractAlias: string;
   leaseExpiryMs?: BrowserTransactionUnsigned | null;
   ttlMs?: BrowserTransactionUnsigned | null;
+  /** Static signature-bound fee intent used for every deployment step. */
+  feePayment?: BrowserFeePayment;
+  /** Per-step fee intent, typically produced from an authenticated fee quote. */
+  feePaymentForStep?: (
+    step: BrowserContractDeploymentStep,
+  ) => BrowserFeePayment | Promise<BrowserFeePayment>;
   metadata?:
     | string
     | { readonly [key: string]: BrowserTransactionMetadataValue }

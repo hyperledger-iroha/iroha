@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.Base64
 import kotlin.io.path.readText
+import org.hyperledger.iroha.sdk.client.FeePaymentJson
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -279,6 +280,10 @@ internal object AndroidFixtureSupport {
             executable = executable,
             timeToLiveMs = optionalLong(payload["time_to_live_ms"], "$name.payload.time_to_live_ms"),
             nonce = optionalInt(payload["nonce"], "$name.payload.nonce"),
+            feePayment = FeePaymentJson.parse(
+                payload["fee_payment"],
+                "$name.payload.fee_payment",
+            ),
             metadata = metadata,
         )
     }

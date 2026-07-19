@@ -47,6 +47,10 @@ const AUTHORITY = AccountAddress.fromAccount({
   algorithm: "ed25519",
   publicKey: PUBLIC_KEY,
 }).toI105(753);
+const AUTHORITY_FEE_PAYMENT = Object.freeze({
+  payer: "authority",
+  chargeLimits: Object.freeze([]),
+});
 const ARTIFACT_ADMISSION_VERIFIER = await createStaticArtifactAdmissionVerifier({
   ok: true,
   code_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
@@ -186,6 +190,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     authority: AUTHORITY,
     chainDiscriminant: 753,
     instructions: [instruction],
+    feePayment: AUTHORITY_FEE_PAYMENT,
     creationTimeMs: 123_456,
     nonce: 1,
   });
@@ -248,6 +253,7 @@ test("browser deployment retains the existing key locally and commits every step
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     contractAlias: "demo::universal",
     clock: () => 123_456,
     nonceForStep: (_step, sequence) => sequence + 1,
@@ -258,7 +264,7 @@ test("browser deployment retains the existing key locally and commits every step
       });
       return {
         abi_version: 1,
-        data_model_version: 1,
+        data_model_version: 2,
         signed_transaction_schema_hash_hex:
           "7ab5ff9c572efb316deac478f19209c5",
       };
@@ -333,6 +339,7 @@ test("browser deployment fails closed without authentic shared artifact admissio
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     contractAlias: "demo::universal",
     readNodeCapabilities() {
       externalCalls += 1;
@@ -406,12 +413,13 @@ test("browser deployment stops without exact persisted Applied finality and auth
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     contractAlias: "demo::universal",
     clock: () => 123_456,
     nonceForStep: (_step, sequence) => sequence + 1,
     readNodeCapabilities: () => ({
       abi_version: 1,
-      data_model_version: 1,
+      data_model_version: 2,
       signed_transaction_schema_hash_hex:
         "7ab5ff9c572efb316deac478f19209c5",
     }),
@@ -467,6 +475,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     contractAlias: "demo::universal",
     sign: ({ payloadHashBytes }) => ed25519.sign(payloadHashBytes, PRIVATE_KEY),
     submitAndWait() {
@@ -480,7 +489,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
       ...base,
       readNodeCapabilities: () => ({
         abi_version: 1,
-        data_model_version: 1,
+        data_model_version: 2,
         signed_transaction_schema_hash_hex: "00".repeat(16),
       }),
       signManifest() {
@@ -497,7 +506,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
       ...base,
       readNodeCapabilities: () => ({
         abi_version: 1,
-        data_model_version: 1,
+        data_model_version: 2,
         signed_transaction_schema_hash_hex:
           "7ab5ff9c572efb316deac478f19209c5",
       }),
@@ -519,9 +528,10 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     readNodeCapabilities: () => ({
       abi_version: 1,
-      data_model_version: 1,
+      data_model_version: 2,
       signed_transaction_schema_hash_hex:
         "7ab5ff9c572efb316deac478f19209c5",
     }),

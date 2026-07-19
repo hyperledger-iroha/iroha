@@ -26,6 +26,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "TransactionConfig",
     "TransactionDraft",
+    "authority_fee_payment",
+    "sponsor_fee_payment",
 ]
 
 
@@ -89,6 +91,7 @@ class TransactionConfig:
 
     chain_id: str
     authority: str
+    fee_payment: Mapping[str, Any]
     creation_time_ms: Optional[int] = None
     ttl_ms: Optional[int] = None
     nonce: Optional[int] = None
@@ -201,6 +204,103 @@ def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict
     return normalized
 
 
+def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    if isinstance(charge_limits, (str, bytes, bytearray, memoryview)):
+        raise TypeError("charge_limits must be a sequence of mappings")
+    normalized: List[Dict[str, Any]] = []
+    previous_kind = -1
+    for index, raw in enumerate(charge_limits):
+        if not isinstance(raw, Mapping):
+            raise TypeError(f"charge_limits[{index}] must be a mapping")
+        kind_literal = raw.get("kind")
+        kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+        if kind < 0:
+            raise ValueError(
+                f"charge_limits[{index}].kind must be nexus or pipeline_gas"
+            )
+        if kind <= previous_kind:
+            raise ValueError(
+                "charge_limits must be unique and ordered nexus before pipeline_gas"
+            )
+        previous_kind = kind
+        asset_definition_id = _require_exact_non_empty_string(
+            raw.get("asset_definition_id"),
+            f"charge_limits[{index}].asset_definition_id",
+        )
+        max_amount = _normalize_positive_quantity(
+            raw.get("max_amount"),
+            f"charge_limits[{index}].max_amount",
+        )
+        normalized.append(
+            {
+                "kind": {
+                    "kind": "nexus" if kind == 0 else "pipeline_gas",
+                    "value": None,
+                },
+                "asset_definition_id": asset_definition_id,
+                "max_amount": max_amount,
+            }
+        )
+    return normalized
+
+
+def _fee_gas_limit(gas_limit: Optional[int]) -> Optional[int]:
+    if gas_limit is None:
+        return None
+    if isinstance(gas_limit, bool) or not isinstance(gas_limit, int) or gas_limit <= 0:
+        raise ValueError("gas_limit must be a positive integer when provided")
+    if gas_limit > (1 << 64) - 1:
+        raise ValueError("gas_limit exceeds u64")
+    return gas_limit
+
+
+def authority_fee_payment(
+    *,
+    charge_limits: Sequence[Mapping[str, Any]],
+    gas_limit: Optional[int] = None,
+) -> Mapping[str, Any]:
+    """Build an exact authority-paid ``FeePaymentIntent`` mapping."""
+
+    return {
+        "payer": "authority",
+        "value": {
+            "charge_limits": _fee_charge_limits(charge_limits),
+            "gas_limit": _fee_gas_limit(gas_limit),
+        },
+    }
+
+
+def sponsor_fee_payment(
+    program_id: str,
+    program_revision: int,
+    *,
+    charge_limits: Sequence[Mapping[str, Any]],
+    gas_limit: Optional[int] = None,
+) -> Mapping[str, Any]:
+    """Build a sponsor-paid intent bound to one immutable program revision."""
+
+    literal = _require_exact_non_empty_string(program_id, "program_id")
+    sponsor, separator, name = literal.partition("/")
+    if separator != "/" or not sponsor or not name or "/" in name:
+        raise ValueError("program_id must use the exact sponsor/program form")
+    if (
+        isinstance(program_revision, bool)
+        or not isinstance(program_revision, int)
+        or program_revision <= 0
+        or program_revision > (1 << 64) - 1
+    ):
+        raise ValueError("program_revision must be a positive u64 integer")
+    return {
+        "payer": "sponsor",
+        "value": {
+            "program_id": {"sponsor": sponsor, "name": name},
+            "program_revision": program_revision,
+            "charge_limits": _fee_charge_limits(charge_limits),
+            "gas_limit": _fee_gas_limit(gas_limit),
+        },
+    }
+
+
 def _normalize_rwa_quantity_fields(
     payload: Mapping[str, Any],
     context: str,
@@ -243,6 +343,10 @@ class TransactionDraft:
         self._config = TransactionConfig(
             chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id"),
             authority=_require_exact_non_empty_string(config.authority, "authority"),
+            fee_payment=_normalize_mapping_payload(
+                config.fee_payment,
+                "fee_payment",
+            ),
             creation_time_ms=config.creation_time_ms,
             ttl_ms=config.ttl_ms,
             nonce=config.nonce,
@@ -1225,6 +1329,7 @@ class TransactionDraft:
             effective_chain,
             effective_authority,
             private_key,
+            fee_payment=self._config.fee_payment,
             instructions=payload_instructions,
             creation_time_ms=effective_creation,
             ttl_ms=effective_ttl,
@@ -1269,6 +1374,44 @@ class TransactionDraft:
         status = client.submit_transaction_envelope(envelope)
         return envelope, status
 
+    def quote_and_sign(
+        self,
+        client: "ToriiClient",
+        private_key: bytes,
+    ) -> tuple[SignedTransactionEnvelope, Mapping[str, Any]]:
+        """Quote and sign one exact unsigned payload without rebuilding it.
+
+        The draft fixes the payer (including an exact sponsor program revision)
+        and executable gas bound. Torii may return updated charge maxima; the
+        native signer rejects payer, revision, or gas substitution.
+        """
+
+        builder = self.to_builder()
+        draft_payload_json = builder.payload_json()
+        draft_payload = json.loads(draft_payload_json)
+        from iroha_torii_client.client import ToriiCanonicalRequestAuth
+
+        keypair = Ed25519KeyPair.from_private_key(private_key)
+        authority = draft_payload.get("authority")
+        if not isinstance(authority, str) or not authority:
+            raise RuntimeError("exact transaction draft is missing its canonical authority")
+        quote = client.quote_fees(
+            draft_payload,
+            canonical_auth=ToriiCanonicalRequestAuth(
+                account_id=authority,
+                signer=keypair.sign,
+            ),
+        )
+        intent = quote.get("intent")
+        if not isinstance(intent, Mapping):
+            raise RuntimeError("fee quote response is missing an intent object")
+        envelope = builder.sign_quoted_payload(
+            draft_payload_json,
+            json.dumps(intent, separators=(",", ":")),
+            private_key,
+        )
+        return envelope, quote
+
     def sign_hex_and_submit(
         self,
         client: "ToriiClient",
@@ -1289,7 +1432,11 @@ class TransactionDraft:
     def to_builder(self) -> TransactionBuilder:
         """Return a :class:`TransactionBuilder` populated with the draft state."""
 
-        builder = TransactionBuilder(self._config.chain_id, self._config.authority)
+        builder = TransactionBuilder(
+            self._config.chain_id,
+            self._config.authority,
+            json.dumps(self._config.fee_payment, separators=(",", ":")),
+        )
         builder.set_creation_time_ms(_ensure_creation_time_ms(self._config))
         if self._config.ttl_ms is not None:
             builder.set_ttl_ms(int(self._config.ttl_ms))
@@ -1299,6 +1446,17 @@ class TransactionDraft:
             builder.set_metadata(self._config.metadata)
         for instruction in self._instructions:
             builder.add_instruction(instruction)
+        for entry in self._lane_privacy_attachments:
+            normalized = _normalize_lane_privacy_attachment(entry)
+            builder.add_lane_privacy_merkle_attachment(
+                normalized["commitment_id"],
+                normalized["leaf"],
+                normalized["leaf_index"],
+                normalized["audit_path"],
+                normalized["proof_backend"],
+                normalized["proof_bytes"],
+                normalized["verifying_key_name"],
+            )
         return builder
 
     # ------------------------------------------------------------------

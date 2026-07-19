@@ -147,7 +147,10 @@ where
 {
     for chunk in instructions.chunks(MAX_INSTRUCTIONS_PER_TX) {
         client
-            .submit_all_blocking(chunk.iter().cloned())
+            .submit_all_blocking(
+                chunk.iter().cloned(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err("Failed to submit instruction batch")?;
     }
     Ok(())
@@ -566,7 +569,10 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
     ensure_domain_registration_lease_for_network(&network, &domain_id)
         .expect("should seed lease for sorting test domain");
     test_client
-        .submit_blocking(Register::domain(Domain::new(domain_id.clone())))
+        .submit_blocking(
+            Register::domain(Domain::new(domain_id.clone())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("should be committed");
 
     let sort_by_metadata_key = "test_sort".parse::<Name>().expect("Valid");

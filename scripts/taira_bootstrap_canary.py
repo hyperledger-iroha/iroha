@@ -513,31 +513,6 @@ def patch_account_id_in_toml(raw: str, account_id: str) -> str:
     return "\n".join(updated).rstrip() + "\n"
 
 
-def write_cli_metadata_file(
-    *,
-    gas_asset_id: str | None,
-    gas_limit: int | None,
-    prefix: str,
-) -> Path | None:
-    metadata: dict[str, Any] = {}
-    if isinstance(gas_asset_id, str) and gas_asset_id.strip():
-        metadata["gas_asset_id"] = gas_asset_id.strip()
-    if isinstance(gas_limit, int) and gas_limit > 0:
-        metadata["gas_limit"] = gas_limit
-    if not metadata:
-        return None
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix=prefix,
-        suffix=".json",
-        delete=False,
-    ) as handle:
-        json.dump(metadata, handle)
-        handle.write("\n")
-        return Path(handle.name)
-
-
 def resolve_iroha_bin(explicit: str | None) -> str:
     candidate = explicit.strip() if isinstance(explicit, str) else ""
     if candidate:
@@ -563,61 +538,53 @@ def register_account_with_local_registrar(
     chain_discriminant: int,
     account_id: str,
     permissions: list[str],
-    gas_asset_id: str | None = None,
-    gas_limit: int | None = None,
 ) -> dict[str, Any]:
     registrar_account_id, _ = load_local_registrar(
         client_toml, chain_discriminant, iroha_bin
     )
     iroha_cli = resolve_iroha_bin(iroha_bin)
-    metadata_path = write_cli_metadata_file(
-        gas_asset_id=gas_asset_id,
-        gas_limit=gas_limit,
-        prefix="taira_local_registrar_metadata_",
-    )
-    iroha_cmd_prefix = [iroha_cli]
-    if metadata_path is not None:
-        iroha_cmd_prefix.extend(["--metadata", str(metadata_path)])
-    iroha_cmd_prefix.extend(["-c", str(client_toml)])
+    iroha_cmd_prefix = [
+        iroha_cli,
+        "--fee-payer",
+        "authority",
+        "-c",
+        str(client_toml),
+    ]
     try:
+        run_command(
+            iroha_cmd_prefix
+            + [
+                "ledger",
+                "account",
+                "register",
+                "--id",
+                account_id,
+            ]
+        )
+        status = "created-local"
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "already exists" not in message and "409" not in message:
+            raise
+        status = "existing-local"
+
+    for permission in normalize_permissions(permissions):
         try:
             run_command(
                 iroha_cmd_prefix
                 + [
-                    "ledger",
                     "account",
-                    "register",
+                    "permission",
+                    "grant",
                     "--id",
                     account_id,
-                ]
+                ],
+                input_text=json.dumps({"name": permission, "payload": {}}),
             )
-            status = "created-local"
         except RuntimeError as exc:
             message = str(exc).lower()
-            if "already exists" not in message and "409" not in message:
+            if "already exists" not in message and "duplicate" not in message:
                 raise
-            status = "existing-local"
-
-        for permission in normalize_permissions(permissions):
-            try:
-                run_command(
-                    iroha_cmd_prefix
-                    + [
-                        "account",
-                        "permission",
-                        "grant",
-                        "--id",
-                        account_id,
-                    ],
-                    input_text=json.dumps({"name": permission, "payload": {}}),
-                )
-            except RuntimeError as exc:
-                message = str(exc).lower()
-                if "already exists" not in message and "duplicate" not in message:
-                    raise
-    finally:
-        if metadata_path is not None:
-            metadata_path.unlink(missing_ok=True)
 
     return {
         "status": status,
@@ -638,42 +605,34 @@ def fund_account_with_local_registrar(
     account_id: str,
     asset_definition_id: str,
     quantity: str,
-    gas_asset_id: str | None = None,
-    gas_limit: int | None = None,
 ) -> dict[str, Any]:
     registrar_account_id, _ = load_local_registrar(
         client_toml, chain_discriminant, iroha_bin
     )
     iroha_cli = resolve_iroha_bin(iroha_bin)
-    metadata_path = write_cli_metadata_file(
-        gas_asset_id=gas_asset_id,
-        gas_limit=gas_limit,
-        prefix="taira_local_funding_metadata_",
+    iroha_cmd_prefix = [
+        iroha_cli,
+        "--fee-payer",
+        "authority",
+        "-c",
+        str(client_toml),
+    ]
+    run_command(
+        iroha_cmd_prefix
+        + [
+            "ledger",
+            "asset",
+            "transfer",
+            "--definition",
+            asset_definition_id,
+            "--account",
+            registrar_account_id,
+            "--to",
+            account_id,
+            "--quantity",
+            quantity,
+        ]
     )
-    iroha_cmd_prefix = [iroha_cli]
-    if metadata_path is not None:
-        iroha_cmd_prefix.extend(["--metadata", str(metadata_path)])
-    iroha_cmd_prefix.extend(["-c", str(client_toml)])
-    try:
-        run_command(
-            iroha_cmd_prefix
-            + [
-                "ledger",
-                "asset",
-                "transfer",
-                "--definition",
-                asset_definition_id,
-                "--account",
-                registrar_account_id,
-                "--to",
-                account_id,
-                "--quantity",
-                quantity,
-            ]
-        )
-    finally:
-        if metadata_path is not None:
-            metadata_path.unlink(missing_ok=True)
     return {
         "status": "funded-local",
         "response_status": 200,
@@ -860,8 +819,7 @@ def attempt_faucet(
     account_id: str,
     torii_root: str,
     *,
-    gas_asset_id: str | None = None,
-    gas_limit: int | None = None,
+    faucet_asset_id: str | None = None,
     chain_discriminant: int = DEFAULT_CHAIN_DISCRIMINANT,
     iroha_bin: str | None = None,
     status_timeout_ms: int = DEFAULT_STATUS_TIMEOUT_MS,
@@ -888,7 +846,7 @@ def attempt_faucet(
             tx_hash_hex = validate_faucet_response(
                 claim,
                 expected_account_id=account_id,
-                expected_asset_definition_id=gas_asset_id,
+                expected_asset_definition_id=faucet_asset_id,
             )
         except RuntimeError as error:
             return {
@@ -1092,15 +1050,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Only generate/onboard the signer and skip the initial faucet attempt",
     )
     parser.add_argument(
-        "--gas-asset-id",
+        "--faucet-asset-id",
         default=None,
-        help="Optional gas asset definition id for faucet fallback transactions",
-    )
-    parser.add_argument(
-        "--gas-limit",
-        type=int,
-        default=None,
-        help="Optional gas limit for faucet fallback transactions",
+        help="Expected asset definition id in the faucet response",
     )
     return parser.parse_args(argv)
 
@@ -1175,8 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
         else attempt_faucet(
             account_id,
             args.torii_root,
-            gas_asset_id=args.gas_asset_id,
-            gas_limit=args.gas_limit,
+            faucet_asset_id=args.faucet_asset_id,
             chain_discriminant=chain_discriminant,
             iroha_bin=args.iroha_bin,
             status_timeout_ms=args.status_timeout_ms,

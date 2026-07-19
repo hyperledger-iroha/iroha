@@ -82,26 +82,42 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
 
     // Build a set of independent txs so scheduler ordering/tie-breakers apply
     let txs = vec![
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Transfer::asset_quantity(
-                a_coin.clone(),
-                3_u32,
-                bob_id.clone(),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_quantity(1_u32, b_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([SetKeyValue::account(
-                alice_id.clone(),
-                "k".parse().unwrap(),
-                iroha_primitives::json::Json::new("v"),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::asset_quantity(
+            a_coin.clone(),
+            3_u32,
+            bob_id.clone(),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Burn::asset_quantity(1_u32, b_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::account(
+            alice_id.clone(),
+            "k".parse().unwrap(),
+            iroha_primitives::json::Json::new("v"),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
     ];
 
     let (json_heap, state_heap) = run_with_ready_heap(true, txs.clone());

@@ -62,17 +62,30 @@ Use the Iroha CLI's local contract debugger. Always name the entrypoint; V1 has
 no implicit source entrypoint or source-order dispatch.
 
 ```sh
+build_record=target/examples/.fingerprints/hello.to.record
+artifact_hash=$(sed -n 's/^artifact_hash=//p' "$build_record")
+input_fingerprint=$(sed -n 's/^input=//p' "$build_record")
+source_map_file="target/examples/.sidecars/$artifact_hash/$input_fingerprint/source-map.json"
+test -f "$source_map_file"
+
 iroha --config defaults/client.toml \
   contract debug-call \
   --code-file target/examples/hello.to \
+  --source-map-file "$source_map_file" \
   --source-file examples/hello/hello.ko \
   --entrypoint main \
   --payload-json '{}'
 ```
 
 The response includes the typed result, gas/cycle budget, syscall trace, queued
-instructions, durable-state overlay, and source location for a trap. For a
-read-only declaration use `contract debug-view` instead.
+instructions, and durable-state overlay. To add source locations and snippets
+for traps, pass the hash-bound compiler sidecar with `--source-map-file`; an
+optional `--source-file` overrides the sidecar's source path and is accepted
+only when the sidecar is also supplied. The example reconstructs the exact
+sidecar path from the build record; the debugger rejects a sidecar whose
+`artifact_hash` does not match `--code-file`. Relative source paths in the
+sidecar are resolved from the current working directory. For a read-only
+declaration use `contract debug-view` instead.
 
 Contract test files use the same compiler and runtime path:
 

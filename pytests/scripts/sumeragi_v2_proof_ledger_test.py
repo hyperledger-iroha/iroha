@@ -40,6 +40,11 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -228,6 +233,16 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     module = load_checker()
     ledger = module.load_ledger()
 
+    application = next(
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] == "application-liveness"
+    )
+    assert application["module"] == "SumeragiV2AsyncLivenessProofs"
+    assert application["symbol"] == "ApplicationCompletionProgressObligation"
+    assert application["status"] == "specified_unproved"
+    assert ledger["machine_checked_completion"] is False
+
     assert tuple(
         obligation["id"]
         for obligation in ledger["obligations"]
@@ -237,6 +252,9 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         "effective-lock-body-acquisition-production-refinement",
         "async-runner-scheduler-preservation",
         "async-type-invariant",
+        "post-decision-timeout-exclusion",
+        "decision-recovery-across-restart",
+        "progress-witness-production-refinement",
         "progress-witness-preservation",
         "post-gst-deadlock-freedom",
         "protected-service-rank",
@@ -252,9 +270,14 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     assert module.PROOF_STATUS_DEPENDENCIES == {
         "timeout-protection": ("historical-tc-lock-commit",),
         "async-type-invariant": ("async-runner-scheduler-preservation",),
+        "post-decision-timeout-exclusion": ("async-type-invariant",),
+        "decision-recovery-across-restart": ("async-type-invariant",),
         "progress-witness-preservation": (
             "async-type-invariant",
             "generation-scoped-vote-delivery",
+            "post-decision-timeout-exclusion",
+            "decision-recovery-across-restart",
+            "progress-witness-production-refinement",
         ),
         "post-gst-deadlock-freedom": (
             "async-type-invariant",
@@ -962,6 +985,644 @@ def test_effective_lock_body_model_and_production_refinement_remain_separate_deb
         assert f"{proposition} = TRUE" in source
 
 
+def copy_effective_lock_acquisition_fixture(tmp_path: Path, module) -> Path:
+    """Copy the executable owner, proof boundary, and adversarial TLC configs."""
+
+    formal_dir = tmp_path / "sumeragi_v2"
+    formal_dir.mkdir()
+    for name in (
+        "SumeragiV2EffectiveLockAcquisition.tla",
+        "SumeragiV2EffectiveLockAcquisitionProofs.tla",
+        "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+        "effective_lock_acquisition.cfg",
+        "effective_lock_rebind_fixed.cfg",
+        "effective_lock_rebind_bug.cfg",
+        "effective_lock_no_retry_bug.cfg",
+        "effective_lock_future_completion_bug.cfg",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    return formal_dir
+
+
+def test_effective_lock_acquisition_source_fidelity_is_green(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+
+    assert module._effective_lock_acquisition_source_fidelity_errors(formal_dir) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "symbol", "old", "new", "expected_error"),
+    (
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "PhysicalCompletionDisposition",
+            "completionId > physicalId",
+            "completionId < physicalId",
+            "PhysicalCompletionDisposition must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "RebindSameLock",
+            "consumerGeneration' = nextGeneration",
+            "consumerGeneration' = consumerGeneration",
+            "RebindSameLock must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "InstallHigherLock",
+            'acquisitionPhase = "Loading"',
+            'acquisitionPhase = "Waiting"',
+            "InstallHigherLock must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "AcquisitionSpec",
+            "/\\ WF_acquisitionVars(RetryRecoveredBody)",
+            "",
+            "AcquisitionSpec must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "StableEffectiveLockDelivery",
+            "/\\ CurrentConsumerDelivered",
+            "/\\ TRUE",
+            "StableEffectiveLockDelivery must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "NoRetryNext",
+            "CompleteOwnedLoad",
+            "RetryRecoveredBody",
+            "NoRetryNext must retain adversarial clause",
+        ),
+    ),
+)
+def test_effective_lock_acquisition_operator_mutations_fail_closed(
+    tmp_path: Path,
+    name: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / name
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_effective_lock_acquisition_theorem_weakening_fails_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2EffectiveLockAcquisitionProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "EffectiveLockAcquisitionModelObligation",
+            "/\\ StableEffectiveLockDelivery",
+            "/\\ TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(
+        "must state type closure plus both temporal properties" in error
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "clause", "expected_error"),
+    (
+        (
+            "effective_lock_acquisition.cfg",
+            "PROPERTY StableEffectiveLockDelivery\n",
+            "executable acquisition search must contain exactly one",
+        ),
+        (
+            "effective_lock_rebind_bug.cfg",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+            "mutation config must contain exactly one",
+        ),
+        (
+            "effective_lock_no_retry_bug.cfg",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+            "mutation config must contain exactly one",
+        ),
+        (
+            "effective_lock_future_completion_bug.cfg",
+            "INVARIANT BuggyFutureCompletionFailsClosed\n",
+            "mutation config must contain exactly one",
+        ),
+    ),
+)
+def test_effective_lock_acquisition_config_weakening_fails_closed(
+    tmp_path: Path,
+    name: str,
+    clause: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / name
+    source = path.read_text(encoding="utf-8")
+    assert source.count(clause) == 1
+    path.write_text(source.replace(clause, "", 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "successor_stale_token_bug.cfg 12",
+            "successor_stale_token_bug.cfg 0",
+            "successor-stale-token-bug exactly once with status 12",
+        ),
+        (
+            '"Invariant SuccessorActivationProtocolInvariantProjection is '
+            'violated." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue."',
+            '"Invariant SuccessorActivationProtocolInvariantProjection is '
+            'violated." \\\n'
+            '  "3 states generated, 3 distinct states found, 0 states left '
+            'on queue."',
+            "successor-stale-token-bug must require exact markers",
+        ),
+        (
+            "effective_lock_rebind_bug.cfg 12",
+            "effective_lock_rebind_bug.cfg 0",
+            "effective-lock-rebind-bug exactly once with status 12",
+        ),
+        (
+            '"5 distinct states" "State 4: Stuttering"',
+            '"5 distinct states"',
+            "effective-lock-no-retry-bug must require exact markers",
+        ),
+        (
+            '"Invariant BuggyFutureCompletionFailsClosed is violated by the '
+            'initial state"',
+            '"Invariant BuggyFutureCompletionFailsClosed is violated."',
+            "effective-lock-future-completion-bug must require exact markers",
+        ),
+    ),
+)
+def test_effective_lock_mutation_runner_weakening_fails_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    assert source.count(old) == 1
+    runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("label", "block"),
+    (
+        (
+            "successor-stale-token-bug",
+            "run_case successor-stale-token-bug \\\n"
+            "  SumeragiV2SuccessorStaleTokenMutation.tla \\\n"
+            "  successor_stale_token_bug.cfg 12 \\\n"
+            '  "Invariant SuccessorActivationProtocolInvariantProjection '
+            'is violated." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue." \\\n'
+            '  "BuggyBeginSuccessorActivation"\n',
+        ),
+        (
+            "successor-stale-token-fixed",
+            "run_case successor-stale-token-fixed \\\n"
+            "  SumeragiV2SuccessorStaleTokenMutation.tla \\\n"
+            "  successor_stale_token_fixed.cfg 0 \\\n"
+            '  "Model checking completed. No error has been found." \\\n'
+            '  "2 states generated, 2 distinct states found, 0 states left '
+            'on queue." \\\n'
+            '  "depth of the complete state graph search is 2"\n',
+        ),
+    ),
+)
+def test_successor_stale_token_runner_requires_both_tlc_cases(
+    tmp_path: Path,
+    label: str,
+    block: str,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    assert source.count(block) == 1
+    runner.write_text(source.replace(block, "", 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+
+    assert any(
+        f"must invoke {label} exactly once" in error for error in errors
+    ), errors
+
+
+def test_successor_stale_token_runner_rejects_swapped_red_green_order(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    bug_start = source.index("run_case successor-stale-token-bug")
+    fixed_start = source.index("run_case successor-stale-token-fixed")
+    next_start = source.index("run_case effective-lock-rebind-fixed")
+    bug_block = source[bug_start:fixed_start]
+    fixed_block = source[fixed_start:next_start]
+    runner.write_text(
+        source[:bug_start] + fixed_block + bug_block + source[next_start:],
+        encoding="utf-8",
+    )
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+
+    assert any(
+        "successor stale-token cases must keep bug-before-fixed order" in error
+        for error in errors
+    ), errors
+
+
+def test_causal_fifo_rank_mutation_source_fidelity_fails_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for name in (
+        "SumeragiV2LivenessProofs.tla",
+        "SumeragiV2CausalFifoRankMutation.tla",
+        "causal_fifo_rank_multiplier_one_bug.cfg",
+        "causal_fifo_rank_doubled.cfg",
+    ):
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+
+    assert module._causal_fifo_rank_mutation_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "SumeragiV2LivenessProofs.tla",
+            "  2 * CandidateSequenceIndex(\n",
+            "  1 * CandidateSequenceIndex(\n",
+            "CausalCandidatePosition must match the reviewed doubled-FIFO",
+        ),
+        (
+            "SumeragiV2CausalFifoRankMutation.tla",
+            '  /\\ preferredLocalSource\' = "Producer"\n',
+            '  /\\ preferredLocalSource\' = "Causal"\n',
+            "RemoveEarlierHead must match the reviewed causal FIFO/cursor mutation",
+        ),
+        (
+            "SumeragiV2CausalFifoRankMutation.tla",
+            "  earlierHeadRemoved => TargetRank < InitialTargetRank\n",
+            "  earlierHeadRemoved => TargetRank <= InitialTargetRank\n",
+            "EarlierHeadRemovalStrictlyDropsTargetRank must match",
+        ),
+        (
+            "causal_fifo_rank_doubled.cfg",
+            "CONSTANT RankMultiplier = 2\n",
+            "CONSTANT RankMultiplier = 1\n",
+            "must equal the exact reviewed TLC contract",
+        ),
+    )
+    for name, old, new, expected_error in mutations:
+        path = formal_dir / name
+        canonical = (module.FORMAL_DIR / name).read_text(encoding="utf-8")
+        assert canonical.count(old) == 1, (name, old)
+        path.write_text(canonical.replace(old, new, 1), encoding="utf-8")
+        errors = module._causal_fifo_rank_mutation_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        path.write_text(canonical, encoding="utf-8")
+
+    obligation = next(
+        obligation
+        for obligation in module.load_ledger()["obligations"]
+        if obligation["id"] == "protected-service-rank"
+    )
+    assert obligation["status"] == "specified_unproved"
+    assert "doubled causal FIFO position" in obligation["requirement"]
+
+
+def test_causal_fifo_rank_mutation_runner_fails_closed(tmp_path: Path) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    runner.write_text(source, encoding="utf-8")
+    assert module._causal_fifo_rank_mutation_runner_errors(repo_root) == []
+
+    mutations = (
+        (
+            "  causal_fifo_rank_multiplier_one_bug.cfg 12 \\\n",
+            "  causal_fifo_rank_multiplier_one_bug.cfg 0 \\\n",
+            "must invoke causal-fifo-rank-multiplier-one-bug exactly once",
+        ),
+        (
+            '  "State 2: <RemoveEarlierHead" \\\n',
+            '  "State 2: <RemoveEarlierHead line" \\\n',
+            "causal-fifo-rank-multiplier-one-bug must require exact markers",
+        ),
+        (
+            "  causal_fifo_rank_doubled.cfg 0 \\\n",
+            "  causal_fifo_rank_doubled.cfg 12 \\\n",
+            "must invoke causal-fifo-rank-doubled exactly once",
+        ),
+    )
+    for old, new, expected_error in mutations:
+        assert source.count(old) == 1, old
+        runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._causal_fifo_rank_mutation_runner_errors(repo_root)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+
+    bug_start = source.index("run_case causal-fifo-rank-multiplier-one-bug")
+    fixed_start = source.index("run_case causal-fifo-rank-doubled", bug_start)
+    next_start = source.index("run_case discovery-debt-bug", fixed_start)
+    bug_block = source[bug_start:fixed_start]
+    fixed_block = source[fixed_start:next_start]
+    runner.write_text(
+        source[:bug_start] + fixed_block + bug_block + source[next_start:],
+        encoding="utf-8",
+    )
+    errors = module._causal_fifo_rank_mutation_runner_errors(repo_root)
+    assert any(
+        "must keep multiplier-one bug before the doubled repair" in error
+        for error in errors
+    ), errors
+
+
+def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
+    """Copy the exact 24-file bounded effect-capacity mutation corpus."""
+
+    repo_root = tmp_path / "repo"
+    formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS:
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+    runner = repo_root / module.EFFECT_CAPACITY_MUTATION_RUNNER
+    runner.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / module.EFFECT_CAPACITY_MUTATION_RUNNER, runner)
+    return repo_root, formal_dir
+
+
+def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+
+    assert len(module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) == 23
+    assert (
+        sum(
+            name.endswith(".tla")
+            for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        )
+        == 4
+    )
+    assert (
+        sum(
+            name.endswith(".cfg")
+            for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        )
+        == 19
+    )
+    assert len(module.EFFECT_CAPACITY_MUTATION_SHA256) == 24
+    assert module._effect_capacity_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    (
+        "SumeragiV2EffectCapacityOwnershipMutation.tla",
+        "effect_batch_partial_fifo_fixed.cfg",
+        "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh",
+    ),
+)
+def test_effect_capacity_mutation_source_seal_rejects_stale_artifact(
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    path = (
+        repo_root / artifact_name
+        if "/" in artifact_name
+        else formal_dir / artifact_name
+    )
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n\\* stale mutation\n",
+        encoding="utf-8",
+    )
+
+    errors = module._effect_capacity_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+
+    assert any(
+        str(path) in error and "must match exact reviewed SHA-256" in error
+        for error in errors
+    ), errors
+
+
+def test_effect_capacity_mutation_source_seal_rejects_missing_and_extra(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    missing = formal_dir / "effect_capacity_timeout_sign_fixed.cfg"
+    missing.unlink()
+    errors = module._effect_capacity_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        str(missing) in error
+        and "missing effect-capacity mutation artifact" in error
+        for error in errors
+    ), errors
+
+    shutil.copy2(module.FORMAL_DIR / missing.name, missing)
+    extra = formal_dir / "effect_capacity_unreviewed.cfg"
+    extra.write_text("SPECIFICATION Spec\n", encoding="utf-8")
+    errors = module._effect_capacity_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        str(extra) in error and "extra effect-capacity mutation artifact" in error
+        for error in errors
+    ), errors
+
+
+def copy_post_decision_timeout_mutation_fixture(
+    tmp_path: Path, module
+) -> tuple[Path, Path]:
+    """Copy the exact ten-file post-Decision timeout mutation corpus."""
+
+    repo_root = tmp_path / "repo"
+    formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS:
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+    runner = repo_root / module.POST_DECISION_TIMEOUT_MUTATION_RUNNER
+    runner.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / module.POST_DECISION_TIMEOUT_MUTATION_RUNNER, runner)
+    return repo_root, formal_dir
+
+
+def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
+        tmp_path, module
+    )
+
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 9
+    assert (
+        sum(
+            name.endswith(".tla")
+            for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
+        )
+        == 1
+    )
+    assert (
+        sum(
+            name.endswith(".cfg")
+            for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
+        )
+        == 8
+    )
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 10
+    assert module._post_decision_timeout_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    (
+        "SumeragiV2PostDecisionTimeoutMutation.tla",
+        "post_decision_timeout_successor_bug.cfg",
+        "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh",
+    ),
+)
+def test_post_decision_timeout_mutation_source_seal_rejects_stale_artifact(
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
+        tmp_path, module
+    )
+    path = (
+        repo_root / artifact_name
+        if "/" in artifact_name
+        else formal_dir / artifact_name
+    )
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n\\* stale mutation\n",
+        encoding="utf-8",
+    )
+
+    errors = module._post_decision_timeout_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+
+    assert any(
+        str(path) in error and "must match exact reviewed SHA-256" in error
+        for error in errors
+    ), errors
+
+
+def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_symlink(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
+        tmp_path, module
+    )
+    missing = formal_dir / "post_decision_form_tc_guard_bug.cfg"
+    missing.unlink()
+    errors = module._post_decision_timeout_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        str(missing) in error
+        and "missing post-Decision timeout mutation artifact" in error
+        for error in errors
+    ), errors
+
+    shutil.copy2(module.FORMAL_DIR / missing.name, missing)
+    extra = formal_dir / "post_decision_unreviewed_bug.cfg"
+    extra.write_text("SPECIFICATION Spec\n", encoding="utf-8")
+    errors = module._post_decision_timeout_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        str(extra) in error
+        and "extra post-Decision timeout mutation artifact" in error
+        for error in errors
+    ), errors
+
+    extra.unlink()
+    symlink = formal_dir / "post_decision_timeout_fixed.cfg"
+    target = formal_dir / "post_decision_timeout_fixed.target"
+    symlink.rename(target)
+    symlink.symlink_to(target.name)
+    errors = module._post_decision_timeout_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        str(symlink) in error and "artifact must be a regular file" in error
+        for error in errors
+    ), errors
+
+
 def test_successor_activation_and_exact_recovery_refinement_remains_explicit_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
@@ -978,15 +1639,31 @@ def test_successor_activation_and_exact_recovery_refinement_remains_explicit_deb
     assert obligation["status"] == "specified_unproved"
 
     source = (module.FORMAL_DIR / "SumeragiV2ChainEpochRefinement.tla").read_text()
+    trace_refinement = module._top_level_operator_body(
+        source, "ProductionSuccessorAndExactRecoveryTraceRefinement"
+    )
+    assert trace_refinement is not None
+    assert " ".join(trace_refinement[0].split()) == (
+        "/\\ ProductionAppliedSuccessorTraceRefinesIndexedActivation = TRUE "
+        "/\\ ProductionRecoveredSuccessorTraceRefinesIndexedActivation = TRUE "
+        "/\\ ProductionStartupFailureRefinesFailClosedActivation = TRUE "
+        "/\\ ProductionHistoricalCertificateTraceRefinesIndexedAsync = TRUE "
+        "/\\ ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync = TRUE "
+        "/\\ ProductionTerminalApplicationExcludesActivation = TRUE"
+    )
     theorem = module._top_level_theorem_body(
         source,
         "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
     )
     assert theorem is not None
-    assert "IndexedChainSpec" in theorem[0]
-    assert (
-        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant"
-        in theorem[0]
+    theorem_parts = re.split(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", theorem[0], maxsplit=1
+    )
+    assert len(theorem_parts) == 1
+    assert " ".join(theorem_parts[0].split()) == (
+        "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+        "/\\ (IndexedChainSpec => []"
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
     )
     assert module._chain_source_fidelity_errors(module.FORMAL_DIR) == []
 
@@ -1009,7 +1686,10 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
         source, "SuccessorActivationStarvationFreedomObligation"
     )
     assert theorem is not None
-    statement = " ".join(theorem[0].split())
+    theorem_parts = re.split(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", theorem[0], maxsplit=1
+    )
+    statement = " ".join(theorem_parts[0].split())
     assert statement == (
         "IndexedChainSpec "
         "=> /\\ SuccessorActivationPendingStructureProperty "
@@ -1019,6 +1699,17 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
         "/\\ SuccessorActivationRankProgressProperty "
         "/\\ SuccessorActivationStarvationFreedomProperty"
     )
+    assert len(theorem_parts) == 2
+    proof = " ".join(theorem_parts[1].split())
+    for dependency in (
+        "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
+        "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
+        "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
+        "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
+        "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
+        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+    ):
+        assert proof.count(dependency) == 1
     assert (
         module._successor_activation_rank_source_fidelity_errors(module.FORMAL_DIR)
         == []
@@ -1549,6 +2240,11 @@ RotatingLeaderProgressProperty(specification) ==
        /\ (gst /\ ResponsiveHonestLeaderViewReached
                  /\ ~ResponsiveNodesDecide)
              ~> ResponsiveNodesDecide
+ApplicationCompletionProgressProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters:
+         (gst /\ NodeHasDecision(node))
+           ~> NodeHasApplication(node)
 ApplicationLivenessProperty(specification) ==
   specification
     => /\ \A node \in AsyncCurrentResponsiveVoters:
@@ -1577,6 +2273,24 @@ PostGstProgressActionEnabled ==
     )
     errors = module._async_proof_architecture_errors(formal_dir)
     assert any("ApplicationLivenessProperty must equal only" in error for error in errors)
+
+    vocabulary.write_text(
+        valid.replace(
+            "ApplicationCompletionProgressProperty(specification) ==\n"
+            "  specification\n"
+            "    => \\A node \\in AsyncCurrentResponsiveVoters:\n",
+            "ApplicationCompletionProgressProperty(specification) ==\n"
+            "  specification\n"
+            "    => \\A node \\in ValidatorIds:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "ApplicationCompletionProgressProperty must equal only" in error
+        for error in errors
+    )
 
     vocabulary.write_text(
         valid.replace(
@@ -1617,6 +2331,47 @@ PostGstProgressActionEnabled ==
     assert any("asynchronous liveness symbol NodeHasDecision" in error for error in errors)
     assert any(
         "asynchronous liveness symbol HeightLivenessProperty" in error
+        for error in errors
+    )
+
+    fidelity_dir = tmp_path / "application-fidelity"
+    fidelity_dir.mkdir()
+    for filename in (
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2LivenessProofs.tla",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / filename, fidelity_dir / filename)
+    assert module._application_completion_source_fidelity_errors(fidelity_dir) == []
+
+    proof_path = fidelity_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    proof_source = proof_path.read_text(encoding="utf-8")
+    proof_path.write_text(
+        proof_source.replace(
+            "         ApplicationCompletionReachesEveryResponsivePrefix\n",
+            "         ApplicationCompletionProgressAppliesFixedResponsiveNode\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
+    assert any(
+        "proof must compose the reviewed application dependencies in order"
+        in error
+        for error in errors
+    )
+
+    proof_path.write_text(
+        mutate_tla_theorem(
+            proof_source,
+            "ApplicationLivenessObligation",
+            "PROOF\n",
+            "OBVIOUS\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
+    assert any(
+        "must have the reviewed deductive application-completion proof" in error
         for error in errors
     )
 
@@ -2182,6 +2937,11 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2258,7 +3018,783 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         for error in module._async_source_fidelity_errors(formal_dir)
     )
 
-def test_progress_witness_source_fidelity_requires_exact_height(
+    path.write_text(source, encoding="utf-8")
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    canonical_effects = effects_path.read_text(encoding="utf-8")
+
+    def mutate_effect_item(name: str, old: str, new: str) -> str:
+        item = module.rust_items(canonical_effects, name)[0]
+        assert item.source.count(old) == 1, (name, old)
+        return canonical_effects.replace(item.source, item.source.replace(old, new, 1), 1)
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "consume_effects",
+            "        if let Err(error) = self.retain_effect_batch(effects) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }\n"
+            "        self.drain_retained_effect_batch(services)\n"
+            "            .map_err(|error| self.close(error, services))",
+            "        let count = self.drain_retained_effect_batch(services)?;\n"
+            "        if let Err(error) = self.retain_effect_batch(effects) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }\n"
+            "        Ok(count)",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "consume_effects must retain the complete reducer batch before draining it"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "drain_retained_effect_batch",
+            ".and_then(|batch| batch.effects.front())",
+            ".and_then(|batch| batch.effects.back())",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "retained dispatch must clone only the FIFO head" in error
+        or "read front, consume_one, and pop_front exactly once in FIFO order" in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "drain_retained_effect_batch",
+            "                    batch.effects.pop_front();\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "read front, consume_one, and pop_front exactly once in FIFO order" in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "drain_retained_effect_batch",
+            "                    debug_assert!(pending_work_producer.is_some());\n"
+            "                    break;\n",
+            "                    debug_assert!(pending_work_producer.is_some());\n"
+            "                    self.retained_effect_batch\n"
+            "                        .as_mut()\n"
+            "                        .expect(\"capacity-blocked head\")\n"
+            "                        .effects\n"
+            "                        .pop_front();\n"
+            "                    break;\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "pending-work capacity retry must leave the FIFO head retained and stop"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "step",
+            "        if self.retained_effect_batch.is_some() {\n",
+            "        if false && self.retained_effect_batch.is_some() {\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "step must drain retained causal debt and return before runtime stepping"
+        in error
+        for error in errors
+    ), errors
+    effects_path.write_text(canonical_effects, encoding="utf-8")
+
+
+def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:
+    module = load_checker()
+    source = r'''
+/* outer /* pub fn comment_fake() {} */ comment */
+const RAW: &str = r###"pub fn raw_fake() { { /* not code */ } }"###;
+const COOKED: &str = "the cooked string continues
+pub fn cooked_fake() { [not_code()] }
+across physical source lines";
+macro_rules! stuffed {
+    () => {
+        pub fn macro_fake() {}
+    }
+}
+stuffed_paren!(
+    pub fn paren_fake() {}
+);
+stuffed_bracket![
+    pub fn bracket_fake() {}
+];
+#[cfg(any())]
+pub fn gated<'a>(input: &'a str) {
+    let brace = '{';
+    let byte = b'}';
+    let escaped = "\\\"}";
+}
+pub fn live<'a>(input: &'a str) {
+    let raw = br#"} // not code"#;
+}
+'''
+
+    assert module.rust_items(source, "comment_fake") == ()
+    assert module.rust_items(source, "raw_fake") == ()
+    assert module.rust_items(source, "cooked_fake") == ()
+    macro = module.rust_items(source, "macro_fake")
+    assert len(macro) == 1
+    assert macro[0].brace_context == (
+        ("macro_rules", "!", "stuffed"),
+        ("(", ")", "=>"),
+    )
+    paren = module.rust_items(source, "paren_fake")
+    assert len(paren) == 1
+    assert tuple(opener for opener, _position, _header in paren[0].delimiter_context) == (
+        "(",
+    )
+    bracket = module.rust_items(source, "bracket_fake")
+    assert len(bracket) == 1
+    assert tuple(
+        opener for opener, _position, _header in bracket[0].delimiter_context
+    ) == ("[",)
+    gated = module.rust_items(source, "gated")
+    assert len(gated) == 1
+    assert gated[0].brace_context == ()
+    assert gated[0].attributes == ("#[cfg(any())]",)
+    live = module.rust_items(source, "live")
+    assert len(live) == 1
+    assert live[0].brace_context == ()
+    assert "'a" in module.rust_code_tokens(live[0].source) or (
+        "'" in module.rust_code_tokens(live[0].source)
+        and "a" in module.rust_code_tokens(live[0].source)
+    )
+
+    duplicate = source + "\npub fn live() {}\n"
+    assert len(module.rust_items(duplicate, "live")) == 2
+
+    file_inner = module.rust_items(
+        "#![cfg(any())]\nconst MARKER: () = ();\npub fn file_gated() {}\n",
+        "file_gated",
+    )
+    assert len(file_inner) == 1
+    assert file_inner[0].ancestor_inner_attributes == ("#![cfg(any())]",)
+
+    module_inner = module.rust_items(
+        "mod hidden {\n"
+        "    #![cfg_attr(feature = \"ship\", cfg(any()))]\n"
+        "    const MARKER: () = ();\n"
+        "    pub fn module_gated() {}\n"
+        "}\n",
+        "module_gated",
+    )
+    assert len(module_inner) == 1
+    assert module_inner[0].ancestor_inner_attributes == (
+        "#![cfg_attr(feature = \"ship\", cfg(any()))]",
+    )
+
+
+def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    causal_fifo_errors = module._production_causal_fifo_source_fidelity_errors
+    assert causal_fifo_errors(formal_dir) == []
+    # Keep this regression scoped to the production causal-FIFO seam; unrelated
+    # async source contracts have their own mutation suites.
+    module._async_source_fidelity_errors = causal_fifo_errors
+
+    adapter = tmp_path / "crates/iroha_core/src/sumeragi/v2.rs"
+    canonical_adapter = adapter.read_text(encoding="utf-8")
+    drive_item = module.rust_items(canonical_adapter, "drive_effects")[0]
+    drive_start = canonical_adapter.index(drive_item.source)
+    drive_end = drive_start + len(drive_item.source)
+
+    def mutate_drive(old: str, new: str) -> str:
+        assert drive_item.source.count(old) == 1, old
+        return (
+            canonical_adapter[:drive_start]
+            + drive_item.source.replace(old, new, 1)
+            + canonical_adapter[drive_end:]
+        )
+
+    helper_call = (
+        "                    reducer::prepend_causal_continuation("
+        "&mut pending, continuation.into_effects());\n"
+    )
+    assert canonical_adapter.count(helper_call) == 1
+    adapter.write_text(
+        canonical_adapter.replace(helper_call, "", 1), encoding="utf-8"
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "drive_effects must contain exactly one reviewed causal-persistence token sequence"
+        in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    adapter.write_text(
+        mutate_drive(
+            "        let mut ready = Vec::new();\n",
+            "        let mut ready = Vec::new();\n"
+            "        if false {\n"
+            "            return Ok(Vec::new());\n"
+            "        }\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "drive_effects declaration, contract, and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    adapter.write_text(
+        canonical_adapter.replace(
+            helper_call,
+            "                    if false {\n"
+            + helper_call
+            + "                    }\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "drive_effects declaration, contract, and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    refinement = (
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    )
+    canonical_refinement = refinement.read_text(encoding="utf-8")
+    assert canonical_refinement.count("continuation.into_iter().rev()") == 1
+    refinement.write_text(
+        canonical_refinement.replace(
+            "continuation.into_iter().rev()", "continuation.into_iter()", 1
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "prepend_causal_continuation reverse-iteration/push-front FIFO kernel "
+        "must match the exact reviewed Rust/Verus item body" in error
+        for error in errors
+    ), errors
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    refinement.write_text(
+        canonical_refinement.replace("pending.push_front(item)", "pending.push_back(item)", 1),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "prepend_causal_continuation reverse-iteration/push-front FIFO kernel "
+        "must match the exact reviewed Rust/Verus item body" in error
+        for error in errors
+    ), errors
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    helper_start = canonical_refinement.index(
+        "pub fn prepend_causal_continuation<T>("
+    )
+    helper_end = canonical_refinement.index(
+        "\n}\n\n/// Caller-visible reducer action classes", helper_start
+    ) + 2
+    helper_source = canonical_refinement[helper_start:helper_end]
+    refinement.write_text(
+        canonical_refinement[:helper_start]
+        + canonical_refinement[helper_end:]
+        + "\nmacro_rules! stuffed_helper {\n"
+        + "    () => {\n"
+        + helper_source
+        + "\n    };\n}\n",
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "prepend_causal_continuation kernel must have reviewed brace context" in error
+        for error in errors
+    ), errors
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    for opener, closer in (("(", ")"), ("[", "]")):
+        refinement.write_text(
+            canonical_refinement[:helper_start]
+            + canonical_refinement[helper_end:]
+            + f"\nstuffed_helper!{opener}\n"
+            + helper_source
+            + f"\n{closer};\n",
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(
+            "prepend_causal_continuation kernel must have reviewed all-delimiter context"
+            in error
+            for error in errors
+        ), (opener, errors)
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    refinement.write_text(
+        canonical_refinement.replace(
+            "pub fn prepend_causal_continuation<T>(",
+            "#[cfg(any())]\npub fn prepend_causal_continuation<T>(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "prepend_causal_continuation kernel may not be disabled or replaced" in error
+        for error in errors
+    ), errors
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    refinement.write_text(
+        "#![cfg(any())]\n" + canonical_refinement,
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "prepend_causal_continuation kernel may not be suppressed by "
+        "file/module/ancestor inner cfg/cfg_attr" in error
+        for error in errors
+    ), errors
+    refinement.write_text(canonical_refinement, encoding="utf-8")
+
+    core = tmp_path / "crates/iroha_core/src/sumeragi/v2_core.rs"
+    canonical_core = core.read_text(encoding="utf-8")
+    export_start = canonical_core.index("pub(crate) use refinement::{")
+    export_end = canonical_core.index("\n};", export_start) + 3
+    export_source = canonical_core[export_start:export_end]
+    core.write_text(
+        canonical_core[:export_start]
+        + canonical_core[export_end:]
+        + "\nmacro_rules! stuffed_refinement_export {\n"
+        + "    () => {\n"
+        + export_source
+        + "\n    };\n}\n",
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "require exactly one direct top-level pub(crate) use refinement::{...} "
+        "export; found 0" in error
+        for error in errors
+    ), errors
+    core.write_text(canonical_core, encoding="utf-8")
+
+    for opener, closer in (("(", ")"), ("[", "]")):
+        core.write_text(
+            canonical_core[:export_start]
+            + canonical_core[export_end:]
+            + f"\nstuffed_refinement_export!{opener}\n"
+            + export_source
+            + f"\n{closer};\n",
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(
+            "require exactly one direct top-level pub(crate) use refinement::{...} "
+            "export; found 0" in error
+            for error in errors
+        ), (opener, errors)
+    core.write_text(canonical_core, encoding="utf-8")
+
+    core.write_text(
+        canonical_core.replace(
+            "pub(crate) use refinement::{",
+            "#[cfg(any())]\npub(crate) use refinement::{",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "require exactly one direct top-level pub(crate) use refinement::{...} "
+        "export; found 0" in error
+        for error in errors
+    ), errors
+    core.write_text(canonical_core, encoding="utf-8")
+
+    core.write_text("#![cfg(any())]\n" + canonical_core, encoding="utf-8")
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "real top-level refinement export may not be suppressed by "
+        "file/module/ancestor inner cfg/cfg_attr" in error
+        for error in errors
+    ), errors
+    core.write_text(canonical_core, encoding="utf-8")
+
+    verus = tmp_path / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    canonical_verus = verus.read_text(encoding="utf-8")
+    theorem_start = canonical_verus.index(
+        "pub proof fn production_reverse_push_front_refines_fifo("
+    )
+    theorem_end = canonical_verus.index(
+        "\n\n/// Stable first-owner filter", theorem_start
+    )
+    verus.write_text(
+        canonical_verus[:theorem_start]
+        + "/*\n"
+        + canonical_verus[theorem_start:theorem_end]
+        + "\n*/\n"
+        + canonical_verus[theorem_end + 2 :],
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "require exactly one real Rust/Verus function item named "
+        "production_reverse_push_front_refines_fifo; found 0" in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    completeness_item = module.rust_items(
+        canonical_verus,
+        "production_fresh_causal_successors_keeps_every_fresh_value",
+    )[0]
+    weakened_completeness = completeness_item.source.replace(
+        "successors.contains(candidate) && !owned.contains(candidate)",
+        "false",
+        1,
+    )
+    assert weakened_completeness != completeness_item.source
+    verus.write_text(
+        canonical_verus.replace(
+            completeness_item.source,
+            weakened_completeness,
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "production_fresh_causal_successors_keeps_every_fresh_value declaration, "
+        "contract, and body must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    assert canonical_verus.count("if owned.contains(candidate) {") >= 3
+    verus.write_text(
+        canonical_verus.replace(
+            "if owned.contains(candidate) {",
+            "if !owned.contains(candidate) {",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "stable first-owner causal-successor filter must match the exact reviewed"
+        in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    unique_item = module.rust_items(
+        canonical_verus,
+        "production_fresh_causal_successors_has_unique_values",
+    )[0]
+    weakened_unique = unique_item.source.replace(
+        "production_fresh_causal_successors(owned, successors).no_duplicates(),",
+        "production_fresh_causal_successors(owned, successors).len() >= 0,",
+        1,
+    )
+    assert weakened_unique != unique_item.source
+    verus.write_text(
+        canonical_verus.replace(unique_item.source, weakened_unique, 1),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "production_fresh_causal_successors_has_unique_values declaration, "
+        "contract, and body must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    proof_open = unique_item.source.find("{")
+    assert proof_open > 0
+    empty_unique = unique_item.source[:proof_open] + "{/* old proof body */}"
+    verus.write_text(
+        canonical_verus.replace(unique_item.source, empty_unique, 1),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "production_fresh_causal_successors_has_unique_values declaration, "
+        "contract, and body must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    reverse_theorem_source = canonical_verus[theorem_start:theorem_end]
+    verus.write_text(
+        canonical_verus[:theorem_start]
+        + canonical_verus[theorem_end:]
+        + "\nmacro_rules! stuffed_verus_theorem {\n"
+        + "    () => {\n"
+        + reverse_theorem_source
+        + "\n    };\n}\n",
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "production reverse-push-front FIFO theorem must have reviewed brace context"
+        in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    verus.write_text(
+        canonical_verus.replace(
+            "pub proof fn production_reverse_push_front_refines_fifo(",
+            "#[cfg(any())]\n"
+            "pub proof fn production_reverse_push_front_refines_fifo(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "production reverse-push-front FIFO theorem may not be disabled or replaced"
+        in error
+        for error in errors
+    ), errors
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    adapter.write_text(
+        canonical_adapter.replace(
+            "#[cfg(test)]\nmod tests {\n",
+            "#[cfg(test)]\nmod tests {\n    #![cfg(any())]\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "strengthened TC-order regression may not be suppressed by "
+        "file/module/ancestor inner cfg/cfg_attr" in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    tc_name = "fn tc_promoted_historical_commit_is_fsynced_before_sign_and_status()"
+    tc_start = canonical_adapter.index(tc_name)
+    no_sign_start = canonical_adapter.index("        assert!(\n            installed", tc_start)
+    match_start = canonical_adapter.index(
+        "        let fetch_tag = match installed.as_slice() {", no_sign_start
+    )
+    match_end = canonical_adapter.index(
+        "\n\n        assert!(matches!(\n            adapter\n"
+        "                .body_available(fetch_tag, manifest)",
+        match_start,
+    )
+    exact_match = canonical_adapter[match_start:match_end]
+    commit_witness_start = canonical_adapter.index(
+        "        let sign = adapter", match_end
+    )
+    tc_test_end = canonical_adapter.index(
+        "\n    }\n\n    #[test]", commit_witness_start
+    )
+    tc_source = canonical_adapter[tc_start:tc_test_end]
+
+    def mutate_tc(old: str, new: str) -> str:
+        assert tc_source.count(old) == 1, old
+        return (
+            canonical_adapter[:tc_start]
+            + tc_source.replace(old, new, 1)
+            + canonical_adapter[tc_test_end:]
+        )
+
+    tc_mutations = (
+        (
+            mutate_tc(
+                tc_name + " {",
+                tc_name + " {\n        if false { return; }",
+            ),
+            "strengthened TC regression declaration and complete control flow "
+            "must match the exact reviewed token digest",
+        ),
+        (
+            canonical_adapter[:commit_witness_start]
+            + "        if false {\n"
+            + canonical_adapter[commit_witness_start:tc_test_end]
+            + "\n        }"
+            + canonical_adapter[tc_test_end:],
+            "strengthened TC regression declaration and complete control flow "
+            "must match the exact reviewed token digest",
+        ),
+        (
+            canonical_adapter[:no_sign_start]
+            + canonical_adapter[match_start:],
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+        ),
+        (
+            canonical_adapter[:match_start]
+            + "        let fetch_tag = installed\n"
+            "            .iter()\n"
+            "            .find_map(|effect| match effect {\n"
+            "                AdapterEffect::FetchBody { tag, .. } => Some(*tag),\n"
+            "                _ => None,\n"
+            "            })\n"
+            "            .expect(\"fetch body\");"
+            + canonical_adapter[match_end:],
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+        ),
+        (
+            canonical_adapter[:match_start]
+            + exact_match.replace(
+                "AdapterEffect::EnterView", "AdapterEffect::__SWAP", 1
+            )
+            .replace("AdapterEffect::FetchBody", "AdapterEffect::EnterView", 1)
+            .replace("AdapterEffect::__SWAP", "AdapterEffect::FetchBody", 1)
+            + canonical_adapter[match_end:],
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+        ),
+        (
+            canonical_adapter[:match_start]
+            + exact_match.replace(
+                "                },\n            ] if enter_tag == tag",
+                "                },\n                ..\n            ] if enter_tag == tag",
+                1,
+            )
+            + canonical_adapter[match_end:],
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+        ),
+        (
+            canonical_adapter.replace(
+                "                && *fetched_subject == subject\n",
+                "",
+                1,
+            ),
+            "TC regression must reject signing and exactly match EnterView-before-FetchBody",
+        ),
+        (
+            mutate_tc(
+                "            }] if *tag == fetch_tag\n"
+                "                && *stored_round == round",
+                "            }] if *tag == timeout_tag\n"
+                "                && *stored_round == round",
+            ),
+            "TC regression must pin exact StoreBody/ValidateBody tags, rounds, and subjects",
+        ),
+        (
+            mutate_tc(
+                "            ] if *tag == fetch_tag\n"
+                "                && vote.round == round",
+                "            ] if *tag == timeout_tag\n"
+                "                && vote.round == round",
+            ),
+            "TC regression must pin the post-validation Commit signing authority, "
+            "WAL, and status witness",
+        ),
+        (
+            mutate_tc(
+                "            Some(core_commit_vote.vote()),",
+                "            Some(other_core_vote.vote()),",
+            ),
+            "TC regression must pin the post-validation Commit signing authority, "
+            "WAL, and status witness",
+        ),
+        (
+            canonical_adapter.replace(
+                ".validation_succeeded(fetch_tag, round, subject, &validated)",
+                ".validation_succeeded(fetch_tag, round, subject, &other)",
+                1,
+            ),
+            "strengthened TC regression must contain exactly one "
+            "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
+        ),
+        (
+            canonical_adapter[:commit_witness_start]
+            + canonical_adapter[tc_test_end:],
+            "TC regression must pin the post-validation Commit signing authority, "
+            "WAL, and status witness",
+        ),
+        (
+            canonical_adapter[:commit_witness_start]
+            + canonical_adapter[commit_witness_start:tc_test_end].replace(
+                "wire::SumeragiV2OutboundIntentStage::PendingSignature",
+                "wire::SumeragiV2OutboundIntentStage::Sent",
+                1,
+            )
+            + canonical_adapter[tc_test_end:],
+            "TC regression must pin the post-validation Commit signing authority, "
+            "WAL, and status witness",
+        ),
+        (
+            canonical_adapter[:commit_witness_start]
+            + canonical_adapter[commit_witness_start:tc_test_end].replace(
+                "            adapter.wal.recovered_records().len(),\n"
+                "            3,\n",
+                "            adapter.wal.recovered_records().len(),\n"
+                "            2,\n",
+                1,
+            )
+            + canonical_adapter[tc_test_end:],
+            "TC regression must pin the post-validation Commit signing authority, "
+            "WAL, and status witness",
+        ),
+    )
+    for mutated_adapter, expected_error in tc_mutations:
+        adapter.write_text(mutated_adapter, encoding="utf-8")
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+    verus.write_text(canonical_verus, encoding="utf-8")
+
+    stable_prepend = (
+        "seq![candidate].add(production_fresh_causal_successors(\n"
+        "                owned.insert(candidate),\n"
+        "                remaining,\n"
+        "            ))"
+    )
+    stable_reverse = (
+        "production_fresh_causal_successors(\n"
+        "                owned.insert(candidate),\n"
+        "                remaining,\n"
+        "            ).add(seq![candidate])"
+    )
+    assert canonical_verus.count(stable_prepend) == 1
+    verus.write_text(
+        canonical_verus.replace(stable_prepend, stable_reverse, 1),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "stable first-owner causal-successor filter must match the exact reviewed"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_progress_witness_source_fidelity_requires_exact_decision_owner(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -2268,32 +3804,357 @@ def test_progress_witness_source_fidelity_requires_exact_height(
     path = formal_dir / "SumeragiV2LivenessProofs.tla"
     canonical = r"""---- MODULE SumeragiV2LivenessProofs ----
 DecisionPipelineCandidate(node, qc, candidate) ==
+  /\ candidate.class = "Completion"
   /\ candidate.node = node
   /\ candidate.height = qc.context.height
   /\ candidate.view = qc.view
+  /\ candidate.subject = qc.subject
+  /\ candidate.kind \in
+       {"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody", "StoreBody",
+        "ValidateBody", "Apply"}
+  /\ CandidateConsumerCurrent(candidate)
   /\ CandidateScheduled(candidate)
 
 DecisionCompletionWitness(node, qc) ==
-  \E request \in asyncActiveRequests:
-    /\ request.kind = "CertifiedRequest"
-    /\ request.source = node
-    /\ request.envelope.height = qc.context.height
-    /\ request.envelope.view = qc.view
+  \/ NodeHasApplication(node)
+  \/ \E request \in asyncActiveRequests:
+       /\ request.kind = "CertifiedRequest"
+       /\ request.source = node
+       /\ request.envelope.height = qc.context.height
+       /\ request.envelope.view = qc.view
+       /\ request.envelope.subject = qc.subject
+  \/ \E candidate \in AsyncCandidateSet:
+       DecisionPipelineCandidate(node, qc, candidate)
 =============================================================================
 """
     path.write_text(canonical, encoding="utf-8")
     assert module._progress_witness_source_fidelity_errors(formal_dir) == []
 
-    for equality in (
+    mutations = (
+        ("  /\\ candidate.class = \"Completion\"\n", ""),
+        (
+            "  /\\ candidate.height = qc.context.height\n",
+            "  /\\ candidate.height >= qc.context.height\n",
+        ),
+        ("  /\\ candidate.view = qc.view\n", ""),
+        ("  /\\ candidate.subject = qc.subject\n", ""),
+        ('       {"FetchBody", ', "       {"),
+        ("  /\\ CandidateConsumerCurrent(candidate)\n", ""),
+        ("  /\\ CandidateScheduled(candidate)\n", ""),
         "  /\\ candidate.height = qc.context.height\n",
-        "    /\\ request.envelope.height = qc.context.height\n",
-    ):
-        path.write_text(canonical.replace(equality, ""), encoding="utf-8")
+        "       /\\ request.envelope.height = qc.context.height\n",
+        "       /\\ request.envelope.view = qc.view\n",
+        "       /\\ request.envelope.subject = qc.subject\n",
+    )
+    for mutation in mutations:
+        if isinstance(mutation, tuple):
+            needle, replacement = mutation
+        else:
+            needle, replacement = mutation, ""
+        assert needle in canonical, needle
+        path.write_text(canonical.replace(needle, replacement, 1), encoding="utf-8")
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
         assert any(
-            "must require exact decision-height ownership" in error
+            "exact current-consumer Decision recovery contract" in error
             for error in errors
+        ), errors
+
+
+def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
+    for name in (
+        "SumeragiV2LivenessProofs.tla",
+        "SumeragiV2Core.tla",
+        "SumeragiV2AsyncNetwork.tla",
+    ):
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    canonical_core = core_path.read_text(encoding="utf-8")
+    canonical_network = network_path.read_text(encoding="utf-8")
+    assert module._progress_witness_source_fidelity_errors(formal_dir) == []
+
+    core_mutations = (
+        (
+            "    /\\ decision.qc.context = context\n",
+            "",
+            "NoDecisionForNode must equal only",
+        ),
+        (
+            "     /\\ NoDecisionForNode(node)\n",
+            "",
+            "must have one direct, non-disjunctive NoDecisionForNode guard",
+        ),
+        (
+            "     /\\ NoDecisionForNode(node)\n",
+            "     /\\ (NoDecisionForNode(node) \\/ TRUE)\n",
+            "must have one direct, non-disjunctive NoDecisionForNode guard",
+        ),
+        (
+            "     /\\ NodeIdle(node)\n"
+            "     /\\ NoDecisionForNode(node)\n"
+            "     /\\ roundView + 1 \\in Views\n",
+            "     /\\ NodeIdle(node)\n"
+            "     /\\ roundView + 1 \\in Views\n",
+            "FormTC must have one direct, non-disjunctive NoDecisionForNode guard",
+        ),
+        (
+            "     /\\ tc.view >= nodeView[node]\n"
+            "     /\\ NodeIdle(node)\n"
+            "     /\\ NoDecisionForNode(node)\n"
+            "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
+            "     /\\ tc.view >= nodeView[node]\n"
+            "     /\\ NodeIdle(node)\n"
+            "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
+            "BeginInstallTC must have one direct, non-disjunctive NoDecisionForNode guard",
+        ),
+        (
+            "          IF ~NoDecisionForNode(envelope.recipient)\n",
+            "          IF FALSE\n",
+            "DeliverTimeout must consume the exact authenticated envelope",
+        ),
+        (
+            "     /\\ timeoutNetwork' = timeoutNetwork \\ {envelope}\n",
+            "     /\\ timeoutNetwork' = timeoutNetwork\n",
+            "DeliverTimeout must consume the exact authenticated envelope",
+        ),
+        (
+            "          IF NoDecisionForNode(envelope.recipient)\n",
+            "          IF TRUE\n",
+            "DeliverTC must consume the exact authenticated envelope",
+        ),
+        (
+            "     /\\ tcNetwork' = tcNetwork \\ {envelope}\n",
+            "     /\\ tcNetwork' = tcNetwork\n",
+            "DeliverTC must consume the exact authenticated envelope",
+        ),
+    )
+    for needle, replacement, expected_error in core_mutations:
+        assert needle in canonical_core, needle
+        core_path.write_text(
+            canonical_core.replace(needle, replacement, 1), encoding="utf-8"
         )
+        errors = module._progress_witness_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        core_path.write_text(canonical_core, encoding="utf-8")
+
+    network_mutations = (
+        (
+            '         IF NoDecisionForNode(command.node)\n'
+            '         THEN <<CausalCandidate("Progress", "FormTC", command)>>\n'
+            "         ELSE <<>>\n",
+            '         <<CausalCandidate("Progress", "FormTC", command)>>\n',
+            "post-Decision DeliverTimeout must emit no causal successor",
+        ),
+        (
+            '         IF NoDecisionForNode(command.node)\n'
+            '         THEN <<CausalCandidate("Progress", "BeginInstallTC", command)>>\n'
+            "         ELSE <<>>\n",
+            '         <<CausalCandidate("Progress", "BeginInstallTC", command)>>\n',
+            "post-Decision DeliverTC must emit no causal successor",
+        ),
+        (
+            "         ELSE <<>>\n    [] command.kind = \"FormTC\" ->",
+            '         ELSE <<CausalCandidate("Progress", "FormTC", command)>>\n'
+            '    [] command.kind = "FormTC" ->',
+            "post-Decision DeliverTimeout must emit no causal successor",
+        ),
+        (
+            "         ELSE <<>>\n    [] command.kind = \"BeginInstallTC\" ->",
+            '         ELSE <<CausalCandidate("Progress", "BeginInstallTC", command)>>\n'
+            '    [] command.kind = "BeginInstallTC" ->',
+            "post-Decision DeliverTC must emit no causal successor",
+        ),
+    )
+    for needle, replacement, expected_error in network_mutations:
+        assert needle in canonical_network, needle
+        network_path.write_text(
+            canonical_network.replace(needle, replacement, 1), encoding="utf-8"
+        )
+        errors = module._progress_witness_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        network_path.write_text(canonical_network, encoding="utf-8")
+
+
+def test_progress_witness_source_fidelity_requires_exact_crash_authority(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
+    for name in (
+        "SumeragiV2LivenessProofs.tla",
+        "SumeragiV2AsyncLivenessProofs.tla",
+    ):
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    canonical = path.read_text(encoding="utf-8")
+    assert module._progress_witness_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "  \\/ CommitRecoveryAuthority(node)\n",
+            "",
+            "AsyncCommitIntentProgressWitness must equal only",
+        ),
+        (
+            "  /\\ generation[node] = asyncRecoveryGeneration\n",
+            "  /\\ generation[node] <= asyncRecoveryGeneration\n",
+            "CommitRecoveryAuthority must equal only",
+        ),
+        (
+            "  /\\ asyncRecoveryNode = node\n",
+            "",
+            "CommitRecoveryAuthority must equal only",
+        ),
+        (
+            "  /\\ AsyncDurableCommitProgressWitness\n",
+            "  /\\ DurableCommitProgressWitness\n",
+            "AsyncProgressWitnessInvariant must equal only",
+        ),
+        (
+            "       /\\ CommitRecoveryAuthority(node)'\n",
+            "",
+            "responsive crash theorem must state only",
+        ),
+        (
+            "AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))",
+            "ProgressWitnessProperty(AsyncSpecAt(initialContext))",
+            "ProgressWitnessObligation must use the crash-aware async property",
+        ),
+        (
+            "DecisionFetchBodyOwned(node, qc) ==\n"
+            "  \\E candidate \\in AsyncCandidateSet:\n"
+            "    /\\ candidate.kind = \"FetchBody\"\n",
+            "DecisionFetchBodyOwned(node, qc) ==\n"
+            "  \\E candidate \\in AsyncCandidateSet:\n"
+            "    /\\ candidate.kind = \"StoreBody\"\n",
+            "DecisionFetchBodyOwned must equal only",
+        ),
+        (
+            "DecisionSourceRetentionInvariant ==\n"
+            "  \\A decision \\in decisions:\n"
+            "    (decision.node \\in AsyncCurrentResponsiveVoters\n"
+            "      /\\ decision.qc.context = context)\n",
+            "DecisionSourceRetentionInvariant ==\n"
+            "  \\A decision \\in decisions:\n"
+            "    decision.node \\in AsyncCurrentResponsiveVoters\n",
+            "DecisionSourceRetentionInvariant must equal only",
+        ),
+        (
+            "THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==\n"
+            "  \\A command:\n"
+            "    command.kind = \"PersistDecision\"\n",
+            "THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==\n"
+            "  \\A command:\n"
+            "    command.kind = \"BeginDecision\"\n",
+            "PersistDecision recovery theorem must state only",
+        ),
+        (
+            "         /\\ Len(CommandSuccessors(command)) = 1\n",
+            "         /\\ Len(CommandSuccessors(command)) = 3\n",
+            "PersistDecision recovery theorem must state only",
+        ),
+        (
+            "BY DEF CommandSuccessors, CausalCandidate, AsyncCandidateFrom,\n"
+            "       AsyncCandidateWithIdentity, CandidateConsumerCurrent\n",
+            "BY DEF CommandSuccessors, CausalCandidate, AsyncCandidateFrom,\n"
+            "       CandidateConsumerCurrent\n",
+            "derive the singleton frontier and current-consumer identity",
+        ),
+        (
+            "PendingTimeoutExcludesDecision ==\n"
+            "  \\A request \\in pendingTimeout:\n"
+            "    NoDecisionForNode(request.node)\n",
+            "PendingTimeoutExcludesDecision ==\n"
+            "  \\A request \\in pendingTimeout:\n"
+            "    TRUE\n",
+            "PendingTimeoutExcludesDecision must equal only",
+        ),
+        (
+            "  /\\ PendingDecisionExcludesTimeoutWork\n\n"
+            "PostDecisionTimeoutControlExcluded ==",
+            "\nPostDecisionTimeoutControlExcluded ==",
+            "DecisionTimeoutFrontierInvariant must equal only",
+        ),
+        (
+            "  /\\ specification => []PostDecisionTimeoutCausalSuccessorsExcluded\n",
+            "",
+            "PostDecisionTimeoutExclusionProperty must equal only",
+        ),
+        (
+            "DecisionsUniqueByNodeContext ==\n"
+            "  \\A left, right \\in decisions:\n"
+            "    /\\ left.node = right.node\n"
+            "    /\\ left.qc.context = right.qc.context\n",
+            "DecisionsUniqueByNodeContext ==\n"
+            "  \\A left, right \\in decisions:\n"
+            "    /\\ left.node = right.node\n",
+            "DecisionsUniqueByNodeContext must equal only",
+        ),
+        (
+            "  /\\ generation[node] = asyncRecoveryGeneration\n"
+            "  /\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node)\n",
+            "  /\\ generation[node] = asyncRecoveryGeneration\n",
+            "DecisionRecoveryAuthority must equal only",
+        ),
+        (
+            "AsyncDecisionCompletionWitness(node, qc) ==\n"
+            "  \\/ DecisionCompletionWitness(node, qc)\n"
+            "  \\/ DecisionRecoveryAuthority(node, qc)\n",
+            "AsyncDecisionCompletionWitness(node, qc) ==\n"
+            "  DecisionCompletionWitness(node, qc)\n",
+            "AsyncDecisionCompletionWitness must equal only",
+        ),
+        (
+            "       /\\ PreGstResponsiveReplay\n"
+            "       => DecisionRecoveryStage(node, qc)'\n",
+            "       /\\ PreGstResponsiveReplay\n"
+            "       => DecisionRecoveryAuthority(node, qc)'\n",
+            "DecisionRecoveryLifecycleTransition must equal only",
+        ),
+        (
+            "  /\\ DecisionsUniqueByNodeContext\n"
+            "  /\\ AsyncDurableDecisionProgressWitness\n",
+            "  /\\ AsyncDurableDecisionProgressWitness\n",
+            "AsyncProgressWitnessInvariant must equal only",
+        ),
+        (
+            "  /\\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE\n",
+            "",
+            "ProductionProgressWitnessTraceRefinement must equal only",
+        ),
+        (
+            "THEOREM ProgressWitnessProductionRefinementObligation ==\n"
+            "  ProductionProgressWitnessTraceRefinement\n",
+            "THEOREM ProgressWitnessProductionRefinementObligation ==\n"
+            "  TRUE\n",
+            "production progress-witness refinement must state only",
+        ),
+    )
+    for needle, replacement, expected_error in mutations:
+        assert needle in canonical, needle
+        path.write_text(canonical.replace(needle, replacement, 1), encoding="utf-8")
+        errors = module._progress_witness_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        path.write_text(canonical, encoding="utf-8")
 
 
 def test_async_source_fidelity_keeps_body_subjects_syntactic(
@@ -2624,6 +4485,11 @@ def test_async_source_fidelity_requires_timeout_signer_deduplication(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2699,6 +4565,11 @@ def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -3574,6 +5445,11 @@ def test_async_source_fidelity_requires_tc_commit_pool_reconstruction(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -4346,6 +6222,11 @@ def test_async_source_fidelity_pins_deferred_cursor_and_rank(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/verify_sumeragi_v2.sh"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -5060,6 +6941,176 @@ def test_chain_successor_mutations_fail_closed(
 
 
 @pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            '                 "Applied", parentContext, node, successorContext)',
+            '                 "Recovered", parentContext, node, successorContext)',
+        ),
+        (
+            "     /\\ successorActivationPrerequisites[parentContext][node] = {}\n",
+            "",
+        ),
+        (
+            "     /\\ token \\notin successorActivationTokens\n",
+            "",
+        ),
+    ),
+)
+def test_chain_begin_successor_requires_clean_exact_applied_start(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        _mutate_chain_operator(
+            source,
+            "BeginSuccessorActivation",
+            old,
+            new,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any("BeginSuccessorActivation" in error for error in errors), errors
+
+
+def test_successor_stale_token_mutation_artifacts_are_pinned() -> None:
+    module = load_checker()
+
+    assert (
+        module._successor_stale_token_mutation_source_fidelity_errors(
+            module.FORMAL_DIR
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    (
+        "SumeragiV2SuccessorStaleTokenMutation.tla",
+        "successor_stale_token_bug.cfg",
+        "successor_stale_token_fixed.cfg",
+    ),
+)
+def test_successor_stale_token_mutation_artifacts_are_required(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    (formal_dir / artifact).unlink()
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(
+        artifact in error and "missing required" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "SuccessorActivationPipelineDistance",
+            "  [] OTHER -> 0",
+            "  [] OTHER -> 1",
+        ),
+        (
+            "FixedBeginSuccessorActivation",
+            "  /\\ activationPrerequisites = {}\n",
+            "",
+        ),
+        (
+            "FixedBeginSuccessorActivation",
+            "  /\\ AppliedSuccessorActivationToken \\notin activationTokens\n",
+            "",
+        ),
+        (
+            "BuggyBeginSuccessorActivation",
+            "  /\\ ExactDurableParentApplicationWitness\n",
+            "  /\\ ExactDurableParentApplicationWitness\n"
+            "  /\\ activationPrerequisites = {}\n",
+        ),
+        (
+            "MutationFailClosedSuccessorStartup",
+            "  /\\ activationTokens' = {}\n",
+            "  /\\ UNCHANGED activationTokens\n",
+        ),
+        (
+            "FailClosedStrictlyDecreasesRankWitness",
+            "    => SuccessorActivationRank < previousRank",
+            "    => SuccessorActivationRank <= previousRank",
+        ),
+    ),
+)
+def test_successor_stale_token_mutation_model_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorStaleTokenMutation.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("artifact", "line"),
+    (
+        (
+            "successor_stale_token_bug.cfg",
+            "INVARIANT SuccessorActivationProtocolInvariantProjection\n",
+        ),
+        (
+            "successor_stale_token_fixed.cfg",
+            "INVARIANT FailClosedStrictlyDecreasesRankWitness\n",
+        ),
+    ),
+)
+def test_successor_stale_token_mutation_config_mutations_fail_closed(
+    tmp_path: Path,
+    artifact: str,
+    line: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / artifact
+    source = path.read_text(encoding="utf-8")
+    assert line in source
+    path.write_text(source.replace(line, "", 1), encoding="utf-8")
+
+    errors = module._successor_stale_token_mutation_source_fidelity_errors(
+        formal_dir
+    )
+
+    assert any(artifact in error and "configuration" in error for error in errors)
+
+
+@pytest.mark.parametrize(
     ("symbol", "old", "new", "expected_error"),
     (
         (
@@ -5422,6 +7473,136 @@ def test_chain_canonical_exact_recovery_production_obligation_is_pinned(
     assert any(
         "missing canonical exact historical-recovery production refinement obligation"
         in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "claim",
+    (
+        "ProductionAppliedSuccessorTraceRefinesIndexedActivation",
+        "ProductionRecoveredSuccessorTraceRefinesIndexedActivation",
+        "ProductionStartupFailureRefinesFailClosedActivation",
+        "ProductionHistoricalCertificateTraceRefinesIndexedAsync",
+        "ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync",
+        "ProductionTerminalApplicationExcludesActivation",
+    ),
+)
+def test_chain_production_trace_refinement_rejects_each_missing_claim(
+    tmp_path: Path,
+    claim: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "ProductionSuccessorAndExactRecoveryTraceRefinement",
+            f"  /\\ {claim} = TRUE\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "ProductionSuccessorAndExactRecoveryTraceRefinement must equal only"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_chain_production_trace_refinement_constant_inventory_is_pinned(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "ProductionTerminalApplicationExcludesActivation",
+            "ProductionInventedTraceClaim",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "trace constants must equal the exact ordered six-claim inventory" in error
+        for error in errors
+    ), errors
+
+
+def test_chain_production_refinement_rejects_abstract_only_theorem(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    symbol = (
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+    )
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            symbol,
+            "  /\\ ProductionSuccessorAndExactRecoveryTraceRefinement\n"
+            "  /\\ (IndexedChainSpec\n"
+            "        => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)\n",
+            "  IndexedChainSpec\n"
+            "    => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "canonical exact historical-recovery production refinement obligation "
+        "must state only" in error
+        for error in errors
+    ), errors
+
+
+def test_chain_production_refinement_rejects_easy_abstract_by_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    symbol = (
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+    )
+    closing = (
+        "        => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)\n"
+    )
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            symbol,
+            closing,
+            closing
+            + "BY AbstractSuccessorActivationAndExactHistoricalRecoveryInvariant\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must remain proofless until all six external source claims" in error
         for error in errors
     ), errors
 
@@ -5791,6 +7972,58 @@ def test_successor_activation_starvation_obligation_pins_every_conjunct(
     ), errors
 
 
+def test_successor_activation_starvation_obligation_pins_composition_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "    BY IndexedChainSpecEstablishesSuccessorActivationNonOrphaning\n",
+            "    BY IndexedChainSpecEstablishesSuccessorActivationPendingStructure\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "proof must compose exactly the six reviewed successor-activation "
+        "theorems" in error
+        for error in errors
+    ), errors
+
+
+def test_successor_activation_starvation_obligation_rejects_asserted_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "SuccessorActivationStarvationFreedomObligation",
+            "PROOF\n",
+            "OBVIOUS\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must have the reviewed deductive composition proof" in error
+        for error in errors
+    ), errors
+
+
 def test_successor_activation_starvation_chain_progress_equivalence_is_pinned(
     tmp_path: Path,
 ) -> None:
@@ -5847,10 +8080,21 @@ def test_verus_shortcut_scan_rejects_assume_admit_and_external_body(
 fn bad() { assume(true); admit(); }
 #[verifier::external_body]
 fn hidden() {}
+fn comment_gap() {
+    assume/* nested-token gap */(true);
+    admit /* gap */ ! /* another gap */ ();
+}
+#[verifier /* gap */ :: /* gap */ external_body]
+fn comment_gapped_hidden() {}
+fn harmless() {
+    let text = "assume/* string */(true) #[verifier::external_body]";
+    // admit/* line comment */();
+    /* #[verifier::external_body] */
+}
 """
 
     errors = module.verus_shortcut_errors(path, source)
-    assert len(errors) == 3
+    assert len(errors) == 6
 
 
 def test_duplicate_json_keys_are_rejected(tmp_path: Path) -> None:
@@ -6068,6 +8312,13 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "SumeragiV2LocalAdmissionMutation.tla" in runner
     assert "7 distinct states" in runner
     assert "depth of the complete state graph search is 7" in runner
+    assert "serve_nonce_reuse_status -eq 13" in runner
+    assert "live Serve nonce reuse did not fail with TLC status 13" in runner
+    assert "serve_nonce_reuse_bug.cfg" in runner
+    assert "serve_nonce_fresh.cfg" in runner
+    assert "SumeragiV2ServeNonceMutation.tla" in runner
+    assert "4 distinct states" in runner
+    assert "depth of the complete state graph search is 3" in runner
     assert "Model checking completed. No error has been found." in runner
 
     formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
@@ -6187,6 +8438,46 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert (formal_dir / "causal_replacement_coalesced.cfg").read_text(
         encoding="utf-8"
     ).startswith("SPECIFICATION CoalescedSpec\n")
+    causal_fifo_rank_mutation = (
+        formal_dir / "SumeragiV2CausalFifoRankMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        "RankMultiplier * CandidateSequenceIndex(candidate, causalQueue)"
+        in causal_fifo_rank_mutation
+    )
+    assert 'preferredLocalSource\' = "Producer"' in causal_fifo_rank_mutation
+    assert (
+        "earlierHeadRemoved => TargetRank < InitialTargetRank"
+        in causal_fifo_rank_mutation
+    )
+    assert (formal_dir / "causal_fifo_rank_multiplier_one_bug.cfg").read_text(
+        encoding="utf-8"
+    ).startswith("CONSTANT RankMultiplier = 1\n")
+    assert (formal_dir / "causal_fifo_rank_doubled.cfg").read_text(
+        encoding="utf-8"
+    ).startswith("CONSTANT RankMultiplier = 2\n")
+    serve_nonce_mutation = (
+        formal_dir / "SumeragiV2ServeNonceMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert "LiveNonceOwnership" in serve_nonce_mutation
+    assert "CorrectBinderCoversRecord" in serve_nonce_mutation
+    assert "CorrectBinderHasRecordInstance" in serve_nonce_mutation
+    assert "OldNext == Refill(TargetJob) \\/ Service" in serve_nonce_mutation
+    assert (
+        "FreshNext == (TargetOwned /\\ Refill(FreshJob)) \\/ Service"
+        in serve_nonce_mutation
+    )
+    assert "TargetEventuallyLeaves == TargetOwned ~> ~TargetOwned" in serve_nonce_mutation
+    assert (formal_dir / "serve_nonce_reuse_bug.cfg").read_text(
+        encoding="utf-8"
+    ).startswith("SPECIFICATION OldSpec\n")
+    fresh_nonce_config = (formal_dir / "serve_nonce_fresh.cfg").read_text(
+        encoding="utf-8"
+    )
+    assert fresh_nonce_config.startswith("SPECIFICATION FreshSpec\n")
+    assert "INVARIANT LiveNonceOwnership\n" in fresh_nonce_config
+    assert "INVARIANT CorrectBinderCoversRecord\n" in fresh_nonce_config
+    assert "INVARIANT CorrectBinderHasRecordInstance\n" in fresh_nonce_config
 
     progress_runner = (
         ROOT_DIR
@@ -6201,10 +8492,27 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "causal_debt_duplicate_fixed.cfg 0" in progress_runner
     assert "causal_replacement_bug.cfg 13" in progress_runner
     assert "causal_replacement_coalesced.cfg 0" in progress_runner
+    assert "causal_fifo_rank_multiplier_one_bug.cfg 12" in progress_runner
+    assert "causal_fifo_rank_doubled.cfg 0" in progress_runner
+    assert (
+        "Invariant EarlierHeadRemovalStrictlyDropsTargetRank is violated."
+        in progress_runner
+    )
+    assert "State 2: <RemoveEarlierHead" in progress_runner
     assert "discovery_debt_bug.cfg 13" in progress_runner
     assert "discovery_debt_fixed.cfg 0" in progress_runner
     assert "io_candidate_index_all_jobs_bug.cfg 12" in progress_runner
     assert "io_candidate_index_consensus_only.cfg 0" in progress_runner
+    assert "successor_stale_token_bug.cfg 12" in progress_runner
+    assert "successor_stale_token_fixed.cfg 0" in progress_runner
+    assert (
+        "Invariant SuccessorActivationProtocolInvariantProjection is violated."
+        in progress_runner
+    )
+    assert (
+        "2 states generated, 2 distinct states found, 0 states left on queue."
+        in progress_runner
+    )
     assert "effective_lock_rebind_fixed.cfg 0" in progress_runner
     assert "effective_lock_rebind_bug.cfg 12" in progress_runner
     assert "effective_lock_no_retry_bug.cfg 13" in progress_runner
@@ -6241,6 +8549,180 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     )
     assert "OwnershipBoundedSpec" in ownership
     assert "OwnershipInitialClock" in ownership
+
+
+@pytest.mark.parametrize(
+    ("symbol", "correct", "grouped_mutation"),
+    (
+        (
+            "FairProtectedStage5RankDescent",
+            "THEOREM FairProtectedStage5RankDescent ==\n"
+            "  \\A initialContext, candidate:\n    \\A position \\in Nat:",
+            "THEOREM FairProtectedStage5RankDescent ==\n"
+            "  \\A initialContext, candidate, position \\in Nat:",
+        ),
+        (
+            "FairProtectedStage4RankDescent",
+            "THEOREM FairProtectedStage4RankDescent ==\n"
+            "  \\A initialContext, candidate:\n    \\A position \\in Nat:",
+            "THEOREM FairProtectedStage4RankDescent ==\n"
+            "  \\A initialContext, candidate, position \\in Nat:",
+        ),
+        (
+            "FairStage4AuxOneStep",
+            "THEOREM FairStage4AuxOneStep ==\n"
+            "  \\A initialContext, candidate, position:\n"
+            "    \\A rank \\in ReadyRunAuxCarrier:",
+            "THEOREM FairStage4AuxOneStep ==\n"
+            "  \\A initialContext, candidate, position,\n"
+            "     rank \\in ReadyRunAuxCarrier:",
+        ),
+        (
+            "FairStage4CapacityOneStep",
+            "THEOREM FairStage4CapacityOneStep ==\n"
+            "  \\A initialContext, candidate, position:\n"
+            "    \\A rank \\in Stage4CapacityCarrier:",
+            "THEOREM FairStage4CapacityOneStep ==\n"
+            "  \\A initialContext, candidate, position,\n"
+            "     rank \\in Stage4CapacityCarrier:",
+        ),
+        (
+            "FairProtectedServeStage5RankDescent",
+            "THEOREM FairProtectedServeStage5RankDescent ==\n"
+            "  \\A initialContext, node, job:\n    \\A position \\in Nat:",
+            "THEOREM FairProtectedServeStage5RankDescent ==\n"
+            "  \\A initialContext, node, job, position \\in Nat:",
+        ),
+    ),
+)
+def test_service_rank_record_binders_cannot_be_grouped_into_rank_carrier(
+    tmp_path: Path,
+    symbol: str,
+    correct: str,
+    grouped_mutation: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = proof.read_text(encoding="utf-8")
+    assert source.count(correct) >= 1
+    proof.write_text(source.replace(correct, grouped_mutation, 1), encoding="utf-8")
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        symbol in error and "record-valued" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("correct", "grouped_mutation"),
+    (
+        (
+            "THEOREM EmptyIngressIndexedPairSet ==\n"
+            "  \\A sources:\n    \\A capacity \\in Nat:",
+            "THEOREM EmptyIngressIndexedPairSet ==\n"
+            "  \\A sources, capacity \\in Nat:",
+        ),
+        (
+            "THEOREM AsyncRecoveryRequiredAtBudgetLeadsLowerCycle ==\n"
+            "  \\A initialContext:\n    \\A budget \\in Nat:",
+            "THEOREM AsyncRecoveryRequiredAtBudgetLeadsLowerCycle ==\n"
+            "  \\A initialContext, budget \\in Nat:",
+        ),
+        (
+            "THEOREM ProtectedRankExitHasWellFoundedSuccessor ==\n"
+            "  \\A candidate:\n"
+            "    \\A rank \\in OwnedServiceRankCarrier:",
+            "THEOREM ProtectedRankExitHasWellFoundedSuccessor ==\n"
+            "  \\A candidate, rank \\in OwnedServiceRankCarrier:",
+        ),
+        (
+            "THEOREM Stage4LocalAdmissionDecreasesAux ==\n"
+            "  \\A candidate, position:\n"
+            "    \\A rank \\in ReadyRunAuxCarrier:",
+            "THEOREM Stage4LocalAdmissionDecreasesAux ==\n"
+            "  \\A candidate, position, rank \\in ReadyRunAuxCarrier:",
+        ),
+        (
+            "THEOREM Stage4CapacityLocalAdmissionStrictlyProgresses ==\n"
+            "  \\A candidate, position:\n"
+            "    \\A rank \\in Stage4CapacityCarrier:",
+            "THEOREM Stage4CapacityLocalAdmissionStrictlyProgresses ==\n"
+            "  \\A candidate, position, rank \\in Stage4CapacityCarrier:",
+        ),
+    ),
+)
+def test_supporting_rank_proofs_reject_heterogeneous_bounded_groups(
+    tmp_path: Path,
+    correct: str,
+    grouped_mutation: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = proof.read_text(encoding="utf-8")
+    assert source.count(correct) == 1, correct
+    proof.write_text(source.replace(correct, grouped_mutation, 1), encoding="utf-8")
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "heterogeneous grouped bounded quantifier" in error
+        for error in errors
+    ), errors
+
+
+def test_scheduler_starvation_composition_requires_both_rank_properties(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = proof.read_text(encoding="utf-8")
+    correct = (
+        "THEOREM ProtectedServiceRankProgressImpliesStarvation ==\n"
+        "  \\A initialContext:\n"
+        "    /\\ AsyncSpecAt(initialContext)\n"
+        "    /\\ ProtectedServiceRanksProgressProperty("
+        "AsyncSpecAt(initialContext))"
+    )
+    candidate_only = correct.replace(
+        "ProtectedServiceRanksProgressProperty",
+        "ProtectedServiceRankProgressProperty",
+    )
+    assert source.count(correct) == 1
+    proof.write_text(source.replace(correct, candidate_only, 1), encoding="utf-8")
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "ProtectedServiceRankProgressImpliesStarvation" in error
+        and "complete rank-progress premise" in error
+        for error in errors
+    ), errors
+
+
+def test_serve_starvation_composition_requires_natural_rank_induction(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = proof.read_text(encoding="utf-8")
+    correct = "BY <3>1, NatLessThanWellFounded, WellFoundedLeadsTo"
+    weakened = "BY <3>1, OwnedServiceRankOrderingWellFounded, WellFoundedLeadsTo"
+    assert source.count(correct) == 1
+    proof.write_text(source.replace(correct, weakened, 1), encoding="utf-8")
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "ProtectedServeRankProgressImpliesStarvation" in error
+        and "NatLessThanWellFounded" in error
+        for error in errors
+    ), errors
 
 
 def test_tlc_configs_keep_an_externally_invalid_subject(tmp_path: Path) -> None:
@@ -6300,6 +8782,7 @@ def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
         "ChangedManifestNotCoalesced",
         "ChangedCommitmentNotCoalesced",
         "ExactCandidateAdmitted",
+        "VolatileSignatureProgressWitness",
         "DurableWorkHasReplayOrRecovery",
         "NoStaleCompletion",
         "OuterProgressClassAligned",
@@ -6319,6 +8802,7 @@ def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
         "crash_replay_signature_fixed.cfg",
         "crash_replay_body_fixed.cfg",
         "crash_replay_application_fixed.cfg",
+        "crash_replay_signature_volatile_bug.cfg",
         "crash_replay_signature_drop_bug.cfg",
         "crash_replay_body_drop_bug.cfg",
         "crash_replay_application_drop_bug.cfg",
@@ -6336,6 +8820,13 @@ def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
             config_source = (formal_dir / config).read_text(encoding="utf-8")
             assert "INVARIANT AsyncRecoveryTypeInvariant\n" in config_source
             assert "INVARIANT AsyncRestartAuthorityInvariant\n" in config_source
+    assert "INVARIANT CrashAwareSignatureProgressWitness\n" in (
+        formal_dir / "crash_replay_signature_fixed.cfg"
+    ).read_text(encoding="utf-8")
+    assert "INVARIANT VolatileSignatureProgressWitness\n" in (
+        formal_dir / "crash_replay_signature_volatile_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert "39 mutants failed their named invariants" in runner
     ingress_mutation = (formal_dir / "SumeragiV2IngressClassMutation.tla").read_text(
         encoding="utf-8"
     )
@@ -6355,6 +8846,9 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         "run_sumeragi_v2_candidate_restart_mutation.sh"
     )
     progress_mutations = source.index("run_sumeragi_v2_progress_mutations.sh")
+    effect_capacity_mutations = source.index(
+        "run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
+    )
     tlc = source.index("run_sumeragi_v2_tlc.sh")
     replay = source.index("check_sumeragi_v2_replay_trace.sh")
     verus = source.index("verify_sumeragi_v2.sh")
@@ -6368,6 +8862,7 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         < productive_mutations
         < candidate_restart
         < progress_mutations
+        < effect_capacity_mutations
         < tlc
         < replay
         < verus
@@ -6503,6 +8998,49 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     taira_source = (
         ROOT_DIR / "integration_tests" / "tests" / "taira_public_localnet.rs"
     ).read_text(encoding="utf-8")
+    integration_runner_source = (
+        ROOT_DIR / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
+    ).read_text(encoding="utf-8")
+    lane_work_source = (
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_lane_work.rs"
+    ).read_text(encoding="utf-8")
+    runner_source = (
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
+    ).read_text(encoding="utf-8")
+    kura_source = (ROOT_DIR / "crates" / "iroha_core" / "src" / "kura.rs").read_text(
+        encoding="utf-8"
+    )
+    lane_geometry_source = (
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
+    ).read_text(encoding="utf-8")
+    liveness_doc = (
+        ROOT_DIR / "docs" / "source" / "sumeragi_v2_liveness.md"
+    ).read_text(encoding="utf-8")
+
+    runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    bash = Path(shutil.which("bash") or "").resolve(strict=True)
+    for sealed_value in ("0", "1"):
+        direct_environment = {
+            "HOME": os.environ.get("HOME", str(ROOT_DIR)),
+            "IROHA_RELEASE_SEALED_WORKTREE": sealed_value,
+            "PATH": os.defpath,
+        }
+        direct = subprocess.run(
+            [str(bash), str(runner_path), "--release"],
+            cwd=ROOT_DIR,
+            env=direct_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert direct.returncode != 0
+        assert (
+            "production release requires matching bootstrap path aliases"
+            in direct.stderr
+        )
 
     assert "export IROHA_TEST_REQUIRE_NETWORK=1" in seed_source
     assert "export IROHA_TEST_NETWORK_START_ATTEMPTS=1" in seed_source
@@ -6512,6 +9050,122 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert ".seed-matrix.lock" in seed_source
     assert "COMPLETED.tsv" in seed_source
 
+    platform_case = release_source[
+        release_source.index('case "$(uname -s)-$(uname -m)" in') :
+        release_source.index("  esac", release_source.index('case "$(uname -s)-$(uname -m)" in'))
+    ]
+    assert platform_case.count("Darwin-arm64)") == 1
+    assert platform_case.count("Linux-x86_64)") == 1
+    assert "Windows" not in platform_case
+    assert "UnsupportedValidatorStoragePlatform" in lane_work_source
+    assert "require_validator_storage_platform(" in lane_work_source
+    assert "sumeragi_v2_validator_storage_supported()" in lane_work_source
+    assert 'cfg!(any(target_os = "linux", target_os = "macos"))' in kura_source
+    run_inner = runner_source[runner_source.index("fn run_inner(") :]
+    runner_platform_gate = run_inner.index("    require_validator_storage_platform(")
+    runner_gate_end = run_inner.index("    )?;", runner_platform_gate)
+    runner_gate = run_inner[runner_platform_gate:runner_gate_end]
+    assert "config.role == NodeRole::Validator" in runner_gate
+    for side_effect in (
+        "output_guard\n        .begin_fail_stop_operation()",
+        "recover_active_height(",
+        "let wal_path =",
+        "SumeragiV2Adapter::open",
+        "ProductionV2Services::start",
+        "V2LaneWorkAdapter::new_with_output_guard",
+    ):
+        assert runner_platform_gate < run_inner.index(side_effect)
+    lane_constructor = lane_work_source[
+        lane_work_source.index("    pub(crate) fn new_with_output_guard(") :
+    ]
+    lane_platform_gate = lane_constructor.index(
+        "        require_validator_storage_platform("
+    )
+    for side_effect in (
+        "begin_fail_stop_operation()",
+        "context\n            .validate()",
+        "MergeSigningGuard::open_with_committed_frontier",
+        "NativeAmxSigningGuard::open",
+    ):
+        assert lane_platform_gate < lane_constructor.index(side_effect)
+    assert "local_validator.is_some()," in run_inner
+    assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
+    assert "let fixed_progress_pairs: [(&Path, &Path, &str); 6]" in lane_geometry_source
+    assert "recovery_directory = refreshed_directory;" in lane_geometry_source
+    assert (
+        "BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock"
+        in lane_geometry_source
+    )
+    assert (
+        "BoundProgressRecoveryFailure::InvalidData => ErrorKind::InvalidData"
+        in lane_geometry_source
+    )
+    new_production_inventory_additions = (
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_classifies_recovery_sync_failure_as_retryable",
+            lane_geometry_source,
+        ),
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_discards_unpublished_temp_for_every_fixed_pair",
+            lane_geometry_source,
+        ),
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_promotes_then_rejects_complete_autonomous_rewrite",
+            lane_geometry_source,
+        ),
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_recovers_complete_certified_rewrite_before_snapshot",
+            lane_geometry_source,
+        ),
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_recovery_rejects_temp_symlink_without_external_writes",
+            lane_geometry_source,
+        ),
+        (
+            "kura::lane_geometry::tests::",
+            "first_release_retirement_rejects_directory_substitution_at_pair_refresh",
+            lane_geometry_source,
+        ),
+        (
+            "sumeragi::v2_lane_work::tests::",
+            "validator_storage_platform_gate_rejects_voters_and_allows_observers",
+            lane_work_source,
+        ),
+        (
+            "sumeragi::v2_runner::tests::",
+            "unsupported_storage_platform_rejects_runner_voter_and_admits_observer",
+            runner_source,
+        ),
+        (
+            "sumeragi_v2_runner::prepare_qc_split_tests::",
+            "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one",
+            integration_runner_source,
+        ),
+    )
+    for _, test_name, source in new_production_inventory_additions:
+        assert f"fn {test_name}(" in source
+    normalized_liveness_doc = re.sub(r"\s+", " ", liveness_doc.lower())
+    assert (
+        "other platforms are restricted to non-voting observer or development use"
+        in normalized_liveness_doc
+    )
+    assert (
+        "complete observer application and lane-retirement behavior there is not release-certified"
+        in normalized_liveness_doc
+    )
+    assert (
+        "no unsupported-platform validator release receipt may be emitted"
+        in normalized_liveness_doc
+    )
+
+    bootstrap_validation = release_source.index(
+        "validate_sumeragi_v2_release_bootstrap.py"
+    )
     required_network = release_source.index("export IROHA_TEST_REQUIRE_NETWORK=1")
     production_units = release_source.index("required_production_liveness_tests")
     taira_rust_contracts = release_source.index(
@@ -6527,6 +9181,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     receipt_contract_preflight = release_source.index(
         "release_receipt_contract_files=("
     )
+    proof_fidelity_preflight = release_source.index(
+        "proof_fidelity_contract_files=("
+    )
     formal_launcher_preflight = release_source.index(
         "formal_launcher_contract_files=("
     )
@@ -6541,18 +9198,22 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     pre_soak_manifest = release_source.index("pre_soak_source_manifest_sha256")
     taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
-    final_proof_check = release_source.rindex("--release")
+    final_proof_check = release_source.index(
+        "check_sumeragi_v2_proof_ledger.py \\\n  --release \\\n  --evidence"
+    )
     aggregate_receipt = release_source.index(
         "write_sumeragi_v2_release_receipt.py"
     )
     assert (
-        required_network
+        bootstrap_validation
+        < required_network
         < production_units
         < taira_rust_contracts
         < source_contract_preflight
         < seed_launcher_preflight
         < chaos_launcher_preflight
         < receipt_contract_preflight
+        < proof_fidelity_preflight
         < formal_launcher_preflight
         < taira_soak_preflight
         < formal_gate
@@ -6565,16 +9226,51 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         < aggregate_receipt
     )
     assert seed_matrix < pr_branch < pr_fast_formal
+    assert "/tmp/iroha-sumeragi-v2-release-host-" not in release_source
+    assert "IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE" not in release_source
+    assert 'release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"' in release_source
+    assert '--bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION"' in release_source
+    assert '--expected-bootstrap-completion-sha256' in release_source
+    assert '--bootstrap-candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT"' in release_source
+    assert '--bootstrap-runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER"' in release_source
+    assert 'mv -- "$release_receipt_partial"' not in release_source
     production_inventory_end = release_source.index("\n)", production_units)
     production_inventory = tuple(
         line.strip()
         for line in release_source[
             production_units:production_inventory_end
         ].splitlines()
-        if line.strip().startswith("sumeragi::")
+        if line.strip().startswith(("sumeragi::", "sumeragi_v2_runner::", "kura::"))
     )
-    assert len(production_inventory) == 166
-    assert len(set(production_inventory)) == 166
+    assert len(production_inventory) == 204
+    assert len(set(production_inventory)) == 204
+    for module, test_name, _ in new_production_inventory_additions:
+        assert f"{module}{test_name}" in production_inventory
+    for required_test in (
+        "kura::tests::progress_witness_durability::"
+        "absent_progress_namespace_requires_every_directory_barrier",
+        "kura::tests::progress_witness_durability::"
+        "bound_progress_recovery_handles_crash_phases_without_path_escape",
+        "kura::tests::progress_witness_durability::"
+        "direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries",
+        "kura::tests::progress_witness_durability::"
+        "initial_preindex_data_sync_failure_rolls_back_payload_before_retry",
+        "kura::tests::progress_witness_durability::"
+        "progress_sidecar_mutation_rejects_symlinks_without_external_writes",
+        "kura::tests::progress_witness_durability::"
+        "progress_prepend_directory_failure_retries_without_corruption",
+        "kura::tests::progress_witness_durability::"
+        "unindexed_crash_suffix_is_repaired_before_retry_or_append",
+        "kura::lane_geometry::tests::"
+        "first_release_retirement_requires_bound_progress_sidecar_durability",
+        "kura::lane_geometry::tests::"
+        "geometry_gc_requires_bound_merge_receipt_durability_before_deletion",
+        "sumeragi::v2_core::tests::"
+        "timeout_elapsed_cannot_start_durable_timeout_after_decision",
+        "sumeragi::v2_core::tests::"
+        "quorum_completing_timeout_vote_cannot_form_tc_after_decision",
+    ):
+        assert required_test in production_inventory
     assert (
         "sumeragi::v2_effects::tests::"
         "runtime_step_dispatches_entire_effect_batch_before_returning"
@@ -6585,6 +9281,26 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         "committed_merge_reservation_rejects_bare_norito"
         in production_inventory
     )
+    assert (
+        "sumeragi::v2_worker::tests::"
+        "locked_candidate_future_completion_is_rejected_without_replacing_owner"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_worker::tests::"
+        "unavailable_locked_candidate_rebinds_latest_consumer_before_retry"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_effects::tests::"
+        "decision_installed_by_same_runtime_step_retires_stale_terminal_effects"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_effects::tests::"
+        "decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work"
+        in production_inventory
+    )
     production_modules_start = release_source.index("production_liveness_modules=(")
     production_modules_end = release_source.index("\n)", production_modules_start)
     production_modules = tuple(
@@ -6592,18 +9308,37 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         for line in release_source[
             production_modules_start:production_modules_end
         ].splitlines()
-        if line.strip().startswith("sumeragi::")
+        if line.strip().startswith(("sumeragi::", "sumeragi_v2_runner", "kura::"))
     )
-    assert len(production_modules) == 14
-    assert len(set(production_modules)) == 14
+    assert len(production_modules) == 17
+    assert len(set(production_modules)) == 17
+    assert "kura::tests::progress_witness_durability" in production_modules
+    assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
     assert "sumeragi::v2_block_sync::tests" in production_modules
     assert "sumeragi::v2_apply::tests" in production_modules
+    assert "sumeragi_v2_runner" in production_modules
     assert 'for module in "${production_liveness_modules[@]}"; do' in release_source
     assert (
         'cargo test --locked -p iroha_core --lib "$module" -- --test-threads=1'
         in release_source
     )
+    assert (
+        "cargo test --locked -p integration_tests --test "
+        "sumeragi_v2_runner_isolated "
+        "sumeragi_v2_runner::prepare_qc_split_tests::"
+        "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one "
+        "-- --exact --test-threads=1"
+        in release_source
+    )
+    assert (
+        '_PRODUCTION_INTEGRATION_TEST = (\n'
+        '    "sumeragi_v2_runner::prepare_qc_split_tests::"\n'
+        '    "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one"\n'
+        ")"
+        in receipt_source
+    )
+    assert "production_integration_ignored_unit_list=" in release_source
     assert (
         "serialized_runtime_rebinds_busy_deferred_body_completion_before_service"
         in release_source
@@ -6615,6 +9350,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "replay_does_not_resign_commit_superseded_by_higher_tc_lock" in release_source
     assert "fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner" in release_source
     assert "blocker_classifier_has_stable_specific_precedence" in release_source
+    assert (
+        "current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit"
+        in release_source
+    )
     assert "missing required production Sumeragi v2 liveness test" in release_source
     assert "production_ignored_unit_list=" in release_source
     assert "required production Sumeragi v2 liveness test is ignored" in release_source
@@ -6629,14 +9368,57 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "did not run exactly ten passing tests" in release_source
     assert "did not run exactly five passing tests" in release_source
     assert "preflight-chaos-launcher pytest 5" in release_source
+    assert "did not run exactly 68 passing tests" in release_source
+    assert "preflight-release-identity pytest 68" in release_source
+    assert "did not run exactly 71 passing tests" in release_source
+    assert "preflight-release-bootstrap pytest 71" in release_source
     assert "did not run exactly 37 passing tests" in release_source
-    assert "preflight-release-receipt pytest 37" in release_source
+    assert "preflight-release-bootstrap-validator pytest 37" in release_source
+    assert "did not run exactly 175 passing tests" in release_source
+    assert "preflight-release-receipt pytest 175" in release_source
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                37,'
+        '"preflight-release-identity",\n                "pytest",\n                68,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-bootstrap",\n                "pytest",\n                71,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-bootstrap-validator",\n                "pytest",\n                37,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-receipt",\n                "pytest",\n                175,'
+        in receipt_source
+    )
+    assert "did not run exactly 477 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 477" in release_source
+    assert (
+        "^477 passed in [0-9]+([.][0-9]+)?s( "
+        r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
+        in release_source
+    )
+    assert (
+        r'r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s"' in release_source
+    )
+    assert (
+        r'r"(?: \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?"'
+        in release_source
+    )
+    for contract_file in (
+        "pytests/scripts/sumeragi_v2_proof_ledger_test.py",
+        "pytests/scripts/sumeragi_v2_verus_evidence_test.py",
+        "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py",
+    ):
+        assert contract_file in release_source
+        assert contract_file in receipt_source
+    assert (
+        '"preflight-proof-fidelity",\n                "pytest",\n                477,'
         in receipt_source
     )
     assert "did not run exactly twelve passing tests" in release_source
@@ -6652,10 +9434,11 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
+    assert "expected_corridor_leg_count=36" in release_source
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source
-    assert "Fail before 128 real-network runs" in release_source
+    assert "Fail before 160 real-network runs" in release_source
     assert "workspace sources changed during the PR release corridor" in release_source
     assert "workspace sources changed before the Taira production soak" in release_source
     assert "workspace sources changed during the production release corridor" in release_source

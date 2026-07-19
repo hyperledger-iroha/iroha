@@ -44,9 +44,13 @@ pub fn create_block<'a>(
 ) -> (CommittedBlock, StateBlock<'a>) {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let transaction = TransactionBuilder::new(chain_id.clone(), account_id)
-        .with_instructions(instructions)
-        .sign(account_private_key);
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(account_private_key);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.view();
         let params = state_view.world.parameters();
@@ -268,9 +272,13 @@ pub fn build_state(
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(account_private_key);
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(account_private_key);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.view();
             let params = state_view.world.parameters();

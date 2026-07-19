@@ -261,21 +261,6 @@ final class TxBuilderTests: XCTestCase {
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
 
-    private static func deterministicValidationFeeNativeTransaction() -> NativeSignedTransaction {
-        NativeSignedTransaction(
-            signedBytes: Data([1, 0xA5]),
-            hash: Data(repeating: 0x5A, count: 32)
-        )
-    }
-
-    private func validationFeeMetadata(
-        from input: SwiftTransactionEncoder.ValidationFeeTransferNativeInput
-    ) throws -> [String: Any] {
-        try XCTUnwrap(
-            JSONSerialization.jsonObject(with: input.transactionMetadataJSON) as? [String: Any]
-        )
-    }
-
     private func makeFixtureKeypair() throws -> Keypair {
         guard let keyData = Data(hexString: Self.fixturePrivateKeyHex) else {
             XCTFail("Invalid fixture private key hex")
@@ -298,7 +283,8 @@ final class TxBuilderTests: XCTestCase {
                                  amount: amount,
                                  noteCommitment: noteCommitment,
                                  payload: payload,
-                                 ttlMs: ttlMs)
+                                 ttlMs: ttlMs,
+                                 feePayment: .authority(chargeLimits: [], gasLimit: nil),)
     }
 
     private func makeProofAttachment() throws -> ProofAttachment {
@@ -326,7 +312,8 @@ final class TxBuilderTests: XCTestCase {
                                    inputs: inputs,
                                    proof: proof,
                                    rootHint: rootHint,
-                                   ttlMs: ttlMs)
+                                   ttlMs: ttlMs,
+                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
     }
 
     private func hexEncoded(_ data: Data) -> String {
@@ -382,7 +369,8 @@ final class TxBuilderTests: XCTestCase {
                                       transferVerifyingKey: transferVk,
                                       unshieldVerifyingKey: unshieldVk,
                                       shieldVerifyingKey: nil,
-                                      ttlMs: ttlMs)
+                                      ttlMs: ttlMs,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),)
     }
 
     private func makeClaimIdentifierRequest(authority: String,
@@ -448,7 +436,8 @@ final class TxBuilderTests: XCTestCase {
                                       authority: authority,
                                       accountId: claimAccountId,
                                       receipt: receipt,
-                                      ttlMs: ttlMs)
+                                      ttlMs: ttlMs,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),)
     }
 
     func testBuildSignedTransferProducesEnvelope() throws {
@@ -461,6 +450,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: 90)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
         XCTAssertEqual(envelope.norito.first, 1)
@@ -484,6 +474,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: authority,
                                        description: "deterministic",
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: 30)
 
         let fixedClockSdk = IrohaSDK(baseURL: URL(string: "https://example.test")!,
@@ -957,6 +948,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0)
@@ -1092,6 +1084,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0)
@@ -1117,7 +1110,8 @@ final class TxBuilderTests: XCTestCase {
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
-                                       description: nil)
+                                       description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
         try await sdk.submit(envelope: envelope)
@@ -1138,7 +1132,8 @@ final class TxBuilderTests: XCTestCase {
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
-                                       description: nil)
+                                       description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
         do {
@@ -1163,6 +1158,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 90)
 
         let swift = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
@@ -1176,6 +1172,7 @@ final class TxBuilderTests: XCTestCase {
                                                                          assetDefinitionId: request.assetDefinitionId,
                                                                          quantity: request.quantity,
                                                                          destination: request.destination,
+                                                                         feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                          privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native bridge transfer encoding")
             return
@@ -1198,6 +1195,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "10",
                                       destination: authority,
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let withKeypair = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                      keypair: keypair,
@@ -1219,7 +1217,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "3.14",
                                   destination: authority,
-                                  ttlMs: 45)
+                                  ttlMs: 45,
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
 
         let swift = try SwiftTransactionEncoder.encodeMint(request: request,
                                                            keypair: keypair,
@@ -1253,7 +1252,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "2",
                                   destination: authority,
-                                  ttlMs: 120)
+                                  ttlMs: 120,
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
 
         let swift = try SwiftTransactionEncoder.encodeBurn(request: request,
                                                            keypair: keypair,
@@ -1289,7 +1289,8 @@ final class TxBuilderTests: XCTestCase {
                                          target: .account(authority),
                                          key: "display_name",
                                          value: value,
-                                         ttlMs: 30)
+                                         ttlMs: 30,
+                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),)
 
         let swift = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
                                                                   keypair: keypair,
@@ -1366,7 +1367,8 @@ final class TxBuilderTests: XCTestCase {
                                                    abiVersion: "1",
                                                    window: window,
                                                    mode: .plain,
-                                                   ttlMs: 20)
+                                                   ttlMs: 20,
+                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
 
         let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                     keypair: keypair,
@@ -1407,7 +1409,8 @@ final class TxBuilderTests: XCTestCase {
                                             members: [authority],
                                             candidatesCount: 1,
                                             derivedBy: .vrf,
-                                            ttlMs: 15)
+                                            ttlMs: 15,
+                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),)
 
         let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
                                                                      keypair: keypair,
@@ -1446,6 +1449,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
 
         guard let native = try? NoritoNativeBridge.shared.encodeTransfer(chainId: transfer.chainId,
@@ -1455,6 +1459,7 @@ final class TxBuilderTests: XCTestCase {
                                                                          assetDefinitionId: transfer.assetDefinitionId,
                                                                          quantity: transfer.quantity,
                                                                          destination: transfer.destination,
+                                                                         feePaymentJSON: try transfer.feePayment.canonicalJSONData(),
                                                                          privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native bridge to produce transaction")
             return
@@ -1477,6 +1482,7 @@ final class TxBuilderTests: XCTestCase {
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
+                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -1488,7 +1494,7 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertTrue(json.contains("\"instructions\""))
     }
 
-    func testDecodeSignedTransactionJSONIncludesFeeSponsorWhenPresent() throws {
+    func testDecodeSignedTransactionJSONIncludesSponsorProgramIntent() throws {
         guard NoritoNativeBridge.shared.isAvailable else {
             throw XCTSkip("NoritoBridge native encoder not linked")
         }
@@ -1497,13 +1503,19 @@ final class TxBuilderTests: XCTestCase {
         let sponsorKeypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
+        let programId = try FeeSponsorProgramId(sponsor: feeSponsor, name: "wallet_fx")
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
-                                       feeSponsor: feeSponsor,
+                                       feePayment: .sponsor(
+                                           programId: programId,
+                                           programRevision: 3,
+                                           chargeLimits: [],
+                                           gasLimit: nil
+                                       ),
                                        ttlMs: nil)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -1512,7 +1524,8 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
+        XCTAssertTrue(json.contains("\"fee_payment\""), json)
+        XCTAssertTrue(json.contains("\"program_revision\":3"), json)
         XCTAssertTrue(json.contains(feeSponsor), json)
     }
 
@@ -1550,7 +1563,8 @@ final class TxBuilderTests: XCTestCase {
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
                                              value: .string("wonderland"),
-                                             ttlMs: nil)
+                                             ttlMs: nil,
+                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
                                                                      signingKey: signingKey,
@@ -1573,7 +1587,8 @@ final class TxBuilderTests: XCTestCase {
                                                    abiVersion: "1",
                                                    window: GovernanceWindow(lower: 1, upper: 5),
                                                    mode: .zk,
-                                                   ttlMs: nil)
+                                                   ttlMs: nil,
+                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                        signingKey: signingKey,
@@ -1582,205 +1597,6 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertFalse(envelope.signedTransaction.isEmpty)
     }
 
-    func testBuildSignedTransferWithValidationFeeCreatesTwoInstructionEnvelopeWithPolicyMetadata() throws {
-        let keypair = try makeFixtureKeypair()
-        let sponsorKeypair = try Keypair.generate()
-        let destinationKeypair = try Keypair.generate()
-        let treasuryKeypair = try Keypair.generate()
-        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
-        let feeSponsor = try AccountId.makeI105(publicKey: sponsorKeypair.publicKey)
-        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
-        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
-        let policyHash = String(repeating: "AB", count: 32)
-        let principal = TransferRequest(chainId: Self.fixtureChainId,
-                                        authority: authority,
-                                        assetDefinitionId: "\(Self.fixtureAssetDefinition)#dataspace:42",
-                                        quantity: "12.34",
-                                        destination: destination,
-                                        description: "invoice-123",
-                                        feeSponsor: feeSponsor,
-                                        ttlMs: 120_000,
-                                        nonce: 9)
-        let request = ValidationFeeTransferRequest(
-            principal: principal,
-            feeQuantity: "0.1",
-            treasuryAccountId: treasury,
-            policyVersion: 7,
-            policyHashHex: policyHash,
-            transactionMetadata: ["client_trace": .string("abc123")]
-        )
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-        sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
-        var nativeInput: SwiftTransactionEncoder.ValidationFeeTransferNativeInput?
-        sdk.validationFeeTransferNativeEncoderForTests = { input in
-            nativeInput = input
-            return Self.deterministicValidationFeeNativeTransaction()
-        }
-
-        let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
-
-        XCTAssertEqual(envelope.norito, Data([1, 0xA5]))
-        XCTAssertEqual(envelope.signedTransaction, Data([0xA5]))
-        XCTAssertEqual(envelope.transactionHash, Data(repeating: 0x5A, count: 32))
-
-        let input = try XCTUnwrap(nativeInput)
-        XCTAssertEqual(input.chainId, Self.fixtureChainId)
-        XCTAssertEqual(input.authority, authority)
-        XCTAssertEqual(input.creationTimeMs, Self.fixtureCreationTimeMs)
-        XCTAssertEqual(input.ttlMs, 120_000)
-        XCTAssertEqual(input.nonce, 9)
-        XCTAssertEqual(input.principalAssetDefinitionId, principal.assetDefinitionId)
-        XCTAssertEqual(input.principalQuantity, principal.quantity)
-        XCTAssertEqual(input.destination, destination)
-        XCTAssertEqual(input.feeAssetDefinitionId, principal.assetDefinitionId)
-        XCTAssertEqual(input.feeQuantity, request.feeQuantity)
-        XCTAssertEqual(input.treasury, treasury)
-        XCTAssertEqual(input.policyVersion, request.policyVersion)
-        XCTAssertEqual(input.policyHashHex, policyHash.lowercased())
-        XCTAssertEqual(input.feeInstructionIndex, 1)
-        XCTAssertEqual(input.feeSponsor, feeSponsor)
-        XCTAssertEqual(input.memo, "invoice-123")
-
-        let metadata = try validationFeeMetadata(from: input)
-        XCTAssertEqual(
-            (metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] as? NSNumber)?.uint64Value,
-            7
-        )
-        XCTAssertEqual(
-            metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] as? String,
-            policyHash.lowercased()
-        )
-        XCTAssertEqual(
-            (metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] as? NSNumber)?.uint64Value,
-            1
-        )
-        XCTAssertEqual(metadata["client_trace"] as? String, "abc123")
-    }
-
-    func testBuildSignedTransferWithValidationFeePreservesExplicitMemoMetadata() throws {
-        let keypair = try makeFixtureKeypair()
-        let destinationKeypair = try Keypair.generate()
-        let treasuryKeypair = try Keypair.generate()
-        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
-        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
-        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
-        let descriptionMemo = "description-memo"
-        let explicitMemo = "explicit-memo"
-        let principal = TransferRequest(chainId: Self.fixtureChainId,
-                                        authority: authority,
-                                        assetDefinitionId: "\(Self.fixtureAssetDefinition)#dataspace:42",
-                                        quantity: "12.34",
-                                        destination: destination,
-                                        description: descriptionMemo,
-                                        ttlMs: 120_000,
-                                        nonce: 10)
-        let request = ValidationFeeTransferRequest(
-            principal: principal,
-            feeQuantity: "0.1",
-            treasuryAccountId: treasury,
-            policyVersion: 7,
-            policyHashHex: String(repeating: "ab", count: 32),
-            transactionMetadata: ["memo": .string(explicitMemo)]
-        )
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-        sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
-        var nativeInput: SwiftTransactionEncoder.ValidationFeeTransferNativeInput?
-        sdk.validationFeeTransferNativeEncoderForTests = { input in
-            nativeInput = input
-            return Self.deterministicValidationFeeNativeTransaction()
-        }
-
-        let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
-
-        XCTAssertEqual(envelope.norito, Data([1, 0xA5]))
-        let input = try XCTUnwrap(nativeInput)
-        XCTAssertNil(input.memo, "explicit metadata must suppress the description-derived memo")
-        let metadata = try validationFeeMetadata(from: input)
-        XCTAssertEqual(metadata["memo"] as? String, explicitMemo)
-        let metadataJSON = try XCTUnwrap(String(data: input.transactionMetadataJSON, encoding: .utf8))
-        XCTAssertFalse(metadataJSON.contains(descriptionMemo), metadataJSON)
-    }
-
-    func testBuildSignedTransferWithValidationFeeRejectsMalformedPolicyHash() throws {
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let principal = TransferRequest(chainId: Self.fixtureChainId,
-                                        authority: authority,
-                                        assetDefinitionId: Self.fixtureAssetDefinition,
-                                        quantity: "1",
-                                        destination: authority,
-                                        description: nil,
-                                        ttlMs: 120_000)
-        let request = ValidationFeeTransferRequest(
-            principal: principal,
-            feeQuantity: "0.10",
-            treasuryAccountId: authority,
-            policyVersion: 1,
-            policyHashHex: "abc"
-        )
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-
-        XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
-            XCTAssertEqual(error as? ValidationFeeTransferRequestError, .malformedPolicyHash("abc"))
-        }
-    }
-
-    func testBuildSignedTransferWithValidationFeeRejectsMalformedFeeSponsor() throws {
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let malformedFeeSponsor = " \(authority)"
-        let principal = TransferRequest(chainId: Self.fixtureChainId,
-                                        authority: authority,
-                                        assetDefinitionId: Self.fixtureAssetDefinition,
-                                        quantity: "1",
-                                        destination: authority,
-                                        description: nil,
-                                        feeSponsor: malformedFeeSponsor,
-                                        ttlMs: 120_000)
-        let request = ValidationFeeTransferRequest(
-            principal: principal,
-            feeQuantity: "0.10",
-            treasuryAccountId: authority,
-            policyVersion: 1,
-            policyHashHex: String(repeating: "ab", count: 32)
-        )
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-        sdk.validationFeeTransferNativeEncoderForTests = { _ in
-            throw SwiftTransactionEncoderError.nativeBridgeUnavailable
-        }
-
-        XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAccountId(field: "feeSponsor", value: malformedFeeSponsor))
-        }
-    }
-
-    func testBuildSignedTransferWithValidationFeeRejectsMutableTreasuryAlias() throws {
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let principal = TransferRequest(chainId: Self.fixtureChainId,
-                                        authority: authority,
-                                        assetDefinitionId: Self.fixtureAssetDefinition,
-                                        quantity: "1",
-                                        destination: authority,
-                                        description: nil,
-                                        ttlMs: 120_000)
-        let request = ValidationFeeTransferRequest(
-            principal: principal,
-            feeQuantity: "0.10",
-            treasuryAccountId: "mutable@treasury",
-            policyVersion: 1,
-            policyHashHex: String(repeating: "ab", count: 32)
-        )
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-
-        XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
-            guard case TransactionInputError.malformedAccountId(let field, _) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(field, "treasury")
-        }
-    }
 
     func testBuildMintWithoutBridgeThrows() throws {
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
@@ -1794,7 +1610,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "3.14",
                                   destination: destination,
-                                  ttlMs: 45)
+                                  ttlMs: 45,
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildMint(mint: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1815,7 +1632,8 @@ final class TxBuilderTests: XCTestCase {
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
                                              value: .string("wonderland"),
-                                             ttlMs: nil)
+                                             ttlMs: nil,
+                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildSetMetadata(request: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1837,7 +1655,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "2",
                                   destination: destination,
-                                  ttlMs: 120)
+                                  ttlMs: 120,
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildBurn(burn: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1861,7 +1680,8 @@ final class TxBuilderTests: XCTestCase {
                               amount: "1",
                               noteCommitment: Data(repeating: 0x00, count: 16),
                               payload: payload,
-                              ttlMs: 10)
+                              ttlMs: 10,
+                              feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         ) { error in
             guard case ShieldRequestError.invalidNoteCommitmentLength = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -1928,7 +1748,8 @@ final class TxBuilderTests: XCTestCase {
                                 toAccountId: authority,
                                 publicAmount: "1",
                                 inputs: [],
-                                proof: proof)
+                                proof: proof,
+                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         ) { error in
             guard case UnshieldRequestError.inputsEmpty = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -1948,7 +1769,8 @@ final class TxBuilderTests: XCTestCase {
                                 toAccountId: authority,
                                 publicAmount: "1",
                                 inputs: [invalidInput],
-                                proof: proof)
+                                proof: proof,
+                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         ) { error in
             guard case UnshieldRequestError.invalidNullifierLength = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -1970,7 +1792,8 @@ final class TxBuilderTests: XCTestCase {
                                 publicAmount: "1",
                                 inputs: [validInput],
                                 proof: proof,
-                                rootHint: hint)
+                                rootHint: hint,
+                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
         ) { error in
             guard case UnshieldRequestError.invalidRootHintLength = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -2035,6 +1858,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair)
         XCTAssertEqual(status.status.kind, "Applied")
@@ -2053,6 +1877,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let options = PipelineStatusPollOptions(pollInterval: 0,
                                                 timeout: 0.1,
@@ -2084,6 +1909,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         do {
             _ = try await sdk.submitAndWait(transfer: request, keypair: keypair)
@@ -2113,6 +1939,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         do {
             _ = try await sdk.submitAndWait(transfer: request, keypair: keypair)
@@ -2143,6 +1970,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let expectation = expectation(description: "pipeline completion")
         let task = sdk.submitAndWait(transfer: request, keypair: keypair) { result in
@@ -2174,6 +2002,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         do {
             _ = try await sdk.submitAndWait(transfer: request, keypair: keypair)
@@ -2200,6 +2029,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let options = PipelineStatusPollOptions(pollInterval: 0, timeout: 0.1, maxAttempts: 2)
         do {
@@ -2228,6 +2058,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
         try await sdk.submit(envelope: envelope)
@@ -2255,6 +2086,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
         try await sdk.submit(envelope: envelope)
@@ -2280,6 +2112,7 @@ final class TxBuilderTests: XCTestCase {
                                       quantity: "1",
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 60)
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
         do {

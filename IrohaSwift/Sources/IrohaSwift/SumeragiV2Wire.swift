@@ -1561,6 +1561,7 @@ public struct SumeragiV2WorkStatus: Equatable, Sendable {
 public enum SumeragiV2QueueKind: UInt32, Equatable, Sendable {
     case ingress = 0, deferredNormal, deferredProgress, deferredCompletion
     case runtimeNormal, runtimeProgress, runtimeCompletion, effectCompletion, networkIngress
+    case effectDispatch = 9
     fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
     fileprivate static func decode(_ data: Data) throws -> Self {
         let tag = try sumeragiV2DecodeU32(data)

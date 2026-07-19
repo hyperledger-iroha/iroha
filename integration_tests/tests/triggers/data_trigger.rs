@@ -104,7 +104,10 @@ fn ensure_account_alias_registration_lease(
         )),
         Err(_) => {
             let request = test_account_alias_register_request(alias_literal, &client.account)?;
-            client.sns().register(&request)?;
+            client.sns().register(
+                &request,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
             Ok(())
         }
     }
@@ -185,18 +188,24 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             let client = test_client.clone();
             let alias_domain = alias_domain.clone();
             move || -> Result<()> {
-                client.submit_blocking(Grant::account_permission(
-                    Permission::from(CanManageAccountAlias {
-                        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-                    }),
-                    ALICE_ID.clone(),
-                ))?;
-                client.submit_blocking(Grant::account_permission(
-                    Permission::from(CanManageAccountAlias {
-                        scope: AccountAliasPermissionScope::Domain(alias_domain),
-                    }),
-                    ALICE_ID.clone(),
-                ))?;
+                client.submit_blocking(
+                    Grant::account_permission(
+                        Permission::from(CanManageAccountAlias {
+                            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+                        }),
+                        ALICE_ID.clone(),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )?;
+                client.submit_blocking(
+                    Grant::account_permission(
+                        Permission::from(CanManageAccountAlias {
+                            scope: AccountAliasPermissionScope::Domain(alias_domain),
+                        }),
+                        ALICE_ID.clone(),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )?;
                 Ok(())
             }
         })
@@ -217,7 +226,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         ));
         spawn_blocking({
             let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
+            move || {
+                client.submit_blocking(
+                    register_trigger,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
         })
         .await??;
 
@@ -232,7 +246,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         ));
         spawn_blocking({
             let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
+            move || {
+                client.submit_blocking(
+                    register_trigger,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
         })
         .await??;
 
@@ -240,10 +259,13 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             let client = test_client.clone();
             let account_alias = account_alias.clone();
             move || {
-                client.submit_blocking(Register::account(
-                    Account::new(gen_account_in("wonderland").0.clone())
-                        .with_label(Some(account_alias)),
-                ))
+                client.submit_blocking(
+                    Register::account(
+                        Account::new(gen_account_in("wonderland").0.clone())
+                            .with_label(Some(account_alias)),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
             }
         })
         .await??;
@@ -267,7 +289,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         ensure_domain_registration_lease_for_network(&network, &neverland)?;
         spawn_blocking({
             let client = test_client.clone();
-            move || client.submit_blocking(Register::domain(Domain::new(neverland)))
+            move || {
+                client.submit_blocking(
+                    Register::domain(Domain::new(neverland)),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
         })
         .await??;
 
@@ -332,9 +359,14 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         spawn_blocking({
             let client = test_client.clone();
             move || {
-                client.submit_blocking(SetParameter::new(Parameter::SmartContract(
-                    iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(new_depth),
-                )))
+                client.submit_blocking(
+                    SetParameter::new(Parameter::SmartContract(
+                        iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(
+                            new_depth,
+                        ),
+                    )),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
             }
         })
         .await??;

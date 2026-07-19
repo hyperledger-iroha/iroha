@@ -390,6 +390,11 @@ NodeInstalledTC(node, roundView) ==
     /\ entry.tc.context = context
     /\ entry.tc.view = roundView
 
+NoDecisionForNode(node) ==
+  ~\E decision \in decisions:
+    /\ decision.node = node
+    /\ decision.qc.context = context
+
 HighRefValid(highRank, highSubject) ==
   \/ /\ highRank = NoRank
      /\ highSubject = NoSubject
@@ -1565,6 +1570,7 @@ BeginTimeout(node) ==
       request == TimeoutRequestFor(node)
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ NodeIdle(node)
+     /\ NoDecisionForNode(node)
      /\ ~NodeTimedOut(node, roundView)
      /\ request \in TimeoutWalSet
      /\ pendingTimeout' = pendingTimeout \cup {request}
@@ -1654,7 +1660,8 @@ DeliverTimeout(envelope) ==
      /\ envelope.vote.highRank <= envelope.vote.view
      /\ timeoutNetwork' = timeoutNetwork \ {envelope}
      /\ receivedTimeoutVotes' =
-          IF TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)
+          IF ~NoDecisionForNode(envelope.recipient)
+             \/ TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)
           THEN receivedTimeoutVotes
           ELSE receivedTimeoutVotes \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1675,6 +1682,7 @@ FormTC(node, roundView) ==
       request == InstallTcWal(node, tc, TRUE)
   IN /\ node \in up
      /\ NodeIdle(node)
+     /\ NoDecisionForNode(node)
      /\ roundView + 1 \in Views
      /\ roundView >= nodeView[node]
      /\ TCValid(tc)
@@ -1698,7 +1706,10 @@ DeliverTC(envelope) ==
      /\ envelope.recipient \in up
      /\ TCValid(envelope.tc)
      /\ tcNetwork' = tcNetwork \ {envelope}
-     /\ receivedTCs' = receivedTCs \cup {received}
+     /\ receivedTCs' =
+          IF NoDecisionForNode(envelope.recipient)
+          THEN receivedTCs \cup {received}
+          ELSE receivedTCs
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
@@ -1717,6 +1728,7 @@ BeginInstallTC(node, tc) ==
      /\ tc.view + 1 \in Views
      /\ tc.view >= nodeView[node]
      /\ NodeIdle(node)
+     /\ NoDecisionForNode(node)
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,

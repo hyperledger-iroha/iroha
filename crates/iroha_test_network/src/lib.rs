@@ -271,7 +271,10 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
     }
 
     let request = test_domain_register_request(domain, &client.account)?;
-    match client.submit_blocking(RegisterSnsName::new(request)) {
+    match client.submit_blocking(
+        RegisterSnsName::new(request),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         Ok(_) => {
             if wait_for_domain_registration_lease(client, domain)? {
                 Ok(())
@@ -333,7 +336,10 @@ fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainI
     }
 
     if !registrations.is_empty() {
-        match client.submit_all_blocking(registrations) {
+        match client.submit_all_blocking(
+            registrations,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => {}
             Err(err) if is_duplicate_sns_selector_error(&err) => {
                 for domain in domains {
@@ -424,7 +430,10 @@ pub fn ensure_domain_registration_leases_for_network_executable(
 /// Register a runtime domain after provisioning its required SNS lease.
 pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
     ensure_domain_registration_lease(client, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
+    client.submit_blocking(
+        Register::domain(domain),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -436,7 +445,10 @@ pub fn submit_register_domain_with_network_lease(
     domain: NewDomain,
 ) -> Result<()> {
     ensure_domain_registration_lease_for_network(network, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
+    client.submit_blocking(
+        Register::domain(domain),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -4035,6 +4047,16 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
+    initial_consensus_message_control: Option<InitialConsensusMessageControl>,
+}
+
+type InitialConsensusMessageControlFactory =
+    dyn Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync;
+
+#[derive(Clone)]
+struct InitialConsensusMessageControl {
+    queue_capacity: usize,
+    factory: Arc<InitialConsensusMessageControlFactory>,
 }
 
 fn bool_env_override(key: &str) -> Option<bool> {
@@ -4650,6 +4672,7 @@ fn normalize_genesis_consensus_handshake(
         chain_id,
         authority,
         &time_source,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(param_instructions)
     .try_sign(genesis_key_pair.private_key())
@@ -4882,6 +4905,7 @@ impl NetworkBuilder {
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
             consensus_message_control: false,
+            initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
         let mut writer = TomlWriter::new(&mut default_layer);
@@ -4919,6 +4943,28 @@ impl NetworkBuilder {
     /// authenticated Sumeragi v2 message control for adversarial network tests.
     pub fn with_consensus_message_control(mut self) -> Self {
         self.consensus_message_control = true;
+        self
+    }
+
+    /// Stage receiver-local authenticated consensus rules before controlled
+    /// daemon processes start.
+    ///
+    /// The factory receives the receiver index and the stable ordered peer-id
+    /// roster. Its result is installed as that receiver's revision-1 command,
+    /// which the feature-isolated daemon must acknowledge during startup.
+    pub fn with_initial_consensus_message_control_rules<F>(
+        mut self,
+        queue_capacity: usize,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
+    {
+        self.consensus_message_control = true;
+        self.initial_consensus_message_control = Some(InitialConsensusMessageControl {
+            queue_capacity,
+            factory: Arc::new(factory),
+        });
         self
     }
 
@@ -5213,6 +5259,7 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
             consensus_message_control,
+            initial_consensus_message_control,
         } = self;
         // A builder is a reusable network recipe. Allocate the environment only
         // when the recipe is built so retrying a cloned recipe cannot inherit a
@@ -5254,7 +5301,7 @@ impl NetworkBuilder {
             config_layers.push(nexus_accounts_layer);
         }
 
-        let peers: Vec<_> = (0..n_peers)
+        let mut peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
@@ -5282,6 +5329,19 @@ impl NetworkBuilder {
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
+        if let Some(initial) = initial_consensus_message_control {
+            for (receiver_index, peer) in peers.iter_mut().enumerate() {
+                let rules = (initial.factory)(receiver_index, &peer_topology);
+                let control = peer
+                    .consensus_message_control
+                    .as_mut()
+                    .and_then(Arc::get_mut)
+                    .expect("new controlled peer must uniquely own its controller");
+                control
+                    .stage_initial_rules(&rules, initial.queue_capacity)
+                    .expect("stage valid initial consensus message-control rules");
+            }
+        }
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         config_layers_for_parse.push(
             Table::new()
@@ -12675,6 +12735,60 @@ exit 0
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         builder.build()
+    }
+
+    #[test]
+    fn builder_stages_receiver_specific_initial_message_control_rules() {
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    builder_stages_receiver_specific_initial_message_control_rules
+                ))
+                .with_initial_consensus_message_control_rules(17, |receiver_index, peer_ids| {
+                    vec![ConsensusMessageControlRule::exact(
+                        peer_ids[(receiver_index + 1) % peer_ids.len()].clone(),
+                        ConsensusMessageControlKind::CommitVote,
+                        2,
+                        0,
+                        ConsensusMessageControlAction::Drop,
+                    )]
+                }),
+        );
+        let peer_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+
+        for (receiver_index, peer) in network.peers().iter().enumerate() {
+            let control = peer
+                .consensus_message_control()
+                .expect("initializer provisions a controlled daemon");
+            let bytes = fs::read(control.root().join("command.norito.json"))
+                .expect("read staged initial command");
+            let command: JsonValue =
+                json::from_slice(&bytes).expect("parse staged initial command");
+            assert_eq!(command.get("revision").and_then(JsonValue::as_u64), Some(1));
+            assert_eq!(
+                command.get("queue_capacity").and_then(JsonValue::as_u64),
+                Some(17)
+            );
+            let rules = command
+                .get("rules")
+                .and_then(JsonValue::as_array)
+                .expect("staged rules array");
+            assert_eq!(rules.len(), 1);
+            let expected_sender = peer_ids[(receiver_index + 1) % peer_ids.len()].to_string();
+            assert_eq!(
+                rules[0].get("sender").and_then(JsonValue::as_str),
+                Some(expected_sender.as_str())
+            );
+            assert_eq!(
+                rules[0].get("action").and_then(JsonValue::as_str),
+                Some("drop")
+            );
+        }
     }
 
     async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {

@@ -50,16 +50,16 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{State, StateView, WorldReadOnly};
-use iroha_core::{queue::Queue, tx::AcceptedTransaction};
+use iroha_core::{
+    executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
+};
 use iroha_crypto::{Hash, KeyPair};
 #[cfg(test)]
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
-    asset::{AssetDefinitionAlias, AssetDefinitionId},
     isi::{self, InstructionBox},
-    metadata::Metadata,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -92,7 +92,7 @@ use iroha_data_model::{
         encode_model_host_heartbeat_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{json::Json, numeric::NumericOperationError};
@@ -208,7 +208,7 @@ pub(crate) struct QueuedSoracloudRuntimeMutationSink {
     state: Arc<State>,
     authority: AccountId,
     key_pair: KeyPair,
-    gas_asset_id: Option<String>,
+    submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
 }
 
 impl QueuedSoracloudRuntimeMutationSink {
@@ -219,7 +219,7 @@ impl QueuedSoracloudRuntimeMutationSink {
         state: Arc<State>,
         authority: AccountId,
         key_pair: KeyPair,
-        gas_asset_id: Option<String>,
+        submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
     ) -> Self {
         Self {
             chain_id,
@@ -227,7 +227,7 @@ impl QueuedSoracloudRuntimeMutationSink {
             state,
             authority,
             key_pair,
-            gas_asset_id,
+            submission,
         }
     }
 }
@@ -238,14 +238,48 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         instruction: InstructionBox,
         endpoint: &'static str,
     ) -> eyre::Result<()> {
-        let tx = sign_soracloud_runtime_submission_transaction(
+        let mut payload = build_soracloud_runtime_submission_payload(
             (*self.chain_id).clone(),
             self.authority.clone(),
             instruction,
-            soracloud_runtime_submission_metadata(&self.state, self.gas_asset_id.as_deref()),
-            &self.key_pair,
+            self.submission.fee_payment_intent(),
             endpoint,
         )?;
+        let route = self
+            .queue
+            .route_payload_with_state(&payload, self.state.as_ref())
+            .wrap_err_with(|| {
+                format!("route internal Soracloud runtime mutation at `{endpoint}`")
+            })?;
+        let latest_header = self.state.latest_block_header_fast();
+        let observation_time_ms = latest_header
+            .as_ref()
+            .map_or(0, |header| header.creation_time_ms);
+        let next_block_height = latest_header
+            .as_ref()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let nexus = self.state.nexus_snapshot();
+        let pipeline = self.state.pipeline_snapshot();
+        let quote = {
+            let world = self.state.world_view();
+            quote_nexus_fee_admission_draft(
+                &world,
+                &nexus,
+                &pipeline,
+                &payload,
+                observation_time_ms,
+                next_block_height,
+                Some(route.dataspace_id),
+            )
+        }
+        .map_err(|error| {
+            eyre::eyre!(
+                "quote internal Soracloud runtime mutation at `{endpoint}`: {error}"
+            )
+        })?;
+        payload.fee_payment = quote.recommended_intent;
+        let tx =
+            sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;
         let (max_clock_drift, transaction_params, crypto) = {
             let world = self.state.world_view();
             let params = world.parameters();
@@ -336,17 +370,28 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     }
 }
 
-fn sign_soracloud_runtime_submission_transaction(
+fn build_soracloud_runtime_submission_payload(
     chain_id: ChainId,
     authority: AccountId,
     instruction: InstructionBox,
-    metadata: Metadata,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    endpoint: &'static str,
+) -> eyre::Result<TransactionPayload> {
+    TransactionBuilder::new(chain_id, authority, fee_payment)
+        .with_instructions([instruction])
+        .into_payload()
+        .wrap_err_with(|| format!("build internal Soracloud runtime mutation at `{endpoint}`"))
+}
+
+fn sign_soracloud_runtime_submission_payload(
+    payload: TransactionPayload,
     key_pair: &KeyPair,
     endpoint: &'static str,
 ) -> eyre::Result<SignedTransaction> {
-    TransactionBuilder::new(chain_id, authority)
-        .with_instructions([instruction])
-        .with_metadata(metadata)
+    TransactionBuilder::from_payload(payload)
+        .wrap_err_with(|| {
+            format!("rebuild quoted internal Soracloud runtime mutation at `{endpoint}`")
+        })?
         .try_sign(key_pair.private_key())
         .wrap_err_with(|| format!("sign internal Soracloud runtime mutation at `{endpoint}`"))
 }
@@ -357,52 +402,6 @@ fn sign_soracloud_runtime_provenance(
     context: &'static str,
 ) -> eyre::Result<iroha_crypto::Signature> {
     iroha_crypto::Signature::try_new(key_pair.private_key(), payload).wrap_err(context)
-}
-
-fn soracloud_runtime_submission_metadata(state: &State, gas_asset_id: Option<&str>) -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id
-        .map(str::trim)
-        .filter(|asset_id| !asset_id.is_empty())
-        .map(|asset_id| canonicalize_or_preserve_runtime_gas_asset_id(state, asset_id.to_owned()))
-    {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(asset_id));
-    }
-
-    metadata
-}
-
-fn canonicalize_or_preserve_runtime_gas_asset_id(state: &State, asset_id: String) -> String {
-    let trimmed = asset_id.trim();
-    if trimmed.is_empty() {
-        return asset_id;
-    }
-
-    let world = state.world_view();
-    if let Ok(definition_id) = trimmed.parse::<AssetDefinitionId>() {
-        if world.asset_definition(&definition_id).is_ok() {
-            return definition_id.to_string();
-        }
-        return trimmed.to_owned();
-    }
-
-    if let Ok(alias) = trimmed.parse::<AssetDefinitionAlias>() {
-        let now_ms = state
-            .latest_block_header_fast()
-            .map(|header| header.creation_time_ms)
-            .unwrap_or(0);
-        if let Some(definition_id) = world.asset_definition_id_by_alias_at(&alias, now_ms) {
-            return definition_id.to_string();
-        }
-    }
-
-    iroha_logger::warn!(
-        asset = %trimmed,
-        "failed to canonicalize Soracloud runtime gas asset id; preserving configured value"
-    );
-    trimmed.to_owned()
 }
 
 fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
@@ -15476,11 +15475,15 @@ mod tests {
     #[test]
     fn runtime_submission_transaction_checked_signing_verifies() -> Result<()> {
         let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
-        let tx = sign_soracloud_runtime_submission_transaction(
+        let payload = build_soracloud_runtime_submission_payload(
             ChainId::from("soracloud-runtime-sign-test"),
             authority.clone(),
             InstructionBox::from(Log::new(Level::INFO, "checked runtime signing".into())),
-            Metadata::default(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/test",
+        )?;
+        let tx = sign_soracloud_runtime_submission_payload(
+            payload,
             &ALICE_KEYPAIR,
             "/internal/soracloud/runtime/test",
         )?;
@@ -15596,31 +15599,43 @@ mod tests {
     }
 
     #[test]
-    fn soracloud_runtime_submission_metadata_uses_explicit_gas_asset() -> Result<()> {
-        let state = test_state()?;
+    fn soracloud_runtime_submission_payload_binds_fee_intent_without_legacy_metadata() -> Result<()> {
+        let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        let payload = build_soracloud_runtime_submission_payload(
+            ChainId::from("soracloud-runtime-fee-intent-test"),
+            authority,
+            InstructionBox::from(Log::new(Level::INFO, "fee intent".into())),
+            intent.clone(),
+            "/internal/soracloud/runtime/test",
+        )?;
 
-        let metadata =
-            soracloud_runtime_submission_metadata(state.as_ref(), Some("  configured-gas  "));
-
-        assert_eq!(
-            metadata
-                .get("gas_asset_id")
-                .expect("gas metadata")
-                .as_ref()
-                .to_string(),
-            "configured-gas"
-        );
+        assert_eq!(payload.fee_payment, intent);
+        assert!(payload.metadata.get("gas_asset_id").is_none());
+        assert!(payload.metadata.get("fee_sponsor").is_none());
         Ok(())
     }
 
     #[test]
-    fn soracloud_runtime_submission_metadata_omits_missing_gas_asset() -> Result<()> {
-        let state = test_state()?;
+    fn soracloud_runtime_submission_builds_exact_sponsor_revision() {
+        let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            "runtime".parse().expect("program name"),
+        );
+        let submission = iroha_config::parameters::actual::SoracloudRuntimeSubmission {
+            fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Sponsor {
+                program_id: program_id.clone(),
+                program_revision: 7,
+            },
+        };
 
-        let metadata = soracloud_runtime_submission_metadata(state.as_ref(), None);
-
-        assert!(metadata.get("gas_asset_id").is_none());
-        Ok(())
+        let iroha_data_model::transaction::FeePaymentIntent::Sponsor(intent) =
+            submission.fee_payment_intent()
+        else {
+            panic!("sponsor config must create a sponsor fee intent");
+        };
+        assert_eq!(intent.program_id, program_id);
+        assert_eq!(intent.program_revision, 7);
     }
 
     fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
@@ -17732,7 +17747,7 @@ mod tests {
                 proxy_only: false,
             },
             submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission {
-                gas_asset_id: Some("xor#wonderland".to_owned()),
+                fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Authority,
             },
             egress: iroha_config::parameters::actual::SoracloudRuntimeEgress {
                 default_allow: false,
@@ -17778,7 +17793,6 @@ mod tests {
             ..Default::default()
         };
         runtime.inrou.enabled = true;
-        runtime.submission.gas_asset_id = Some("xor#wonderland".to_owned());
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);

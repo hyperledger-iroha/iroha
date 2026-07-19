@@ -41,7 +41,7 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
-    /// Exact ABI-20/V4 top-up archive ceiling enforced by Torii.
+    /// Exact ABI-21/V4 top-up archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
@@ -66,7 +66,7 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
 public struct KagemushaRedeemRequest: Equatable, Sendable {
-    /// Exact ABI-20/V4 redemption archive ceiling enforced by Torii.
+    /// Exact ABI-21/V4 redemption archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String

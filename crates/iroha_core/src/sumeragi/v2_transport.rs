@@ -576,6 +576,7 @@ impl OutstandingCertifiedBodyRequests {
     /// Removing both indexes prevents abandoned requests from permanently
     /// consuming the bounded request capacity while late responses remain
     /// correctly classified as unsolicited.
+    #[cfg(test)]
     pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         let Ok(plan) = self.plan_retirement(request_hash) else {
             return false;

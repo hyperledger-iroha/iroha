@@ -35,7 +35,9 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 Usage tips
 - Check and build sources in `examples/` with the unified `koto` driver.
 - Exercise a named entrypoint with `iroha contract debug-call`, or a view
-  with `iroha contract debug-view`.
+  with `iroha contract debug-view`. Pair `--source-file` with the matching
+  hash-bound `--source-map-file` emitted by the same `koto build`; the debugger
+  rejects a source-map sidecar for a different artifact.
 - Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
 
 Pipeline configuration

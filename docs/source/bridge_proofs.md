@@ -399,17 +399,21 @@ but route-unbound artifact cannot enter SCCP settlement.
 `native_proof_b64`. Both endpoints are available only on the exact Taira chain
 and use the same two states:
 
-1. **Prepare:** send canonical Taira `authority` and the endpoint artifact,
-   optionally with a positive `creation_time_ms`. Omit both `signature_b64` and
+1. **Prepare:** send canonical Taira `authority`, one explicit typed
+   `fee_payment` payer selection, and the endpoint artifact, optionally with a
+   positive `creation_time_ms`. Omit both `signature_b64` and
    `transaction_payload_b64`. The response has `submitted: false`, no
-   `tx_hash_hex`, and returns the exact canonical transaction payload plus its
-   32-byte signing prehash.
-2. **Direct submit:** resend the same artifact with both `signature_b64` and
-   the returned `transaction_payload_b64`, plus the exact positive
-   `creation_time_ms`. Torii decodes and re-encodes the bounded payload,
-   byte-compares its chain, authority, proof instruction, metadata, and time,
-   verifies the detached signature, and queues exactly that transaction. The
-   response has `submitted: true` and `tx_hash_hex`, with no signing scaffold.
+   `tx_hash_hex`. Torii runs the same authoritative fee-quote engine as
+   `POST /v1/fees/quote` and returns the exact canonical quoted transaction
+   payload plus its 32-byte signing prehash. Sign that returned payload without
+   rebuilding or editing it.
+2. **Direct submit:** resend the same artifact and payer selection with both
+   `signature_b64` and the quoted `transaction_payload_b64`, plus the exact
+   positive `creation_time_ms`. Torii decodes and re-encodes the bounded
+   payload, byte-compares its chain, authority, fee payer and exact sponsor
+   revision, proof instruction, metadata, and time, verifies the detached
+   signature, and queues exactly that transaction. The response has
+   `submitted: true` and `tx_hash_hex`, with no signing scaffold.
 
 Detached signatures are canonical padded base64 of one nonempty, nonzero
 generic signature payload, bounded to 16 KiB; they are not restricted to raw
@@ -419,6 +423,12 @@ propose/approve flow. Transaction payloads are bounded to 16 MiB. Mixed signing
 states, an omitted direct creation time, a payload from another chain,
 authority, route, proof, or time, and a non-verifying signature fail before
 queue submission.
+
+`fee_payment` is required in both states. Authority payment carries an empty
+program selection; sponsored payment carries one exact immutable program ID
+and revision. Legacy fee metadata and implicit sender or sponsor fallback are
+rejected. The direct submission's selection, gas bound, and quoted maxima must
+match the signed transaction payload exactly.
 
 Requests and responses use closed field sets and canonical JSON/base64/Norito
 encodings. The unified response field is

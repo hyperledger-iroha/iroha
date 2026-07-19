@@ -1327,8 +1327,12 @@ mod tests {
         let genesis_signer = KeyPair::try_random().expect("generate genesis signer");
         let genesis_public_key = genesis_signer.public_key().clone();
         let genesis_account = AccountId::new(genesis_public_key.clone());
-        let genesis_transaction = TransactionBuilder::new(PK2_CHAIN_ID.into(), genesis_account)
-            .sign(genesis_signer.private_key());
+        let genesis_transaction = TransactionBuilder::new(
+            PK2_CHAIN_ID.into(),
+            genesis_account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(genesis_signer.private_key());
         let genesis_block = SignedBlock::genesis(
             vec![genesis_transaction],
             genesis_signer.private_key(),

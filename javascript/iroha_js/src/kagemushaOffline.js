@@ -1,11 +1,11 @@
-/** Transport-only ABI-20/manifest-V4 Kagemusha projections.
+/** Transport-only ABI-21/manifest-V4 Kagemusha projections.
  *
  * This module deliberately has no native prover or artifact-install surface.
  * Top-up and redemption methods accept canonical Norito archives produced by
  * a supported wallet/prover implementation.
  */
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 20;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024;
@@ -252,7 +252,7 @@ export function normalizeKagemushaReadinessV4(payload, requestedAssetSelector) {
     positive: true,
     maximum: 0xffff_ffff,
   }) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION) {
-    throw new TypeError(`${context}.required_bridge_abi_version must be 20`);
+    throw new TypeError(`${context}.required_bridge_abi_version must be 21`);
   }
   if (safeUnsigned(item.max_hops, `${context}.max_hops`, {
     positive: true,
@@ -282,13 +282,13 @@ export function normalizeKagemushaReadinessV4(payload, requestedAssetSelector) {
   const hasEq = verifiers.active_recursive_step_eq_verifier !== null;
   const hasEp = verifiers.active_recursive_step_ep_verifier !== null;
   if (hasEq !== hasEp) {
-    throw new TypeError(`${context} must report the ABI-20 V4 Eq/Ep verifier pair atomically`);
+    throw new TypeError(`${context} must report the ABI-21 V4 Eq/Ep verifier pair atomically`);
   }
   const artifactSet = item.artifact_set === null
     ? null
     : normalizeArtifactSet(item.artifact_set, evaluatedBlockHeight, assetScale);
   if ((artifactSet !== null) !== hasEq) {
-    throw new TypeError(`${context}.artifact_set and the ABI-20 V4 Eq/Ep pair must be reported together`);
+    throw new TypeError(`${context}.artifact_set and the ABI-21 V4 Eq/Ep pair must be reported together`);
   }
   if (
     artifactSet !== null &&
@@ -310,7 +310,7 @@ export function normalizeKagemushaReadinessV4(payload, requestedAssetSelector) {
   );
   const expectedLineage = proofBackendAvailable && artifactSet !== null && hasEq && hasEp;
   if (recursiveLineageSupported !== expectedLineage) {
-    throw new TypeError(`${context}.recursive_lineage_supported contradicts the ABI-20 runtime conjunction`);
+    throw new TypeError(`${context}.recursive_lineage_supported contradicts the ABI-21 runtime conjunction`);
   }
   if (!Array.isArray(item.blockers)) {
     throw new TypeError(`${context}.blockers must be an array`);
@@ -339,7 +339,7 @@ export function normalizeKagemushaReadinessV4(payload, requestedAssetSelector) {
     verifiers.active_unshield_verifier !== null &&
     blockers.length === 0;
   if (ready !== expectedReady) {
-    throw new TypeError(`${context}.ready contradicts the complete ABI-20 runtime conjunction`);
+    throw new TypeError(`${context}.ready contradicts the complete ABI-21 runtime conjunction`);
   }
   return Object.freeze({
     required_bridge_abi_version: KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,

@@ -637,6 +637,139 @@ export function noritoEncodeContractManifestSignaturePayload(manifest) {
   );
 }
 
+function encodeFeePaymentIntentValue(intent, context) {
+  if (!isPlainObject(intent)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(intent, ["payer", "value"], context);
+  const payer = assertNonEmptyString(intent.payer, `${context}.payer`);
+  if (payer !== "authority" && payer !== "sponsor") {
+    throw new TypeError(`${context}.payer must be authority or sponsor`);
+  }
+  if (!isPlainObject(intent.value)) {
+    throw new TypeError(`${context}.value must be an object`);
+  }
+  const allowedValueFields = ["charge_limits", "gas_limit"];
+  if (payer === "sponsor") {
+    allowedValueFields.push("program_id", "program_revision");
+  }
+  assertOnlyObjectKeys(intent.value, allowedValueFields, `${context}.value`);
+  if (!Array.isArray(intent.value.charge_limits)) {
+    throw new TypeError(`${context}.value.charge_limits must be an array`);
+  }
+  let previousKind = -1;
+  const chargeLimits = encodeNoritoVec(
+    Array.from(intent.value.charge_limits, (limit, index) => {
+      const itemContext = `${context}.value.charge_limits[${index}]`;
+      if (!Object.prototype.hasOwnProperty.call(intent.value.charge_limits, index)) {
+        throw new TypeError(`${context}.value.charge_limits must not contain holes`);
+      }
+      if (!isPlainObject(limit)) {
+        throw new TypeError(`${itemContext} must be an object`);
+      }
+      assertOnlyObjectKeys(
+        limit,
+        ["kind", "asset_definition_id", "max_amount"],
+        itemContext,
+      );
+      if (!isPlainObject(limit.kind)) {
+        throw new TypeError(`${itemContext}.kind must be a tagged unit object`);
+      }
+      assertOnlyObjectKeys(limit.kind, ["kind", "value"], `${itemContext}.kind`);
+      const kind = assertNonEmptyString(limit.kind.kind, `${itemContext}.kind.kind`);
+      const kindTag = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
+      if (kindTag < 0 || limit.kind.value !== null) {
+        throw new TypeError(
+          `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
+        );
+      }
+      if (kindTag <= previousKind) {
+        throw new TypeError(
+          `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
+        );
+      }
+      previousKind = kindTag;
+      const quantity = NumericV1.decodeQuantityJson(limit.max_amount);
+      if (quantity.mantissa <= 0n) {
+        throw new TypeError(`${itemContext}.max_amount must be greater than zero`);
+      }
+      return encodeStructValue([
+        [encodeEnumTagValue(kindTag)],
+        [
+          encodeAssetDefinitionIdValue(
+            limit.asset_definition_id,
+            `${itemContext}.asset_definition_id`,
+          ),
+        ],
+        [encodeNumericValue(limit.max_amount, `${itemContext}.max_amount`)],
+      ]);
+    }),
+    (encoded) => encoded,
+  );
+  const gasLimit = encodeOptionValue(
+    intent.value.gas_limit ?? null,
+    encodeU64NumberValue,
+    `${context}.value.gas_limit`,
+  );
+  if (intent.value.gas_limit !== undefined && intent.value.gas_limit !== null) {
+    const normalizedGas = normalizeU64Input(
+      intent.value.gas_limit,
+      `${context}.value.gas_limit`,
+    );
+    if (normalizedGas === 0n) {
+      throw new TypeError(`${context}.value.gas_limit must be non-zero`);
+    }
+  }
+  if (payer === "authority") {
+    return encodeEnumTagValue(0, () =>
+      encodeStructValue([[chargeLimits], [gasLimit]]),
+    );
+  }
+  if (!isPlainObject(intent.value.program_id)) {
+    throw new TypeError(`${context}.value.program_id must be an object`);
+  }
+  assertOnlyObjectKeys(
+    intent.value.program_id,
+    ["sponsor", "name"],
+    `${context}.value.program_id`,
+  );
+  const name = assertNonEmptyString(
+    intent.value.program_id.name,
+    `${context}.value.program_id.name`,
+  );
+  if (
+    name !== intent.value.program_id.name ||
+    name.normalize("NFC") !== name ||
+    /[\s@#$\/]/u.test(name)
+  ) {
+    throw new TypeError(`${context}.value.program_id.name must be a canonical Iroha Name`);
+  }
+  const revision = normalizeU64Input(
+    intent.value.program_revision,
+    `${context}.value.program_revision`,
+  );
+  if (revision === 0n) {
+    throw new TypeError(`${context}.value.program_revision must be non-zero`);
+  }
+  const programId = encodeStructValue([
+    [
+      encodeAccountIdValue(
+        intent.value.program_id.sponsor,
+        `${context}.value.program_id.sponsor`,
+      ),
+    ],
+    [encodeNoritoStringValue(name)],
+  ]);
+  return encodeEnumTagValue(1, () =>
+    encodeStructValue([
+      [programId],
+      [encodeU64Value(revision, `${context}.value.program_revision`)],
+      [chargeLimits],
+      [gasLimit],
+    ]),
+  );
+}
+
 /**
  * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
  *
@@ -693,10 +826,9 @@ export function noritoEncodeMultisigProposeRequest(request) {
         ),
       ],
       [
-        encodeOptionValue(
-          request.fee_sponsor ?? request.feeSponsor ?? null,
-          encodeNoritoStringValue,
-          "MultisigProposeDto.fee_sponsor",
+        encodeFeePaymentIntentValue(
+          request.fee_payment ?? request.feePayment,
+          "MultisigProposeDto.fee_payment",
         ),
       ],
       [
@@ -922,24 +1054,9 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
         ),
       ],
       [
-        encodeOptionValue(
-          request.gas_asset_id ?? request.gasAssetId ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.gas_asset_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.fee_sponsor ?? request.feeSponsor ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.fee_sponsor",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.gas_limit ?? request.gasLimit ?? null,
-          encodeU64NumberValue,
-          "MultisigContractCallProposeDto.gas_limit",
+        encodeFeePaymentIntentValue(
+          request.fee_payment ?? request.feePayment,
+          "MultisigContractCallProposeDto.fee_payment",
         ),
       ],
     ]),
@@ -1009,10 +1126,9 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
         ),
       ],
       [
-        encodeOptionValue(
-          request.fee_sponsor ?? request.feeSponsor ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.fee_sponsor",
+        encodeFeePaymentIntentValue(
+          request.fee_payment ?? request.feePayment,
+          "MultisigContractCallApproveDto.fee_payment",
         ),
       ],
       [

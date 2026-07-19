@@ -1,6 +1,6 @@
 # Retained V2 primitives and the V4 lifecycle
 
-Kagemusha is the only offline-cash protocol. ABI 20, manifest V4, and the V4
+Kagemusha is the only offline-cash protocol. ABI 21, manifest V4, and the V4
 top-up, recursive, verification, and redemption carriers are the sole
 lifecycle. The `V2` suffix survives only on unchanged leaf primitives that V4
 intentionally embeds: scaled amounts, note descriptors and openings,
@@ -75,7 +75,7 @@ revoked, so a legitimate branch is not stranded when issuance closes.
 
 ## Artifacts and native bridge
 
-Bridge ABI 20 exposes the current Kagemusha artifact contract. It reports
+Bridge ABI 21 exposes the current Kagemusha artifact contract. It reports
 manifest schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`,
 backend `halo2/ipa-pasta-cycle-v4`, transcript
 `kagemusha-pasta-cycle-poseidon-v4`, and the exact StepEq/StepEp circuit
@@ -135,7 +135,7 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-Readiness is a closed snapshot-bound object. It carries exact bridge ABI 20,
+Readiness is a closed snapshot-bound object. It carries exact bridge ABI 21,
 maximum hop count, canonical asset and scale, evaluated block height/hash,
 active transfer, top-up-shield, unshield, recursive StepEq and recursive StepEp
 verifier records, the required nullable authenticated `artifact_set`, backend

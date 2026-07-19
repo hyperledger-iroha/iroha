@@ -28,6 +28,19 @@
         },
         {
           "Register": {
+            "Account": {
+              "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
+              "label": null,
+              "metadata": {
+                "purpose": "fee_sponsor_vault_custody"
+              },
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
             "AssetDefinition": {
               "alias": null,
               "balance_scope_policy": "Global",

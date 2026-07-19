@@ -1798,7 +1798,12 @@ mod tests {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key_pair.private_key());
         let entrypoint = TransactionEntrypoint::from(tx.clone());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
 
@@ -1912,7 +1917,12 @@ mod tests {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key_pair.private_key());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let payload = BlockPayload {
             header,
@@ -1939,7 +1949,12 @@ mod tests {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key_pair.private_key());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let mut payload = BlockPayload {
             header,
@@ -2150,9 +2165,12 @@ mod tests {
     fn adversarial_fixture_header_replacement_preserves_body() {
         let keypair = checked_random_keypair();
         let authority = crate::account::AccountId::new(keypair.public_key().clone());
-        let transaction =
-            TransactionBuilder::new(ChainId::from("header-replacement-test"), authority)
-                .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("header-replacement-test"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
         let original = block.header();
         let replacement = BlockHeader::new(
@@ -2180,7 +2198,12 @@ mod tests {
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![tx], keypair.private_key(), None, None);
         assert_eq!(
             block.header().confidential_features(),
@@ -2251,9 +2274,13 @@ mod tests {
             ))),
         ];
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(ordered.clone())
-            .sign(key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(ordered.clone())
+        .sign(key_pair.private_key());
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2463,9 +2490,13 @@ mod tests {
         let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(core::iter::empty::<crate::isi::InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<crate::isi::InstructionBox>())
+        .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![tx], keypair.private_key(), None, None);
 
         let wire = block.canonical_wire().expect("canonical wire");
@@ -2543,12 +2574,20 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(chain, authority)
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
 
         let block = SignedBlock::genesis(vec![tx1, tx2], keypair.private_key(), None, None);
 
@@ -2805,9 +2844,13 @@ mod tests {
             .expect("chain id must parse");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
         let bundle = sample_da_bundle();
 
         let block =
@@ -2835,9 +2878,13 @@ mod tests {
             .expect("chain id must parse");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
         let bundle = DaProofPolicyBundle::new(vec![DaProofPolicy {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -2872,9 +2919,13 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(ChainId::from("genesis-checked-signing"), authority)
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("genesis-checked-signing"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
         let bundle = DaProofPolicyBundle::new(vec![DaProofPolicy {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -3114,8 +3165,12 @@ mod tests {
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
         let authority = AccountId::new(checked_random_keypair().public_key().clone());
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3230,8 +3285,12 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let time_trigger = TimeTriggerEntrypoint {
             id: "housekeeping".parse().expect("trigger id"),
             instructions: ExecutionStep(ConstVec::new_empty()),
@@ -3286,8 +3345,12 @@ mod tests {
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(ChainId::from("set-results-too-short"), authority)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("set-results-too-short"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
@@ -3323,8 +3386,12 @@ mod tests {
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(ChainId::from("set-results-count"), authority)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("set-results-count"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3376,8 +3443,12 @@ mod tests {
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(ChainId::from("set-results-mismatch"), authority)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("set-results-mismatch"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let expected = tx.hash_as_entrypoint();
         let actual = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
@@ -3416,8 +3487,12 @@ mod tests {
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(ChainId::from("set-results-header-mismatch"), authority)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("set-results-header-mismatch"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let expected = MerkleTree::from_iter([entry_hash]).root();
         let actual = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -3460,8 +3535,12 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
 
         let entry_hashes = vec![entry_hash];
@@ -3535,8 +3614,12 @@ mod tests {
         let chain: ChainId = "external-proof-block".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let time_trigger = TimeTriggerEntrypoint {
             id: "cleanup".parse().expect("trigger id"),
             instructions: ExecutionStep(ConstVec::new_empty()),
@@ -3602,8 +3685,12 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let time_trigger = TimeTriggerEntrypoint {
             id: "cleanup".parse().expect("trigger id"),
             instructions: ExecutionStep(ConstVec::new_empty()),
@@ -3678,8 +3765,12 @@ mod tests {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
@@ -3713,8 +3804,12 @@ mod tests {
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let transaction =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
 
         let wire = block.canonical_wire().expect("canonical wire");
@@ -3745,8 +3840,12 @@ mod tests {
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let transaction =
-            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
 
         let versioned = block.encode_versioned();

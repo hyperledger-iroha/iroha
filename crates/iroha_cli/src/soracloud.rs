@@ -9,7 +9,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    env, fs, io,
+    fs, io,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -77,6 +77,7 @@ use iroha::{
             encode_uploaded_model_finalize_provenance_payload,
         },
         sorafs::pin_registry::StorageClass,
+        transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_core::soracloud_runtime::{
@@ -139,6 +140,7 @@ const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
 
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
+    static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
 }
 
 /// Soracloud control-plane commands.
@@ -407,6 +409,13 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
             *slot.borrow_mut() = Some(context.config().clone());
+        });
+        SORACLOUD_FEE_PAYMENT.with(|slot| {
+            *slot.borrow_mut() = Some(
+                context
+                    .transaction_fee_payment()
+                    .map_err(|error| format!("{error:#}")),
+            );
         });
         match self {
             Command::App(command) => command.run(context),
@@ -11186,6 +11195,9 @@ fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String>
     let quantity = value
         .parse::<Quantity>()
         .map_err(|error| format!("must be a canonical non-negative quantity: {error}"))?;
+    if quantity.to_string() != value {
+        return Err(format!("must use canonical quantity spelling `{quantity}`"));
+    }
     if quantity.is_zero() {
         return Err("quantity must be greater than zero".to_owned());
     }
@@ -12589,6 +12601,16 @@ fn soracloud_submission_config() -> Result<ClientConfig> {
     })
 }
 
+fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
+    SORACLOUD_FEE_PAYMENT.with(|slot| match slot.borrow().as_ref() {
+        Some(Ok(intent)) => Ok(intent.clone()),
+        Some(Err(error)) => Err(eyre!(error.clone())),
+        None => Err(eyre!(
+            "Soracloud fee payment selection is not initialized; pass --fee-payer authority or an exact sponsor program and revision"
+        )),
+    })
+}
+
 fn canonical_query_string(raw: Option<&str>) -> String {
     let Some(raw) = raw else {
         return String::new();
@@ -12759,33 +12781,47 @@ fn submit_soracloud_draft_transaction(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
     let client = Client::new(config);
+    let requested_fee_payment = soracloud_fee_payment()?;
+    let executable = Executable::Instructions(instructions.into());
+    let mut payload = client
+        .try_build_transaction_payload(
+            executable,
+            requested_fee_payment.clone(),
+            Metadata::default(),
+        )
+        .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact Soracloud mutation fees")?;
+    let selection_matches = match (&requested_fee_payment, &quote.intent) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    };
+    if !selection_matches {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("fee quote returned an invalid Soracloud payment intent")?;
+    payload.fee_payment = quote.intent;
     let transaction = client
-        .try_build_transaction(instructions, soracloud_submission_metadata())
-        .wrap_err("failed to build Soracloud mutation transaction")?;
+        .try_sign_transaction_payload(payload)
+        .wrap_err("failed to sign the exact quoted Soracloud mutation payload")?;
     client
         .submit_transaction_blocking(&transaction)
         .map(Into::into)
         .map(Some)
         .wrap_err("failed to submit Soracloud mutation transaction")
-}
-
-fn soracloud_submission_metadata() -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(gas_asset_id) = soracloud_submission_gas_asset_id() {
-        let gas_asset_key = "gas_asset_id"
-            .parse::<Name>()
-            .expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(gas_asset_id));
-    }
-    metadata
-}
-
-fn soracloud_submission_gas_asset_id() -> Option<String> {
-    ["IROHA_SORACLOUD_GAS_ASSET_ID", "IROHA_GAS_ASSET_ID"]
-        .into_iter()
-        .find_map(|name| env::var(name).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
@@ -19475,7 +19511,7 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
     return json {{
       authenticated: false,
       observed_height: observed_height,
-      wallet: null
+      wallet: Json::parse("null")
     }};
   }}
 
@@ -21683,6 +21719,9 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         config.key_pair = key_pair.clone();
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
             *slot.borrow_mut() = Some(config);
+        });
+        SORACLOUD_FEE_PAYMENT.with(|slot| {
+            *slot.borrow_mut() = Some(Ok(FeePaymentIntent::authority(Vec::new(), None)));
         });
     }
 
@@ -35098,7 +35137,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35317,7 +35356,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35441,7 +35480,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };

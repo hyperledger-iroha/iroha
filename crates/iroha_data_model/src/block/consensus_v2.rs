@@ -60,8 +60,8 @@ const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    102, 17, 205, 198, 99, 72, 190, 191, 189, 88, 63, 136, 136, 100, 167, 71, 220, 200, 40, 197,
-    254, 132, 245, 141, 251, 3, 70, 204, 162, 122, 186, 243,
+    234, 106, 76, 240, 125, 39, 95, 30, 253, 3, 79, 200, 36, 73, 150, 119, 19, 65, 12, 108, 19,
+    223, 247, 205, 27, 171, 181, 31, 56, 200, 112, 91,
 ];
 
 /// Block height in the v2 protocol.
@@ -2404,6 +2404,11 @@ pub enum SumeragiV2QueueKind {
     EffectCompletion,
     /// Bounded transport-to-runner network ingress.
     NetworkIngress,
+    /// Reducer-to-effect dispatch suffix retained for pending-work capacity.
+    ///
+    /// This reserved FIFO runs before another reducer transition. Capacity
+    /// retries are therefore not scheduler-skip debt.
+    EffectDispatch,
 }
 
 /// Occupancy and fairness state for one bounded local queue.
@@ -2882,7 +2887,7 @@ impl SumeragiV2Status {
             || self.liveness.commit_quorums.len() > MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT
             || self.liveness.timeout_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
             || self.liveness.outbound_intents.len() > 7
-            || self.liveness.queues.len() > 9
+            || self.liveness.queues.len() > 10
             || self.liveness.ignore_counts.len() > MAX_LIVENESS_IGNORE_REASONS
         {
             return Err(Error::LivenessCollectionTooLarge);
@@ -5048,6 +5053,7 @@ mod tests {
             SumeragiV2QueueKind::RuntimeCompletion,
             SumeragiV2QueueKind::EffectCompletion,
             SumeragiV2QueueKind::NetworkIngress,
+            SumeragiV2QueueKind::EffectDispatch,
         ]
         .into_iter()
         .map(|queue| SumeragiV2QueueStatus {

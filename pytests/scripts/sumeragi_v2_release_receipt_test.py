@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
+import re
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
+from types import ModuleType
 
 import pytest
 
@@ -65,7 +71,8 @@ SCENARIOS = (
     "authoritative_v2_genesis_commits_on_every_validator",
     "authoritative_v2_finalizes_through_validator_restart",
     "taira_npos_leader_timeout_commits_within_rotation_bound",
-    "real_network_divergent_prepare_qcs_converge_after_ordered_release",
+    "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
+    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
 )
 SUMMARY_FIELDS = (
     "profile",
@@ -84,6 +91,53 @@ SUMMARY_FIELDS = (
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_json(value: object) -> bytes:
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+def artifact_metadata(path: Path, mode: int) -> dict[str, object]:
+    return {
+        "archive_name": path.name,
+        "mode": f"{mode:04o}",
+        "sha256": sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def protected_metadata(
+    path: Path, mode: int, protected_sha256: str
+) -> dict[str, object]:
+    return {
+        "archive_name": path.name,
+        "mode": f"{mode:04o}",
+        "observed_sha256": sha256(path),
+        "protected_sha256": protected_sha256,
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def command_record(
+    argv: list[str],
+    replay_argv: list[str],
+    status: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> dict[str, object]:
+    return {
+        "argv": argv,
+        "replay_argv": replay_argv,
+        "exit_status": status,
+        "stdout_base64": base64.b64encode(stdout).decode("ascii"),
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stdout_size_bytes": len(stdout),
+        "stderr_base64": base64.b64encode(stderr).decode("ascii"),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+        "stderr_size_bytes": len(stderr),
+    }
 
 
 def write_tsv(path: Path, fields: dict[str, str]) -> None:
@@ -116,12 +170,514 @@ def fixture_writer(tmp_path: Path) -> Path:
     return writer
 
 
+def make_bootstrap_evidence(
+    tmp_path: Path,
+    *,
+    identity: dict[str, object],
+    identity_bytes: bytes,
+    raw_commit: bytes,
+    lock_bytes: bytes,
+    signer_fingerprint: str,
+    signer_principal: str,
+    signature_git: Path,
+    signature_ssh_keygen: Path,
+    signature_allowed_signers: Path,
+    signature_revocation: Path,
+    show_output: bytes,
+) -> dict[str, Path | str]:
+    candidate_root = tmp_path / "bootstrap-candidate"
+    (candidate_root / "scripts").mkdir(parents=True)
+    (candidate_root / "Cargo.lock").write_bytes(lock_bytes)
+    runner = candidate_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    runner_source = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    shutil.copy2(runner_source, runner)
+
+    evidence_dir = tmp_path / "bootstrap-evidence"
+    evidence_dir.mkdir(mode=0o700)
+    evidence_dir.chmod(0o700)
+    for child in ("home", "tmp", "runner-bin"):
+        (evidence_dir / child).mkdir(mode=0o700)
+        (evidence_dir / child).chmod(0o700)
+    for log_name in ("runner-stdout.log", "runner-stderr.log"):
+        log = evidence_dir / log_name
+        log.write_bytes(b"")
+        log.chmod(0o600)
+    trust_dir = tmp_path / "bootstrap-trust"
+    trust_dir.mkdir(mode=0o700)
+    frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
+    assert sha256(frozen_bootstrap) == (
+        "540f91f9cfe1f3e55797ead639d61380121b0f7091e07c555b8ff6d5611794ed"
+    )
+    synthetic_sources: dict[str, Path] = {}
+    for label, data, mode in (
+        ("python", b"#!/bin/sh\nexit 0\n", 0o500),
+        ("bash", b"#!/bin/sh\nexit 0\n", 0o500),
+        ("manifest_helper", b"# fixture manifest helper\n", 0o400),
+        ("identity_verifier", b"# fixture identity verifier\n", 0o400),
+        ("receipt_validator", b"# fixture receipt validator\n", 0o400),
+    ):
+        path = trust_dir / label
+        path.write_bytes(data)
+        path.chmod(mode)
+        synthetic_sources[label] = path
+    runner_tool_source = trust_dir / "runner-chmod"
+    runner_tool_source.write_bytes(b"#!/bin/sh\nexit 0\n")
+    runner_tool_source.chmod(0o500)
+    runner_tool_manifest = trust_dir / "runner-tool-manifest.json"
+    runner_tool_manifest.write_bytes(
+        canonical_json(
+            {
+                "schema_version": 1,
+                "tools": {
+                    "chmod": {
+                        "path": str(runner_tool_source.resolve()),
+                        "sha256": sha256(runner_tool_source),
+                    }
+                },
+            }
+        )
+    )
+    runner_tool_manifest.chmod(0o400)
+    synthetic_sources["runner_tool_manifest"] = runner_tool_manifest
+    runner_tool_alias = evidence_dir / "runner-bin" / "chmod"
+    runner_tool_alias.symlink_to(runner_tool_source.resolve())
+    trusted_sources = {
+        "allowed_signers": signature_allowed_signers,
+        "bash": synthetic_sources["bash"],
+        "bootstrap": frozen_bootstrap,
+        "git": signature_git,
+        "identity_verifier": synthetic_sources["identity_verifier"],
+        "manifest_helper": synthetic_sources["manifest_helper"],
+        "python": synthetic_sources["python"],
+        "receipt_validator": synthetic_sources["receipt_validator"],
+        "revocation": signature_revocation,
+        "runner_tool_manifest": synthetic_sources["runner_tool_manifest"],
+        "ssh_keygen": signature_ssh_keygen,
+    }
+    trusted_names = {
+        "allowed_signers": ("bootstrap-allowed-signers", 0o400),
+        "bash": ("bash", 0o500),
+        "bootstrap": ("trusted-bootstrap.py", 0o400),
+        "git": ("git", 0o500),
+        "identity_verifier": ("verify-identity.py", 0o400),
+        "manifest_helper": ("compute-manifest.py", 0o400),
+        "python": ("python3", 0o500),
+        "receipt_validator": ("validate-receipt.py", 0o400),
+        "revocation": ("bootstrap-revocation", 0o400),
+        "runner_tool_manifest": ("runner-tool-manifest.json", 0o400),
+        "ssh_keygen": ("ssh-keygen", 0o500),
+    }
+    trusted_records: dict[str, object] = {}
+    trusted_archives: dict[str, Path] = {}
+    for label, source in trusted_sources.items():
+        archive_name, archive_mode = trusted_names[label]
+        archive = evidence_dir / archive_name
+        archive.write_bytes(source.read_bytes())
+        archive.chmod(archive_mode)
+        trusted_archives[label] = archive
+        trusted_records[label] = {
+            "archive_name": archive_name,
+            "archive_mode": f"{archive_mode:04o}",
+            "observed_sha256": sha256(source),
+            "protected_sha256": sha256(source),
+            "size_bytes": source.stat().st_size,
+            "source_mode": f"{source.stat().st_mode & 0o7777:04o}",
+            "source_path": str(source.resolve()),
+        }
+
+    bootstrap_identity = evidence_dir / "candidate-identity.json"
+    bootstrap_identity.write_bytes(identity_bytes)
+    bootstrap_identity.chmod(0o400)
+    identity_paths = {
+        "cargo_lock": evidence_dir / "identity-Cargo.lock",
+        "git": evidence_dir / "identity-git",
+        "identity_attestation": evidence_dir / "identity-attestation.json",
+        "identity_transcript": evidence_dir / "identity-transcript.json",
+        "raw_commit": evidence_dir / "identity-raw-commit",
+        "ssh_allowed_signers": evidence_dir / "identity-allowed-signers",
+        "ssh_keygen": evidence_dir / "identity-ssh-keygen",
+        "ssh_revocation": evidence_dir / "identity-revocation",
+    }
+    for label, source in (
+        ("cargo_lock", Path(candidate_root / "Cargo.lock")),
+        ("git", trusted_archives["git"]),
+        ("raw_commit", None),
+        ("ssh_allowed_signers", trusted_archives["allowed_signers"]),
+        ("ssh_keygen", trusted_archives["ssh_keygen"]),
+        ("ssh_revocation", trusted_archives["revocation"]),
+    ):
+        path = identity_paths[label]
+        path.write_bytes(raw_commit if source is None else source.read_bytes())
+        path.chmod(0o500 if label in {"git", "ssh_keygen"} else 0o400)
+
+    bootstrap_tools = {
+        "git": {
+            "archive_name": "identity-git",
+            "mode": "0500",
+            "observed_sha256": sha256(identity_paths["git"]),
+            "protected_sha256": sha256(identity_paths["git"]),
+            "size_bytes": identity_paths["git"].stat().st_size,
+            "source_path": str(trusted_archives["git"]),
+        },
+        "ssh_keygen": {
+            "archive_name": "identity-ssh-keygen",
+            "mode": "0500",
+            "observed_sha256": sha256(identity_paths["ssh_keygen"]),
+            "protected_sha256": sha256(identity_paths["ssh_keygen"]),
+            "size_bytes": identity_paths["ssh_keygen"].stat().st_size,
+            "source_path": str(trusted_archives["ssh_keygen"]),
+        },
+    }
+    bootstrap_policies = {
+        "expected_signer_fingerprint": signer_fingerprint,
+        "signature_format": "ssh",
+        "ssh_allowed_signers": protected_metadata(
+            identity_paths["ssh_allowed_signers"],
+            0o400,
+            sha256(trusted_archives["allowed_signers"]),
+        ),
+        "ssh_revocation": protected_metadata(
+            identity_paths["ssh_revocation"],
+            0o400,
+            sha256(trusted_archives["revocation"]),
+        ),
+    }
+    identity_archive_names = {
+        "cargo_lock": "identity-Cargo.lock",
+        "git": "identity-git",
+        "raw_commit": "identity-raw-commit",
+        "ssh_allowed_signers": "identity-allowed-signers",
+        "ssh_keygen": "identity-ssh-keygen",
+        "ssh_revocation": "identity-revocation",
+        "verify_transcript": "identity-transcript.json",
+    }
+    stages = {
+        label: evidence_dir / f".{name}.stage.{index:032x}"
+        for index, (label, name) in enumerate(identity_archive_names.items(), 20)
+    }
+    historical_config = [
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.minTrustLevel=fully",
+        "-c",
+        f"gpg.ssh.program={stages['ssh_keygen']}",
+        "-c",
+        f"gpg.ssh.allowedSignersFile={stages['ssh_allowed_signers']}",
+        "-c",
+        f"gpg.ssh.revocationFile={stages['ssh_revocation']}",
+        "-c",
+        f"gpg.program={stages['ssh_keygen']}",
+        "-c",
+        f"gpg.openpgp.program={stages['ssh_keygen']}",
+        "-c",
+        f"gpg.x509.program={stages['ssh_keygen']}",
+    ]
+    placeholder = "${EVIDENCE_DIRECTORY}"
+    replay_config = [
+        value.replace(str(stages["ssh_keygen"]), f"{placeholder}/identity-ssh-keygen")
+        .replace(
+            str(stages["ssh_allowed_signers"]),
+            f"{placeholder}/identity-allowed-signers",
+        )
+        .replace(str(stages["ssh_revocation"]), f"{placeholder}/identity-revocation")
+        for value in historical_config
+    ]
+    identity_environment = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": str(evidence_dir),
+        "LANG": "C",
+        "LANGUAGE": "C",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+        "TZ": "UTC",
+        "XDG_CONFIG_HOME": str(evidence_dir),
+    }
+    if sys.platform == "darwin":
+        identity_environment["__CF_USER_TEXT_ENCODING"] = (
+            f"0x{os.geteuid():X}:0x1:0xE"
+        )
+    head = identity["head_commit"]
+    assert isinstance(head, str)
+    bootstrap_transcript_value = {
+        "schema_version": 2,
+        "archive_names": identity_archive_names,
+        "candidate_commit_oid": head,
+        "environment": identity_environment,
+        "policy_overrides": historical_config,
+        "policies": bootstrap_policies,
+        "replay": {
+            "candidate_root": "${CANDIDATE_ROOT}",
+            "evidence_directory": placeholder,
+            "environment": {
+                key: value.replace(str(evidence_dir), placeholder)
+                for key, value in identity_environment.items()
+            },
+            "policy_overrides": replay_config,
+        },
+        "tools": bootstrap_tools,
+        "commands": {
+            "show_signature_metadata": command_record(
+                [
+                    str(stages["git"]),
+                    *historical_config,
+                    "show",
+                    "--no-patch",
+                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
+                    head,
+                ],
+                [
+                    f"{placeholder}/identity-git",
+                    *replay_config,
+                    "show",
+                    "--no-patch",
+                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
+                    head,
+                ],
+                0,
+                show_output,
+                b"",
+            ),
+            "verify_commit": command_record(
+                [
+                    str(stages["git"]),
+                    *historical_config,
+                    "verify-commit",
+                    "--raw",
+                    head,
+                ],
+                [
+                    f"{placeholder}/identity-git",
+                    *replay_config,
+                    "verify-commit",
+                    "--raw",
+                    head,
+                ],
+                0,
+                b"",
+                b"Good fixture SSH signature\n",
+            ),
+        },
+        "tool_probes": {
+            "ssh_keygen_usage": command_record(
+                [str(stages["ssh_keygen"]), "-?"],
+                [f"{placeholder}/identity-ssh-keygen", "-?"],
+                1,
+                b"",
+                b"fixture ssh-keygen usage\n",
+            )
+        },
+    }
+    identity_paths["identity_transcript"].write_bytes(
+        canonical_json(bootstrap_transcript_value)
+    )
+    identity_paths["identity_transcript"].chmod(0o400)
+    bootstrap_attestation_value = {
+        "schema_version": 2,
+        "release_identity": identity,
+        "release_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
+        "tools": bootstrap_tools,
+        "policies": bootstrap_policies,
+        "verification": {
+            "status": "G",
+            "signer_fingerprint": signer_fingerprint,
+            "primary_key_fingerprint": "",
+            "allowed_signers_principal": signer_principal,
+        },
+        "evidence": {
+            label: artifact_metadata(
+                identity_paths["identity_transcript"]
+                if label == "verify_transcript"
+                else identity_paths[label],
+                0o500 if label in {"git", "ssh_keygen"} else 0o400,
+            )
+            for label in identity_archive_names
+        },
+    }
+    identity_paths["identity_attestation"].write_bytes(
+        canonical_json(bootstrap_attestation_value)
+    )
+    identity_paths["identity_attestation"].chmod(0o400)
+
+    identity_verification: dict[str, object] = {}
+    for label, path in identity_paths.items():
+        identity_verification[label] = artifact_metadata(
+            path, 0o500 if label in {"git", "ssh_keygen"} else 0o400
+        )
+    identity_verification["verify_transcript"] = artifact_metadata(
+        identity_paths["identity_transcript"], 0o400
+    )
+    closed_path_entries = [str(evidence_dir), str(evidence_dir / "runner-bin")]
+    policy_environment = {
+        "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(trusted_archives["ssh_keygen"]),
+        "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": sha256(trusted_archives["git"]),
+        "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": sha256(
+            trusted_archives["ssh_keygen"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT": signer_fingerprint,
+        "SUMERAGI_V2_RELEASE_SSH_ALLOWED_SIGNERS": str(
+            trusted_archives["allowed_signers"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256": sha256(
+            trusted_archives["allowed_signers"]
+        ),
+        "SUMERAGI_V2_RELEASE_SSH_REVOCATION_FILE": str(
+            trusted_archives["revocation"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256": sha256(
+            trusted_archives["revocation"]
+        ),
+        "SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION": str(
+            evidence_dir / "BOOTSTRAP_COMPLETED.json"
+        ),
+        "SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION": str(
+            identity_paths["identity_attestation"]
+        ),
+        "SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT": str(
+            identity_paths["identity_transcript"]
+        ),
+        "SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY": str(bootstrap_identity),
+        "SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR": str(evidence_dir),
+    }
+    alias_environment = {
+        key.replace("SUMERAGI_V2_RELEASE_", "IROHA_RELEASE_", 1): value
+        for key, value in policy_environment.items()
+        if key.startswith("SUMERAGI_V2_RELEASE_BOOTSTRAP_")
+    }
+    runner_environment = {
+        "HOME": str(evidence_dir / "home"),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": os.pathsep.join(closed_path_entries),
+        "TMPDIR": str(evidence_dir / "tmp"),
+        "TZ": "UTC",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "core.hooksPath",
+        "GIT_CONFIG_VALUE_0": os.devnull,
+        "GIT_CONFIG_KEY_1": "core.fsmonitor",
+        "GIT_CONFIG_VALUE_1": "false",
+        "GIT_TERMINAL_PROMPT": "0",
+        **policy_environment,
+        **alias_environment,
+    }
+    marker_value = {
+        "schema_version": 1,
+        "trust_boundary": {
+            "bootstrap_authentication": "external prerequisite",
+            "release_image_and_dynamic_loader": "external prerequisite",
+            "same_uid_and_trusted_ancestor_owners": True,
+        },
+        "candidate_root": str(candidate_root),
+        "candidate_identity": identity,
+        "candidate_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
+        "trusted_inputs": trusted_records,
+        "identity_verification": identity_verification,
+        "runner": {
+            "argv": [str(trusted_archives["bash"]), str(runner), "--release"],
+            "closed_path_resolution": {
+                "bash": str(trusted_archives["bash"]),
+                "git": str(trusted_archives["git"]),
+                "python3": str(trusted_archives["python"]),
+            },
+            "environment_without_self_digest": runner_environment,
+            "mode": f"{runner.stat().st_mode & 0o7777:04o}",
+            "output": {
+                "stderr_path": str(evidence_dir / "runner-stderr.log"),
+                "stdout_path": str(evidence_dir / "runner-stdout.log"),
+                "active_mode": "0600",
+                "sealed_mode": "0400",
+            },
+            "path": str(runner),
+            "self_digest_environment_variables": [
+                "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
+                "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
+            ],
+            "sha256": sha256(runner),
+            "size_bytes": runner.stat().st_size,
+            "tool_directory": str(evidence_dir / "runner-bin"),
+            "tools": {
+                "chmod": {
+                    "alias_name": "chmod",
+                    "alias_path": str(runner_tool_alias),
+                    "sha256": sha256(runner_tool_source),
+                    "size_bytes": runner_tool_source.stat().st_size,
+                    "source_mode": "0500",
+                    "source_path": str(runner_tool_source.resolve()),
+                }
+            },
+        },
+        "trusted_execution_probes": {
+            "bash": {
+                "argv": [str(trusted_archives["bash"]), "-c", ":"],
+                "exit_status": 0,
+            },
+            "python": {
+                "argv": [
+                    str(trusted_archives["python"]),
+                    "-I",
+                    "-S",
+                    "-c",
+                    "raise SystemExit(0)",
+                ],
+                "exit_status": 0,
+            },
+        },
+    }
+    completion = evidence_dir / "BOOTSTRAP_COMPLETED.json"
+    completion.write_bytes(canonical_json(marker_value))
+    completion.chmod(0o400)
+    return {
+        "bootstrap_completion": completion,
+        "bootstrap_evidence_dir": evidence_dir,
+        "bootstrap_identity": bootstrap_identity,
+        "bootstrap_attestation": identity_paths["identity_attestation"],
+        "bootstrap_transcript": identity_paths["identity_transcript"],
+        "expected_bootstrap_completion_sha256": sha256(completion),
+        "bootstrap_candidate_root": candidate_root,
+        "bootstrap_runner": runner,
+        "bootstrap_identity_cargo_lock": identity_paths["cargo_lock"],
+        "bootstrap_identity_git": identity_paths["git"],
+        "bootstrap_identity_raw_commit": identity_paths["raw_commit"],
+        "bootstrap_identity_allowed_signers": identity_paths[
+            "ssh_allowed_signers"
+        ],
+        "bootstrap_identity_ssh_keygen": identity_paths["ssh_keygen"],
+        "bootstrap_identity_revocation": identity_paths["ssh_revocation"],
+    }
+
+
 def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
-    head = "1" * 40
     tree = "2" * 40
-    lock = "3" * 64
+    lock_bytes = b"fixture Cargo.lock\n"
+    lock = hashlib.sha256(lock_bytes).hexdigest()
+    signer_fingerprint = "SHA256:" + "A" * 43
+    signer_principal = "release@example.test"
+    signature_payload = base64.b64encode(b"SSHSIG fixture signature").decode("ascii")
+    raw_commit = (
+        f"tree {tree}\n"
+        "author Release Fixture <release@example.test> 1700000000 +0000\n"
+        "committer Release Fixture <release@example.test> 1700000000 +0000\n"
+        "gpgsig -----BEGIN SSH SIGNATURE-----\n"
+        f" {signature_payload}\n"
+        " -----END SSH SIGNATURE-----\n"
+        "\n"
+        "Sumeragi v2 release fixture\n"
+        "\n"
+        "Sumeragi-V2-Release-Identity-Version: 1\n"
+        f"Sumeragi-V2-Source-Manifest-SHA256: {candidate_manifest}\n"
+        f"Sumeragi-V2-Cargo-Lock-SHA256: {lock}\n"
+    ).encode("utf-8")
+    framed_commit = b"commit " + str(len(raw_commit)).encode("ascii") + b"\0" + raw_commit
+    head = hashlib.sha1(framed_commit, usedforsecurity=False).hexdigest()
     candidate = tmp_path / "candidate.json"
     sealed = tmp_path / "sealed.json"
     identity = {
@@ -132,9 +688,305 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "workspace_source_manifest_sha256": candidate_manifest,
         "cargo_lock_sha256": lock,
     }
-    candidate.write_text(json.dumps(identity, sort_keys=True), encoding="utf-8")
+    candidate.write_bytes(canonical_json(identity))
     identity["workspace_source_manifest_sha256"] = sealed_manifest
-    sealed.write_text(json.dumps(identity, sort_keys=True), encoding="utf-8")
+    sealed.write_bytes(canonical_json(identity))
+
+    signature_dir = tmp_path / "release-identity-source"
+    signature_dir.mkdir(mode=0o700)
+    signature_dir.chmod(0o700)
+    signature_attestation = signature_dir / "RELEASE_IDENTITY_VERIFIED.json"
+    signature_transcript = signature_dir / "verify-transcript.json"
+    signature_raw_commit = signature_dir / "raw-commit"
+    signature_cargo_lock = signature_dir / "Cargo.lock"
+    signature_allowed_signers = signature_dir / "allowed-signers"
+    signature_revocation = signature_dir / "revocation-file"
+    signature_git = signature_dir / "git"
+    signature_ssh_keygen = signature_dir / "ssh-keygen"
+
+    signature_raw_commit.write_bytes(raw_commit)
+    signature_cargo_lock.write_bytes(lock_bytes)
+    signature_allowed_signers.write_text(
+        f"{signer_principal} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKey\n",
+        encoding="utf-8",
+    )
+    signature_revocation.write_bytes(b"")
+    fake_git = (
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  'rev-parse --show-toplevel') pwd -P ;;\n"
+        f"  'rev-parse --verify HEAD^{{commit}}') printf '%s\\n' {head} ;;\n"
+        f"  'rev-parse --verify {head}^{{tree}}') printf '%s\\n' {tree} ;;\n"
+        f"  'cat-file commit {head}') cat <<'FIXTURE_RAW_COMMIT'\n"
+        + raw_commit.decode("utf-8")
+        + "FIXTURE_RAW_COMMIT\n"
+        f"  ;;\n  *'verify-commit --raw {head}') printf '%s\\n' "
+        "'Good fixture SSH signature' >&2 ;;\n"
+        f"  *'show --no-patch --format=%G?%x00%GF%x00%GP%x00%GS%x00 {head}') "
+        f"printf 'G\\000%s\\000\\000%s\\000\\n' {signer_fingerprint} {signer_principal} ;;\n"
+        "  *) printf 'unexpected fake Git argv: %s\\n' \"$*\" >&2; exit 91 ;;\n"
+        "esac\n"
+    )
+    signature_git.write_text(fake_git, encoding="utf-8")
+    signature_ssh_keygen.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'fixture ssh-keygen usage' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    for path in (
+        signature_raw_commit,
+        signature_cargo_lock,
+        signature_allowed_signers,
+        signature_revocation,
+    ):
+        path.chmod(0o400)
+    signature_git.chmod(0o500)
+    signature_ssh_keygen.chmod(0o500)
+
+    protected_git = sha256(signature_git)
+    protected_ssh = sha256(signature_ssh_keygen)
+    protected_allowed = sha256(signature_allowed_signers)
+    protected_revocation = sha256(signature_revocation)
+    archive_names = {
+        "cargo_lock": "Cargo.lock",
+        "git": "git",
+        "raw_commit": "raw-commit",
+        "ssh_allowed_signers": "allowed-signers",
+        "ssh_keygen": "ssh-keygen",
+        "ssh_revocation": "revocation-file",
+        "verify_transcript": "verify-transcript.json",
+    }
+    stage_paths = {
+        name: signature_dir / f".{archive_name}.stage.{index:032x}"
+        for index, (name, archive_name) in enumerate(archive_names.items(), 1)
+    }
+    historical_config = [
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.minTrustLevel=fully",
+        "-c",
+        f"gpg.ssh.program={stage_paths['ssh_keygen']}",
+        "-c",
+        f"gpg.ssh.allowedSignersFile={stage_paths['ssh_allowed_signers']}",
+        "-c",
+        f"gpg.ssh.revocationFile={stage_paths['ssh_revocation']}",
+        "-c",
+        f"gpg.program={stage_paths['ssh_keygen']}",
+        "-c",
+        f"gpg.openpgp.program={stage_paths['ssh_keygen']}",
+        "-c",
+        f"gpg.x509.program={stage_paths['ssh_keygen']}",
+    ]
+    evidence_placeholder = "${EVIDENCE_DIRECTORY}"
+    replay_config = [
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.minTrustLevel=fully",
+        "-c",
+        f"gpg.ssh.program={evidence_placeholder}/ssh-keygen",
+        "-c",
+        f"gpg.ssh.allowedSignersFile={evidence_placeholder}/allowed-signers",
+        "-c",
+        f"gpg.ssh.revocationFile={evidence_placeholder}/revocation-file",
+        "-c",
+        f"gpg.program={evidence_placeholder}/ssh-keygen",
+        "-c",
+        f"gpg.openpgp.program={evidence_placeholder}/ssh-keygen",
+        "-c",
+        f"gpg.x509.program={evidence_placeholder}/ssh-keygen",
+    ]
+    tools = {
+        "git": {
+            **protected_metadata(signature_git, 0o500, protected_git),
+            "source_path": str((tmp_path / "source-tools" / "git").resolve()),
+        },
+        "ssh_keygen": {
+            **protected_metadata(signature_ssh_keygen, 0o500, protected_ssh),
+            "source_path": str((tmp_path / "source-tools" / "ssh-keygen").resolve()),
+        },
+    }
+    policies = {
+        "expected_signer_fingerprint": signer_fingerprint,
+        "signature_format": "ssh",
+        "ssh_allowed_signers": protected_metadata(
+            signature_allowed_signers, 0o400, protected_allowed
+        ),
+        "ssh_revocation": protected_metadata(
+            signature_revocation, 0o400, protected_revocation
+        ),
+    }
+    closed_environment = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": str(signature_dir),
+        "LANG": "C",
+        "LANGUAGE": "C",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+        "TZ": "UTC",
+        "XDG_CONFIG_HOME": str(signature_dir),
+    }
+    if sys.platform == "darwin":
+        closed_environment["__CF_USER_TEXT_ENCODING"] = (
+            f"0x{os.geteuid():X}:0x1:0xE"
+        )
+    show_output = (
+        f"G\0{signer_fingerprint}\0\0{signer_principal}\0\n"
+    ).encode("utf-8")
+    transcript = {
+        "schema_version": 2,
+        "archive_names": archive_names,
+        "candidate_commit_oid": head,
+        "environment": closed_environment,
+        "policy_overrides": historical_config,
+        "policies": policies,
+        "replay": {
+            "candidate_root": "${CANDIDATE_ROOT}",
+            "evidence_directory": evidence_placeholder,
+            "environment": {
+                key: value.replace(str(signature_dir), evidence_placeholder)
+                for key, value in closed_environment.items()
+            },
+            "policy_overrides": replay_config,
+        },
+        "tools": tools,
+        "commands": {
+            "show_signature_metadata": command_record(
+                [
+                    str(stage_paths["git"]),
+                    *historical_config,
+                    "show",
+                    "--no-patch",
+                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
+                    head,
+                ],
+                [
+                    f"{evidence_placeholder}/git",
+                    *replay_config,
+                    "show",
+                    "--no-patch",
+                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
+                    head,
+                ],
+                0,
+                show_output,
+                b"",
+            ),
+            "verify_commit": command_record(
+                [
+                    str(stage_paths["git"]),
+                    *historical_config,
+                    "verify-commit",
+                    "--raw",
+                    head,
+                ],
+                [
+                    f"{evidence_placeholder}/git",
+                    *replay_config,
+                    "verify-commit",
+                    "--raw",
+                    head,
+                ],
+                0,
+                b"",
+                b"Good fixture SSH signature\n",
+            ),
+        },
+        "tool_probes": {
+            "ssh_keygen_usage": command_record(
+                [str(stage_paths["ssh_keygen"]), "-?"],
+                [f"{evidence_placeholder}/ssh-keygen", "-?"],
+                1,
+                b"",
+                b"fixture ssh-keygen usage\n",
+            )
+        },
+    }
+    signature_transcript.write_bytes(canonical_json(transcript))
+    signature_transcript.chmod(0o400)
+    attestation_evidence = {
+        "cargo_lock": artifact_metadata(signature_cargo_lock, 0o400),
+        "git": artifact_metadata(signature_git, 0o500),
+        "raw_commit": artifact_metadata(signature_raw_commit, 0o400),
+        "ssh_allowed_signers": artifact_metadata(signature_allowed_signers, 0o400),
+        "ssh_keygen": artifact_metadata(signature_ssh_keygen, 0o500),
+        "ssh_revocation": artifact_metadata(signature_revocation, 0o400),
+        "verify_transcript": artifact_metadata(signature_transcript, 0o400),
+    }
+    candidate_identity = json.loads(candidate.read_text(encoding="utf-8"))
+    attestation = {
+        "schema_version": 2,
+        "release_identity": candidate_identity,
+        "release_identity_sha256": sha256(candidate),
+        "tools": tools,
+        "policies": policies,
+        "verification": {
+            "status": "G",
+            "signer_fingerprint": signer_fingerprint,
+            "primary_key_fingerprint": "",
+            "allowed_signers_principal": signer_principal,
+        },
+        "evidence": attestation_evidence,
+    }
+    signature_attestation.write_bytes(canonical_json(attestation))
+    signature_attestation.chmod(0o400)
+    bootstrap = make_bootstrap_evidence(
+        tmp_path,
+        identity=candidate_identity,
+        identity_bytes=candidate.read_bytes(),
+        raw_commit=raw_commit,
+        lock_bytes=lock_bytes,
+        signer_fingerprint=signer_fingerprint,
+        signer_principal=signer_principal,
+        signature_git=signature_git,
+        signature_ssh_keygen=signature_ssh_keygen,
+        signature_allowed_signers=signature_allowed_signers,
+        signature_revocation=signature_revocation,
+        show_output=show_output,
+    )
+    bootstrap_evidence_dir = bootstrap["bootstrap_evidence_dir"]
+    assert isinstance(bootstrap_evidence_dir, Path)
+    release_invocation_root = bootstrap_evidence_dir / "release-runner"
+    release_invocation_root.mkdir(mode=0o700)
+    release_invocation_root.chmod(0o700)
+    release_root = release_invocation_root / "source"
+    release_root.mkdir()
+    (release_root / "Cargo.lock").write_bytes(lock_bytes)
+    release_output = release_invocation_root / "output"
+    release_output.mkdir(mode=0o700)
+    release_output.chmod(0o700)
+    release_output_directory = release_output / "release"
+    release_output_directory.mkdir(mode=0o700)
+    release_output_directory.chmod(0o700)
+    terminal_output = release_output_directory / "RELEASE_COMPLETED.json"
+
+    signature_dir = bootstrap_evidence_dir
+    signature_attestation = bootstrap["bootstrap_attestation"]
+    signature_transcript = bootstrap["bootstrap_transcript"]
+    signature_raw_commit = bootstrap["bootstrap_identity_raw_commit"]
+    signature_cargo_lock = bootstrap["bootstrap_identity_cargo_lock"]
+    signature_allowed_signers = bootstrap["bootstrap_identity_allowed_signers"]
+    signature_revocation = bootstrap["bootstrap_identity_revocation"]
+    signature_git = bootstrap["bootstrap_identity_git"]
+    signature_ssh_keygen = bootstrap["bootstrap_identity_ssh_keygen"]
+    assert all(
+        isinstance(path, Path)
+        for path in (
+            signature_attestation,
+            signature_transcript,
+            signature_raw_commit,
+            signature_cargo_lock,
+            signature_allowed_signers,
+            signature_revocation,
+            signature_git,
+            signature_ssh_keygen,
+        )
+    )
 
     writer_symbols = runpy.run_path(str(SCRIPT))
     corridor_legs = writer_symbols["_corridor_legs"]()
@@ -182,6 +1034,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         if kind.startswith("cargo-"):
             test_lines = []
             if kind == "cargo-module":
+                test_lines = [
+                    f"test {test} ... ok"
+                    for test in required_by_module[module_by_leg[leg_id]]
+                ]
+            elif leg_id in module_by_leg:
                 test_lines = [
                     f"test {test} ... ok"
                     for test in required_by_module[module_by_leg[leg_id]]
@@ -335,7 +1192,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     runs_dir.mkdir(parents=True)
     seed_logs = []
     summary_lines = ["\t".join(SUMMARY_FIELDS)]
-    for index in range(128):
+    seed_run_count = len(SCENARIOS) * 32
+    for index in range(seed_run_count):
         scenario = SCENARIOS[index // 32]
         seed_index = index % 32
         seed = scenario if seed_index == 0 else f"{scenario}:seed:{seed_index:02d}"
@@ -386,8 +1244,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
-            "completed_runs": "128",
-            "expected_runs": "128",
+            "completed_runs": str(seed_run_count),
+            "expected_runs": str(seed_run_count),
             "summary_sha256": sha256(seed_summary),
         },
     )
@@ -455,8 +1313,26 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         },
     )
     return {
+        **bootstrap,
         "candidate": candidate,
         "sealed": sealed,
+        "release_root": release_root,
+        "terminal_output": terminal_output,
+        "signature_attestation": signature_attestation,
+        "signature_transcript": signature_transcript,
+        "signature_raw_commit": signature_raw_commit,
+        "signature_cargo_lock": signature_cargo_lock,
+        "signature_allowed_signers": signature_allowed_signers,
+        "signature_revocation": signature_revocation,
+        "signature_git": signature_git,
+        "signature_ssh_keygen": signature_ssh_keygen,
+        "signature_dir": signature_dir,
+        "expected_git_sha256": protected_git,
+        "expected_ssh_keygen_sha256": protected_ssh,
+        "expected_allowed_signers_sha256": protected_allowed,
+        "expected_revocation_sha256": protected_revocation,
+        "expected_signer_fingerprint": signer_fingerprint,
+        "signer_principal": signer_principal,
         "corridor_completion": corridor_completion,
         "corridor_summary": corridor_summary,
         "corridor_required": corridor_required,
@@ -489,16 +1365,85 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
 
 
 def run_writer(
-    evidence: dict[str, Path | str | list[Path]], output: Path, writer: Path
+    evidence: dict[str, Path | str | list[Path]],
+    output: Path,
+    writer: Path,
+    *,
+    use_supplied_output: bool = False,
+    verify_existing: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
+    if not use_supplied_output:
+        output = terminal_output_path(evidence)
+    if not output.parent.exists():
+        output.parent.mkdir(parents=True, mode=0o700)
+        output.parent.chmod(0o700)
+    repository_root = evidence["release_root"]
+    assert isinstance(repository_root, Path)
+    source_root = writer.parent.parent
+    retained_scripts = repository_root / "scripts"
+    retained_formal = retained_scripts / "formal"
+    retained_formal.mkdir(parents=True, exist_ok=True)
+    for relative in (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
+        Path("scripts/check_taira_v2_soak_evidence.py"),
+        Path(".cargo/config.toml"),
+    ):
+        destination = repository_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not verify_existing or not destination.exists():
+            shutil.copy2(source_root / relative, destination)
+    arguments = [
             sys.executable,
             str(writer),
             "--candidate-identity",
             str(evidence["candidate"]),
             "--sealed-identity",
             str(evidence["sealed"]),
+            "--release-root",
+            str(evidence["release_root"]),
+            "--signature-attestation",
+            str(evidence["signature_attestation"]),
+            "--signature-transcript",
+            str(evidence["signature_transcript"]),
+            "--signature-raw-commit",
+            str(evidence["signature_raw_commit"]),
+            "--signature-cargo-lock",
+            str(evidence["signature_cargo_lock"]),
+            "--signature-allowed-signers",
+            str(evidence["signature_allowed_signers"]),
+            "--signature-revocation",
+            str(evidence["signature_revocation"]),
+            "--signature-git",
+            str(evidence["signature_git"]),
+            "--signature-ssh-keygen",
+            str(evidence["signature_ssh_keygen"]),
+            "--expected-git-sha256",
+            str(evidence["expected_git_sha256"]),
+            "--expected-ssh-keygen-sha256",
+            str(evidence["expected_ssh_keygen_sha256"]),
+            "--expected-allowed-signers-sha256",
+            str(evidence["expected_allowed_signers_sha256"]),
+            "--expected-revocation-sha256",
+            str(evidence["expected_revocation_sha256"]),
+            "--expected-signer-fingerprint",
+            str(evidence["expected_signer_fingerprint"]),
+            "--bootstrap-completion",
+            str(evidence["bootstrap_completion"]),
+            "--bootstrap-evidence-dir",
+            str(evidence["bootstrap_evidence_dir"]),
+            "--bootstrap-identity",
+            str(evidence["bootstrap_identity"]),
+            "--bootstrap-attestation",
+            str(evidence["bootstrap_attestation"]),
+            "--bootstrap-transcript",
+            str(evidence["bootstrap_transcript"]),
+            "--expected-bootstrap-completion-sha256",
+            str(evidence["expected_bootstrap_completion_sha256"]),
+            "--bootstrap-candidate-root",
+            str(evidence["bootstrap_candidate_root"]),
+            "--bootstrap-runner",
+            str(evidence["bootstrap_runner"]),
             "--corridor-completion",
             str(evidence["corridor_completion"]),
             "--formal-completion",
@@ -509,9 +1454,15 @@ def run_writer(
             str(evidence["chaos_completion"]),
             "--taira-completion",
             str(evidence["taira_completion"]),
+            "--repository-root",
+            str(repository_root),
             "--output",
             str(output),
-        ],
+        ]
+    if verify_existing:
+        arguments.append("--verify-existing")
+    return subprocess.run(
+        arguments,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -519,12 +1470,123 @@ def run_writer(
     )
 
 
+def terminal_output_path(
+    evidence: dict[str, Path | str | list[Path]],
+) -> Path:
+    output = evidence["terminal_output"]
+    assert isinstance(output, Path)
+    return output
+
+
+def rewrite_json(path: Path, value: dict[str, object]) -> None:
+    path.chmod(0o600)
+    path.write_bytes(canonical_json(value))
+    path.chmod(0o400)
+
+
+def load_writer_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_v2_release_receipt_writer", SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def mutate_bootstrap_marker(
+    evidence: dict[str, Path | str | list[Path]], mutator: object
+) -> None:
+    marker = evidence["bootstrap_completion"]
+    assert isinstance(marker, Path)
+    value = json.loads(marker.read_text(encoding="utf-8"))
+    assert callable(mutator)
+    mutator(value)
+    rewrite_json(marker, value)
+    evidence["expected_bootstrap_completion_sha256"] = sha256(marker)
+
+
+def mutate_attestation(
+    evidence: dict[str, Path | str | list[Path]], mutator: object
+) -> None:
+    path = evidence["signature_attestation"]
+    assert isinstance(path, Path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    assert callable(mutator)
+    mutator(value)
+    rewrite_json(path, value)
+
+
+def mutate_transcript(
+    evidence: dict[str, Path | str | list[Path]], mutator: object
+) -> None:
+    path = evidence["signature_transcript"]
+    assert isinstance(path, Path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    assert callable(mutator)
+    mutator(value)
+    rewrite_json(path, value)
+
+    attestation_path = evidence["signature_attestation"]
+    assert isinstance(attestation_path, Path)
+    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    attestation["evidence"]["verify_transcript"] = artifact_metadata(path, 0o400)
+    rewrite_json(attestation_path, attestation)
+
+
+def rebind_git_archive(
+    evidence: dict[str, Path | str | list[Path]], new_source: str
+) -> None:
+    git_path = evidence["signature_git"]
+    assert isinstance(git_path, Path)
+    git_path.chmod(0o700)
+    git_path.write_text(new_source, encoding="utf-8")
+    git_path.chmod(0o500)
+    digest = sha256(git_path)
+    evidence["expected_git_sha256"] = digest
+
+    attestation_path = evidence["signature_attestation"]
+    transcript_path = evidence["signature_transcript"]
+    assert isinstance(attestation_path, Path)
+    assert isinstance(transcript_path, Path)
+    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    for value in (attestation, transcript):
+        value["tools"]["git"]["observed_sha256"] = digest
+        value["tools"]["git"]["protected_sha256"] = digest
+        value["tools"]["git"]["size_bytes"] = git_path.stat().st_size
+    attestation["evidence"]["git"] = artifact_metadata(git_path, 0o500)
+    rewrite_json(transcript_path, transcript)
+    attestation["evidence"]["verify_transcript"] = artifact_metadata(
+        transcript_path, 0o400
+    )
+    rewrite_json(attestation_path, attestation)
+
+
+def set_nested(value: dict[str, object], path: tuple[str, ...], replacement: object) -> None:
+    current: object = value
+    for key in path[:-1]:
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    current[path[-1]] = replacement
+
+
+def set_command_stream(
+    record: dict[str, object], stream: str, data: bytes
+) -> None:
+    record[f"{stream}_base64"] = base64.b64encode(data).decode("ascii")
+    record[f"{stream}_sha256"] = hashlib.sha256(data).hexdigest()
+    record[f"{stream}_size_bytes"] = len(data)
+
+
 def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
     writer = fixture_writer(tmp_path)
-    output = tmp_path / "receipt" / "RELEASE_COMPLETED.json"
+    output = terminal_output_path(evidence)
     result = run_writer(evidence, output, writer)
 
     assert result.returncode == 0, result.stderr
@@ -538,6 +1600,61 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "candidate_source_manifest_sha256": evidence["candidate_manifest"],
         "sealed_source_manifest_sha256": evidence["sealed_manifest"],
     }
+    assert receipt["authentication"]["schema_version"] == 2
+    release_authentication = receipt["authentication"]["release_identity"]
+    bootstrap_authentication = receipt["authentication"]["bootstrap"]
+    assert release_authentication["signature_format"] == "ssh"
+    assert release_authentication["verification_status"] == "G"
+    assert release_authentication["candidate_commit_oid"] == evidence["head"]
+    assert release_authentication["signer_fingerprint"] == evidence[
+        "expected_signer_fingerprint"
+    ]
+    assert release_authentication["allowed_signers_principal"] == evidence[
+        "signer_principal"
+    ]
+    assert release_authentication["replay"]["performed"] is True
+    assert release_authentication["trust_policy"] == {
+        "git_sha256": evidence["expected_git_sha256"],
+        "ssh_keygen_sha256": evidence["expected_ssh_keygen_sha256"],
+        "allowed_signers_sha256": evidence["expected_allowed_signers_sha256"],
+        "revocation_sha256": evidence["expected_revocation_sha256"],
+        "signer_fingerprint": evidence["expected_signer_fingerprint"],
+    }
+    assert bootstrap_authentication["completion_sha256"] == evidence[
+        "expected_bootstrap_completion_sha256"
+    ]
+    assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
+        "540f91f9cfe1f3e55797ead639d61380121b0f7091e07c555b8ff6d5611794ed"
+    )
+    assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
+    assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
+        evidence["bootstrap_completion"]
+    )
+    signature_artifacts = {
+        "release_signature_attestation": "signature_attestation",
+        "release_signature_transcript": "signature_transcript",
+        "release_signature_raw_commit": "signature_raw_commit",
+        "release_signature_cargo_lock": "signature_cargo_lock",
+        "release_signature_allowed_signers": "signature_allowed_signers",
+        "release_signature_revocation": "signature_revocation",
+        "release_signature_git": "signature_git",
+        "release_signature_ssh_keygen": "signature_ssh_keygen",
+    }
+    for receipt_name, fixture_name in signature_artifacts.items():
+        fixture_path = evidence[fixture_name]
+        assert isinstance(fixture_path, Path)
+        expected_mode = "0500" if fixture_name in {
+            "signature_git",
+            "signature_ssh_keygen",
+        } else "0400"
+        assert receipt["evidence"][receipt_name] == {
+            "path": str(fixture_path.resolve()),
+            "sha256": sha256(fixture_path),
+            "size_bytes": fixture_path.stat().st_size,
+            "mode": expected_mode,
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
     expected_artifacts = {
         "corridor_completion": "corridor_completion",
         "corridor_summary": "corridor_summary",
@@ -574,6 +1691,579 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         {"path": str(path.resolve()), "sha256": sha256(path)}
         for path in corridor_logs
     ]
+    proof_fidelity_logs = [
+        artifact
+        for artifact in receipt["evidence"]["corridor_logs"]
+        if artifact["path"].endswith("-preflight-proof-fidelity.log")
+    ]
+    assert len(proof_fidelity_logs) == 1
+
+
+def test_verify_existing_rebuilds_and_durably_accepts_the_exact_receipt(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    output = terminal_output_path(evidence)
+
+    published = run_writer(evidence, output, writer)
+    assert published.returncode == 0, published.stderr
+    evidence_directory = evidence["bootstrap_evidence_dir"]
+    assert isinstance(evidence_directory, Path)
+    for name in ("runner-stdout.log", "runner-stderr.log"):
+        (evidence_directory / name).chmod(0o400)
+
+    verified = run_writer(
+        evidence,
+        output,
+        writer,
+        verify_existing=True,
+    )
+
+    assert verified.returncode == 0, verified.stderr
+    assert "aggregate release receipt verified" in verified.stdout
+    assert stat.S_IMODE(output.stat().st_mode) == 0o400
+
+
+def test_verify_existing_rejects_terminal_receipt_semantic_drift(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    output = terminal_output_path(evidence)
+
+    published = run_writer(evidence, output, writer)
+    assert published.returncode == 0, published.stderr
+    evidence_directory = evidence["bootstrap_evidence_dir"]
+    assert isinstance(evidence_directory, Path)
+    for name in ("runner-stdout.log", "runner-stderr.log"):
+        (evidence_directory / name).chmod(0o400)
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    receipt["identity"]["head_commit"] = "9" * 40
+    rewrite_json(output, receipt)
+
+    verified = run_writer(
+        evidence,
+        output,
+        writer,
+        verify_existing=True,
+    )
+
+    assert verified.returncode == 1
+    assert "existing terminal receipt" in verified.stderr
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("schema_version",), 1),
+        (("release_identity", "head_commit"), "9" * 40),
+        (("release_identity_sha256",), "0" * 64),
+        (("tools", "git", "archive_name"), "other-git"),
+        (("tools", "git", "mode"), "0501"),
+        (("tools", "git", "observed_sha256"), "1" * 64),
+        (("tools", "git", "protected_sha256"), "2" * 64),
+        (("policies", "signature_format"), "openpgp"),
+        (("policies", "expected_signer_fingerprint"), "SHA256:" + "B" * 43),
+        (("policies", "ssh_allowed_signers", "protected_sha256"), "3" * 64),
+        (("policies", "ssh_allowed_signers", "size_bytes"), False),
+        (("policies", "ssh_revocation", "size_bytes"), False),
+        (("verification", "status"), "U"),
+        (("verification", "signer_fingerprint"), "SHA256:" + "B" * 43),
+        (("verification", "primary_key_fingerprint"), "SHA256:" + "C" * 43),
+        (("verification", "allowed_signers_principal"), ""),
+        (("evidence", "raw_commit", "archive_name"), "commit"),
+        (("evidence", "raw_commit", "size_bytes"), 0),
+        (("evidence", "ssh_revocation", "size_bytes"), False),
+    ],
+)
+def test_receipt_rejects_tampered_signature_attestation_fields(
+    tmp_path: Path, path: tuple[str, ...], replacement: object
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    mutate_attestation(
+        evidence, lambda value: set_nested(value, path, replacement)
+    )
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "release" in result.stderr.lower()
+    assert not (tmp_path / "receipt.json").exists()
+
+
+@pytest.mark.parametrize("artifact_name", ["signature_attestation", "signature_transcript"])
+def test_receipt_rejects_noncanonical_signature_json(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    artifact = evidence[artifact_name]
+    assert isinstance(artifact, Path)
+    value = json.loads(artifact.read_text(encoding="utf-8"))
+    artifact.chmod(0o600)
+    artifact.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    artifact.chmod(0o400)
+    if artifact_name == "signature_transcript":
+        attestation = evidence["signature_attestation"]
+        assert isinstance(attestation, Path)
+        attestation_value = json.loads(attestation.read_text(encoding="utf-8"))
+        attestation_value["evidence"]["verify_transcript"] = artifact_metadata(
+            artifact, 0o400
+        )
+        rewrite_json(attestation, attestation_value)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "canonical UTF-8 JSON" in result.stderr
+
+
+def test_receipt_rejects_noncanonical_candidate_identity_bytes(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    candidate = evidence["candidate"]
+    assert isinstance(candidate, Path)
+    value = json.loads(candidate.read_text(encoding="utf-8"))
+    candidate.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "candidate identity is not canonical UTF-8 JSON" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_fragment"),
+    [
+        ("non-ssh", "non-SSH signature format"),
+        ("malformed-armor", "malformed SSH signature armor"),
+        ("wrong-tree", "tree does not match"),
+        ("duplicate-trailer", "exact terminal Sumeragi v2 release trailer block"),
+    ],
+)
+def test_raw_commit_validator_rejects_adversarial_signed_object_shapes(
+    tmp_path: Path, mutation: str, error_fragment: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    raw_path = evidence["signature_raw_commit"]
+    candidate_path = evidence["candidate"]
+    assert isinstance(raw_path, Path)
+    assert isinstance(candidate_path, Path)
+    raw = raw_path.read_bytes()
+    identity = json.loads(candidate_path.read_text(encoding="utf-8"))
+    if mutation == "non-ssh":
+        raw = raw.replace(b"SSH SIGNATURE", b"PGP SIGNATURE")
+    elif mutation == "malformed-armor":
+        raw = re.sub(rb"(?m)^ [A-Za-z0-9+/=]+$", b" ***", raw, count=1)
+    elif mutation == "wrong-tree":
+        raw = raw.replace(b"tree " + b"2" * 40, b"tree " + b"3" * 40)
+    elif mutation == "duplicate-trailer":
+        raw = raw.replace(
+            b"Sumeragi v2 release fixture\n\n",
+            b"Sumeragi v2 release fixture\n"
+            b"Sumeragi-V2-Release-Identity-Version: 1\n\n",
+        )
+    else:
+        raise AssertionError(mutation)
+    framed = b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw
+    identity["head_commit"] = hashlib.sha1(
+        framed, usedforsecurity=False
+    ).hexdigest()
+    symbols = runpy.run_path(str(SCRIPT))
+
+    with pytest.raises(symbols["ReceiptError"], match=error_fragment):
+        symbols["_validate_raw_commit"](raw, identity)
+
+
+def test_allowed_signers_policy_accepts_one_unbounded_active_line() -> None:
+    symbols = runpy.run_path(str(SCRIPT))
+
+    symbols["_validate_allowed_signers_policy"](
+        b"# release trust root\n\n"
+        b"release@example.test ssh-ed25519 AAAAC3NzaFixtureKey\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "error_fragment"),
+    [
+        (
+            b"first@example.test ssh-ed25519 AAAAC3NzaFirst\n"
+            b"second@example.test ssh-ed25519 AAAAC3NzaSecond\n",
+            "exactly one active line",
+        ),
+        (
+            b'release@example.test valid-after="20260101Z" '
+            b"ssh-ed25519 AAAAC3NzaFixtureKey\n",
+            "time-bounded",
+        ),
+        (
+            b'release@example.test valid-before="20270101Z" '
+            b"ssh-ed25519 AAAAC3NzaFixtureKey\n",
+            "time-bounded",
+        ),
+    ],
+)
+def test_allowed_signers_policy_rejects_multiple_or_time_bounded_lines(
+    policy: bytes, error_fragment: str
+) -> None:
+    symbols = runpy.run_path(str(SCRIPT))
+
+    with pytest.raises(symbols["ReceiptError"], match=error_fragment):
+        symbols["_validate_allowed_signers_policy"](policy)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("expected_git_sha256", "0" * 64),
+        ("expected_ssh_keygen_sha256", "1" * 64),
+        ("expected_allowed_signers_sha256", "2" * 64),
+        ("expected_revocation_sha256", "3" * 64),
+        ("expected_signer_fingerprint", "SHA256:" + "B" * 43),
+    ],
+)
+def test_receipt_rejects_wrong_out_of_band_signature_policy(
+    tmp_path: Path, field: str, replacement: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    evidence[field] = replacement
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert not (tmp_path / "receipt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    [
+        "signature_attestation",
+        "signature_transcript",
+        "signature_raw_commit",
+        "signature_cargo_lock",
+        "signature_allowed_signers",
+        "signature_revocation",
+        "signature_git",
+        "signature_ssh_keygen",
+    ],
+)
+def test_receipt_rejects_signature_archive_mode_drift(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    artifact = evidence[artifact_name]
+    assert isinstance(artifact, Path)
+    artifact.chmod(0o600)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "exact mode" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    [
+        "signature_raw_commit",
+        "signature_cargo_lock",
+        "signature_allowed_signers",
+        "signature_revocation",
+        "signature_git",
+        "signature_ssh_keygen",
+    ],
+)
+def test_receipt_rejects_signature_archive_content_drift(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    artifact = evidence[artifact_name]
+    assert isinstance(artifact, Path)
+    tool = artifact_name in {"signature_git", "signature_ssh_keygen"}
+    artifact.chmod(0o700 if tool else 0o600)
+    artifact.write_bytes(artifact.read_bytes() + b"tamper\n")
+    artifact.chmod(0o500 if tool else 0o400)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert not (tmp_path / "receipt.json").exists()
+
+
+def test_receipt_rejects_nonprivate_signature_archive_directory(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    directory = evidence["signature_dir"]
+    assert isinstance(directory, Path)
+    directory.chmod(0o755)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "exact mode 0700" in result.stderr
+
+
+def test_receipt_rejects_signature_archive_wrong_name(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    attestation = evidence["signature_attestation"]
+    assert isinstance(attestation, Path)
+    renamed = attestation.with_name("attestation.json")
+    attestation.rename(renamed)
+    evidence["signature_attestation"] = renamed
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "wrong exact name" in result.stderr
+
+
+def test_receipt_rejects_signature_archives_split_across_directories(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    revocation = evidence["signature_revocation"]
+    assert isinstance(revocation, Path)
+    other = tmp_path / "other-private"
+    other.mkdir(mode=0o700)
+    moved = other / revocation.name
+    revocation.rename(moved)
+    evidence["signature_revocation"] = moved
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "do not share one directory" in result.stderr
+
+
+def test_receipt_rejects_signature_archive_symlink(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    raw_commit = evidence["signature_raw_commit"]
+    assert isinstance(raw_commit, Path)
+    real = raw_commit.with_name("raw-commit-real")
+    raw_commit.rename(real)
+    raw_commit.symlink_to(real.name)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "resolved and non-symlinked" in result.stderr
+
+
+def test_receipt_rejects_hardlinked_signature_archives(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    allowed = evidence["signature_allowed_signers"]
+    revocation = evidence["signature_revocation"]
+    assert isinstance(allowed, Path)
+    assert isinstance(revocation, Path)
+    revocation.unlink()
+    os.link(allowed, revocation)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "singly linked" in result.stderr
+
+
+def test_receipt_rejects_signature_directory_inside_release_root(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    root = evidence["release_root"]
+    assert isinstance(root, Path)
+    nested = root / "release-identity"
+    nested.mkdir(mode=0o700)
+    nested.chmod(0o700)
+    evidence["signature_dir"] = nested
+    for key in (
+        "signature_attestation",
+        "signature_transcript",
+        "signature_raw_commit",
+        "signature_cargo_lock",
+        "signature_allowed_signers",
+        "signature_revocation",
+        "signature_git",
+        "signature_ssh_keygen",
+    ):
+        old_path = evidence[key]
+        assert isinstance(old_path, Path)
+        moved = nested / old_path.name
+        old_path.rename(moved)
+        evidence[key] = moved
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "exact bootstrap release-runner source" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "schema-version",
+        "archive-name",
+        "candidate-oid",
+        "environment-home",
+        "environment-extra",
+        "tools-disagree",
+        "policies-disagree",
+        "replay-root",
+        "replay-environment",
+        "replay-policy",
+        "historical-symbolic-head",
+        "replay-symbolic-head",
+        "verify-failed",
+        "show-size",
+        "show-base64",
+        "show-bad-status",
+        "probe-replay",
+    ],
+)
+def test_receipt_rejects_tampered_signature_transcript(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+
+    def apply(value: dict[str, object]) -> None:
+        if mutation == "schema-version":
+            value["schema_version"] = 1
+        elif mutation == "archive-name":
+            value["archive_names"]["raw_commit"] = "commit"
+        elif mutation == "candidate-oid":
+            value["candidate_commit_oid"] = "9" * 40
+        elif mutation == "environment-home":
+            value["environment"]["HOME"] = "/tmp/untrusted-home"
+        elif mutation == "environment-extra":
+            value["environment"]["GIT_CONFIG_COUNT"] = "1"
+        elif mutation == "tools-disagree":
+            value["tools"]["git"]["observed_sha256"] = "4" * 64
+        elif mutation == "policies-disagree":
+            value["policies"]["signature_format"] = "openpgp"
+        elif mutation == "replay-root":
+            value["replay"]["candidate_root"] = "HEAD"
+        elif mutation == "replay-environment":
+            value["replay"]["environment"]["HOME"] = str(
+                evidence["signature_dir"]
+            )
+        elif mutation == "replay-policy":
+            value["replay"]["policy_overrides"][5] = "gpg.ssh.program=ssh-keygen"
+        elif mutation == "historical-symbolic-head":
+            value["commands"]["verify_commit"]["argv"][-1] = "HEAD"
+        elif mutation == "replay-symbolic-head":
+            value["commands"]["verify_commit"]["replay_argv"][-1] = "HEAD"
+        elif mutation == "verify-failed":
+            value["commands"]["verify_commit"]["exit_status"] = 1
+        elif mutation == "show-size":
+            value["commands"]["show_signature_metadata"]["stdout_size_bytes"] += 1
+        elif mutation == "show-base64":
+            value["commands"]["show_signature_metadata"]["stdout_base64"] = "***"
+        elif mutation == "show-bad-status":
+            command = value["commands"]["show_signature_metadata"]
+            assert isinstance(command, dict)
+            set_command_stream(
+                command,
+                "stdout",
+                (
+                    f"B\0{evidence['expected_signer_fingerprint']}\0\0"
+                    f"{evidence['signer_principal']}\0\n"
+                ).encode("utf-8"),
+            )
+        elif mutation == "probe-replay":
+            value["tool_probes"]["ssh_keygen_usage"]["replay_argv"][0] = (
+                "ssh-keygen"
+            )
+        else:
+            raise AssertionError(mutation)
+
+    mutate_transcript(evidence, apply)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert not (tmp_path / "receipt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["verify-failure", "metadata-change", "raw-commit-change", "top-level-change"],
+)
+def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
+    tmp_path: Path, failure: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    git_path = evidence["signature_git"]
+    assert isinstance(git_path, Path)
+    source = git_path.read_text(encoding="utf-8")
+    if failure == "verify-failure":
+        source = source.replace(
+            "'Good fixture SSH signature' >&2 ;;",
+            "'Good fixture SSH signature' >&2; exit 73 ;;",
+        )
+    elif failure == "metadata-change":
+        source = source.replace("SHA256:" + "A" * 43, "SHA256:" + "B" * 43)
+    elif failure == "raw-commit-change":
+        source = source.replace(
+            "Sumeragi v2 release fixture", "Sumeragi v2 changed release fixture"
+        )
+    elif failure == "top-level-change":
+        other_root = tmp_path / "other-root"
+        other_root.mkdir()
+        source = source.replace(
+            "'rev-parse --show-toplevel') pwd -P ;;",
+            f"'rev-parse --show-toplevel') printf '%s\\n' '{other_root}' ;;",
+        )
+    else:
+        raise AssertionError(failure)
+    rebind_git_archive(evidence, source)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "archived Git" in result.stderr or "signature replay" in result.stderr
+
+
+def test_receipt_rejects_fully_rebound_cross_policy_allowed_signers(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    allowed = evidence["signature_allowed_signers"]
+    transcript_path = evidence["signature_transcript"]
+    attestation_path = evidence["signature_attestation"]
+    assert isinstance(allowed, Path)
+    assert isinstance(transcript_path, Path)
+    assert isinstance(attestation_path, Path)
+    allowed.chmod(0o600)
+    allowed.write_text(
+        "attacker@example.test ssh-ed25519 AAAAC3NzaAttacker\n", encoding="utf-8"
+    )
+    allowed.chmod(0o400)
+    forged_digest = sha256(allowed)
+    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    forged_policy = protected_metadata(allowed, 0o400, forged_digest)
+    transcript["policies"]["ssh_allowed_signers"] = forged_policy
+    attestation["policies"]["ssh_allowed_signers"] = forged_policy
+    attestation["evidence"]["ssh_allowed_signers"] = artifact_metadata(allowed, 0o400)
+    rewrite_json(transcript_path, transcript)
+    attestation["evidence"]["verify_transcript"] = artifact_metadata(
+        transcript_path, 0o400
+    )
+    rewrite_json(attestation_path, attestation)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "out-of-band digest" in result.stderr
 
 
 def test_receipt_accepts_transcript_published_by_chaos_launcher(
@@ -603,7 +2293,7 @@ def test_receipt_accepts_transcript_published_by_chaos_launcher(
     evidence["chaos_completion"] = invocations[0] / "COMPLETED.tsv"
     evidence["chaos_log"] = invocations[0] / "chaos-100k.log"
     writer = fixture_writer(tmp_path / "writer")
-    output = tmp_path / "receipt" / "RELEASE_COMPLETED.json"
+    output = terminal_output_path(evidence)
 
     receipt_result = run_writer(evidence, output, writer)
 
@@ -689,7 +2379,7 @@ def test_receipt_rejects_candidate_and_sealed_git_identity_mismatch(
     assert isinstance(candidate_path, Path)
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     candidate["head_commit"] = "9" * 40
-    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    candidate_path.write_bytes(canonical_json(candidate))
     output = tmp_path / "RELEASE_COMPLETED.json"
 
     result = run_writer(evidence, output, writer)
@@ -719,6 +2409,27 @@ def test_receipt_rejects_seed_exact_identity_mismatch(
         for line in completion.read_text(encoding="utf-8").splitlines()
     )
     fields[field] = replacement
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "exact release matrix" in result.stderr
+
+
+@pytest.mark.parametrize("field", ["completed_runs", "expected_runs"])
+def test_receipt_rejects_stale_four_scenario_seed_count(
+    tmp_path: Path, field: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    completion = evidence["seed_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields[field] = "128"
     write_tsv(completion, fields)
 
     result = run_writer(evidence, tmp_path / "receipt.json", writer)
@@ -1059,3 +2770,602 @@ def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "archived Taira evidence failed release validation" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement"),
+    [
+        (("schema_version",), True),
+        (("schema_version",), 1.0),
+        (("trust_boundary", "same_uid_and_trusted_ancestor_owners"), 1),
+        (("trusted_inputs", "revocation", "size_bytes"), False),
+        (("runner", "size_bytes"), True),
+        (("runner", "size_bytes"), 1.0),
+        (("runner", "mode"), 0o755),
+        (("runner", "path_entries"), ["relative-path"]),
+        (
+            ("runner", "self_digest_environment_variables"),
+            ["SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256"],
+        ),
+        (("trusted_execution_probes", "bash", "exit_status"), False),
+    ],
+)
+def test_receipt_rejects_bootstrap_marker_schema_and_type_confusion(
+    tmp_path: Path, field_path: tuple[str, ...], replacement: object
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    mutate_bootstrap_marker(
+        evidence,
+        lambda value: set_nested(value, field_path, replacement),
+    )
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "bootstrap" in result.stderr.lower()
+    assert not terminal_output_path(evidence).exists()
+
+
+def test_receipt_rejects_bootstrap_marker_without_exact_external_digest(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    evidence["expected_bootstrap_completion_sha256"] = "0" * 64
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "out-of-band digest" in result.stderr
+    assert not terminal_output_path(evidence).exists()
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    [
+        "trusted-bootstrap.py",
+        "compute-manifest.py",
+        "verify-identity.py",
+        "python3",
+        "bash",
+        "bootstrap-allowed-signers",
+        "bootstrap-revocation",
+    ],
+)
+def test_receipt_rejects_tampered_bootstrap_trusted_archives(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    directory = evidence["bootstrap_evidence_dir"]
+    assert isinstance(directory, Path)
+    artifact = directory / artifact_name
+    original_mode = artifact.stat().st_mode & 0o7777
+    artifact.chmod(0o700 if original_mode == 0o500 else 0o600)
+    artifact.write_bytes(artifact.read_bytes() + b"tampered\n")
+    artifact.chmod(original_mode)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "bootstrap" in result.stderr.lower()
+    assert not terminal_output_path(evidence).exists()
+
+
+@pytest.mark.parametrize("mutation", ["mode", "symlink", "hardlink"])
+def test_receipt_rejects_bootstrap_archive_path_and_inode_aliases(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    directory = evidence["bootstrap_evidence_dir"]
+    assert isinstance(directory, Path)
+    helper = directory / "compute-manifest.py"
+    if mutation == "mode":
+        helper.chmod(0o600)
+    elif mutation == "symlink":
+        real = directory / "compute-manifest.real"
+        helper.rename(real)
+        helper.symlink_to(real.name)
+    elif mutation == "hardlink":
+        verifier = directory / "verify-identity.py"
+        verifier.unlink()
+        os.link(helper, verifier)
+    else:
+        raise AssertionError(mutation)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "bootstrap" in result.stderr.lower()
+    assert not terminal_output_path(evidence).exists()
+
+
+@pytest.mark.parametrize(
+    ("key", "basename"),
+    [
+        ("bootstrap_completion", "BOOTSTRAP_COMPLETED.copy.json"),
+        ("bootstrap_identity", "candidate-identity.copy.json"),
+        ("bootstrap_attestation", "identity-attestation.copy.json"),
+        ("bootstrap_transcript", "identity-transcript.copy.json"),
+    ],
+)
+def test_receipt_rejects_bootstrap_cli_path_aliases(
+    tmp_path: Path, key: str, basename: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    source = evidence[key]
+    directory = evidence["bootstrap_evidence_dir"]
+    assert isinstance(source, Path)
+    assert isinstance(directory, Path)
+    alias = directory / basename
+    alias.write_bytes(source.read_bytes())
+    alias.chmod(source.stat().st_mode & 0o7777)
+    evidence[key] = alias
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "exact evidence path" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement"),
+    [
+        (
+            (
+                "runner",
+                "environment_without_self_digest",
+                "IROHA_RELEASE_BOOTSTRAP_IDENTITY",
+            ),
+            "/tmp/aliased-candidate-identity.json",
+        ),
+        (("runner", "argv", "0"), "/bin/bash"),
+        (("runner", "closed_path_resolution", "git"), "/usr/bin/git"),
+    ],
+)
+def test_receipt_rejects_bootstrap_runner_aliases(
+    tmp_path: Path, field_path: tuple[str, ...], replacement: object
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+
+    def mutate(value: dict[str, object]) -> None:
+        if field_path[-1].isdigit():
+            current: object = value
+            for field in field_path[:-2]:
+                assert isinstance(current, dict)
+                current = current[field]
+            assert isinstance(current, dict)
+            sequence = current[field_path[-2]]
+            assert isinstance(sequence, list)
+            sequence[int(field_path[-1])] = replacement
+        else:
+            set_nested(value, field_path, replacement)
+
+    mutate_bootstrap_marker(evidence, mutate)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "bootstrap" in result.stderr.lower()
+
+
+def test_receipt_requires_distinct_original_and_sealed_candidate_roots(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    evidence["bootstrap_candidate_root"] = evidence["release_root"]
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "must be distinct" in result.stderr
+
+
+def test_receipt_requires_exact_bootstrap_release_source_shape(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    wrong_root = tmp_path / "wrong-sealed-source"
+    wrong_root.mkdir()
+    source_lock = evidence["signature_cargo_lock"]
+    assert isinstance(source_lock, Path)
+    (wrong_root / "Cargo.lock").write_bytes(source_lock.read_bytes())
+    evidence["release_root"] = wrong_root
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "exact bootstrap release-runner source" in result.stderr
+
+
+def test_receipt_requires_exact_terminal_output_path(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    wrong_parent = tmp_path / "wrong-output"
+    wrong_parent.mkdir(mode=0o700)
+    wrong_parent.chmod(0o700)
+    wrong_output = wrong_parent / "RELEASE_COMPLETED.json"
+
+    result = run_writer(
+        evidence,
+        wrong_output,
+        writer,
+        use_supplied_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "exact bootstrap release output path" in result.stderr
+    assert not wrong_output.exists()
+    assert not terminal_output_path(evidence).exists()
+
+
+def private_output(tmp_path: Path) -> tuple[Path, Path]:
+    directory = tmp_path / "private-output"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    return directory, directory / "RELEASE_COMPLETED.json"
+
+
+def test_terminal_publication_is_no_clobber_and_durable(tmp_path: Path) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    data = canonical_json({"result": "release-complete"})
+    revalidations = 0
+
+    def revalidate() -> None:
+        nonlocal revalidations
+        revalidations += 1
+
+    module._publish_terminal_receipt(output, data, revalidate=revalidate)
+
+    metadata = output.lstat()
+    assert output.read_bytes() == data
+    assert metadata.st_mode & 0o7777 == 0o400
+    assert metadata.st_nlink == 1
+    assert revalidations == 2
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+def test_terminal_publication_completes_short_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    data = b"terminal receipt with deliberately short writes\n"
+    real_write = module.os.write
+
+    def short_write(descriptor: int, pending: object) -> int:
+        return real_write(descriptor, pending[:3])
+
+    monkeypatch.setattr(module.os, "write", short_write)
+
+    module._publish_terminal_receipt(output, data, revalidate=lambda: None)
+
+    assert output.read_bytes() == data
+    assert output.stat().st_nlink == 1
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+def test_terminal_publication_rejects_zero_length_write_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    monkeypatch.setattr(module.os, "write", lambda _descriptor, _pending: 0)
+
+    with pytest.raises(module.ReceiptError, match="write made no progress"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=lambda: None
+        )
+
+    assert not output.exists()
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+@pytest.mark.parametrize("failure_call", [1, 2, 3])
+def test_terminal_publication_fsync_failure_cleans_every_owned_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_call: int,
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    real_fsync = module.os.fsync
+    calls = 0
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise OSError("fixture fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", failing_fsync)
+
+    with pytest.raises(module.ReceiptError, match="publication failed closed"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=lambda: None
+        )
+
+    assert not output.exists()
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+def test_terminal_publication_link_failure_cleans_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("fixture link failure")
+
+    monkeypatch.setattr(module.os, "link", fail_link)
+
+    with pytest.raises(module.ReceiptError, match="publication failed closed"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=lambda: None
+        )
+
+    assert not output.exists()
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+def test_terminal_publication_cleans_a_link_created_before_reported_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    real_link = module.os.link
+
+    def link_then_fail(*args: object, **kwargs: object) -> None:
+        real_link(*args, **kwargs)
+        raise OSError("fixture post-link failure")
+
+    monkeypatch.setattr(module.os, "link", link_then_fail)
+
+    with pytest.raises(module.ReceiptError, match="publication failed closed"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=lambda: None
+        )
+
+    assert not output.exists()
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+@pytest.mark.parametrize("failure_kind", ["file", "directory"])
+def test_evidence_durability_fsync_failure_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    module = load_writer_module()
+    directory = tmp_path / "evidence"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    artifact = directory / "artifact"
+    artifact.write_bytes(b"progress evidence\n")
+    artifact.chmod(0o400)
+    path_contract = module._capture_path_contract(
+        artifact,
+        "fixture evidence",
+        expected_sha256=sha256(artifact),
+        expected_mode=0o400,
+        expected_owner=os.geteuid(),
+        expected_nlink=1,
+        expected_size=artifact.stat().st_size,
+    )
+    directory_contract = module._capture_directory_contract(
+        directory, "fixture evidence directory"
+    )
+    real_fsync = module.os.fsync
+
+    def fail_selected(descriptor: int) -> None:
+        is_directory = stat.S_ISDIR(os.fstat(descriptor).st_mode)
+        if is_directory == (failure_kind == "directory"):
+            raise OSError("fixture evidence durability failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", fail_selected)
+
+    with pytest.raises(module.ReceiptError, match="fsync failed"):
+        module._fsync_receipt_inputs([directory_contract, path_contract])
+
+
+def test_evidence_durability_rejects_directory_inventory_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_writer_module()
+    directory = tmp_path / "evidence"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    contract = module._capture_directory_contract(
+        directory, "fixture evidence directory"
+    )
+    (directory / "late-artifact").write_bytes(b"late\n")
+
+    with pytest.raises(module.ReceiptError, match="changed before fsync"):
+        module._fsync_receipt_inputs([contract])
+
+
+def test_evidence_durability_orders_files_before_bottom_up_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_writer_module()
+    parent = tmp_path / "evidence"
+    child = parent / "nested"
+    child.mkdir(parents=True, mode=0o700)
+    parent.chmod(0o700)
+    child.chmod(0o700)
+    artifact = child / "artifact"
+    artifact.write_bytes(b"progress evidence\n")
+    artifact.chmod(0o400)
+    contracts = [
+        module._capture_directory_contract(parent, "fixture parent"),
+        module._capture_path_contract(
+            artifact,
+            "fixture evidence",
+            expected_sha256=sha256(artifact),
+            expected_mode=0o400,
+            expected_owner=os.geteuid(),
+            expected_nlink=1,
+            expected_size=artifact.stat().st_size,
+        ),
+        module._capture_directory_contract(child, "fixture child"),
+    ]
+    inode_names = {
+        (contract.device, contract.inode): contract.path.name
+        for contract in contracts
+    }
+    observed: list[str] = []
+    real_fsync = module.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        observed.append(inode_names[(metadata.st_dev, metadata.st_ino)])
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", record_fsync)
+
+    module._fsync_receipt_inputs(contracts)
+
+    assert observed == ["artifact", "nested", "evidence"]
+
+
+@pytest.mark.parametrize("mutation_revalidation", [1, 2])
+def test_terminal_publication_revalidation_failure_cleans_terminal_names(
+    tmp_path: Path, mutation_revalidation: int
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.write_bytes(b"stable evidence\n")
+    snapshot = module._capture_path_contract(
+        evidence,
+        "fixture evidence",
+        expected_sha256=sha256(evidence),
+    )
+    calls = 0
+
+    def revalidate() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == mutation_revalidation:
+            evidence.write_bytes(b"forged evidence\n")
+        module._revalidate_receipt_inputs([snapshot])
+
+    with pytest.raises(module.ReceiptError, match="aggregate evidence"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=revalidate
+        )
+
+    assert not output.exists()
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+@pytest.mark.parametrize("existing_kind", ["regular", "symlink", "hardlink"])
+def test_terminal_publication_never_overwrites_existing_terminal_name(
+    tmp_path: Path, existing_kind: str
+) -> None:
+    module = load_writer_module()
+    directory, output = private_output(tmp_path)
+    protected = directory / "protected"
+    protected.write_bytes(b"protected bytes\n")
+    if existing_kind == "regular":
+        output.write_bytes(b"previous terminal receipt\n")
+    elif existing_kind == "symlink":
+        output.symlink_to(protected.name)
+    elif existing_kind == "hardlink":
+        os.link(protected, output)
+    else:
+        raise AssertionError(existing_kind)
+    before = output.lstat()
+    protected_bytes = protected.read_bytes()
+
+    with pytest.raises(module.ReceiptError, match="overwrite is forbidden"):
+        module._publish_terminal_receipt(
+            output, b"replacement receipt\n", revalidate=lambda: None
+        )
+
+    after = output.lstat()
+    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+    assert protected.read_bytes() == protected_bytes
+    assert not list(directory.glob(f".{output.name}.stage.*"))
+
+
+@pytest.mark.parametrize("parent_state", ["missing", "mode-0755"])
+def test_terminal_publication_rejects_unsafe_output_directory(
+    tmp_path: Path, parent_state: str
+) -> None:
+    module = load_writer_module()
+    directory = tmp_path / "unsafe-output"
+    if parent_state == "mode-0755":
+        directory.mkdir(mode=0o700)
+        directory.chmod(0o755)
+    output = directory / "RELEASE_COMPLETED.json"
+
+    with pytest.raises(module.ReceiptError, match="terminal receipt output directory"):
+        module._publish_terminal_receipt(
+            output, b"terminal receipt\n", revalidate=lambda: None
+        )
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("mutation", ["content", "mode", "inode", "hardlink"])
+def test_aggregate_snapshot_revalidation_rejects_late_mutation(
+    tmp_path: Path, mutation: str
+) -> None:
+    module = load_writer_module()
+    evidence = tmp_path / "aggregate-evidence"
+    evidence.write_bytes(b"original evidence\n")
+    snapshot = module._capture_path_contract(
+        evidence,
+        "fixture evidence",
+        expected_sha256=sha256(evidence),
+    )
+    if mutation == "content":
+        evidence.write_bytes(b"mutated evidence!\n")
+    elif mutation == "mode":
+        evidence.chmod(0o400)
+    elif mutation == "inode":
+        evidence.unlink()
+        evidence.write_bytes(b"original evidence\n")
+    elif mutation == "hardlink":
+        os.link(evidence, tmp_path / "aggregate-evidence-alias")
+    else:
+        raise AssertionError(mutation)
+
+    with pytest.raises(module.ReceiptError, match="aggregate evidence"):
+        module._revalidate_receipt_inputs([snapshot])
+
+
+@pytest.mark.parametrize("mutation", ["mode", "entry", "inode"])
+def test_aggregate_directory_revalidation_rejects_late_mutation(
+    tmp_path: Path, mutation: str
+) -> None:
+    module = load_writer_module()
+    directory = tmp_path / "aggregate-directory"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    snapshot = module._capture_directory_contract(
+        directory, "fixture evidence directory"
+    )
+    if mutation == "mode":
+        directory.chmod(0o755)
+    elif mutation == "entry":
+        (directory / "late-entry").write_bytes(b"late evidence\n")
+    elif mutation == "inode":
+        directory.rmdir()
+        directory.mkdir(mode=0o700)
+        directory.chmod(0o700)
+    else:
+        raise AssertionError(mutation)
+
+    with pytest.raises(module.ReceiptError, match="aggregate evidence directory"):
+        module._revalidate_receipt_inputs([snapshot])

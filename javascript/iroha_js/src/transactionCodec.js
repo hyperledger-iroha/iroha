@@ -81,6 +81,7 @@ const TRANSFER_INPUT_FIELDS = new Set([
   "creationTimeMs",
   "ttlMs",
   "nonce",
+  "feePayment",
   "networkPrefix",
   "chainDiscriminant",
 ]);
@@ -92,8 +93,30 @@ const INSTRUCTION_INPUT_FIELDS = new Set([
   "creationTimeMs",
   "ttlMs",
   "nonce",
+  "feePayment",
   "networkPrefix",
   "chainDiscriminant",
+]);
+const FEE_PAYMENT_FIELDS = new Set([
+  "payer",
+  "programId",
+  "programRevision",
+  "chargeLimits",
+  "gasLimit",
+]);
+const FEE_CHARGE_LIMIT_FIELDS = new Set([
+  "kind",
+  "assetDefinitionId",
+  "maxAmount",
+]);
+const FEE_CHARGE_KIND_TAG = Object.freeze({
+  nexus: 0,
+  pipelineGas: 1,
+});
+const LEGACY_FEE_METADATA_KEYS = Object.freeze([
+  "fee_sponsor",
+  "gas_limit",
+  "gas_asset_id",
 ]);
 const SIGNABLE_FIELDS = new Set([
   "payloadBytes",
@@ -415,6 +438,143 @@ function normalizeQuantity(value) {
     fail("invalid_quantity", "quantity must be greater than zero");
   }
   return { literal, mantissa, scale: quantity.scale };
+}
+
+function normalizeFeeProgramName(value, context) {
+  const name = exactString(value, context, { maxBytes: MAX_METADATA_KEY_BYTES });
+  if (
+    name.normalize("NFC") !== name ||
+    isRustUnicodeWhitespace(name) ||
+    /[@#$]/u.test(name)
+  ) {
+    fail("invalid_fee_payment", `${context} is not a canonical program Name`);
+  }
+  return name;
+}
+
+function normalizeFeeProgramId(value, authority, context) {
+  const literal = exactString(value, context, { maxBytes: 1024 });
+  const separator = literal.indexOf("/");
+  if (separator <= 0 || separator === literal.length - 1) {
+    fail(
+      "invalid_fee_payment",
+      `${context} must use <canonical-sponsor-account>/<program-name>`,
+    );
+  }
+  const sponsor = accountInfo(
+    literal.slice(0, separator),
+    `${context}.sponsor`,
+    authority.discriminant,
+  );
+  const name = normalizeFeeProgramName(
+    literal.slice(separator + 1),
+    `${context}.name`,
+  );
+  if (`${sponsor.literal}/${name}` !== literal) {
+    fail("invalid_fee_payment", `${context} must use its exact canonical form`);
+  }
+  return { literal, sponsor, name };
+}
+
+function normalizeFeeChargeLimits(value) {
+  if (!Array.isArray(value)) {
+    fail("invalid_fee_payment", "feePayment.chargeLimits must be an array");
+  }
+  if (value.length > Object.keys(FEE_CHARGE_KIND_TAG).length) {
+    fail("invalid_fee_payment", "feePayment.chargeLimits contains too many entries");
+  }
+  let previousTag = -1;
+  return value.map((entry, index) => {
+    entry = snapshotAllowedFields(
+      entry,
+      FEE_CHARGE_LIMIT_FIELDS,
+      `feePayment.chargeLimits[${index}]`,
+    );
+    const kind = exactString(
+      entry.kind,
+      `feePayment.chargeLimits[${index}].kind`,
+      { maxBytes: 32 },
+    );
+    const tag = FEE_CHARGE_KIND_TAG[kind];
+    if (tag === undefined) {
+      fail(
+        "invalid_fee_payment",
+        `feePayment.chargeLimits[${index}].kind must be nexus or pipelineGas`,
+      );
+    }
+    if (tag <= previousTag) {
+      fail(
+        "invalid_fee_payment",
+        "feePayment.chargeLimits must be unique and ordered nexus before pipelineGas",
+      );
+    }
+    previousTag = tag;
+    const assetDefinitionId = exactString(
+      entry.assetDefinitionId,
+      `feePayment.chargeLimits[${index}].assetDefinitionId`,
+      { maxBytes: 128 },
+    );
+    assetDefinitionArchive(assetDefinitionId);
+    const maxAmount = normalizeQuantity(entry.maxAmount);
+    return { kind, tag, assetDefinitionId, maxAmount };
+  });
+}
+
+function normalizeFeePayment(value, authority) {
+  value = snapshotAllowedFields(value, FEE_PAYMENT_FIELDS, "feePayment");
+  const payer = exactString(value.payer, "feePayment.payer", { maxBytes: 16 });
+  if (payer !== "authority" && payer !== "sponsor") {
+    fail("invalid_fee_payment", "feePayment.payer must be authority or sponsor");
+  }
+  const chargeLimits = normalizeFeeChargeLimits(value.chargeLimits);
+  const gasLimit = normalizeOptionalUnsigned(
+    value.gasLimit,
+    UINT64_MAX,
+    "feePayment.gasLimit",
+    { nonZero: true },
+  );
+  if (payer === "authority") {
+    if (value.programId !== undefined || value.programRevision !== undefined) {
+      fail(
+        "invalid_fee_payment",
+        "authority feePayment must not include programId or programRevision",
+      );
+    }
+    return { payer, tag: 0, chargeLimits, gasLimit };
+  }
+  if (value.programId === undefined || value.programRevision === undefined) {
+    fail(
+      "invalid_fee_payment",
+      "sponsor feePayment requires programId and programRevision",
+    );
+  }
+  const programRevision = normalizeUnsigned(
+    value.programRevision,
+    UINT64_MAX,
+    "feePayment.programRevision",
+  );
+  if (programRevision === 0n) {
+    fail("invalid_fee_payment", "feePayment.programRevision must be non-zero");
+  }
+  return {
+    payer,
+    tag: 1,
+    program: normalizeFeeProgramId(value.programId, authority, "feePayment.programId"),
+    programRevision,
+    chargeLimits,
+    gasLimit,
+  };
+}
+
+function rejectLegacyFeeMetadata(metadata) {
+  for (const key of LEGACY_FEE_METADATA_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+      fail(
+        "invalid_fee_payment",
+        `metadata.${key} is retired; use the signature-bound feePayment field`,
+      );
+    }
+  }
 }
 
 function normalizeMetadata(input) {
@@ -828,6 +988,46 @@ function metadataArchive(metadata) {
   return vector(entries);
 }
 
+function feeChargeLimitsArchive(chargeLimits) {
+  return vector(
+    chargeLimits.map((limit) =>
+      struct([
+        u32(limit.tag),
+        assetDefinitionArchive(limit.assetDefinitionId),
+        numericArchive(limit.maxAmount),
+      ]),
+    ),
+  );
+}
+
+function feePaymentArchive(feePayment) {
+  const chargeLimits = feeChargeLimitsArchive(feePayment.chargeLimits);
+  const gasLimit = option(
+    feePayment.gasLimit === null ? null : u64(feePayment.gasLimit),
+  );
+  if (feePayment.tag === 0) {
+    return Buffer.concat([
+      u32(0),
+      field(struct([chargeLimits, gasLimit])),
+    ]);
+  }
+  const programId = struct([
+    accountArchive(feePayment.program.sponsor),
+    stringValue(feePayment.program.name),
+  ]);
+  return Buffer.concat([
+    u32(1),
+    field(
+      struct([
+        programId,
+        u64(feePayment.programRevision),
+        chargeLimits,
+        gasLimit,
+      ]),
+    ),
+  ]);
+}
+
 function crc64(payload) {
   let value = CRC64_MASK;
   for (const byte of payload) {
@@ -933,6 +1133,8 @@ function normalizeTransferInput(input, now) {
   assetScopeArchive(source.scope);
   const quantity = normalizeQuantity(input.quantity);
   const metadata = normalizeMetadata(input.metadata);
+  rejectLegacyFeeMetadata(metadata);
+  const feePayment = normalizeFeePayment(input.feePayment, authority);
   const creationTimeMs = normalizeUnsigned(
     input.creationTimeMs ?? now(),
     UINT64_MAX,
@@ -951,6 +1153,7 @@ function normalizeTransferInput(input, now) {
     source,
     quantity,
     destination,
+    feePayment,
     metadata,
     creationTimeMs,
     ttlMs,
@@ -972,6 +1175,7 @@ function encodeTransferPayload(normalized) {
     executable,
     option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
+    feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
@@ -1028,6 +1232,8 @@ function normalizeInstructionTransactionInput(input, now) {
     return Buffer.from(archive);
   });
   const metadata = normalizeMetadata(input.metadata);
+  rejectLegacyFeeMetadata(metadata);
+  const feePayment = normalizeFeePayment(input.feePayment, authority);
   const creationTimeMs = normalizeUnsigned(
     input.creationTimeMs ?? now(),
     UINT64_MAX,
@@ -1042,6 +1248,7 @@ function normalizeInstructionTransactionInput(input, now) {
     chainId,
     authority,
     instructions,
+    feePayment,
     metadata,
     creationTimeMs,
     ttlMs,
@@ -1061,6 +1268,7 @@ function encodeInstructionTransactionPayload(normalized) {
     executable,
     option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
+    feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
@@ -1285,6 +1493,84 @@ function validateNumericArchive(payload, context) {
   }
 }
 
+function validateFeeChargeLimitsArchive(payload, context) {
+  const reader = new Reader(payload, context);
+  const count = reader.readU64("count");
+  if (count > BigInt(Object.keys(FEE_CHARGE_KIND_TAG).length)) {
+    fail("malformed_payload", `${context} contains too many charge limits`);
+  }
+  let previousTag = -1;
+  for (let index = 0; index < Number(count); index += 1) {
+    const entry = new Reader(
+      reader.readField(`item[${index}]`),
+      `${context}[${index}]`,
+    );
+    const kind = entry.readField("kind");
+    if (kind.length !== 4) {
+      fail("malformed_payload", `${context}[${index}].kind must be a u32 tag`);
+    }
+    const tag = kind.readUInt32LE(0);
+    if (tag > 1 || tag <= previousTag) {
+      fail(
+        "malformed_payload",
+        `${context} must be uniquely ordered by charge kind`,
+      );
+    }
+    previousTag = tag;
+    validateFixedByteArchive(
+      entry.readField("assetDefinitionId"),
+      16,
+      `${context}[${index}].assetDefinitionId`,
+    );
+    validateNumericArchive(
+      entry.readField("maxAmount"),
+      `${context}[${index}].maxAmount`,
+    );
+    entry.assertEof();
+  }
+  reader.assertEof();
+}
+
+function validateFeeProgramIdArchive(payload, context) {
+  const reader = new Reader(payload, context);
+  validateAccountArchive(reader.readField("sponsor"), `${context}.sponsor`);
+  const name = validateStringArchive(
+    reader.readField("name"),
+    `${context}.name`,
+    { maxBytes: MAX_METADATA_KEY_BYTES },
+  );
+  normalizeFeeProgramName(name, `${context}.name`);
+  reader.assertEof();
+}
+
+function validateFeePaymentArchive(payload, context) {
+  const reader = new Reader(payload, context);
+  const tag = reader.readU32("payer");
+  if (tag > 1) {
+    fail("malformed_payload", `${context} uses unsupported payer tag ${tag}`);
+  }
+  const body = new Reader(reader.readField("value"), `${context}.value`);
+  reader.assertEof();
+  if (tag === 1) {
+    validateFeeProgramIdArchive(
+      body.readField("programId"),
+      `${context}.programId`,
+    );
+    const revision = body.readField("programRevision");
+    if (revision.length !== 8 || revision.readBigUInt64LE(0) === 0n) {
+      fail("malformed_payload", `${context}.programRevision must be non-zero u64`);
+    }
+  }
+  validateFeeChargeLimitsArchive(
+    body.readField("chargeLimits"),
+    `${context}.chargeLimits`,
+  );
+  validateOption(body.readField("gasLimit"), 8, `${context}.gasLimit`, {
+    nonZero: true,
+  });
+  body.assertEof();
+}
+
 function validateFrame(frame, context) {
   if (frame.length < 40 || frame.subarray(0, 4).toString("ascii") !== "NRT0") {
     fail("malformed_payload", `${context} is not an NRT0 frame`);
@@ -1505,6 +1791,7 @@ function validateMetadataArchive(payload, context) {
       `${context} canonical JSON exceeds ${MAX_METADATA_JSON_BYTES} UTF-8 bytes`,
     );
   }
+  return normalizedMetadata;
 }
 
 function validateTransactionPayload(payload, authorityLiteral) {
@@ -1549,7 +1836,16 @@ function validateTransactionPayload(payload, authorityLiteral) {
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
-  validateMetadataArchive(reader.readField("metadata"), "transaction payload.metadata");
+  validateFeePaymentArchive(
+    reader.readField("feePayment"),
+    "transaction payload.feePayment",
+  );
+  rejectLegacyFeeMetadata(
+    validateMetadataArchive(
+      reader.readField("metadata"),
+      "transaction payload.metadata",
+    ),
+  );
   reader.assertEof();
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
@@ -1595,9 +1891,15 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
-  validateMetadataArchive(
-    reader.readField("metadata"),
-    "transaction payload.metadata",
+  validateFeePaymentArchive(
+    reader.readField("feePayment"),
+    "transaction payload.feePayment",
+  );
+  rejectLegacyFeeMetadata(
+    validateMetadataArchive(
+      reader.readField("metadata"),
+      "transaction payload.metadata",
+    ),
   );
   reader.assertEof();
   return assertedAuthority ?? { publicKey: authorityPublicKey };

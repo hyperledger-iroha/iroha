@@ -57,17 +57,28 @@ koto build target/quickstart/hello.ko \
   --manifest-out target/quickstart/hello.manifest.json \
   --max-cycles 1000000
 
+build_record=target/quickstart/.fingerprints/hello.to.record
+artifact_hash=$(sed -n 's/^artifact_hash=//p' "$build_record")
+input_fingerprint=$(sed -n 's/^input=//p' "$build_record")
+source_map_file="target/quickstart/.sidecars/$artifact_hash/$input_fingerprint/source-map.json"
+test -f "$source_map_file"
+
 iroha --config defaults/client.toml \
   contract debug-call \
   --code-file target/quickstart/hello.to \
+  --source-map-file "$source_map_file" \
   --source-file target/quickstart/hello.ko \
   --entrypoint write_detail \
   --payload-json '{}'
 ```
 
 The debugger reports gas use, cycles, syscalls, queued instructions, durable
-state, and source-aware traps. Entrypoints are always selected by name; V1 has
-no implicit `main` or source-order dispatch.
+state, and trap diagnostics. Pass the build's hash-bound source map with
+`--source-map-file` to resolve a trap to source; `--source-file` may accompany
+it to override the sidecar's source path, but cannot be used alone. The
+debugger verifies that the sidecar's `artifact_hash` matches the contract
+artifact before using any locations. Entrypoints are always selected by name;
+V1 has no implicit `main` or source-order dispatch.
 
 ## 4. Start a development network
 

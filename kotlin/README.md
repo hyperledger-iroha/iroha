@@ -8,7 +8,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-20/V4 artifact streaming |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-21/V4 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
 
 ### Consumer usage
@@ -28,6 +28,36 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 // Android wallet with offline payments
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 ```
+
+### Fee quotes and sponsorship
+
+Every transaction payload requires a typed `FeePaymentIntent`. Select the
+authority directly, or bind sponsorship to one exact on-chain program and
+immutable revision:
+
+```kotlin
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
+
+val authorityPaid = FeePaymentIntent.authority(emptyList())
+val sponsored = FeePaymentIntent.sponsor(
+    FeeSponsorProgramId(sponsorAccountId, "wallet_payments"),
+    3,
+    emptyList(),
+)
+```
+
+The empty charge-limit list is only the initial quote draft. Freeze the complete
+unsigned payload, include `fee_payment = requested.toJsonMap()`, and call
+`HttpClientTransport.quoteFees(unsignedPayload, canonicalAuth)`. Verify that the
+response preserved the payer, exact program/revision, and gas bound; replace
+only `fee_payment` with `FeeQuoteResponse.intent`, then sign and submit that same
+payload. Use `getFeeSponsorProgram(programId, canonicalAuth)` to inspect one
+exact lifecycle record before selecting its revision. Contract/IVM drafts must
+include a positive gas bound in the intent.
+
+The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
+rejected. A sponsor rejection never falls back to charging the authority.
 
 ### Torii server-sent events
 
@@ -49,7 +79,7 @@ have a gap.
 
 ### Kagemusha proof artifacts
 
-`core-jvm` exposes the exact ABI-20/V4 typed Kagemusha init, fractional append/change,
+`core-jvm` exposes the exact ABI-21/V4 typed Kagemusha init, fractional append/change,
 verification, and redemption builders through the fixed native surface. It also provides exact
 scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter

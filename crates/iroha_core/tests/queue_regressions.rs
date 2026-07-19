@@ -87,8 +87,12 @@ fn make_transaction(
     ttl: Option<Duration>,
     creation_time: Duration,
 ) -> AcceptedTransaction<'static> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, format!("noop-{nonce}"))]);
+    let mut builder = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, format!("noop-{nonce}"))]);
     if let Some(ttl) = ttl {
         builder.set_ttl(ttl);
     }

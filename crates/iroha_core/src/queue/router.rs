@@ -50,6 +50,7 @@ use iroha_data_model::{
             SubmitZkAceAuthorizedTransfer, Unshield, ZkTransfer,
         },
     },
+    metadata::Metadata,
     musubi::{MusubiNamespace, MusubiPackageId},
     name::Name,
     nexus::{
@@ -59,7 +60,7 @@ use iroha_data_model::{
     permission::Permission,
     smart_contract::ContractAddress,
     sns::{RegisterNameRequestV1, SuffixId},
-    transaction::Executable,
+    transaction::{Executable, signed::TransactionPayload},
 };
 use iroha_executor_data_model::isi::multisig::{
     MultisigApprove, MultisigInstructionBox, MultisigProposalState, MultisigPropose,
@@ -75,9 +76,9 @@ use iroha_executor_data_model::permission::{
     },
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
     nexus::{
-        CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+        CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
-        CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+        CanWithdrawFeeSponsorProgram,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -91,6 +92,115 @@ use thiserror::Error;
 
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
+
+/// Read-only transaction fields consumed by deterministic lane and dataspace routing.
+///
+/// Both accepted transactions and canonical unsigned payloads implement this view so
+/// quote discovery and queue admission execute the same routing code. Signatures and
+/// envelope attachments deliberately do not participate in routing.
+pub trait TransactionRoutingView {
+    /// Return the authority when this entrypoint has one.
+    fn authority_opt(&self) -> Option<&AccountId>;
+
+    /// Return routing metadata when this entrypoint has it.
+    fn metadata(&self) -> Option<&Metadata>;
+
+    /// Return the executable used for native routing inspection.
+    fn executable(&self) -> Option<&Executable>;
+
+    /// Evaluate a predicate over the instruction batch used by matcher rules.
+    fn any_matching_instruction(&self, predicate: &mut dyn FnMut(&dyn Instruction) -> bool)
+    -> bool;
+
+    /// Return the signature-independent hash used for elastic default-lane sharding.
+    fn routing_hash(&self) -> Hash;
+}
+
+impl TransactionRoutingView for AcceptedTransaction<'_> {
+    fn authority_opt(&self) -> Option<&AccountId> {
+        AcceptedTransaction::authority_opt(self)
+    }
+
+    fn metadata(&self) -> Option<&Metadata> {
+        AcceptedTransaction::metadata(self)
+    }
+
+    fn executable(&self) -> Option<&Executable> {
+        match self.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                Some(signed.instructions())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(reveal.signed_transaction().instructions())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
+        }
+    }
+
+    fn any_matching_instruction(
+        &self,
+        predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
+    ) -> bool {
+        match self.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                let Executable::Instructions(batch) = signed.instructions() else {
+                    return false;
+                };
+                batch.iter().any(|instruction| predicate(&**instruction))
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                let Executable::Instructions(batch) = reveal.signed_transaction().instructions()
+                else {
+                    return false;
+                };
+                batch.iter().any(|instruction| predicate(&**instruction))
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                    .is_ok_and(|instruction| predicate(&*instruction))
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+        }
+    }
+
+    fn routing_hash(&self) -> Hash {
+        self.external().map_or_else(
+            || self.hash_as_entrypoint().into(),
+            |signed| HashOf::new(signed.payload()).into(),
+        )
+    }
+}
+
+impl TransactionRoutingView for TransactionPayload {
+    fn authority_opt(&self) -> Option<&AccountId> {
+        Some(&self.authority)
+    }
+
+    fn metadata(&self) -> Option<&Metadata> {
+        Some(&self.metadata)
+    }
+
+    fn executable(&self) -> Option<&Executable> {
+        Some(&self.instructions)
+    }
+
+    fn any_matching_instruction(
+        &self,
+        predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
+    ) -> bool {
+        let Executable::Instructions(batch) = &self.instructions else {
+            return false;
+        };
+        batch.iter().any(|instruction| predicate(&**instruction))
+    }
+
+    fn routing_hash(&self) -> Hash {
+        HashOf::new(self).into()
+    }
+}
 /// Routing decision returned by a [`LaneRouter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RoutingDecision {
@@ -363,7 +473,7 @@ impl RoutingResolveError {
 /// [`evaluate_policy_with_catalog`] when catalog alignment is required.
 pub fn evaluate_policy(
     policy: &LaneRoutingPolicy,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
 ) -> RoutingDecision {
     if let Some(decision) =
         dataspace_scoped_permission_routing_decision(tx, None, None, None).unwrap_or(None)
@@ -391,7 +501,7 @@ pub fn evaluate_policy(
 
 fn fail_closed_policy_route_with_view(
     policy: &LaneRoutingPolicy,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     state_view: &StateView<'_>,
 ) -> RoutingDecision {
     let nexus = state_view.nexus();
@@ -441,7 +551,7 @@ pub fn evaluate_policy_with_catalog(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     if transaction_contains_fx_corridor_settlement(tx)
         && let Some(decision) =
@@ -492,7 +602,7 @@ pub fn evaluate_policy_plan_with_catalog(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     if transaction_contains_fx_corridor_settlement(tx)
         && let Some(decision) =
@@ -544,7 +654,7 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     evaluate_policy_with_catalog_and_world_at_opt(
@@ -562,7 +672,7 @@ pub fn evaluate_policy_with_catalog_and_world_at<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: u64,
 ) -> Result<RoutingDecision, RoutingResolveError> {
@@ -580,7 +690,7 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
@@ -656,7 +766,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     evaluate_policy_plan_with_catalog_and_world_at_opt(
@@ -675,7 +785,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: u64,
 ) -> Result<RoutingPlan, RoutingResolveError> {
@@ -697,7 +807,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
 /// helper therefore fails closed to non-elastic/default routing for no-target default traffic.
 pub fn evaluate_policy_plan_with_nexus_and_world_at<W: WorldReadOnly>(
     nexus: &Nexus,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: u64,
 ) -> Result<RoutingPlan, RoutingResolveError> {
@@ -716,7 +826,7 @@ pub fn evaluate_policy_plan_with_nexus_and_world_at<W: WorldReadOnly>(
 /// time and block height.
 pub fn evaluate_policy_plan_with_nexus_and_world_at_block_height<W: WorldReadOnly>(
     nexus: &Nexus,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: u64,
     block_height: u64,
@@ -739,7 +849,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     world: &W,
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
@@ -811,7 +921,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
 }
 
 fn dataspace_scoped_permission_routing_decision(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     lane_catalog: Option<&LaneCatalog>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
@@ -875,7 +985,7 @@ fn dataspace_scoped_permission_routing_decision(
 }
 
 fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     lane_catalog: Option<&LaneCatalog>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
@@ -942,7 +1052,7 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
 }
 
 fn settlement_routing_decision_without_catalog(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
 ) -> Option<RoutingDecision> {
     if transaction_contains_fx_corridor_settlement(tx) {
         return Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
@@ -953,7 +1063,7 @@ fn settlement_routing_decision_without_catalog(
 }
 
 fn settlement_routing_decision(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
     state_view: Option<&StateView<'_>>,
@@ -967,7 +1077,7 @@ fn settlement_routing_decision(
 }
 
 fn settlement_routing_decision_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
@@ -986,7 +1096,7 @@ fn settlement_routing_decision_with_world<W: WorldReadOnly>(
 }
 
 fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     matched_rule: Option<&LaneRoutingRule>,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
@@ -1312,7 +1422,7 @@ fn asset_definition_requires_universal_coordinator_with_world<W: WorldReadOnly>(
 }
 
 fn settlement_transaction_dataspace_target(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
@@ -1353,7 +1463,7 @@ fn settlement_transaction_dataspace_target(
 }
 
 fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
@@ -1583,7 +1693,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     Ok(None)
 }
 
-fn transaction_contains_fx_corridor_settlement(tx: &AcceptedTransaction<'_>) -> bool {
+fn transaction_contains_fx_corridor_settlement(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
     };
@@ -1602,21 +1712,11 @@ fn transaction_contains_fx_corridor_settlement(tx: &AcceptedTransaction<'_>) -> 
     }
 }
 
-fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx Executable> {
-    match tx.entrypoint() {
-        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
-            Some(signed.instructions())
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => None,
-        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-            Some(reveal.signed_transaction().instructions())
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => None,
-        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
-    }
+fn transaction_executable(tx: &dyn TransactionRoutingView) -> Option<&Executable> {
+    tx.executable()
 }
 
-fn amx_policy_rejects_cross_dataspace(tx: &AcceptedTransaction<'_>) -> bool {
+fn amx_policy_rejects_cross_dataspace(tx: &dyn TransactionRoutingView) -> bool {
     tx.metadata()
         .and_then(|metadata| metadata.get(AMX_POLICY_METADATA_KEY))
         .and_then(|raw| raw.try_into_any_norito::<String>().ok())
@@ -1782,7 +1882,7 @@ fn apply_authority_dataspace_target(
 }
 
 fn transaction_dataspace_routing_target(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
@@ -1791,7 +1891,7 @@ fn transaction_dataspace_routing_target(
 }
 
 fn transaction_dataspace_routing_target_info(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
@@ -1891,7 +1991,7 @@ fn transaction_dataspace_routing_target_info(
 }
 
 fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
@@ -2006,7 +2106,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
 /// route so block commitments can expose deterministic prepare/commit evidence.
 #[allow(dead_code)]
 pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
 ) -> Vec<DataSpaceId> {
@@ -2015,7 +2115,7 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
 }
 
 fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
@@ -2423,7 +2523,7 @@ enum AccountPermissionHolderTarget<'account> {
 }
 
 fn account_permission_holder_routing_target<'tx>(
-    tx: &'tx AcceptedTransaction<'tx>,
+    tx: &'tx dyn TransactionRoutingView,
 ) -> Option<&'tx AccountId> {
     let Some(executable) = transaction_executable(tx) else {
         return None;
@@ -4548,7 +4648,7 @@ fn account_dataspace_target<W: WorldReadOnly>(
 
 fn authority_dataspace_target(
     state_view: Option<&StateView<'_>>,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
 ) -> Option<DataSpaceId> {
     tx.authority_opt().and_then(|authority| {
         account_dataspace_target(
@@ -4561,7 +4661,7 @@ fn authority_dataspace_target(
 
 fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     world: Option<&W>,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     tx.authority_opt()
@@ -5368,9 +5468,19 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
             .is_some(),
-        "CanUseFeeSponsor" => permission
+        "CanManageFeeSponsorProgram" => permission
             .payload()
-            .try_into_any_norito::<CanUseFeeSponsor>()
+            .try_into_any_norito::<CanManageFeeSponsorProgram>()
+            .ok()
+            .is_some(),
+        "CanEnrollFeeSponsorProgram" => permission
+            .payload()
+            .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
+            .ok()
+            .is_some(),
+        "CanWithdrawFeeSponsorProgram" => permission
+            .payload()
+            .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
             .ok()
             .is_some(),
         _ => false,
@@ -5498,9 +5608,9 @@ fn dataspace_scoped_permission_target(
                         state_view,
                     )
                 }),
-            "CanUseFeeSponsor" => permission
+            "CanManageFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanUseFeeSponsor>()
+                .try_into_any_norito::<CanManageFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
                     account_dataspace_target(
@@ -5509,19 +5619,27 @@ fn dataspace_scoped_permission_target(
                         state_view.map(state_view_ledger_time_ms),
                     )
                 }),
-            "CanUseFeeSponsorForAccount" => permission
+            "CanEnrollFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanUseFeeSponsorForAccount>()
+                .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
-                    domain_dataspace_target_with_state(&token.domain, dataspace_catalog, state_view)
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &token.program_id.sponsor,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
                 }),
-            "CanEnrollFeeSponsorPolicyForAccountDomain" => permission
+            "CanWithdrawFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanEnrollFeeSponsorPolicyForAccountDomain>()
+                .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
-                    domain_dataspace_target_with_state(&token.domain, dataspace_catalog, state_view)
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &token.program_id.sponsor,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
                 }),
             _ => None,
         };
@@ -5678,36 +5796,26 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         ledger_time_ms,
                     )
                 }),
-            "CanUseFeeSponsor" => permission
+            "CanManageFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanUseFeeSponsor>()
+                .try_into_any_norito::<CanManageFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
                     account_dataspace_target(Some(world), &token.sponsor, ledger_time_ms)
                 }),
-            "CanUseFeeSponsorForAccount" => permission
+            "CanEnrollFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanUseFeeSponsorForAccount>()
+                .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
-                    domain_dataspace_target_with_world(
-                        &token.domain,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
+                    account_dataspace_target(Some(world), &token.program_id.sponsor, ledger_time_ms)
                 }),
-            "CanEnrollFeeSponsorPolicyForAccountDomain" => permission
+            "CanWithdrawFeeSponsorProgram" => permission
                 .payload()
-                .try_into_any_norito::<CanEnrollFeeSponsorPolicyForAccountDomain>()
+                .try_into_any_norito::<CanWithdrawFeeSponsorProgram>()
                 .ok()
                 .and_then(|token| {
-                    domain_dataspace_target_with_world(
-                        &token.domain,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
+                    account_dataspace_target(Some(world), &token.program_id.sponsor, ledger_time_ms)
                 }),
             _ => None,
         };
@@ -5765,7 +5873,7 @@ fn instruction_dataspace_scoped_permission_target_needs_state(
     false
 }
 
-fn dataspace_scoped_permission_routing_requires_state(tx: &AcceptedTransaction<'_>) -> bool {
+fn dataspace_scoped_permission_routing_requires_state(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
     };
@@ -6017,8 +6125,8 @@ pub(crate) fn routable_lane_ids_for_nexus_at_height(
     lane_ids
 }
 
-fn default_route_shard_index(tx: &AcceptedTransaction<'_>, lane_count: usize) -> usize {
-    let hash = tx.hash();
+fn default_route_shard_index(tx: &dyn TransactionRoutingView, lane_count: usize) -> usize {
+    let hash = tx.routing_hash();
     let mut bytes = [0_u8; core::mem::size_of::<u64>()];
     bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
     let shard = u64::from_le_bytes(bytes);
@@ -6029,7 +6137,7 @@ fn resolve_default_routing_decision(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: Option<&AcceptedTransaction<'_>>,
+    tx: Option<&dyn TransactionRoutingView>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     if lane_catalog
@@ -6091,7 +6199,7 @@ fn resolve_policy_routing_plan(
     mut target: TransactionDataspaceTarget,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: Option<&AcceptedTransaction<'_>>,
+    tx: Option<&dyn TransactionRoutingView>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     add_smart_contract_deploy_policy_participant(&mut target, matched_rule);
@@ -6186,7 +6294,7 @@ fn resolve_policy_routing_decision(
     target_is_coordinator_route: bool,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    tx: Option<&AcceptedTransaction<'_>>,
+    tx: Option<&dyn TransactionRoutingView>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     if target_is_coordinator_route && target_dataspace == Some(DataSpaceId::UNIVERSAL) {
@@ -6395,7 +6503,7 @@ fn legacy_single_lane_for_dataspace(
 
 fn rule_matches(
     rule: &LaneRoutingRule,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
     let matcher = &rule.matcher;
@@ -6419,7 +6527,7 @@ fn rule_matches(
 
 fn rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
@@ -6599,7 +6707,7 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
 
 fn instructions_match(
     matcher: &str,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
@@ -6611,42 +6719,14 @@ fn instructions_match(
         return false;
     }
 
-    match tx.entrypoint() {
-        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
-            let executable = signed.instructions();
-            let Executable::Instructions(batch) = executable else {
-                return false;
-            };
-
-            batch.iter().any(|instruction| {
-                instruction_matches(matcher_label, destination_scope, &**instruction, state_view)
-            })
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => false,
-        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-            let executable = reveal.signed_transaction().instructions();
-            let Executable::Instructions(batch) = executable else {
-                return false;
-            };
-
-            batch.iter().any(|instruction| {
-                instruction_matches(matcher_label, destination_scope, &**instruction, state_view)
-            })
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-            crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                .map(|instruction| {
-                    instruction_matches(matcher_label, destination_scope, &*instruction, state_view)
-                })
-                .unwrap_or(false)
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
-    }
+    tx.any_matching_instruction(&mut |instruction| {
+        instruction_matches(matcher_label, destination_scope, instruction, state_view)
+    })
 }
 
 fn instructions_match_with_world<W: WorldReadOnly>(
     matcher: &str,
-    tx: &AcceptedTransaction<'_>,
+    tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
@@ -6660,58 +6740,16 @@ fn instructions_match_with_world<W: WorldReadOnly>(
         return false;
     }
 
-    match tx.entrypoint() {
-        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
-            let executable = signed.instructions();
-            let Executable::Instructions(batch) = executable else {
-                return false;
-            };
-
-            batch.iter().any(|instruction| {
-                instruction_matches_with_world(
-                    matcher_label,
-                    destination_scope,
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            })
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => false,
-        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-            let executable = reveal.signed_transaction().instructions();
-            let Executable::Instructions(batch) = executable else {
-                return false;
-            };
-
-            batch.iter().any(|instruction| {
-                instruction_matches_with_world(
-                    matcher_label,
-                    destination_scope,
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            })
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-            crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                .map(|instruction| {
-                    instruction_matches_with_world(
-                        matcher_label,
-                        destination_scope,
-                        &*instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                })
-                .unwrap_or(false)
-        }
-        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
-    }
+    tx.any_matching_instruction(&mut |instruction| {
+        instruction_matches_with_world(
+            matcher_label,
+            destination_scope,
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )
+    })
 }
 
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
@@ -7059,7 +7097,7 @@ fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
 /// Strategy object that derives lane/dataspace assignments for queued transactions.
 pub trait LaneRouter: Send + Sync + 'static {
     /// Route the given transaction without requiring a state snapshot.
-    fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision;
+    fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision;
 
     /// Route the given transaction using an already acquired state view.
     ///
@@ -7067,7 +7105,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// [`LaneRouter::route_without_state`].
     fn route_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         _state_view: &StateView<'_>,
     ) -> RoutingDecision {
         self.route(tx)
@@ -7077,7 +7115,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     ///
     /// The default implementation prefers [`LaneRouter::route_without_state`]
     /// and only falls back to taking a short-lived [`StateView`] when needed.
-    fn route_with_state(&self, tx: &AcceptedTransaction<'_>, state: &State) -> RoutingDecision {
+    fn route_with_state(&self, tx: &dyn TransactionRoutingView, state: &State) -> RoutingDecision {
         if let Some(decision) = self.route_without_state(tx) {
             return decision;
         }
@@ -7089,14 +7127,14 @@ pub trait LaneRouter: Send + Sync + 'static {
     ///
     /// Routers that do not depend on dynamic world-state can override this to
     /// avoid taking a full [`StateView`] in hot requeue paths.
-    fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+    fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
         Some(self.route(tx))
     }
 
     /// Route the given transaction and return deterministic route-resolution errors.
     fn try_route(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         Ok(self.route(tx))
     }
@@ -7104,7 +7142,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Route with an existing state view and return deterministic route-resolution errors.
     fn try_route_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         Ok(self.route_with_view(tx, state_view))
@@ -7113,7 +7151,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Route with narrow state access and return deterministic route-resolution errors.
     fn try_route_with_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state: &State,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         if let Some(decision) = self.try_route_without_state(tx)? {
@@ -7126,7 +7164,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Route without state snapshot when possible and return deterministic route errors.
     fn try_route_without_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         Ok(self.route_without_state(tx))
     }
@@ -7134,7 +7172,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Build the full routing plan for a transaction and return deterministic errors.
     fn try_route_plan(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         self.try_route(tx)
             .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator)))
@@ -7143,7 +7181,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Build the full routing plan with an existing state view.
     fn try_route_plan_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         self.try_route_with_view(tx, state_view)
@@ -7153,7 +7191,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Build the full routing plan with narrow state access when possible.
     fn try_route_plan_with_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         if let Some(plan) = self.try_route_plan_without_state(tx)? {
@@ -7166,7 +7204,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     /// Build the full routing plan without state when possible.
     fn try_route_plan_without_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
         Ok(self
             .try_route_without_state(tx)?
@@ -7187,7 +7225,7 @@ impl SingleLaneRouter {
 }
 
 impl LaneRouter for SingleLaneRouter {
-    fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+    fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     }
 }
@@ -7217,7 +7255,7 @@ impl ConfigLaneRouter {
 
     fn catalog_only_routing_decision(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
@@ -7240,13 +7278,13 @@ impl ConfigLaneRouter {
 }
 
 impl LaneRouter for ConfigLaneRouter {
-    fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+    fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision {
         evaluate_policy(&self.policy, tx)
     }
 
     fn route_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state_view: &StateView<'_>,
     ) -> RoutingDecision {
         self.try_route_with_view(tx, state_view)
@@ -7259,13 +7297,13 @@ impl LaneRouter for ConfigLaneRouter {
             })
     }
 
-    fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+    fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
         self.try_route_without_state(tx).ok().flatten()
     }
 
     fn try_route(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         if transaction_contains_fx_corridor_settlement(tx)
             && let Some(decision) = settlement_routing_decision(
@@ -7326,7 +7364,7 @@ impl LaneRouter for ConfigLaneRouter {
 
     fn try_route_plan(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         if transaction_contains_fx_corridor_settlement(tx)
             && let Some(decision) = settlement_routing_decision(
@@ -7395,7 +7433,7 @@ impl LaneRouter for ConfigLaneRouter {
 
     fn try_route_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         let nexus = state_view.nexus();
@@ -7466,7 +7504,7 @@ impl LaneRouter for ConfigLaneRouter {
 
     fn try_route_plan_with_view(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = state_view.nexus();
@@ -7545,7 +7583,7 @@ impl LaneRouter for ConfigLaneRouter {
 
     fn try_route_without_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         // The governed corridor registry is state-backed; defer instead of failing before the
         // caller can retry with a state view.
@@ -7590,7 +7628,7 @@ impl LaneRouter for ConfigLaneRouter {
 
     fn try_route_plan_without_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
         // Participant dataspaces come from the governed corridor registry.
         if transaction_contains_fx_corridor_settlement(tx) {
@@ -7636,7 +7674,7 @@ impl LaneRouter for ConfigLaneRouter {
 impl ConfigLaneRouter {
     fn authority_scope_routing_requires_state(
         &self,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
     ) -> Result<bool, RoutingResolveError> {
         if tx.authority_opt().is_none() || account_permission_holder_routing_target(tx).is_some() {
             return Ok(false);
@@ -7696,7 +7734,7 @@ fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
     account_needs_state || instruction_needs_state
 }
 
-fn transaction_target_routing_requires_state(tx: &AcceptedTransaction<'_>) -> bool {
+fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
     };
@@ -7761,9 +7799,8 @@ mod tests {
             CanResolveAccountAlias,
         },
         nexus::{
-            CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
-            CanPublishSpaceDirectoryManifestForAccountDomain,
-            CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+            CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
+            CanPublishSpaceDirectoryManifestForUaid,
         },
         trigger::CanRegisterTrigger,
     };
@@ -7817,10 +7854,14 @@ mod tests {
         metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("chain");
-        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions(instructions)
-            .with_metadata(metadata)
-            .sign(signer);
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata)
+        .sign(signer);
         let default_limits = TransactionParameters::default();
         let params = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -7858,17 +7899,20 @@ mod tests {
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
         executable: iroha_data_model::transaction::Executable,
-        mut metadata: Metadata,
+        metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("chain");
-        metadata.insert(
-            "gas_limit".parse().expect("gas_limit key"),
-            iroha_primitives::json::Json::new(10_000_u64),
-        );
-        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(executable)
-            .with_metadata(metadata)
-            .sign(signer);
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(10_000),
+            ),
+        )
+        .with_executable(executable)
+        .with_metadata(metadata)
+        .sign(signer);
         let default_limits = TransactionParameters::default();
         let params = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -14287,7 +14331,7 @@ mod tests {
 
     fn fx_route_plan_results(
         router: &ConfigLaneRouter,
-        tx: &AcceptedTransaction<'_>,
+        tx: &dyn TransactionRoutingView,
         corridor: FxCorridorPolicy,
         world: crate::state::World,
     ) -> (
@@ -17313,104 +17357,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_fee_sponsor_permissions_route_by_embedded_domain_without_state() {
-        let (registrar_id, registrar_keypair) = gen_account_in("registrar");
-        let (beneficiary_id, _) = gen_account_in("retail-beneficiary");
-        let (sponsor_id, _) = gen_account_in("sponsor");
-        let dataspace = DataSpaceId::new(10);
-        let lane = LaneId::new(3);
-        let domain = DomainId::try_new("hbl", "sbp").expect("HBL retail domain");
-        let policy_name: Name = "retail".parse().expect("retail sponsor policy");
-        let dataspace_catalog = dataspace_catalog(&[(dataspace, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane, dataspace),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy::default(),
-            dataspace_catalog,
-            lane_catalog,
-        );
-        let expected = RoutingDecision::new(lane, dataspace);
-
-        let exact_use = CanUseFeeSponsorForAccount {
-            sponsor: sponsor_id.clone(),
-            policy: policy_name.clone(),
-            beneficiary: beneficiary_id.clone(),
-            domain: domain.clone(),
-        };
-        let exact_use_grant = sample_transaction(
-            &registrar_id,
-            registrar_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                exact_use.clone(),
-                beneficiary_id.clone(),
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&exact_use_grant)
-                .expect("exact sponsor-use grant routing should resolve from catalog"),
-            Some(expected),
-        );
-
-        let exact_use_revoke = sample_transaction(
-            &registrar_id,
-            registrar_keypair.private_key(),
-            vec![InstructionBox::from(Revoke::account_permission(
-                exact_use,
-                beneficiary_id,
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&exact_use_revoke)
-                .expect("exact sponsor-use revoke routing should resolve from catalog"),
-            Some(expected),
-        );
-
-        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: sponsor_id.clone(),
-            policy: policy_name.clone(),
-            domain: domain.clone(),
-        };
-        let enrollment_grant = sample_transaction(
-            &registrar_id,
-            registrar_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                enrollment,
-                registrar_id.clone(),
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&enrollment_grant)
-                .expect("domain enrollment grant routing should resolve from catalog"),
-            Some(expected),
-        );
-
-        let enrollment_role: RoleId = "hbl_sponsor_enrollers".parse().expect("role id");
-        let enrollment_role_grant = sample_transaction(
-            &registrar_id,
-            registrar_keypair.private_key(),
-            vec![InstructionBox::from(Grant::role_permission(
-                CanEnrollFeeSponsorPolicyForAccountDomain {
-                    sponsor: sponsor_id,
-                    policy: policy_name,
-                    domain,
-                },
-                enrollment_role,
-            ))],
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&enrollment_role_grant)
-                .expect("role enrollment permission should route from its exact domain"),
-            Some(expected),
-        );
-    }
-
-    #[test]
     fn space_directory_manifest_writes_route_by_manifest_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace = DataSpaceId::new(10);
@@ -18619,284 +18565,6 @@ mod tests {
                 .try_route_plan_with_state(&tx, &state)
                 .expect("state routing should use committed nexus policy")
                 .coordinator_route(),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-
-    #[test]
-    fn fee_sponsor_account_permission_grant_routes_to_holder_single_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let (sponsor_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                CanUseFeeSponsor {
-                    sponsor: sponsor_id,
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                },
-                holder_id.clone(),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog.clone();
-        let state_view = state.view();
-        let expected = RoutingDecision::new(lane_id, dataspace_id);
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("fee sponsor grants should defer without account scope state"),
-            None
-        );
-        assert_eq!(
-            router.route_without_state(&tx),
-            None,
-            "unchecked queue routing must also defer without account scope state"
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state_view)
-                .expect("state-view routing should use holder account scope"),
-            expected
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_state(&tx, &state)
-                .expect("state-backed routing plan should use holder account scope")
-                .coordinator_route(),
-            expected
-        );
-        assert_eq!(
-            evaluate_policy_with_catalog_and_world(
-                &policy,
-                &lane_catalog,
-                &state_view.nexus().dataspace_catalog,
-                &tx,
-                state_view.world(),
-            )
-            .expect("validation routing should use holder account scope"),
-            expected
-        );
-    }
-
-    #[test]
-    fn fee_sponsor_account_permission_grant_routes_to_sponsor_scope_for_new_holder() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("new-retail-holder");
-        let (sponsor_id, _) = gen_account_in("wonderland-sponsor");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                },
-                holder_id,
-            ))],
-        );
-        let mut sponsor_scope =
-            crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        sponsor_scope.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(sponsor_id, sponsor_scope)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog.clone();
-        let state_view = state.view();
-        let expected = RoutingDecision::new(lane_id, dataspace_id);
-
-        assert_eq!(
-            router
-                .try_route_plan_without_state(&tx)
-                .expect("fee sponsor grants should defer without sponsor scope state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state_view)
-                .expect("state-view routing should use sponsor account scope"),
-            expected
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_state(&tx, &state)
-                .expect("state-backed routing plan should use sponsor account scope")
-                .coordinator_route(),
-            expected
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                &lane_catalog,
-                &state_view.nexus().dataspace_catalog,
-                &tx,
-                state_view.world(),
-            )
-            .expect("validation routing should use sponsor account scope")
-            .coordinator_route(),
-            expected
-        );
-    }
-
-    #[test]
-    fn fee_sponsor_account_permission_grant_prefers_sponsor_scope_over_holder_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("retail-holder");
-        let (sponsor_id, _) = gen_account_in("cbuae-sponsor");
-        let holder_dataspace = DataSpaceId::new(10);
-        let sponsor_dataspace = DataSpaceId::new(11);
-        let holder_lane = LaneId::new(3);
-        let sponsor_lane = LaneId::new(4);
-        let catalog = dataspace_catalog(&[(holder_dataspace, "sbp"), (sponsor_dataspace, "cbuae")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (holder_lane, holder_dataspace),
-            (sponsor_lane, sponsor_dataspace),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                },
-                holder_id.clone(),
-            ))],
-        );
-        let mut holder_scope = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        holder_scope.ensure_dataspace(holder_dataspace);
-        let mut sponsor_scope =
-            crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        sponsor_scope.ensure_dataspace(sponsor_dataspace);
-        let state = state_with_account_scope_entries(
-            &[(holder_id, holder_scope), (sponsor_id, sponsor_scope)],
-            catalog,
-        );
-        state.nexus.write().lane_catalog = lane_catalog;
-        let expected = RoutingDecision::new(sponsor_lane, sponsor_dataspace);
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("fee sponsor grants should defer without account scope state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("state-view routing should prefer sponsor account scope"),
-            expected
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_state(&tx, &state)
-                .expect("state-backed routing plan should prefer sponsor account scope")
-                .coordinator_route(),
-            expected
-        );
-        assert_eq!(
-            evaluate_policy_plan_with_catalog_and_world(
-                &policy,
-                router.lane_catalog.as_ref(),
-                &state.view().nexus().dataspace_catalog,
-                &tx,
-                state.view().world(),
-            )
-            .expect("validation routing should prefer sponsor account scope")
-            .coordinator_route(),
-            expected
-        );
-    }
-
-    #[test]
-    fn account_permission_query_ignores_instruction_rule_but_uses_state_scope_fallback() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (holder_id, _) = gen_account_in("wonderland");
-        let (sponsor_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(1),
-                dataspace: None,
-                matcher: LaneRoutingMatcher {
-                    account: None,
-                    instruction: Some("grant::permission".to_string()),
-                    description: None,
-                },
-            }],
-        };
-        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-        let tx = sample_transaction(
-            &submitter_id,
-            submitter_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                CanUseFeeSponsor {
-                    sponsor: sponsor_id,
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                },
-                holder_id.clone(),
-            ))],
-        );
-        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
-        scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = lane_catalog;
-        let state_view = state.view();
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("instruction-only query route should defer without account scope state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state_view)
-                .expect("instruction matcher should be ignored for account-permission query route"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

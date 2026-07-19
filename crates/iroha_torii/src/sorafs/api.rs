@@ -12911,11 +12911,34 @@ async fn submit_appeal_finance_deposit_settlement_step(
         Ok(instruction) => instruction,
         Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
     };
-    let mut builder =
-        TransactionBuilder::new((*state.chain_id).clone(), step.required_authority.clone())
-            .with_instructions([instruction]);
+    let mut builder = TransactionBuilder::new(
+        (*state.chain_id).clone(),
+        step.required_authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction]);
     builder.set_ttl(Duration::from_secs(300));
-    let tx = match builder.try_sign(key_pair.private_key()) {
+    let mut payload = match builder.into_payload() {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build SoraFS appeal finance settlement payload: {err}"),
+            ));
+        }
+    };
+    payload.fee_payment = match crate::quote_internal_fee_payment(&state, &payload) {
+        Ok(intent) => intent,
+        Err(err) => {
+            return Err(json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("failed to quote SoraFS appeal finance settlement fees: {err}"),
+            ));
+        }
+    };
+    let tx = match TransactionBuilder::from_payload(payload)
+        .and_then(|builder| builder.try_sign(key_pair.private_key()))
+    {
         Ok(tx) => tx,
         Err(err) => {
             return Err(json_error(

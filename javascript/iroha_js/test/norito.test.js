@@ -26,9 +26,18 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
   },
 });
 const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const MULTISIG_SIGNER_ID =
+  "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y";
 
 function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function authorityFeePayment(gasLimit = null) {
+  return {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: gasLimit },
+  };
 }
 
 function noncanonicalStandardBase64PadBitAlias(encoded) {
@@ -950,14 +959,14 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
       Asset: {
         source: sourceAssetId,
         object: "7",
-        destination: ACCOUNT_ID,
+        destination: MULTISIG_SIGNER_ID,
       },
     },
   };
   const request = {
     multisig_account_alias: "cbdc@hbl.sbp",
-    signer_account_id: ACCOUNT_ID,
-    fee_sponsor: "sponsor@sbp",
+    signer_account_id: MULTISIG_SIGNER_ID,
+    fee_payment: authorityFeePayment(),
     validation_fee_policy_version: "7",
     validation_fee_policy_hash: "ab".repeat(32),
     validation_fee_instruction_index: "1",
@@ -982,7 +991,7 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
-    "fee_sponsor",
+    "fee_payment",
     "memo",
     "validation_fee_policy_version",
     "validation_fee_policy_hash",
@@ -1088,7 +1097,8 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
 test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
   const request = {
     multisig_account_alias: "cbdc@hbl.sbp",
-    signer_account_id: ACCOUNT_ID,
+    signer_account_id: MULTISIG_SIGNER_ID,
+    fee_payment: authorityFeePayment(),
     instructions: [
       {
         Transfer: {
@@ -1187,7 +1197,8 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
 test("native multisig proposal DTO preserves native instruction frames without JS schema entries", () => {
   const request = {
     multisig_account_alias: "cbdc@hbl.sbp",
-    signer_account_id: ACCOUNT_ID,
+    signer_account_id: MULTISIG_SIGNER_ID,
+    fee_payment: authorityFeePayment(),
     instructions: [
       {
         Unregister: {
@@ -1213,8 +1224,9 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
       () =>
         noritoEncodeMultisigProposeRequest({
           multisig_account_alias: "cbdc@hbl.sbp",
-          signer_account_id: ACCOUNT_ID,
+          signer_account_id: MULTISIG_SIGNER_ID,
           signature_b64,
+          fee_payment: authorityFeePayment(),
           instructions: [
             {
               Unregister: {
@@ -1229,11 +1241,12 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
       () =>
         noritoEncodeMultisigContractCallProposeRequest({
           multisig_account_alias: "cbdc@hbl.sbp",
-          signer_account_id: ACCOUNT_ID,
+          signer_account_id: MULTISIG_SIGNER_ID,
           signature_b64,
           contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           entrypoint: "execute",
           payload: { probe: true },
+          fee_payment: authorityFeePayment(10_000),
         }),
       /exact standard-base64/,
     );
@@ -1241,9 +1254,10 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
       () =>
         noritoEncodeMultisigContractCallApproveRequest({
           multisig_account_alias: "cbdc@hbl.sbp",
-          signer_account_id: ACCOUNT_ID,
+          signer_account_id: MULTISIG_SIGNER_ID,
           signature_b64,
           instructions_hash: "aa".repeat(32),
+          fee_payment: authorityFeePayment(),
         }),
       /exact standard-base64/,
     );

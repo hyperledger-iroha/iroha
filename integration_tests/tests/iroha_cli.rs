@@ -1109,19 +1109,20 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("IVM transactions require transaction metadata `gas_limit`"),
+        stderr.contains("IVM transactions require a signature-bound gas limit")
+            && stderr.contains("--gas-limit <u64>"),
         "unexpected stderr: {stderr}"
     );
     assert!(
         !stderr.contains("Connection refused"),
-        "CLI should reject missing gas_limit before any network call: {stderr}"
+        "CLI should reject a missing typed gas limit before any network call: {stderr}"
     );
 
     Ok(())
 }
 
 #[test]
-fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyre::Result<()> {
+fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
 
     let dir = tempfile::tempdir()?;
@@ -1158,8 +1159,8 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyr
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.contains("require transaction metadata `gas_limit`"),
-        "CLI should accept --gas-limit and skip local missing-metadata rejection: {stderr}"
+        !stderr.contains("require a signature-bound gas limit"),
+        "CLI should accept --gas-limit and construct the typed fee intent: {stderr}"
     );
     assert!(
         stderr.contains("Failed to submit an IVM transaction"),

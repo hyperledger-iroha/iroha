@@ -13,7 +13,8 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     transaction::{
-        Executable, IvmBytecode, SignedTransaction, TransactionBuilder, signed::TransactionPayload,
+        Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
+        signed::TransactionPayload,
     },
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -45,6 +46,7 @@ struct PayloadSpec {
     executable: Value,
     time_to_live_ms: Option<u64>,
     nonce: Option<u32>,
+    fee_payment: FeePaymentIntent,
     metadata: Option<BTreeMap<String, Value>>,
 }
 
@@ -98,7 +100,8 @@ impl PayloadSpec {
         let authority = AccountId::parse_encoded(&self.authority)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|_| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(chain_id, authority.clone());
+        let mut builder =
+            TransactionBuilder::new(chain_id, authority.clone(), self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if let Some(ttl_ms) = self.time_to_live_ms {
             builder.set_ttl(Duration::from_millis(ttl_ms));
@@ -492,6 +495,7 @@ mod tests {
             },
             time_to_live_ms: Some(3500),
             nonce: Some(17),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: None,
         };
         let builder = payload.to_builder().expect("builder");

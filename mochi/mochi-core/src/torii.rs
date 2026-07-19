@@ -617,6 +617,7 @@ fn build_lane_lifecycle_transaction(
     let mut builder = TransactionBuilder::new(
         ChainId::from(chain_id.to_owned()),
         signer.account_id().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([SetParameter::new(Parameter::Custom(custom))]);
     builder.set_ttl(SMOKE_TTL);
@@ -644,8 +645,12 @@ fn build_readiness_smoke_transaction(
         .expect("readiness smoke metadata key is valid");
     let value = Json::new(format!("{now_ms}:{attempt}"));
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
-    let mut builder = TransactionBuilder::new(chain_id, signer.account_id().clone())
-        .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
+    let mut builder = TransactionBuilder::new(
+        chain_id,
+        signer.account_id().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
 
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
@@ -6024,7 +6029,11 @@ mod tests {
 
     fn sample_block() -> SignedBlock {
         let chain: ChainId = "mochi-block-stream".parse().expect("chain id");
-        let mut builder = TransactionBuilder::new(chain.clone(), ALICE_ID.clone());
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_secs(42));
         let builder = builder.with_instructions(core::iter::empty::<InstructionBox>());
         let tx = builder.sign(ALICE_KEYPAIR.private_key());
@@ -7579,9 +7588,13 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "mochi-test".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
         let versioned = tx.encode_versioned();
 
         let client = ToriiClient::new(format!("http://{addr}")).expect("client");

@@ -312,13 +312,7 @@ class _MockState:
                     "per_byte_fee": "0",
                     "per_instruction_fee": "0",
                     "per_gas_unit_fee": "0",
-                    "sponsorship_enabled": False,
-                    "sponsor_max_fee": "0",
-                    "sponsor_verified_balance_safety_floor": "0",
-                    "canonical_sponsor_account_id": None,
-                    "fee_receipts_activation_height": 0,
-                    "external_settlement_enabled": False,
-                    "burn_from_unix_timestamp_ms": 0,
+                    "sponsor_vault_custody_account_id": "",
                     "settlement_mode": "direct",
                     "successful_claim_fee_exempt_authorities": [],
                 },
@@ -583,6 +577,7 @@ class _MockState:
             raise ValueError("SCCP bridge submit payload must be an object")
         common = {
             "authority",
+            "fee_payment",
             "signature_b64",
             "transaction_payload_b64",
             "creation_time_ms",
@@ -598,8 +593,13 @@ class _MockState:
         unknown = next((field for field in payload if field not in allowed), None)
         if unknown is not None:
             raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
-        if "authority" not in payload or required not in payload:
-            raise ValueError(f"authority and {required} are required")
+        if "authority" not in payload or "fee_payment" not in payload or required not in payload:
+            raise ValueError(f"authority, fee_payment, and {required} are required")
+        from .client import ToriiClient
+
+        ToriiClient._normalize_fee_payment_intent(
+            payload["fee_payment"], context="SCCP bridge submit fee_payment"
+        )
         signed = "signature_b64" in payload
         if signed != ("transaction_payload_b64" in payload):
             raise ValueError(
@@ -1083,9 +1083,12 @@ class _MockState:
                 raise ValueError(f"contract call payload missing '{key}'")
         if ("contract_address" in payload) == ("contract_alias" in payload):
             raise ValueError("contract call payload must include exactly one of contract_address or contract_alias")
-        gas_limit = payload.get("gas_limit")
+        fee_payment = payload.get("fee_payment")
+        if not isinstance(fee_payment, dict) or not isinstance(fee_payment.get("value"), dict):
+            raise ValueError("contract call payload missing 'fee_payment'")
+        gas_limit = fee_payment["value"].get("gas_limit")
         if not isinstance(gas_limit, int) or isinstance(gas_limit, bool) or gas_limit <= 0:
-            raise ValueError("contract call payload missing 'gas_limit'")
+            raise ValueError("contract call fee_payment missing positive 'gas_limit'")
         response = dict(self.contract_call_response)
         tx_hash_hex = response.get("tx_hash_hex")
         if isinstance(tx_hash_hex, str):
@@ -1106,8 +1109,7 @@ class _MockState:
                 "entrypoint_hash_hex": response.get("entrypoint_hash_hex"),
                 "gas_limit": gas_limit,
                 "gas_used": None,
-                "gas_asset_id": payload.get("gas_asset_id"),
-                "fee_sponsor": payload.get("fee_sponsor"),
+                "fee_payment": fee_payment,
                 "payload_digest_hex": "00" * 32,
             },
         )

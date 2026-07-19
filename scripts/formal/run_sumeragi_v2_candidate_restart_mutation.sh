@@ -130,6 +130,8 @@ run_green restart-signature "$RESTART_MODULE" crash_replay_signature_fixed.cfg
 run_green restart-body "$RESTART_MODULE" crash_replay_body_fixed.cfg
 run_green restart-application "$RESTART_MODULE" \
   crash_replay_application_fixed.cfg
+run_mutant restart-signature-volatile "$RESTART_MODULE" \
+  crash_replay_signature_volatile_bug.cfg VolatileSignatureProgressWitness
 run_mutant restart-signature-drop "$RESTART_MODULE" \
   crash_replay_signature_drop_bug.cfg DurableWorkHasReplayOrRecovery
 run_mutant restart-body-drop "$RESTART_MODULE" \
@@ -200,7 +202,7 @@ run_mutant ingress-class-runtime-commit-response "$INGRESS_CLASS_MODULE" \
   RuntimeProgressClassAligned
 
 echo "[tlc] exact candidate identity distinguishes context, view, generation, payload, evidence, work, body, manifest, and commitment and coalesces an identical occurrence"
-echo "[tlc] compact crash/replay reconstruction retains signature, body, and application negative controls without preserving the obsolete exclusive RestartReplay order"
+echo "[tlc] compact crash/replay reconstruction replaces the volatile signature witness with exact crash authority and retains body and application negative controls without preserving the obsolete exclusive RestartReplay order"
 echo "[tlc] stale-generation completion and dropped reconstruction mutants fail their named invariants"
 echo "[tlc] exact outer Progress and runtime Progress/Normal/bypass partitions reject every single-family mutation"
-echo "[tlc] 6 repaired cases passed; 38 mutants failed their named invariants"
+echo "[tlc] 6 repaired cases passed; 39 mutants failed their named invariants"

@@ -683,6 +683,8 @@ fn saturating_duration_add(left: Duration, right: Duration) -> Duration {
 }
 
 fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let owner = V2StatusOwner::from_status(&status);
     let watchdog_threshold = latest_v2_effect_status()
         .filter(|effect_status| {
@@ -714,6 +716,8 @@ pub fn set_v2_status(status: SumeragiV2Status) {
 
 /// Publish the latest local effect/runtime ownership snapshot.
 pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let owner = V2StatusOwner {
         height_context_id: status.height_context_id,
         height: status.height,
@@ -761,6 +765,8 @@ pub(crate) fn set_v2_effect_completion_observer<T>(
 ) where
     T: V2IoCompletionQueueObserver + 'static,
 {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let observer = Arc::clone(observer);
     let observer: Arc<dyn V2IoCompletionQueueObserver> = observer;
     *SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER
@@ -854,6 +860,8 @@ fn update_v2_successor_work_stage_at(
     stage: SumeragiV2LocalWorkStage,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let Some(mut status) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -958,6 +966,8 @@ fn activate_v2_successor_height_at(
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
 
     // Validate the predecessor and publish Complete before replacing it with
@@ -980,6 +990,8 @@ fn activate_recovered_v2_successor_height_at(
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
     if let Some(published) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -1040,6 +1052,8 @@ pub(crate) fn set_v2_network_ingress(
     height: u64,
     ingress: &Arc<FairV2Ingress>,
 ) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     *SUMERAGI_V2_NETWORK_INGRESS
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -1151,6 +1165,7 @@ fn overlay_v2_effect_status(
                 | SumeragiV2QueueKind::RuntimeProgress
                 | SumeragiV2QueueKind::RuntimeCompletion
                 | SumeragiV2QueueKind::EffectCompletion
+                | SumeragiV2QueueKind::EffectDispatch
         )
     });
     for (queue, snapshot) in [
@@ -1160,6 +1175,10 @@ fn overlay_v2_effect_status(
         (
             SumeragiV2QueueKind::EffectCompletion,
             effect_status.effect_completion_queue,
+        ),
+        (
+            SumeragiV2QueueKind::EffectDispatch,
+            effect_status.effect_dispatch_queue,
         ),
     ] {
         let oldest_age = (snapshot.depth != 0).then(|| {
@@ -1228,10 +1247,15 @@ fn quorum_is_complete(quorum: &SumeragiV2VoteQuorumStatus) -> bool {
 
 fn queue_is_starved(queue: &SumeragiV2QueueStatus) -> bool {
     // `Ingress` is the retained semantic-admission/equivocation table, not a
-    // serviceable queue. Queue age remains useful context, but only eligible
-    // service debt can prove that reserved work repeatedly lost dispatch.
-    queue.queue != SumeragiV2QueueKind::Ingress
-        && queue.depth != 0
+    // serviceable queue. `EffectDispatch` is a reserved strict FIFO attempted
+    // before the runtime advances; pending-work exhaustion makes its head
+    // temporarily ineligible rather than scheduler-starved. Queue age remains
+    // useful context, but only genuine eligible-skip debt can prove that
+    // reserved work repeatedly lost dispatch.
+    !matches!(
+        queue.queue,
+        SumeragiV2QueueKind::Ingress | SumeragiV2QueueKind::EffectDispatch
+    ) && queue.depth != 0
         && queue.service_debt >= FAIR_SERVICE_CLASS_COUNT
 }
 
@@ -1312,6 +1336,42 @@ fn classify_v2_liveness_blocker(
         return SumeragiV2LivenessBlocker::SchedulerStarvation;
     }
 
+    // A durable current-view timeout intent retires local proposal/Prepare
+    // ownership and prevents fresh lock acquisition in that view. The reducer
+    // may still report its pre-timeout Prepare phase while it collects the
+    // timeout quorum, so phase alone is no longer the active progress path.
+    // Commit is intentionally different: an exact durable locked Commit
+    // remains active and retransmittable across both same-view timeout intent
+    // and later-view TC installation, and therefore retains an independent
+    // decision path.
+    let timeout_pool_started = status
+        .liveness
+        .timeout_quorums
+        .iter()
+        .any(|quorum| quorum.round.view == status.view);
+    let local_timeout_started =
+        has_current_view_outbound_intent(status, SumeragiV2OutboundIntentKind::TimeoutVote)
+            || has_current_view_outbound_intent(
+                status,
+                SumeragiV2OutboundIntentKind::TimeoutCertificate,
+            );
+    if local_timeout_started && status.phase != SumeragiV2StatusPhase::Commit {
+        let formed = status
+            .liveness
+            .timeout_quorums
+            .iter()
+            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed)
+            || has_current_view_outbound_intent(
+                status,
+                SumeragiV2OutboundIntentKind::TimeoutCertificate,
+            );
+        return if formed {
+            SumeragiV2LivenessBlocker::SchedulerStarvation
+        } else {
+            SumeragiV2LivenessBlocker::TimeoutCertificateMissing
+        };
+    }
+
     if status.phase == SumeragiV2StatusPhase::Commit {
         let formed = status
             .liveness
@@ -1340,26 +1400,12 @@ fn classify_v2_liveness_blocker(
         };
     }
 
-    let timeout_started = status
-        .liveness
-        .timeout_quorums
-        .iter()
-        .any(|quorum| quorum.round.view == status.view)
-        || has_current_view_outbound_intent(status, SumeragiV2OutboundIntentKind::TimeoutVote)
-        || has_current_view_outbound_intent(
-            status,
-            SumeragiV2OutboundIntentKind::TimeoutCertificate,
-        );
-    if timeout_started {
+    if timeout_pool_started {
         let formed = status
             .liveness
             .timeout_quorums
             .iter()
-            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed)
-            || has_current_view_outbound_intent(
-                status,
-                SumeragiV2OutboundIntentKind::TimeoutCertificate,
-            );
+            .any(|quorum| quorum.round.view == status.view && quorum.certificate_formed);
         return if formed {
             SumeragiV2LivenessBlocker::SchedulerStarvation
         } else {
@@ -1462,6 +1508,8 @@ pub fn v2_status_with_restart_required(restart_required: bool) -> Option<Sumerag
 /// fail-closed. The snapshot is deliberately kept until an explicit restart
 /// clears and reconstructs the registry.
 pub(crate) fn mark_v2_restart_required() {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let Some(slot) = SUMERAGI_V2_STATUS.get() else {
         return;
     };
@@ -1476,6 +1524,8 @@ pub(crate) fn mark_v2_restart_required() {
 
 /// Clear protocol-v2 status during shutdown and isolated tests.
 pub fn clear_v2_status() {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let mut status = SUMERAGI_V2_STATUS.get().map(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1512,7 +1562,8 @@ pub fn clear_v2_status() {
 #[cfg(test)]
 mod v2_liveness_watchdog_tests {
     use std::{
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, mpsc},
+        thread,
         time::{Duration, Instant},
     };
 
@@ -1521,12 +1572,13 @@ mod v2_liveness_watchdog_tests {
         BlockHeader,
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage,
-            SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+            GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
+            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker,
+            SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
             SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
             SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
-            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2VoteQuorumStatus,
+            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
+            SumeragiV2VoteQuorumStatus,
         },
     };
 
@@ -1608,6 +1660,15 @@ mod v2_liveness_watchdog_tests {
         )
     }
 
+    fn prepare_qc(status: &SumeragiV2Status, view: u64, seed: u8) -> QuorumCertificateRef {
+        QuorumCertificateRef {
+            round: round(status, view),
+            phase: GlobalPhase::Prepare,
+            subject: subject(seed),
+            execution_commitment: execution_commitment(seed),
+        }
+    }
+
     fn commit_quorum(
         status: &SumeragiV2Status,
         view: u64,
@@ -1682,6 +1743,7 @@ mod v2_liveness_watchdog_tests {
             pending_store_bytes: 0,
             queued_runtime_completions: 0,
             effect_completion_queue: lane(112),
+            effect_dispatch_queue: lane(8),
             runtime_queues: RuntimeQueueSnapshot {
                 normal: lane(64),
                 progress: lane(80),
@@ -1689,6 +1751,47 @@ mod v2_liveness_watchdog_tests {
             },
             watchdog_threshold: threshold,
         }
+    }
+
+    #[test]
+    fn cross_thread_v2_publication_waits_for_status_test_lease_and_resumes_after_release() {
+        let guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        let publication = status();
+        let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
+        let (completed_tx, completed_rx) = mpsc::sync_channel(0);
+
+        let publisher = thread::spawn(move || {
+            assert!(
+                super::try_reentrant_test_guard(&super::RBC_STATUS_TEST_LOCK).is_none(),
+                "a foreign thread must not enter the stable status window"
+            );
+            attempted_tx
+                .send(())
+                .expect("announce the blocked publication attempt");
+            set_v2_status_at(publication, started_at);
+            completed_tx
+                .send(())
+                .expect("announce publication after lease release");
+        });
+
+        attempted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("publisher reaches the guarded mutation boundary");
+        assert!(
+            v2_status_at(started_at).is_none(),
+            "the stable test window must exclude a foreign publisher"
+        );
+
+        drop(guard);
+        completed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("publisher resumes after the stable window closes");
+        publisher.join().expect("publisher thread completes");
+
+        let _cleanup_guard = super::rbc_status_test_guard();
+        clear_v2_status();
     }
 
     #[test]
@@ -2028,6 +2131,83 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
+    fn current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit() {
+        let mut prepare = status();
+        prepare.phase = SumeragiV2StatusPhase::Prepare;
+        prepare.body_state = SumeragiV2BodyState::Validated;
+        let current_round = round(&prepare, prepare.view);
+        prepare
+            .liveness
+            .timeout_quorums
+            .push(SumeragiV2TimeoutQuorumStatus {
+                round: current_round,
+                signer_count: 1,
+                signed_power: 1,
+                min_signers: 3,
+                total_power: 4,
+                certificate_formed: false,
+            });
+        prepare
+            .validate()
+            .expect("remote-timeout Prepare fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&prepare, false),
+            SumeragiV2LivenessBlocker::PrepareQuorumMissing,
+            "a remote partial timeout pool does not close the local Prepare path"
+        );
+
+        prepare
+            .liveness
+            .outbound_intents
+            .push(SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::TimeoutVote,
+                round: current_round,
+                subject: None,
+                execution_commitment: None,
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            });
+        prepare
+            .validate()
+            .expect("local-timeout Prepare fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&prepare, false),
+            SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
+            "a durable timeout closes the current Prepare path"
+        );
+
+        let mut current_commit = prepare.clone();
+        current_commit.phase = SumeragiV2StatusPhase::Commit;
+        let current_lock = prepare_qc(&current_commit, current_commit.view, 0xA2);
+        current_commit.locked_prepare_qc = Some(current_lock);
+        current_commit.highest_prepare_qc = Some(current_lock);
+        current_commit
+            .validate()
+            .expect("same-view locked Commit fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&current_commit, false),
+            SumeragiV2LivenessBlocker::CommitQuorumMissing,
+            "a same-view timeout must not hide the still-active locked Commit path"
+        );
+
+        let mut historical_commit = current_commit;
+        historical_commit.view = 1;
+        let historical_lock = prepare_qc(&historical_commit, 0, 0xA2);
+        historical_commit.locked_prepare_qc = Some(historical_lock);
+        historical_commit.highest_prepare_qc = Some(historical_lock);
+        let later_timeout_round = round(&historical_commit, 1);
+        historical_commit.liveness.outbound_intents[0].round = later_timeout_round;
+        historical_commit.liveness.timeout_quorums[0].round = later_timeout_round;
+        historical_commit
+            .validate()
+            .expect("historical locked Commit fixture is structurally valid");
+        assert_eq!(
+            classify_v2_liveness_blocker(&historical_commit, false),
+            SumeragiV2LivenessBlocker::CommitQuorumMissing,
+            "a later-view timeout must not hide the still-admissible historical locked Commit path"
+        );
+    }
+
+    #[test]
     fn runtime_work_overlay_precedes_watchdog_classification() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
@@ -2122,6 +2302,7 @@ mod v2_liveness_watchdog_tests {
                     | SumeragiV2QueueKind::RuntimeProgress
                     | SumeragiV2QueueKind::RuntimeCompletion
                     | SumeragiV2QueueKind::EffectCompletion
+                    | SumeragiV2QueueKind::EffectDispatch
                     | SumeragiV2QueueKind::NetworkIngress
             )),
             "no successor-owned queue may overlay the predecessor"
@@ -2816,6 +2997,50 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
+    fn effect_dispatch_overlay_exposes_age_without_claiming_scheduler_starvation() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let captured_at = Instant::now();
+        set_v2_status_at(status(), captured_at);
+        let mut effects = effect_status(Duration::from_secs(1), captured_at);
+        effects.effect_dispatch_queue = RuntimeQueueLaneSnapshot {
+            depth: 2,
+            capacity: 8,
+            oldest_age: Some(Duration::from_millis(500)),
+            max_service_debt: 2,
+        };
+        set_v2_effect_status(effects.clone());
+
+        let below_threshold =
+            v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
+        let dispatch = below_threshold
+            .liveness
+            .queues
+            .iter()
+            .find(|queue| queue.queue == SumeragiV2QueueKind::EffectDispatch)
+            .expect("effect dispatch queue");
+        assert_eq!(dispatch.depth, 2);
+        assert_eq!(dispatch.capacity, 8);
+        assert_eq!(dispatch.oldest_age_ms, Some(2_500));
+        assert_eq!(dispatch.service_debt, 2);
+        assert_ne!(
+            below_threshold.liveness.blocker,
+            Some(SumeragiV2LivenessBlocker::SchedulerStarvation),
+            "EffectDispatch never participates in scheduler skip rotation"
+        );
+
+        effects.effect_dispatch_queue.max_service_debt = 3;
+        set_v2_effect_status(effects);
+        let full_rotation = v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
+        assert_ne!(
+            full_rotation.liveness.blocker,
+            Some(SumeragiV2LivenessBlocker::SchedulerStarvation),
+            "EffectDispatch capacity retries cannot constitute scheduler skip debt"
+        );
+        clear_v2_status();
+    }
+
+    #[test]
     fn live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
@@ -3459,12 +3684,6 @@ pub struct NexusFeeSnapshot {
     pub charged_via_payer_total: u64,
     /// Successful debits that used a sponsor account.
     pub charged_via_sponsor_total: u64,
-    /// Rejections because sponsorship was disabled.
-    pub sponsor_disabled_total: u64,
-    /// Rejections because the sponsor did not authorize the payer.
-    pub sponsor_unauthorized_total: u64,
-    /// Rejections because the fee exceeded `sponsor_max_fee`.
-    pub sponsor_cap_exceeded_total: u64,
     /// Failures due to config/asset parsing errors.
     pub config_errors_total: u64,
     /// Failures while executing the fee debit.
@@ -3494,27 +3713,6 @@ pub enum NexusFeeEvent {
         amount: Quantity,
         /// Asset definition id string.
         asset_id: String,
-    },
-    /// Sponsorship was disabled.
-    SponsorDisabled {
-        /// Account attempting to sponsor the fee.
-        payer_id: String,
-    },
-    /// Sponsor did not authorize the payer.
-    SponsorUnauthorized {
-        /// Sponsor account that was requested.
-        sponsor_id: String,
-        /// Transaction authority that attempted to use the sponsor.
-        authority_id: String,
-    },
-    /// Sponsorship exceeded configured cap.
-    SponsorCapExceeded {
-        /// Account that attempted to sponsor.
-        payer_id: String,
-        /// Maximum allowed fee.
-        max_fee: Quantity,
-        /// Attempted fee.
-        attempted_fee: Quantity,
     },
     /// Fee debit failed to apply.
     TransferFailed {
@@ -4279,34 +4477,6 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
             guard.last_payer = Some(payer_kind);
             guard.last_payer_id = Some(payer_id);
             guard.last_error = None;
-        }
-        NexusFeeEvent::SponsorDisabled { payer_id } => {
-            guard.sponsor_disabled_total = guard.sponsor_disabled_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(payer_id);
-            guard.last_error = Some("sponsorship disabled".to_string());
-        }
-        NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id,
-            authority_id,
-        } => {
-            guard.sponsor_unauthorized_total = guard.sponsor_unauthorized_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(sponsor_id);
-            guard.last_error = Some(format!(
-                "sponsor not authorized for authority {authority_id}"
-            ));
-        }
-        NexusFeeEvent::SponsorCapExceeded {
-            payer_id,
-            max_fee,
-            attempted_fee,
-        } => {
-            guard.sponsor_cap_exceeded_total = guard.sponsor_cap_exceeded_total.saturating_add(1);
-            guard.last_payer = Some(NexusFeePayer::Sponsor);
-            guard.last_payer_id = Some(payer_id);
-            guard.last_amount = Some(attempted_fee);
-            guard.last_error = Some(format!("sponsor_max_fee exceeded (max={max_fee})"));
         }
         NexusFeeEvent::TransferFailed {
             payer_kind,
@@ -5949,6 +6119,13 @@ impl NexusFeeTestLock {
 }
 
 #[cfg(test)]
+/// Serialize every process-wide v2 status mutation with tests that need a
+/// stable clear/publish/observe window.
+///
+/// This is a synchronous, owner-reentrant test lease. Do not move it to another
+/// task or thread for nested use, hold it across `.await`, or wait for a child
+/// which can call a guarded status mutation; each of those patterns can prevent
+/// the original owner from releasing the lease.
 pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
     reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
 }

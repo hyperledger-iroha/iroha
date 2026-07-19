@@ -30,7 +30,10 @@ fn find_accounts_with_asset() -> Result<()> {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         };
-        test_client.submit_blocking(Register::asset_definition(asset_definition.clone()))?;
+        test_client.submit_blocking(
+            Register::asset_definition(asset_definition.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         // Checking results before all
         let received_asset_definition = test_client
@@ -56,7 +59,10 @@ fn find_accounts_with_asset() -> Result<()> {
             .cloned()
             .map(|account_id| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(register_accounts)?;
+        test_client.submit_all_blocking(
+            register_accounts,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let mint_asset = accounts
             .iter()
@@ -64,7 +70,10 @@ fn find_accounts_with_asset() -> Result<()> {
             .map(|account_id| AssetId::new(definition_id.clone(), account_id))
             .map(|asset_id| Mint::asset_quantity(1u32, asset_id))
             .collect::<Vec<_>>();
-        test_client.submit_all_blocking(mint_asset)?;
+        test_client.submit_all_blocking(
+            mint_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let accounts = HashSet::from(accounts);
 

@@ -36,6 +36,8 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -398,26 +400,71 @@ class HttpClientTransport(
         return executeAccepted(buildJsonPostRequest("/v1/zk/vk/update", body), "verifying key update", 202)
     }
 
+    /** Quote the exact unsigned transaction payload before replacing only its fee maxima. */
+    fun quoteFees(
+        unsignedPayload: Map<String, Any?>,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<FeeQuoteResponse> {
+        val authority = unsignedPayload["authority"] as? String
+            ?: throw IllegalArgumentException("unsignedPayload.authority must be a string")
+        require(authority == canonicalAuth.accountId) {
+            "canonicalAuth.accountId must equal unsignedPayload.authority"
+        }
+        val requestedIntent = FeePaymentJson.parse(
+            unsignedPayload["fee_payment"],
+            "unsignedPayload.fee_payment",
+        )
+        val body = encodeJsonBody(linkedMapOf("payload" to unsignedPayload))
+        return fetchJson(
+            buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth),
+            FeePaymentJson::parseQuote,
+            "fee quote",
+            200,
+        ).thenApply { quote ->
+            require(requestedIntent.hasSamePayerAndGasBound(quote.intent)) {
+                "fee quote response changed the requested payer, sponsor revision, or gas bound"
+            }
+            quote
+        }
+    }
+
+    /** Fetch one exact on-chain fee sponsor program under canonical request authentication. */
+    fun getFeeSponsorProgram(
+        programId: FeeSponsorProgramId,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<FeeSponsorProgramResponse> {
+        val body = encodeJsonBody(linkedMapOf("program_id" to programId.literal()))
+        return fetchJson(
+            buildVpnRequest("POST", "/v1/fee-sponsor-programs/by-id", body, canonicalAuth),
+            FeePaymentJson::parseProgram,
+            "fee sponsor program lookup",
+            200,
+        ).thenApply { program ->
+            require(program.id == programId) {
+                "fee sponsor program response id does not match the requested program"
+            }
+            program
+        }
+    }
+
     fun callContract(
         authority: String,
         privateKey: String,
-        gasLimit: Long,
+        feePayment: FeePaymentIntent,
         contractAddress: String? = null,
         contractAlias: String? = null,
         entrypoint: String,
         payload: Any? = null,
-        gasAssetId: String? = null,
     ): CompletableFuture<ContractCallResponse> {
         val body = encodeJsonBody(
             buildContractCallPayload(
                 authority = authority,
                 privateKey = privateKey,
-                gasLimit = gasLimit,
+                feePayment = feePayment,
                 contractAddress = contractAddress,
                 contractAlias = contractAlias,
                 entrypoint = entrypoint,
                 payload = payload,
-                gasAssetId = gasAssetId,
             )
         )
         return fetchJson(buildJsonPostRequest("/v1/contracts/call", body), ContractJsonParser::parseCallResponse, "contract call")
@@ -1013,22 +1060,20 @@ class HttpClientTransport(
         @JvmStatic internal fun buildContractCallPayload(
             authority: String,
             privateKey: String,
-            gasLimit: Long,
+            feePayment: FeePaymentIntent,
             contractAddress: String?,
             contractAlias: String?,
             entrypoint: String,
             payload: Any?,
-            gasAssetId: String?,
         ): Map<String, Any> {
-            require(gasLimit > 0) { "gasLimit must be positive" }
+            require(feePayment.gasLimit != null) { "contract feePayment must include gasLimit" }
             val normalized = LinkedHashMap<String, Any>()
             normalized["authority"] = normalizeNonBlank(authority, "authority")
             normalized["private_key"] = normalizeNonBlank(privateKey, "privateKey")
             normalized.putAll(buildContractTargetSelector(contractAddress, contractAlias))
             normalized["entrypoint"] = normalizeNonBlank(entrypoint, "entrypoint")
             if (payload != null) normalized["payload"] = payload
-            if (gasAssetId != null) normalized["gas_asset_id"] = normalizeNonBlank(gasAssetId, "gasAssetId")
-            normalized["gas_limit"] = gasLimit
+            normalized["fee_payment"] = feePayment.toJsonMap()
             return normalized
         }
 
@@ -1053,7 +1098,7 @@ class HttpClientTransport(
                 require(request.creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
                 payload["creation_time_ms"] = request.creationTimeMs
             }
-            if (request.feeSponsor != null) payload["fee_sponsor"] = normalizeNonBlank(request.feeSponsor, "feeSponsor")
+            payload["fee_payment"] = request.feePayment.toJsonMap()
             if (request.memo != null) payload["memo"] = normalizeNonBlank(request.memo, "memo")
             putValidationFeePolicyMetadata(
                 payload,
@@ -1275,6 +1320,10 @@ class HttpClientTransport(
             val authority = fields["authority"] as? String
                 ?: throw IllegalArgumentException("authority is required and must be canonical")
             requireCanonicalSccpAuthority(authority)
+            val feePayment = FeePaymentJson.parse(
+                fields["fee_payment"],
+                "bridge submit payload.fee_payment",
+            )
             val hasSignature = fields.containsKey("signature_b64")
             val signature = fields["signature_b64"]
             if (hasSignature) {
@@ -1302,7 +1351,12 @@ class HttpClientTransport(
                 creationTimeMs,
             )
             if (transactionPayload is String) {
-                normalizeOptionalTransactionPayload(transactionPayload, creationTimeMs, authority)
+                normalizeOptionalTransactionPayload(
+                    transactionPayload,
+                    creationTimeMs,
+                    authority,
+                    feePayment,
+                )
             }
             val artifactField = if (path == "/v1/bridge/messages") {
                 "native_proof_b64"
@@ -1455,11 +1509,11 @@ class HttpClientTransport(
         }
 
         private val SCCP_PROOF_SUBMIT_FIELDS = setOf(
-            "authority", "signature_b64", "transaction_payload_b64",
+            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
             "destination_proof_b64", "creation_time_ms",
         )
         private val SCCP_MESSAGE_SUBMIT_FIELDS = setOf(
-            "authority", "signature_b64", "transaction_payload_b64",
+            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
             "native_proof_b64", "creation_time_ms",
         )
         private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024

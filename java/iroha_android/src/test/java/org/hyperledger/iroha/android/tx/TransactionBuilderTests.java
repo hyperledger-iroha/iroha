@@ -41,7 +41,7 @@ public final class TransactionBuilderTests {
 
   private static void encodeAndSignWithExplicitSigner() throws Exception {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000002")
             .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setCreationTimeMs(1_735_000_001_234L)
@@ -77,7 +77,7 @@ public final class TransactionBuilderTests {
 
   private static void encodeAndSignWithKeyManagerAlias() throws Exception {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setChainId("00000003")
             .setAuthority(TestAccountIds.ed25519Authority(0x29))
             .setCreationTimeMs(1_735_000_111_000L)
@@ -120,7 +120,7 @@ public final class TransactionBuilderTests {
     final byte[] wirePayloadB =
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setExecutable(
                 Executable.instructions(
                     List.of(
@@ -139,13 +139,13 @@ public final class TransactionBuilderTests {
   private static void transactionPayloadRejectsPaddedIdsBeforeSigning() {
     final String authority = TestAccountIds.ed25519Authority(0x2F);
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setChainId(" 00000042"),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId(" 00000042"),
         "chainId must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setChainId("00000042 "),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId("00000042 "),
         "chainId must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setAuthority(" " + authority),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setAuthority(" " + authority),
         "authority must not contain surrounding whitespace");
   }
 

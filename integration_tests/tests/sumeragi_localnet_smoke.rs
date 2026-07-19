@@ -268,7 +268,10 @@ async fn submit_route_probe_with_retry(
 ) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     loop {
-        match client.submit::<InstructionBox>(Log::new(Level::INFO, message.to_owned()).into()) {
+        match client.submit::<InstructionBox>(
+            Log::new(Level::INFO, message.to_owned()).into(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(true),
             Err(err)
                 if Instant::now() < deadline && err.to_string().contains("route_unavailable") =>
@@ -486,7 +489,13 @@ async fn submit_logs(
                     let client = submit_clients[client_idx].clone();
                     let handle = task::spawn_blocking(move || {
                         client
-                            .submit::<InstructionBox>(Log::new(Level::INFO, payload).into())
+                            .submit::<InstructionBox>(
+                                Log::new(Level::INFO, payload).into(),
+                                iroha::data_model::transaction::FeePaymentIntent::authority(
+                                    Vec::new(),
+                                    None,
+                                ),
+                            )
                             .wrap_err_with(|| format!("failed to submit log instruction {idx}"))
                     });
                     handle.await.wrap_err("submit task join failed")?
@@ -640,9 +649,16 @@ async fn fund_realistic_npos_transfer_fee_accounts(
 
     task::spawn_blocking(move || -> Result<()> {
         for (chunk_index, instructions) in instruction_chunks.into_iter().enumerate() {
-            client.submit_all_blocking(instructions).wrap_err_with(|| {
-                format!("failed to fund NPoS fee assets for transfer account chunk {chunk_index}")
-            })?;
+            client
+                .submit_all_blocking(
+                    instructions,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to fund NPoS fee assets for transfer account chunk {chunk_index}"
+                    )
+                })?;
         }
         Ok(())
     })
@@ -1045,7 +1061,7 @@ async fn submit_ram_lfe_emails_paced(
             }
             .into();
             let transaction = submit_account.clients[0]
-                .build_transaction_from_items([instruction], realistic_load_metadata(index));
+                .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
             let payload = submit_account.clients[0].prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &submit_account.clients,
@@ -1128,7 +1144,7 @@ async fn submit_transfers_paced(
             )
             .into();
             let transaction = source_account.clients[0]
-                .build_transaction_from_items([instruction], realistic_load_metadata(index));
+                .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
             let payload = source_account.clients[0].prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &source_account.clients,
@@ -3806,7 +3822,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
             peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!("failed to submit warmup log instruction to {}", peer.mnemonic())
                 })?;
@@ -3831,7 +3847,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         for peer in network.peers() {
             let message = format!("localnet bounded block {}", peer.mnemonic());
             peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!("failed to submit log instruction to {}", peer.mnemonic())
                 })?;
@@ -4306,7 +4322,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
             peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                 .wrap_err_with(|| {
                     format!("failed to submit warmup log instruction to {}", peer.mnemonic())
                 })?;

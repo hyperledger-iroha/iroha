@@ -3439,10 +3439,10 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSu
         let client_index =
             usize::try_from(load_sequence % usize_to_u64(clients.len())).unwrap_or(0);
         let client = &clients[client_index];
-        match client.submit(Log::new(
-            Level::INFO,
-            format!("autoscale-load-{load_sequence}"),
-        )) {
+        match client.submit(
+            Log::new(Level::INFO, format!("autoscale-load-{load_sequence}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(hash) => {
                 report.submitted = report.submitted.saturating_add(1);
                 report.per_client_submitted[client_index] =
@@ -3522,10 +3522,13 @@ fn wait_for_submission_ready(clients: &[Client], timeout: Duration, context: &st
     let mut last_errors = vec![None::<String>; clients.len()];
     while started.elapsed() <= timeout {
         for (client_index, client) in clients.iter().enumerate() {
-            match client.submit(Log::new(
-                Level::INFO,
-                format!("autoscale-submission-ready-{probe_seq}-{client_index}"),
-            )) {
+            match client.submit(
+                Log::new(
+                    Level::INFO,
+                    format!("autoscale-submission-ready-{probe_seq}-{client_index}"),
+                ),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ) {
                 Ok(hash) => {
                     eprintln!(
                         "[autoscale-localnet] {context}: submission readiness accepted by client {client_index} with tx {hash}"
@@ -3712,10 +3715,10 @@ fn wait_for_expanded_lanes_with_heartbeat(
                 }
                 last_storage_snapshot = storage_snapshot;
                 last_elastic_storage_snapshot = elastic_storage_snapshot;
-                if let Err(heartbeat_err) = heartbeat_client.submit(Log::new(
-                    Level::INFO,
-                    format!("{heartbeat_prefix}-{heartbeat_seq}"),
-                )) {
+                if let Err(heartbeat_err) = heartbeat_client.submit(
+                    Log::new(Level::INFO, format!("{heartbeat_prefix}-{heartbeat_seq}")),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                ) {
                     last_heartbeat_error = Some(heartbeat_err.to_string());
                 }
                 heartbeat_seq = heartbeat_seq.saturating_add(1);
@@ -3821,10 +3824,10 @@ fn wait_for_expanded_lanes_with_heartbeat(
         last_elastic_storage_snapshot = elastic_storage_snapshot;
         last_status_snapshot = status_snapshot;
 
-        if let Err(err) = heartbeat_client.submit(Log::new(
-            Level::INFO,
-            format!("{heartbeat_prefix}-{heartbeat_seq}"),
-        )) {
+        if let Err(err) = heartbeat_client.submit(
+            Log::new(Level::INFO, format!("{heartbeat_prefix}-{heartbeat_seq}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             last_heartbeat_error = Some(err.to_string());
         }
         heartbeat_seq = heartbeat_seq.saturating_add(1);
@@ -3947,10 +3950,10 @@ fn wait_for_chain_progress_with_heartbeat(
             }
         }
 
-        if let Err(err) = heartbeat_client.submit(Log::new(
-            Level::INFO,
-            format!("{heartbeat_prefix}-{heartbeat_seq}"),
-        )) {
+        if let Err(err) = heartbeat_client.submit(
+            Log::new(Level::INFO, format!("{heartbeat_prefix}-{heartbeat_seq}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             last_heartbeat_error = Some(err.to_string());
         }
         heartbeat_seq = heartbeat_seq.saturating_add(1);
@@ -4078,7 +4081,10 @@ fn submit_rotating_heartbeat(
         return Ok(());
     };
     client
-        .submit(Log::new(Level::INFO, format!("{prefix}-{sequence}")))
+        .submit(
+            Log::new(Level::INFO, format!("{prefix}-{sequence}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .map(|_| ())
         .map_err(|err| err.to_string())
 }
@@ -5341,7 +5347,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
                             client.submit(Log::new(
                                 Level::INFO,
                                 format!("certified-merge-ordering-heartbeat-{sequence}"),
-                            ))
+                            ), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
                         })
                         .await;
                     }

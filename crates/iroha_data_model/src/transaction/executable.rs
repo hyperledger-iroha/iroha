@@ -1,6 +1,6 @@
 //! Types representing executable parts of a transaction.
 
-use std::{fmt, iter::IntoIterator, ops::Deref, sync::LazyLock, vec::Vec};
+use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
@@ -12,7 +12,9 @@ use norito::{NoritoDeserialize, core as ncore};
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
-use crate::{isi::InstructionBox, metadata::Metadata, name::Name, smart_contract::ContractAddress};
+use crate::{
+    isi::InstructionBox, smart_contract::ContractAddress, transaction::signed::FeePaymentIntent,
+};
 
 #[model]
 mod model {
@@ -388,74 +390,44 @@ impl From<ContractInvocation> for Executable {
     }
 }
 
-static TRANSACTION_GAS_LIMIT_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| "gas_limit".parse().expect("static gas_limit key"));
-
-/// Errors raised while decoding transaction `gas_limit` metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Errors raised while requiring a signature-bound transaction gas limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionGasLimitError {
-    /// The metadata key is missing.
+    /// The signed fee intent does not declare an executable gas limit.
     Missing,
-    /// The metadata value is present but cannot be decoded as `u64`.
-    Invalid(String),
-    /// The metadata value is present but zero.
-    Zero,
 }
 
 impl fmt::Display for TransactionGasLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Missing => f.write_str("missing gas_limit in transaction metadata"),
-            Self::Invalid(err) => write!(f, "invalid gas_limit metadata: {err}"),
-            Self::Zero => f.write_str("gas_limit must be positive"),
+            Self::Missing => f.write_str("missing gas limit in fee payment intent"),
         }
     }
 }
 
 impl std::error::Error for TransactionGasLimitError {}
 
-/// Returns the canonical transaction metadata key used for `gas_limit`.
-pub fn transaction_gas_limit_metadata_key() -> &'static Name {
-    &TRANSACTION_GAS_LIMIT_METADATA_KEY
-}
-
-/// Parse the optional transaction `gas_limit` metadata entry.
-///
-/// Returns `Ok(None)` when the metadata key is absent.
-///
-/// # Errors
-///
-/// Returns [`TransactionGasLimitError::Invalid`] when the metadata value cannot be decoded as
-/// `u64`, and [`TransactionGasLimitError::Zero`] when the decoded value is zero.
-pub fn parse_transaction_gas_limit(
-    metadata: &Metadata,
-) -> Result<Option<u64>, TransactionGasLimitError> {
-    let Some(raw) = metadata.get(transaction_gas_limit_metadata_key()) else {
-        return Ok(None);
-    };
-    let value = raw
-        .clone()
-        .try_into_any_norito::<u64>()
-        .map_err(|err| TransactionGasLimitError::Invalid(err.to_string()))?;
-    if value == 0 {
-        return Err(TransactionGasLimitError::Zero);
+/// Return the optional nonzero executable gas limit bound by the signed fee intent.
+#[must_use]
+pub const fn parse_transaction_gas_limit(fee_payment: &FeePaymentIntent) -> Option<u64> {
+    match fee_payment.gas_limit() {
+        Some(limit) => Some(limit.get()),
+        None => None,
     }
-    Ok(Some(value))
 }
 
-/// Parse the required transaction `gas_limit` metadata entry.
+/// Return the executable gas limit bound by the signed fee intent.
 ///
 /// # Errors
 ///
-/// Returns [`TransactionGasLimitError::Missing`] when the metadata key is absent, plus the same
-/// decode and positivity errors returned by [`parse_transaction_gas_limit`].
-pub fn require_transaction_gas_limit(metadata: &Metadata) -> Result<u64, TransactionGasLimitError> {
-    parse_transaction_gas_limit(metadata)?.ok_or(TransactionGasLimitError::Missing)
-}
-
-/// Insert or replace the transaction `gas_limit` metadata entry.
-pub fn insert_transaction_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
-    metadata.insert(transaction_gas_limit_metadata_key().clone(), gas_limit);
+/// Returns [`TransactionGasLimitError::Missing`] when the signed intent omits the limit.
+pub const fn require_transaction_gas_limit(
+    fee_payment: &FeePaymentIntent,
+) -> Result<u64, TransactionGasLimitError> {
+    match parse_transaction_gas_limit(fee_payment) {
+        Some(limit) => Ok(limit),
+        None => Err(TransactionGasLimitError::Missing),
+    }
 }
 
 impl AsRef<[u8]> for IvmBytecode {
@@ -478,7 +450,7 @@ impl IvmBytecode {
 }
 
 impl Executable {
-    /// Returns `true` if the executable kind requires transaction `gas_limit` metadata.
+    /// Returns `true` if the executable kind requires a signature-bound gas limit.
     pub fn requires_transaction_gas_limit(&self) -> bool {
         !matches!(self, Self::Instructions(_))
     }
@@ -889,33 +861,31 @@ mod tests {
     }
 
     #[test]
-    fn transaction_gas_limit_roundtrip_helpers_work() {
-        let mut metadata = Metadata::default();
-        assert_eq!(
-            parse_transaction_gas_limit(&metadata).expect("missing gas_limit should be allowed"),
-            None
+    fn transaction_gas_limit_reads_signed_fee_intent() {
+        let without_limit = FeePaymentIntent::authority(Vec::new(), None);
+        assert_eq!(parse_transaction_gas_limit(&without_limit), None);
+        let with_limit = FeePaymentIntent::authority(
+            Vec::new(),
+            Some(std::num::NonZeroU64::new(42).expect("nonzero gas limit")),
         );
-        insert_transaction_gas_limit(&mut metadata, 42);
+        assert_eq!(parse_transaction_gas_limit(&with_limit), Some(42));
         assert_eq!(
-            parse_transaction_gas_limit(&metadata).expect("gas_limit should parse"),
-            Some(42)
-        );
-        assert_eq!(
-            require_transaction_gas_limit(&metadata).expect("gas_limit should be required"),
+            require_transaction_gas_limit(&with_limit).expect("gas_limit should be required"),
             42
         );
     }
 
     #[test]
-    fn transaction_gas_limit_reports_invalid_and_zero_values() {
-        let mut metadata = Metadata::default();
-        metadata.insert(transaction_gas_limit_metadata_key().clone(), "oops");
-        let err = parse_transaction_gas_limit(&metadata).expect_err("invalid gas_limit must fail");
-        assert!(matches!(err, TransactionGasLimitError::Invalid(_)));
-
-        insert_transaction_gas_limit(&mut metadata, 0);
-        let err = require_transaction_gas_limit(&metadata).expect_err("zero gas_limit must fail");
-        assert_eq!(err, TransactionGasLimitError::Zero);
+    fn transaction_gas_limit_requires_explicit_signed_value() {
+        let intent = FeePaymentIntent::authority(Vec::new(), None);
+        assert_eq!(
+            require_transaction_gas_limit(&intent),
+            Err(TransactionGasLimitError::Missing)
+        );
+        assert_eq!(
+            TransactionGasLimitError::Missing.to_string(),
+            "missing gas limit in fee payment intent"
+        );
     }
 
     #[test]

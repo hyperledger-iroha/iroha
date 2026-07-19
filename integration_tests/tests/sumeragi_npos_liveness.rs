@@ -476,8 +476,11 @@ async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> 
         let client = probe.clone();
         let message = message.clone();
         move || {
-            client
-                .build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default())
+            client.build_transaction_from_items(
+                [Log::new(Level::INFO, message)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
         }
     })
     .await

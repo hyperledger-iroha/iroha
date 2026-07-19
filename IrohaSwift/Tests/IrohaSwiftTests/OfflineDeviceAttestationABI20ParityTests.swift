@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
-/// Exact Rust/Swift golden coverage for the ABI-20 device-registration model.
+/// Exact Rust/Swift golden coverage for the ABI-21 device-registration model.
 final class OfflineDeviceAttestationABI20ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()

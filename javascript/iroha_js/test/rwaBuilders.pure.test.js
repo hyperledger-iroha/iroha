@@ -34,6 +34,10 @@ const DESTINATION = AccountAddress.fromAccount({ publicKey: Buffer.from(
   ),
 }).toI105();
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const AUTHORITY_FEE_PAYMENT = Object.freeze({
+  payer: "authority",
+  chargeLimits: Object.freeze([]),
+});
 const RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const RWA_ID_HASH_UPPER =
@@ -174,6 +178,7 @@ test("RWA transaction builders serialize canonical instructions through injected
       chainId,
       authority,
       instructions,
+      feePaymentJson,
       metadataPayload,
       creationTimeMs,
       ttlMs,
@@ -184,6 +189,7 @@ test("RWA transaction builders serialize canonical instructions through injected
         chainId,
         authority,
         instructions,
+        feePaymentJson,
         metadataPayload,
         creationTimeMs,
         ttlMs,
@@ -201,6 +207,7 @@ test("RWA transaction builders serialize canonical instructions through injected
     const register = buildRegisterRwaTransaction({
       chainId: "test-chain",
       authority: AUTHORITY,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       rwa: {
         domain: "commodities",
         quantity: "10.5",
@@ -216,6 +223,7 @@ test("RWA transaction builders serialize canonical instructions through injected
     const transfer = buildTransferRwaTransaction({
       chainId: "test-chain",
       authority: AUTHORITY,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       sourceAccountId: AUTHORITY,
       rwaId: RWA_ID_HASH_UPPER,
       quantity: "2.5",
@@ -225,6 +233,7 @@ test("RWA transaction builders serialize canonical instructions through injected
     const setMetadata = buildSetRwaKeyValueTransaction({
       chainId: "test-chain",
       authority: AUTHORITY,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       rwaId: RWA_ID,
       key: "grade",
       value: { score: BigInt(9) },
@@ -233,6 +242,7 @@ test("RWA transaction builders serialize canonical instructions through injected
     const removeMetadata = buildRemoveRwaKeyValueTransaction({
       chainId: "test-chain",
       authority: AUTHORITY,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       rwaId: RWA_ID,
       key: "grade",
       privateKey: PRIVATE_KEY,

@@ -216,9 +216,10 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_lists_after_verify
     {
-        client.submit_blocking(iroha::data_model::isi::zk::VerifyProof::new(
-            find_attachment,
-        ))?;
+        client.submit_blocking(
+            iroha::data_model::isi::zk::VerifyProof::new(find_attachment),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
         let recs = retry_all_proof_records(&client)?;
@@ -230,12 +231,18 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_backend_filters
     {
-        client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
-            backend_attachment,
-        )])?;
-        client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
-            stark_backend_attachment,
-        )])?;
+        client.submit_all_blocking(
+            [iroha::data_model::isi::zk::VerifyProof::new(
+                backend_attachment,
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        client.submit_all_blocking(
+            [iroha::data_model::isi::zk::VerifyProof::new(
+                stark_backend_attachment,
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
         let halo2 = retry_records_by_backend(&client, "halo2/ipa")?;
@@ -274,12 +281,18 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_status_filters
     {
-        client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
-            verified_attachment,
-        )])?;
-        client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
-            rejected_attachment,
-        )])?;
+        client.submit_all_blocking(
+            [iroha::data_model::isi::zk::VerifyProof::new(
+                verified_attachment,
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        client.submit_all_blocking(
+            [iroha::data_model::isi::zk::VerifyProof::new(
+                rejected_attachment,
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
         let verified =

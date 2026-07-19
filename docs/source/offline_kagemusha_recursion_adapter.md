@@ -1,6 +1,6 @@
 # Kagemusha recursive-verifier adapter audit
 
-This note records the proof-system boundary for the sole ABI-20/V4 Kagemusha
+This note records the proof-system boundary for the sole ABI-21/V4 Kagemusha
 recursive-spend lifecycle.
 It is an implementation audit, not a readiness claim. The production backend
 remains unavailable until the fixed-key paired deferred verifier and its
@@ -209,9 +209,9 @@ opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
 decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
-## ABI-20 and artifact V4 contract
+## ABI-21 and artifact V4 contract
 
-The current contract is bridge ABI `20`, manifest schema
+The current contract is bridge ABI `21`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
 `halo2/ipa-pasta-cycle-v4`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-v4`. These values carry no mode field. The two
@@ -231,7 +231,7 @@ activation window and proof-pair limit.
 `KagemushaRecursiveSpendStateBoundaryV2` still crosses the field boundary as a
 layout version followed by all 890 explicit little-endian `u32` result-state
 limbs. Layout V2 adds the statement's append-only `next_zero_leaf_index` to the
-exact state. This is a deliberate pre-production reset: ABI 20 and manifest V4
+exact state. This is a deliberate pre-production reset: ABI 21 and manifest V4
 remain the only lifecycle, but keys, bootstrap witnesses, proofs, manifests,
 and schema hashes from the former 889-limb layout are incompatible and must not
 be reused. V4 derives the single public-instance-column layout from each

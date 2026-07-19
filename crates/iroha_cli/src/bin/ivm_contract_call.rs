@@ -20,7 +20,7 @@ use iroha::{
         prelude::*,
         smart_contract::{ContractAddress, ContractAlias},
         transaction::{
-            Executable, TransactionBuilder,
+            Executable, FeePaymentIntent,
             executable::{ContractArgumentRecord, ContractInvocation},
         },
     },
@@ -39,9 +39,6 @@ use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
-// Canonical argument preparation reserves the bounded 1 MiB HEAP before
-// decoding; keep the default above that floor with room for a small call.
-const DEFAULT_IVM_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -65,14 +62,12 @@ struct Args {
     payload_file: Option<PathBuf>,
     #[arg(long, default_value_t = DEFAULT_CHAIN_DISCRIMINANT_TAIRA)]
     chain_discriminant: u16,
+    /// Canonical Norito JSON selecting the fee payer, sponsor revision, and gas bound.
+    /// The helper quotes and signs exact recommended charge limits before submission.
     #[arg(long)]
-    gas_asset_id: Option<String>,
-    #[arg(long)]
-    fee_sponsor: Option<String>,
+    fee_payment_json: PathBuf,
     #[arg(long = "gov-manifest-approver", value_name = "ACCOUNT")]
     gov_manifest_approvers: Vec<String>,
-    #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
-    gas_limit: u64,
     #[arg(long, default_value_t = 300_000)]
     status_timeout_ms: u64,
     #[arg(long)]
@@ -141,13 +136,6 @@ fn insert_string_metadata(
     value: impl Into<String>,
 ) -> Result<()> {
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
-    Ok(())
-}
-
-fn insert_gas_asset_id(metadata: &mut Metadata, gas_asset_id: Option<&str>) -> Result<()> {
-    if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
-        insert_string_metadata(metadata, "gas_asset_id", asset_id.trim().to_owned())?;
-    }
     Ok(())
 }
 
@@ -251,9 +239,6 @@ fn contract_call_metadata(
     expected_code_hash: &Hash,
     contract_alias: Option<&ContractAlias>,
     entrypoint: &str,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&str>,
-    gas_limit: u64,
     gov_manifest_approvers: &[String],
 ) -> Result<Metadata> {
     let mut metadata = Metadata::default();
@@ -271,44 +256,26 @@ fn contract_call_metadata(
         insert_string_metadata(&mut metadata, "contract_alias", alias.to_string())?;
     }
     insert_string_metadata(&mut metadata, "contract_entrypoint", entrypoint.to_owned())?;
-    insert_gas_asset_id(&mut metadata, gas_asset_id)?;
-    if let Some(sponsor) = fee_sponsor.filter(|value| !value.trim().is_empty()) {
-        insert_string_metadata(&mut metadata, "fee_sponsor", sponsor.trim().to_owned())?;
-    }
-    metadata.insert(Name::from_str("gas_limit")?, Json::new(gas_limit));
     insert_gov_manifest_approvers(&mut metadata, gov_manifest_approvers)?;
     Ok(metadata)
 }
 
-fn sign_contract_call_transaction(
-    chain_id: &ChainId,
-    authority: &AccountId,
-    private_key: &PrivateKey,
-    transaction_ttl: Option<Duration>,
-    metadata: Metadata,
+fn contract_call_executable(
     contract_address: ContractAddress,
     expected_code_hash: Hash,
     entrypoint: String,
     arguments: Option<Vec<u8>>,
-) -> Result<SignedTransaction> {
+) -> Result<Executable> {
     let arguments = arguments
         .map(ContractArgumentRecord::try_new)
         .transpose()
         .wrap_err("contract argument record exceeds the signed wire limit")?;
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
-    if let Some(transaction_ttl) = transaction_ttl {
-        builder.set_ttl(transaction_ttl);
-    }
-    builder
-        .with_metadata(metadata)
-        .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address,
-            expected_code_hash,
-            entrypoint,
-            arguments,
-        }))
-        .try_sign(private_key)
-        .wrap_err("failed to sign contract call transaction")
+    Ok(Executable::ContractCall(ContractInvocation {
+        contract_address,
+        expected_code_hash,
+        entrypoint,
+        arguments,
+    }))
 }
 
 fn encode_contract_arguments(
@@ -369,6 +336,16 @@ fn payload_digest_hex(payload: Option<&Json>) -> String {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    let fee_payment_bytes = fs::read(&args.fee_payment_json)
+        .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
+    let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
+        .wrap_err_with(|| format!("parse {}", args.fee_payment_json.display()))?;
+    fee_payment
+        .validate()
+        .wrap_err("invalid fee payment intent")?;
+    iroha::data_model::transaction::require_transaction_gas_limit(&fee_payment)
+        .wrap_err("contract calls require a signature-bound gas limit from `/v1/fees/quote`")?;
+
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
         .address
@@ -404,28 +381,47 @@ fn main() -> Result<()> {
         &args.entrypoint,
         payload.as_ref(),
     )?;
-    let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let metadata = contract_call_metadata(
         &contract_address,
         &expected_code_hash,
         contract_alias.as_ref(),
         &args.entrypoint,
-        args.gas_asset_id.as_deref(),
-        args.fee_sponsor.as_deref(),
-        args.gas_limit,
         &args.gov_manifest_approvers,
     )?;
-    let tx = sign_contract_call_transaction(
-        &client.chain,
-        &authority,
-        &private_key,
-        transaction_ttl,
-        metadata,
+    let executable = contract_call_executable(
         contract_address.clone(),
         expected_code_hash,
         args.entrypoint.clone(),
         arguments,
     )?;
+    let mut unsigned = client
+        .try_build_transaction_payload(executable, fee_payment.clone(), metadata)
+        .wrap_err("failed to build exact contract-call payload for fee quoting")?;
+    let fee_quote = client
+        .quote_fees(&unsigned)
+        .wrap_err("failed to quote contract-call fees")?;
+    let selection_matches = match (&fee_payment, &fee_quote.intent) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    };
+    if !selection_matches {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
+        ));
+    }
+    unsigned.fee_payment = fee_quote.intent.clone();
+    let tx = client
+        .try_sign_transaction_payload(unsigned)
+        .wrap_err("failed to sign exact quoted contract-call payload")?;
+    let gas_limit =
+        iroha::data_model::transaction::require_transaction_gas_limit(&fee_quote.intent)?;
     let tx_hash = tx.hash();
     let entrypoint_hash = tx.hash_as_entrypoint();
     client.submit_transaction_blocking(&tx)?;
@@ -441,9 +437,9 @@ fn main() -> Result<()> {
         "tx_hash_hex": (tx_hash.to_string()),
         "entrypoint": (args.entrypoint.clone()),
         "entrypoint_hash_hex": (entrypoint_hash.to_string()),
-        "gas_limit": (args.gas_limit),
-        "gas_asset_id": (args.gas_asset_id),
-        "fee_sponsor": (args.fee_sponsor),
+        "gas_limit": (gas_limit),
+        "fee_payment": (fee_quote.intent.clone()),
+        "fee_quote": (fee_quote.clone()),
         "payload_digest_hex": (payload_digest_hex),
     });
     let result = norito::json!({
@@ -458,6 +454,7 @@ fn main() -> Result<()> {
         "entrypoint": (args.entrypoint.clone()),
         "tx_hash_hex": (tx_hash),
         "entrypoint_hash_hex": (entrypoint_hash),
+        "fee_quote": (fee_quote),
         "operation_receipt": (operation_receipt),
         "terminal_kind": ("Committed"),
         "final": (norito::json!({
@@ -472,13 +469,6 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_gas_limit_covers_strict_argument_admission_floor() {
-        const {
-            assert!(DEFAULT_IVM_GAS_LIMIT > 1_048_752);
-        }
-    }
 
     #[test]
     fn payload_digest_hex_hashes_empty_payload_when_absent() {
@@ -506,17 +496,8 @@ mod tests {
                 .expect("contract address");
         let expected_code_hash = Hash::new(b"metadata-contract-code");
         let expected_code_hash_literal = expected_code_hash.to_string();
-        let metadata = contract_call_metadata(
-            &address,
-            &expected_code_hash,
-            None,
-            "submit",
-            None,
-            None,
-            50_000,
-            &[],
-        )
-        .expect("contract call metadata");
+        let metadata = contract_call_metadata(&address, &expected_code_hash, None, "submit", &[])
+            .expect("contract call metadata");
 
         assert!(metadata.get("contract_payload").is_none());
         assert_eq!(

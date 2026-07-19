@@ -327,7 +327,10 @@ async fn register_request(
 ) -> Result<NameRecordV1> {
     let client = client.clone();
     run_sns_client_call("register SNS name", move || {
-        let response = client.sns().register(&request)?;
+        let response = client.sns().register(
+            &request,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         Ok(response.name_record)
     })
     .await
@@ -341,9 +344,12 @@ async fn freeze_name(
     let client = client.clone();
     let literal = literal.to_owned();
     run_sns_client_call("freeze SNS name", move || {
-        client
-            .sns()
-            .freeze(SnsNamespacePath::Domain, &literal, &request)
+        client.sns().freeze(
+            SnsNamespacePath::Domain,
+            &literal,
+            &request,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await
 }
@@ -356,9 +362,12 @@ async fn unfreeze_name(
     let client = client.clone();
     let literal = literal.to_owned();
     run_sns_client_call("unfreeze SNS name", move || {
-        client
-            .sns()
-            .unfreeze(SnsNamespacePath::Domain, &literal, &governance)
+        client.sns().unfreeze(
+            SnsNamespacePath::Domain,
+            &literal,
+            &governance,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await
 }
@@ -371,9 +380,12 @@ async fn renew_name(
     let client = client.clone();
     let literal = literal.to_owned();
     run_sns_client_call("renew SNS name", move || {
-        client
-            .sns()
-            .renew(SnsNamespacePath::Domain, &literal, &request)
+        client.sns().renew(
+            SnsNamespacePath::Domain,
+            &literal,
+            &request,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await
 }
@@ -386,9 +398,12 @@ async fn transfer_name(
     let client = client.clone();
     let literal = literal.to_owned();
     run_sns_client_call("transfer SNS name", move || {
-        client
-            .sns()
-            .transfer(SnsNamespacePath::Domain, &literal, &request)
+        client.sns().transfer(
+            SnsNamespacePath::Domain,
+            &literal,
+            &request,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await
 }

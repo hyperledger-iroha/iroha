@@ -3,6 +3,8 @@ package org.hyperledger.iroha.android.nexus;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Input for the V1 numeric asset transfer flow. */
@@ -11,6 +13,7 @@ public final class NexusTransferInput {
   private final String sourceAssetId;
   private final String quantity;
   private final String destinationAccountId;
+  private final FeePaymentIntent feePayment;
   private final String authority;
   private final byte[] signingPublicKey;
   private final Long creationTimeMs;
@@ -19,11 +22,15 @@ public final class NexusTransferInput {
   private final Map<String, String> metadata;
 
   public NexusTransferInput(
-      final String sourceAssetId, final String quantity, final String destinationAccountId) {
+      final String sourceAssetId,
+      final String quantity,
+      final String destinationAccountId,
+      final FeePaymentIntent feePayment) {
     this(builder()
         .sourceAssetId(sourceAssetId)
         .quantity(quantity)
-        .destinationAccountId(destinationAccountId));
+        .destinationAccountId(destinationAccountId)
+        .feePayment(feePayment));
   }
 
   private NexusTransferInput(final Builder builder) {
@@ -34,6 +41,7 @@ public final class NexusTransferInput {
             .toString();
     this.destinationAccountId =
         NexusModelUtils.requireNonBlank(builder.destinationAccountId, "destinationAccountId");
+    this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
     this.authority = builder.authority;
     this.signingPublicKey = NexusModelUtils.copy(builder.signingPublicKey);
     this.creationTimeMs = builder.creationTimeMs;
@@ -47,6 +55,7 @@ public final class NexusTransferInput {
         .sourceAssetId(sourceAssetId)
         .quantity(quantity)
         .destinationAccountId(destinationAccountId)
+        .feePayment(feePayment)
         .authority(authority)
         .signingPublicKey(signingPublicKey)
         .creationTimeMs(creationTimeMs)
@@ -65,6 +74,10 @@ public final class NexusTransferInput {
 
   public String destinationAccountId() {
     return destinationAccountId;
+  }
+
+  public FeePaymentIntent feePayment() {
+    return feePayment;
   }
 
   public String authority() {
@@ -99,6 +112,7 @@ public final class NexusTransferInput {
     private String sourceAssetId;
     private String quantity;
     private String destinationAccountId;
+    private FeePaymentIntent feePayment;
     private String authority;
     private byte[] signingPublicKey;
     private Long creationTimeMs;
@@ -126,6 +140,11 @@ public final class NexusTransferInput {
 
     public Builder destinationAccountId(final String destinationAccountId) {
       this.destinationAccountId = destinationAccountId;
+      return this;
+    }
+
+    public Builder feePayment(final FeePaymentIntent feePayment) {
+      this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
       return this;
     }
 

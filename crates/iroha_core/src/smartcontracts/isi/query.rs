@@ -78,8 +78,8 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::oracle::DefiOracleAttestation>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
-        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorPolicy>,
-        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorPolicyId>,
+        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgram>,
+        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgramId>,
     ]);
 }
 
@@ -655,8 +655,8 @@ impl SortableQueryOutput for PeerId {
     }
 }
 
-impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicy {
-    type TiebreakKey = iroha_data_model::nexus::FeeSponsorPolicyId;
+impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorProgram {
+    type TiebreakKey = iroha_data_model::nexus::FeeSponsorProgramId;
 
     fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
@@ -671,7 +671,7 @@ impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicy {
     }
 }
 
-impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicyId {
+impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorProgramId {
     type TiebreakKey = Self;
 
     fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
@@ -998,8 +998,8 @@ fn preflight_singular_source_materialization(
         SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {
             return Err(reject_unbounded("FindLaneRelayEnvelopeByRef"));
         }
-        SingularQueryBox::FindFeeSponsorPolicyById(query) => {
-            if let Some(policy) = world.fee_sponsor_policies().get(&query.id) {
+        SingularQueryBox::FindFeeSponsorProgramById(query) => {
+            if let Some(policy) = world.fee_sponsor_programs().get(&query.id) {
                 charge(policy, &mut remaining)?;
             }
         }
@@ -1161,7 +1161,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindLaneRelayEnvelopeByRef(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindFeeSponsorPolicyById(q) => {
+            SingularQueryBox::FindFeeSponsorProgramById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindFxCorridorPolicyRegistry(q) => {
@@ -1393,10 +1393,10 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::escrow::AnonymousAssetEscrowRecord =>
                 dm::query::escrow::prelude::FindAnonymousAssetEscrows,
-            dm::nexus::FeeSponsorPolicy =>
-                dm::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor,
-            dm::nexus::FeeSponsorPolicy => dm::query::nexus::prelude::FindFeeSponsorPolicies,
-            dm::nexus::FeeSponsorPolicyId => dm::query::nexus::prelude::FindFeeSponsorPolicyIds,
+            dm::nexus::FeeSponsorProgram =>
+                dm::query::nexus::prelude::FindFeeSponsorProgramsBySponsor,
+            dm::nexus::FeeSponsorProgram => dm::query::nexus::prelude::FindFeeSponsorPrograms,
+            dm::nexus::FeeSponsorProgramId => dm::query::nexus::prelude::FindFeeSponsorProgramIds,
         }
 
         Err(Error::Conversion(
@@ -4202,18 +4202,18 @@ impl ValidQueryRequest {
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
-                            QueryItemKind::FeeSponsorPolicy => {
+                            QueryItemKind::FeeSponsorProgram => {
                                 if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorPolicy, iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor)
+                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
                                 }
                                 run_payload_or_default!(
-                                    iroha_data_model::nexus::FeeSponsorPolicy,
-                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                                    iroha_data_model::nexus::FeeSponsorProgram,
+                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
                                 )
                             }
-                            QueryItemKind::FeeSponsorPolicyId => run_payload_or_default!(
-                                iroha_data_model::nexus::FeeSponsorPolicyId,
-                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                            QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorProgramId,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                             ),
                         }
                     }
@@ -4366,13 +4366,13 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
-                        QueryItemKind::FeeSponsorPolicy => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicy,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        QueryItemKind::FeeSponsorProgram => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgram,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
                         ),
-                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicyId,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        QueryItemKind::FeeSponsorProgramId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgramId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                         ),
                     }
                 }
@@ -4507,13 +4507,13 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
-                        QueryItemKind::FeeSponsorPolicy => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicy,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        QueryItemKind::FeeSponsorProgram => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgram,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
                         ),
-                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicyId,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        QueryItemKind::FeeSponsorProgramId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgramId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                         ),
                     }
                 }
@@ -4657,13 +4657,13 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
-                        QueryItemKind::FeeSponsorPolicy => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicy,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        QueryItemKind::FeeSponsorProgram => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgram,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
                         ),
-                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
-                            iroha_data_model::nexus::FeeSponsorPolicyId,
-                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        QueryItemKind::FeeSponsorProgramId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorProgramId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                         ),
                     }
                 };
@@ -5710,18 +5710,18 @@ impl ValidQueryRequest {
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
-                            QueryItemKind::FeeSponsorPolicy => {
+                            QueryItemKind::FeeSponsorProgram => {
                                 if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorPolicy, iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor)
+                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorProgram, iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramsBySponsor)
                                 }
                                 run_payload_or_default!(
-                                    iroha_data_model::nexus::FeeSponsorPolicy,
-                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                                    iroha_data_model::nexus::FeeSponsorProgram,
+                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPrograms
                                 )
                             }
-                            QueryItemKind::FeeSponsorPolicyId => run_payload_or_default!(
-                                iroha_data_model::nexus::FeeSponsorPolicyId,
-                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                            QueryItemKind::FeeSponsorProgramId => run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorProgramId,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                             ),
                         }
                     }
@@ -6602,7 +6602,11 @@ mod tests {
             .expect("valid chain id");
         let keypair = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -7903,9 +7907,13 @@ mod tests {
 
             let valid_tx = {
                 let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
-                let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-                    .with_instructions([ok_instruction])
-                    .sign(ALICE_KEYPAIR.private_key());
+                let tx = TransactionBuilder::new(
+                    chain_id.clone(),
+                    ALICE_ID.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([ok_instruction])
+                .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(
                     tx,
                     &chain_id,
@@ -7916,9 +7924,13 @@ mod tests {
             };
             let invalid_tx = {
                 let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-                let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-                    .with_instructions([fail_isi.clone(), fail_isi])
-                    .sign(ALICE_KEYPAIR.private_key());
+                let tx = TransactionBuilder::new(
+                    chain_id.clone(),
+                    ALICE_ID.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([fail_isi.clone(), fail_isi])
+                .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(
                     tx,
                     &chain_id,
@@ -12419,9 +12431,13 @@ mod tests {
         let crypto_cfg = state.crypto();
 
         let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
-        let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions([ok_instruction])
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ok_instruction])
+        .sign(ALICE_KEYPAIR.private_key());
 
         let va_tx = AcceptedTransaction::accept(
             tx,
@@ -12452,9 +12468,13 @@ mod tests {
 
         let state_view = state.view();
 
-        let unapplied_tx = TransactionBuilder::new(chain_id, ALICE_ID.clone())
-            .with_instructions([Unregister::account(gen_account_in("domain").0)])
-            .sign(ALICE_KEYPAIR.private_key());
+        let unapplied_tx = TransactionBuilder::new(
+            chain_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Unregister::account(gen_account_in("domain").0)])
+        .sign(ALICE_KEYPAIR.private_key());
         let wrong_hash = TransactionEntrypoint::from(unapplied_tx).hash();
 
         let not_found = FindTransactions::new()

@@ -8,7 +8,12 @@ from typing import Any
 
 import pytest
 
-from iroha_python import SorafsPinAlias, SorafsPinRegisterResponse, ToriiClient
+from iroha_python import (
+    SorafsPinAlias,
+    SorafsPinRegisterResponse,
+    ToriiClient,
+    authority_fee_payment,
+)
 
 from .helpers import RecordingSession, StubResponse
 
@@ -19,7 +24,7 @@ def _pin_register_request() -> dict[str, Any]:
         "private_key": "ed25519:deadbeef",
         "manifest_payload": b"manifest-norito",
         "submitted_epoch": 42,
-        "gas_asset_id": "xor#universal",
+        "fee_payment": authority_fee_payment(charge_limits=[]),
         "alias": {
             "namespace": "docs",
             "name": "main",
@@ -50,7 +55,7 @@ def test_register_sorafs_pin_manifest_posts_validated_payload() -> None:
     assert body["private_key"] == "ed25519:deadbeef"
     assert body["manifest_payload"] == base64.b64encode(b"manifest-norito").decode("ascii")
     assert body["submitted_epoch"] == 42
-    assert body["gas_asset_id"] == "xor#universal"
+    assert body["fee_payment"] == authority_fee_payment(charge_limits=[])
     assert body["alias"] == {
         "namespace": "docs",
         "name": "main",
@@ -131,6 +136,7 @@ def test_register_sorafs_pin_manifest_typed_normalizes_response() -> None:
         "manifest_bytes",
         "manifestPayload",
         "submittedEpoch",
+        "gas_asset_id",
         "gasAssetId",
         "successorOfHex",
         "alias_namespace",
@@ -189,8 +195,8 @@ def test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_field
         (lambda request: request.update({"submitted_epoch": "42"}), "submitted_epoch"),
         (lambda request: request.update({"authority": " alice@boi"}), "authority"),
         (lambda request: request.update({"private_key": "ed25519:deadbeef "}), "private_key"),
-        (lambda request: request.update({"gas_asset_id": ""}), "gas_asset_id"),
-        (lambda request: request.update({"gas_asset_id": " xor#universal"}), "gas_asset_id"),
+        (lambda request: request.pop("fee_payment"), "fee_payment"),
+        (lambda request: request.update({"fee_payment": {}}), "fee_payment"),
         (lambda request: request["alias"].pop("proof_base64"), "alias.proof_base64"),
         (
             lambda request: request["alias"].update({"proof_base64": "not base64!"}),

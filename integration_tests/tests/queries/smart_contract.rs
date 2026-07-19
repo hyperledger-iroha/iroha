@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smart contract query behaviour checks.
 
+use std::num::NonZeroU64;
+
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{
@@ -11,16 +13,15 @@ use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
 
-fn metadata_with_gas_limit(bytecode: &IvmBytecode) -> Result<Metadata> {
+fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent> {
     let parsed =
         ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        "gas_limit".parse().expect("static gas_limit key"),
-        gas_limit_for_meta(&parsed.metadata)
-            .map_err(|error| eyre::eyre!("invalid IVM cycle limit: {error:?}"))?,
-    );
-    Ok(metadata)
+    let gas_limit = gas_limit_for_meta(&parsed.metadata)
+        .map_err(|error| eyre::eyre!("invalid IVM cycle limit: {error:?}"))?;
+    Ok(FeePaymentIntent::authority(
+        Vec::new(),
+        NonZeroU64::new(gas_limit),
+    ))
 }
 
 #[test]
@@ -41,8 +42,8 @@ fn smart_contract_query_scenarios() -> Result<()> {
     // live_query_is_dropped_after_smart_contract_end
     {
         let bytecode = load_sample_ivm("query_assets_and_save_cursor");
-        let metadata = metadata_with_gas_limit(&bytecode)?;
-        let transaction = client.build_transaction(bytecode, metadata);
+        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
+        let transaction = client.build_transaction(bytecode, fee_payment, Metadata::default());
         client.submit_transaction_blocking(&transaction)?;
 
         let cursor_key: Name = "cursor".parse().unwrap();
@@ -77,8 +78,8 @@ fn smart_contract_query_scenarios() -> Result<()> {
     // smart_contract_can_filter_queries
     {
         let bytecode = load_sample_ivm("smart_contract_can_filter_queries");
-        let metadata = metadata_with_gas_limit(&bytecode)?;
-        let transaction = client.build_transaction(bytecode, metadata);
+        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
+        let transaction = client.build_transaction(bytecode, fee_payment, Metadata::default());
         client
             .submit_transaction_blocking(&transaction)
             .wrap_err_with(|| {

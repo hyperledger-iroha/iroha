@@ -68,12 +68,18 @@ impl OfflineCommandRuntime {
         }
     }
 
-    fn sign_transaction(
+    fn quote_and_sign_transaction(
         &self,
+        app: &AppState,
         transaction: TransactionBuilder,
         context: &'static str,
     ) -> Result<SignedTransaction, Error> {
-        transaction
+        let mut payload = transaction
+            .into_payload()
+            .map_err(|source| offline_transaction_signing_error(context, source))?;
+        payload.fee_payment = crate::quote_internal_fee_payment(app, &payload)?;
+        TransactionBuilder::from_payload(payload)
+            .map_err(|source| offline_transaction_signing_error(context, source))?
             .try_sign(self.key_pair.private_key())
             .map_err(|source| offline_transaction_signing_error(context, source))
     }
@@ -164,9 +170,12 @@ pub(crate) async fn handle_top_up(
         ));
     }
     let instruction = TopUpKagemushaRecursiveV4::new(topup_request.clone());
-    let mut transaction =
-        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]);
+    let mut transaction = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        issuer.authority.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(instruction)]);
     transaction.set_creation_time(Duration::from_millis(
         topup_request.authorization.issued_at_ms,
     ));
@@ -176,7 +185,7 @@ pub(crate) async fn handle_top_up(
             .expires_at_ms
             .saturating_sub(topup_request.authorization.issued_at_ms),
     ));
-    let tx = issuer.sign_transaction(transaction, "offline_top_up_transaction")?;
+    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_top_up_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -254,16 +263,19 @@ pub(crate) async fn handle_redeem(
     }
     let authorization = redeem_request.authorization.clone();
     let instruction = RedeemKagemushaRecursiveV4::new(redeem_request.clone());
-    let mut transaction =
-        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]);
+    let mut transaction = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        issuer.authority.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(instruction)]);
     transaction.set_creation_time(Duration::from_millis(authorization.issued_at_ms));
     transaction.set_ttl(Duration::from_millis(
         authorization
             .expires_at_ms
             .saturating_sub(authorization.issued_at_ms),
     ));
-    let tx = issuer.sign_transaction(transaction, "offline_redeem_transaction")?;
+    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_redeem_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -500,7 +512,7 @@ fn ensure_kagemusha_v4_transaction_release(
 ) -> Result<(), Error> {
     let resolved = resolution.map_err(|error| Error::AppServiceUnavailable {
         code: "offline_recursive_release_invalid",
-        message: format!("The authenticated ABI-20 V4 release could not be resolved: {error}"),
+        message: format!("The authenticated ABI-21 V4 release could not be resolved: {error}"),
     })?;
     ensure_kagemusha_v4_issuance_window(resolved.issuance_active, issuance_required)
 }
@@ -512,7 +524,7 @@ fn ensure_kagemusha_v4_issuance_window(
     if issuance_required && !issuance_active {
         return Err(Error::AppServiceUnavailable {
             code: "offline_recursive_release_outside_issuance_window",
-            message: "The selected authenticated ABI-20 V4 release is outside its issuance window."
+            message: "The selected authenticated ABI-21 V4 release is outside its issuance window."
                 .to_owned(),
         });
     }
@@ -2283,6 +2295,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(issuer.key_pair.private_key());
@@ -2650,6 +2663,7 @@ mod tests {
         let unrelated = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([iroha_data_model::isi::Log::new(
             iroha_data_model::Level::INFO,
@@ -2673,6 +2687,7 @@ mod tests {
         let front_runner_transaction = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             AccountId::new(front_runner.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(TopUpKagemushaRecursiveV4::new(
             request.clone(),

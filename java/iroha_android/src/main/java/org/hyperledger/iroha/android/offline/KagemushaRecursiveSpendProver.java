@@ -21,12 +21,12 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
- * ABI-20 Kagemusha V4 artifact streaming and capability bridge.
+ * ABI-21 Kagemusha V4 artifact streaming and capability bridge.
  *
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * Every recursive lifecycle result is projected only through an ABI-20/V4 native decoder.
+ * Every recursive lifecycle result is projected only through an ABI-21/V4 native decoder.
  */
 public final class KagemushaRecursiveSpendProver {
   /** Closed first-release hardware assertion profiles for online operations. */
@@ -45,7 +45,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 20;
+  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   public static final String V4_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v4";
@@ -71,20 +71,20 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
   public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 9_211;
   public static final int MAX_PEER_ARCHIVE_BYTES_V2 = 32 * 1024;
-  /** Consensus ceiling for one canonical recipient-only ABI-20 peer archive. */
+  /** Consensus ceiling for one canonical recipient-only ABI-21 peer archive. */
   public static final int MAX_PEER_ARCHIVE_BYTES_V4 = 32 * 1024 * 1024;
   public static final int MAX_PEER_ARCHIVE_BYTES = MAX_PEER_ARCHIVE_BYTES_V4;
-  /** Consensus-derived ceiling for one canonical ABI-20 top-up provenance archive. */
+  /** Consensus-derived ceiling for one canonical ABI-21 top-up provenance archive. */
   public static final int MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 = 6_488_064;
   /** Largest V4 local verify carrier accepted by the native bridge, plus framing headroom. */
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4;
-  /** Exact Torii body ceiling for the ABI-20/V4 top-up route. */
+  /** Exact Torii body ceiling for the ABI-21/V4 top-up route. */
   public static final int MAX_TORII_TOP_UP_REQUEST_BYTES_V4 = 512 * 1024;
 
-  /** Exact Torii body ceiling for the ABI-20/V4 redemption route. */
+  /** Exact Torii body ceiling for the ABI-21/V4 redemption route. */
   public static final int MAX_TORII_REDEEM_REQUEST_BYTES_V4 = 48 * 1024 * 1024;
 
   private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
@@ -107,7 +107,7 @@ public final class KagemushaRecursiveSpendProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final boolean ARTIFACT_BRIDGE_AVAILABLE = loadArtifactBridge();
 
-  /** Canonical ABI-20 artifact roles. Declaration order is part of the native contract. */
+  /** Canonical ABI-21 artifact roles. Declaration order is part of the native contract. */
   public enum ArtifactRoleV4 {
     STEP_EQ_PARAMS_IPA("step-eq.params-ipa.krv4"),
     STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
@@ -2254,7 +2254,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Opaque ABI-20 recursive state. */
+  /** Opaque ABI-21 recursive state. */
   public static final class BundleV4 extends CanonicalArchive {
     private BundleV4(final byte[] archive) {
       super(
@@ -2308,7 +2308,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Finalized ABI-20 top-up receipt with a V4 artifact binding. */
+  /** Finalized ABI-21 top-up receipt with a V4 artifact binding. */
   public static final class TopUpAnchorV4 extends CanonicalArchive {
     private TopUpAnchorV4(final byte[] archive) {
       super(
@@ -2473,7 +2473,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Canonical next-zero cursor persisted atomically with every restored ABI-20 branch. */
+  /** Canonical next-zero cursor persisted atomically with every restored ABI-21 branch. */
   public static final class OutputMembershipFrontierV4 extends CanonicalArchive {
     private OutputMembershipFrontierV4(final byte[] archive) {
       super(
@@ -3179,7 +3179,7 @@ public final class KagemushaRecursiveSpendProver {
     public int proofStepCount() { return proofStepCount; }
   }
 
-  /** Secret-bearing local state used only by the genuine ABI-20 builders. */
+  /** Secret-bearing local state used only by the genuine ABI-21 builders. */
   public static final class SpendableBranchV4 implements AutoCloseable {
     private final BundleV4 bundle;
     private final NoteMembershipWitness membershipWitness;
@@ -3530,7 +3530,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Authenticated ABI-20 V4 release identity selected at the readiness snapshot. */
+  /** Authenticated ABI-21 V4 release identity selected at the readiness snapshot. */
   public static final class AuthenticatedArtifactSet {
     private final String generation;
     private final byte[] manifestSha256;
@@ -3582,7 +3582,7 @@ public final class KagemushaRecursiveSpendProver {
       if (maximumProofBytes <= 0
           || maximumProofBytes > MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
         throw new IllegalArgumentException(
-            "artifactMaximumProofBytes exceeds the ABI-20 V4 release limit");
+            "artifactMaximumProofBytes exceeds the ABI-21 V4 release limit");
       }
       if (assetScale < 0 || assetScale > KagemushaScaledAmount.MAXIMUM_SCALE) {
         throw new IllegalArgumentException(

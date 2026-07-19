@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+
 /** Public normalized evidence returned for a contract operation. */
 class ContractOperationReceipt(
     @JvmField val operationKind: String,
@@ -15,7 +17,6 @@ class ContractOperationReceipt(
     @JvmField val entrypointHashHex: String?,
     @JvmField val gasLimit: Long?,
     @JvmField val gasUsed: Long?,
-    @JvmField val gasAssetId: String?,
-    @JvmField val feeSponsor: String?,
+    @JvmField val feePayment: FeePaymentIntent?,
     @JvmField val payloadDigestHex: String,
 )

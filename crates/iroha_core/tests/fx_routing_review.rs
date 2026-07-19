@@ -273,8 +273,12 @@ fn accepted_transaction(
     state: &State,
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
-    let mut builder = TransactionBuilder::new(state.chain_id.clone(), ALICE_ID.clone())
-        .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(
+        state.chain_id.clone(),
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions);
     builder.set_creation_time(Duration::from_millis(1));
     let signed = builder.sign(ALICE_KEYPAIR.private_key());
     let view = state.view();

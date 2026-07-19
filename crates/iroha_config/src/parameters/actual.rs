@@ -58,7 +58,7 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
         LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility, ShardId,
         UniversalAccountId,
     },
@@ -69,6 +69,7 @@ use iroha_data_model::{
         pricing::PricingScheduleRecord,
     },
     taikai::TaikaiAvailabilityClass,
+    transaction::FeePaymentIntent,
 };
 use iroha_primitives::{
     addr::SocketAddr,
@@ -228,13 +229,6 @@ impl SoracloudRuntime {
             "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
         );
         assert!(
-            self.submission
-                .gas_asset_id
-                .as_ref()
-                .is_some_and(|asset_id| !asset_id.trim().is_empty()),
-            "soracloud_runtime.production_mode requires soracloud_runtime.submission.gas_asset_id"
-        );
-        assert!(
             !self.egress.default_allow,
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
         );
@@ -313,8 +307,37 @@ impl Default for SoracloudRuntimeInrou {
 /// Runtime-originated transaction submission settings.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SoracloudRuntimeSubmission {
-    /// Gas asset definition id used for runtime-originated control-plane submissions.
-    pub gas_asset_id: Option<String>,
+    /// Exact fee payer used for runtime-originated control-plane submissions.
+    pub fee_payer: SoracloudRuntimeFeePayer,
+}
+
+/// Signature-bound fee source for runtime-originated Soracloud transactions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SoracloudRuntimeFeePayer {
+    /// Debit the validator authority after deterministic quoting.
+    #[default]
+    Authority,
+    /// Debit one exact immutable sponsor-program revision.
+    Sponsor {
+        /// Canonical sponsor/program identifier.
+        program_id: FeeSponsorProgramId,
+        /// Exact immutable program revision.
+        program_revision: u64,
+    },
+}
+
+impl SoracloudRuntimeSubmission {
+    /// Build the empty-limit fee intent that Core must quote before signing.
+    #[must_use]
+    pub fn fee_payment_intent(&self) -> FeePaymentIntent {
+        match &self.fee_payer {
+            SoracloudRuntimeFeePayer::Authority => FeePaymentIntent::authority(Vec::new(), None),
+            SoracloudRuntimeFeePayer::Sponsor {
+                program_id,
+                program_revision,
+            } => FeePaymentIntent::sponsor(program_id.clone(), *program_revision, Vec::new(), None),
+        }
+    }
 }
 
 /// Outbound egress policy for embedded Soracloud runtimes.
@@ -2643,20 +2666,8 @@ pub struct NexusFees {
     pub per_instruction_fee: Quantity,
     /// Per-gas-unit fee multiplier applied to measured gas usage.
     pub per_gas_unit_fee: Quantity,
-    /// Whether fee sponsorship is permitted.
-    pub sponsorship_enabled: bool,
-    /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
-    pub sponsor_max_fee: Quantity,
-    /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
-    pub sponsor_verified_balance_safety_floor: Quantity,
-    /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
-    pub canonical_sponsor_account_id: Option<String>,
-    /// First block height whose lane commitments include Nexus fee receipts.
-    pub fee_receipts_activation_height: u64,
-    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
-    pub external_settlement_enabled: bool,
-    /// Retained for configuration compatibility; direct Nexus fee settlement burns immediately.
-    pub burn_from_unix_timestamp_ms: u64,
+    /// Protocol account that physically custodies isolated sponsor-program vault assets.
+    pub sponsor_vault_custody_account_id: AccountId,
     /// How fees are settled after they are computed.
     pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
@@ -2672,15 +2683,6 @@ pub enum NexusFeeSettlementMode {
     LaneRelayBurn,
 }
 
-impl NexusFees {
-    /// Whether the asynchronous lane-relay-burn receipt path is active for `block_height`.
-    #[must_use]
-    pub fn lane_relay_burn_receipts_active_at(&self, block_height: u64) -> bool {
-        self.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
-            && block_height >= self.fee_receipts_activation_height
-    }
-}
-
 impl Default for NexusFees {
     fn default() -> Self {
         Self {
@@ -2690,15 +2692,8 @@ impl Default for NexusFees {
             per_byte_fee: defaults::nexus::fees::per_byte_fee(),
             per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
-            sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
-            sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
-            sponsor_verified_balance_safety_floor:
-                defaults::nexus::fees::sponsor_verified_balance_safety_floor(),
-            canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
-                .map(str::to_owned),
-            fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
-            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
-            burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
+            sponsor_vault_custody_account_id:
+                defaults::nexus::fees::sponsor_vault_custody_account_id(),
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
         }
@@ -3126,10 +3121,8 @@ pub struct Nexus {
     pub lane_config: LaneConfig,
     /// Validated data-space catalog.
     pub dataspace_catalog: DataSpaceCatalog,
-    /// Default fee sponsor account literal for each data space.
-    pub dataspace_fee_sponsors: BTreeMap<DataSpaceId, String>,
-    /// Default fee sponsor policy name for each data space.
-    pub dataspace_fee_sponsor_policies: BTreeMap<DataSpaceId, Name>,
+    /// Default fee sponsor program for each data space.
+    pub dataspace_fee_sponsor_program_ids: BTreeMap<DataSpaceId, FeeSponsorProgramId>,
     /// Lane routing policy.
     pub routing_policy: LaneRoutingPolicy,
     /// Lane manifest registry configuration.
@@ -3166,8 +3159,7 @@ impl Default for Nexus {
             configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
-            dataspace_fee_sponsors: BTreeMap::new(),
-            dataspace_fee_sponsor_policies: BTreeMap::new(),
+            dataspace_fee_sponsor_program_ids: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
             governance: GovernanceCatalog::default(),
@@ -3203,8 +3195,7 @@ impl Nexus {
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
-            || !self.dataspace_fee_sponsors.is_empty()
-            || !self.dataspace_fee_sponsor_policies.is_empty()
+            || !self.dataspace_fee_sponsor_program_ids.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
 }
@@ -3249,8 +3240,7 @@ struct NexusConsensusPolicyPreimageV1 {
     enabled: bool,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
-    dataspace_fee_sponsors: Vec<(u64, String)>,
-    dataspace_fee_sponsor_policies: Vec<(u64, String)>,
+    dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
     routing: NexusConsensusRoutingV1,
     staking: NexusConsensusStakingV1,
     fees: NexusConsensusFeesV1,
@@ -3321,13 +3311,7 @@ struct NexusConsensusFeesV1 {
     per_byte_fee: Quantity,
     per_instruction_fee: Quantity,
     per_gas_unit_fee: Quantity,
-    sponsorship_enabled: bool,
-    sponsor_max_fee: Quantity,
-    sponsor_verified_balance_safety_floor: Quantity,
-    canonical_sponsor_account_id: Option<String>,
-    fee_receipts_activation_height: u64,
-    external_settlement_enabled: bool,
-    burn_from_unix_timestamp_ms: u64,
+    sponsor_vault_custody_account_id: AccountId,
     settlement_mode: u8,
     successful_claim_fee_exempt_authorities: Vec<String>,
 }
@@ -3552,15 +3536,10 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect::<Vec<_>>();
     dataspaces.sort_unstable_by_key(|entry| entry.id);
-    let dataspace_fee_sponsors = nexus
-        .dataspace_fee_sponsors
+    let dataspace_fee_sponsor_program_ids = nexus
+        .dataspace_fee_sponsor_program_ids
         .iter()
-        .map(|(id, sponsor)| (id.as_u64(), sponsor.clone()))
-        .collect();
-    let dataspace_fee_sponsor_policies = nexus
-        .dataspace_fee_sponsor_policies
-        .iter()
-        .map(|(id, policy)| (id.as_u64(), policy.as_ref().to_owned()))
+        .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
     let mut successful_claim_fee_exempt_authorities =
         nexus.fees.successful_claim_fee_exempt_authorities.clone();
@@ -3595,8 +3574,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         ])
         .into(),
         dataspaces,
-        dataspace_fee_sponsors,
-        dataspace_fee_sponsor_policies,
+        dataspace_fee_sponsor_program_ids,
         routing: NexusConsensusRoutingV1 {
             default_lane: nexus.routing_policy.default_lane.as_u32(),
             default_dataspace: nexus.routing_policy.default_dataspace.as_u64(),
@@ -3624,16 +3602,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             per_byte_fee: nexus.fees.per_byte_fee.clone(),
             per_instruction_fee: nexus.fees.per_instruction_fee.clone(),
             per_gas_unit_fee: nexus.fees.per_gas_unit_fee.clone(),
-            sponsorship_enabled: nexus.fees.sponsorship_enabled,
-            sponsor_max_fee: nexus.fees.sponsor_max_fee.clone(),
-            sponsor_verified_balance_safety_floor: nexus
-                .fees
-                .sponsor_verified_balance_safety_floor
-                .clone(),
-            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id.clone(),
-            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
-            external_settlement_enabled: nexus.fees.external_settlement_enabled,
-            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            sponsor_vault_custody_account_id: nexus.fees.sponsor_vault_custody_account_id.clone(),
             settlement_mode: nexus_fee_settlement_mode_tag(nexus.fees.settlement_mode),
             successful_claim_fee_exempt_authorities,
         },
@@ -4840,38 +4809,8 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.fees.sponsorship_enabled",
-        &nexus.fees.sponsorship_enabled,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.sponsor_max_fee",
-        &nexus.fees.sponsor_max_fee,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.sponsor_balance_floor",
-        &nexus.fees.sponsor_verified_balance_safety_floor,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.canonical_sponsor",
-        &nexus.fees.canonical_sponsor_account_id,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.receipts_activation_height",
-        &nexus.fees.fee_receipts_activation_height,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.external_settlement_enabled",
-        &nexus.fees.external_settlement_enabled,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.burn_from_unix_timestamp_ms",
-        &nexus.fees.burn_from_unix_timestamp_ms,
+        "nexus.fees.sponsor_vault_custody_account_id",
+        &nexus.fees.sponsor_vault_custody_account_id,
     );
     let settlement_mode = match nexus.fees.settlement_mode {
         NexusFeeSettlementMode::Direct => 0_u8,
@@ -4889,13 +4828,8 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.dataspace_fee_sponsors",
-        &nexus.dataspace_fee_sponsors,
-    );
-    append(
-        &mut preimage,
-        "nexus.dataspace_fee_sponsor_policies",
-        &nexus.dataspace_fee_sponsor_policies,
+        "nexus.dataspace_fee_sponsor_program_ids",
+        &nexus.dataspace_fee_sponsor_program_ids,
     );
 
     append(
@@ -7286,8 +7220,8 @@ pub struct ToriiOnboarding {
     pub alias_resolve_dataspaces: Vec<DataSpaceId>,
     /// Exact domain-qualified account-alias domains automatically granted for read-only resolution.
     pub alias_resolve_domains: Vec<DomainId>,
-    /// Optional exact sponsor-policy pair granted per newly onboarded account.
-    pub fee_sponsor: Option<ToriiOnboardingFeeSponsor>,
+    /// Optional exact sponsor program enrolled for each newly onboarded account.
+    pub fee_sponsor_program_id: Option<FeeSponsorProgramId>,
     /// Default alias lease term applied during onboarding.
     pub alias_lease_term_years: u8,
     /// Whether onboarding should create a default auto-renew subscription.
@@ -7300,15 +7234,6 @@ pub struct ToriiOnboarding {
     pub alias_auto_renew_max_failures: u32,
     /// Existing domain used to store internal alias auto-renew subscription NFTs.
     pub alias_auto_renew_subscription_domain: Option<DomainId>,
-}
-
-/// Exact fee-sponsor policy enrollment used by signer-backed onboarding.
-#[derive(Debug, Clone)]
-pub struct ToriiOnboardingFeeSponsor {
-    /// Sponsor account that owns the policy.
-    pub account: AccountId,
-    /// Explicit sponsor-local policy name.
-    pub policy: Name,
 }
 
 /// App-facing faucet configuration exposed to Torii.
@@ -11311,7 +11236,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "6611cdc66348bebfbd583f888864a747dcc828c5fe84f58dfb0346cca27abaf3",
+            "ea6a4cf07d275f1efd034fc82449967713410c6c13dff7cd1babb51f38c8705b",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -11382,18 +11307,23 @@ mod tests {
         assert_nexus_change("staking policy", changed);
 
         let mut changed = nexus.clone();
-        changed.fees.sponsorship_enabled = !changed.fees.sponsorship_enabled;
-        assert_nexus_change("fee policy", changed);
+        changed.fees.sponsor_vault_custody_account_id = AccountId::new(
+            KeyPair::try_from_seed(vec![0xF5; 32], Algorithm::Ed25519)
+                .expect("deterministic sponsor vault test key")
+                .public_key()
+                .clone(),
+        );
+        assert_nexus_change("fee sponsor vault custody", changed);
 
         let mut changed = nexus.clone();
-        changed.fees.burn_from_unix_timestamp_ms += 1;
-        assert_nexus_change("fee settlement activation", changed);
-
-        let mut changed = nexus.clone();
-        changed
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, "sponsor".to_owned());
-        assert_nexus_change("dataspace sponsor policy", changed);
+        changed.dataspace_fee_sponsor_program_ids.insert(
+            DataSpaceId::UNIVERSAL,
+            FeeSponsorProgramId::new(
+                changed.fees.sponsor_vault_custody_account_id.clone(),
+                "default".parse().expect("valid sponsor program name"),
+            ),
+        );
+        assert_nexus_change("dataspace sponsor program", changed);
 
         let mut changed = nexus.clone();
         changed.axt.max_clock_skew_ms += 1;

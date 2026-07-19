@@ -66,7 +66,7 @@ def test_faucet_requires_queued_receipt_and_pipeline_finality(monkeypatch) -> No
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",
-        gas_asset_id=asset_definition_id,
+        faucet_asset_id=asset_definition_id,
         status_timeout_ms=1_000,
     )
 
@@ -92,7 +92,7 @@ def test_faucet_rejects_retired_synchronous_receipt(monkeypatch) -> None:
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",
-        gas_asset_id="gas-asset",
+        faucet_asset_id="gas-asset",
     )
 
     assert result["status"] == "failed"
@@ -114,7 +114,7 @@ def test_faucet_rejects_short_queued_hash(monkeypatch) -> None:
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",
-        gas_asset_id="gas-asset",
+        faucet_asset_id="gas-asset",
     )
 
     assert result["status"] == "failed"

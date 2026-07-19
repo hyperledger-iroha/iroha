@@ -484,7 +484,16 @@ async fn submit_instruction_or_warn(
 ) -> Result<()> {
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || client.submit(instruction).map(|_| ()).wrap_err(context)).await??;
+    spawn_blocking(move || {
+        client
+            .submit(
+                instruction,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .map(|_| ())
+            .wrap_err(context)
+    })
+    .await??;
     Ok(())
 }
 

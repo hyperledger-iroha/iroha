@@ -12,10 +12,9 @@ use std::collections::BTreeMap;
 use iroha_config::parameters::actual as config;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    account::AccountId,
     asset::AssetDefinitionId,
     block::consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, FeeDebitSource, LaneId},
     transaction::SignedTransaction,
 };
 #[cfg(any(feature = "telemetry", test))]
@@ -247,10 +246,14 @@ pub struct PendingSettlement {
 pub struct PendingNexusFeeReceipt {
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
-    /// Sponsor or payer Nexus account charged for the public XOR burn.
-    pub payer_account_id: AccountId,
-    /// Fee asset selector, fixed to `xor#universal` for DPN settlement.
-    pub fee_asset_id: String,
+    /// Exact account or sponsor-program vault charged by settlement.
+    pub debit_source: FeeDebitSource,
+    /// Canonical fee asset definition charged by settlement.
+    pub fee_asset_id: AssetDefinitionId,
+    /// Immutable sponsor-program revision charged by this receipt, when sponsored.
+    pub program_revision: Option<u64>,
+    /// Proof-bound cross-lane spend lease, when relay settlement is used.
+    pub lease_id: Option<iroha_crypto::Hash>,
     /// Computed Nexus fee amount.
     pub fee_amount: Quantity,
     /// Fee schedule inputs used to compute [`Self::fee_amount`].
@@ -267,13 +270,15 @@ impl PendingNexusFeeReceipt {
         dataspace_id: DataSpaceId,
     ) -> NexusFeeReceipt {
         NexusFeeReceipt {
-            version: 1,
+            version: NexusFeeReceipt::VERSION,
             source_id: self.source_id,
             dataspace_id,
             lane_id,
             block_height,
-            payer_account_id: self.payer_account_id,
+            debit_source: self.debit_source,
             fee_asset_id: self.fee_asset_id,
+            program_revision: self.program_revision,
+            lease_id: self.lease_id,
             fee_amount: self.fee_amount,
             schedule: self.schedule,
         }

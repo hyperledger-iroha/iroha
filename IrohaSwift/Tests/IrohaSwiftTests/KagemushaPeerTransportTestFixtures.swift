@@ -205,7 +205,7 @@ enum KagemushaPeerTransportTestFixtures {
 
     /// Rust-generated canonical bundle template. `payment(request:)` rebinds
     /// its peer-split request digest and reframes the opaque bundle payload as
-    /// ABI-20 solely for transport-state-machine tests. Proof acceptance stays
+    /// ABI-21 solely for transport-state-machine tests. Proof acceptance stays
     /// covered by the native bridge tests; this fixture never enters a wallet.
     private static let canonicalRecipientBundleArchiveHex = [
         "4e5254300000dd08ef107254cbcf59c74170bd235bac005503000000000000698b08642ee59045020000000000000000b305",

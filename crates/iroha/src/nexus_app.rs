@@ -10,7 +10,7 @@ use std::{num::NonZeroU32, time::Duration};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetId, ChainId, Metadata, Quantity, Transfer},
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use thiserror::Error;
 use url::Url;
@@ -83,6 +83,12 @@ pub enum NexusAppError {
     /// Torii submit failed.
     #[error("transaction submit failed: {0}")]
     Submit(String),
+    /// Torii fee quoting failed or changed a signature-bound selection.
+    #[error("transaction fee quote failed: {0}")]
+    FeeQuote(String),
+    /// The exact unsigned transaction payload could not be constructed.
+    #[error("transaction payload build failed: {0}")]
+    TransactionBuild(String),
     /// Pipeline status wait failed.
     #[error("transaction status wait failed: {0}")]
     StatusWait(String),
@@ -102,6 +108,8 @@ impl NexusAppError {
             Self::InvalidSignature(_) | Self::SignatureVerification(_) => "invalid_signature",
             Self::TransactionHashMismatch { .. } => "transaction_hash_mismatch",
             Self::Submit(_) => "submit_failed",
+            Self::FeeQuote(_) => "fee_quote_failed",
+            Self::TransactionBuild(_) => "transaction_build_failed",
             Self::StatusWait(_) => "status_wait_failed",
         }
     }
@@ -194,6 +202,8 @@ pub struct NexusTransferInput {
     pub authority: Option<AccountId>,
     /// Transaction metadata.
     pub metadata: Metadata,
+    /// Exact authority or sponsor-program selection and executable gas bound to quote.
+    pub fee_payment: FeePaymentIntent,
     /// Optional deterministic creation timestamp.
     pub creation_time_ms: Option<u64>,
     /// Optional transaction TTL.
@@ -291,6 +301,16 @@ pub trait NexusConnectTransport {
 
 /// Torii submission dependency used by the facade.
 pub trait NexusToriiSubmitter {
+    /// Quote the exact unsigned payload before the wallet signs it.
+    ///
+    /// # Errors
+    /// Returns an error if Torii rejects the draft or changes the selected
+    /// payer, sponsor revision, or gas bound.
+    fn quote_fee_payment(
+        &self,
+        payload: &TransactionPayload,
+    ) -> Result<FeePaymentIntent, NexusAppError>;
+
     /// Submit the signed transaction and optionally wait for final status.
     ///
     /// # Errors
@@ -333,6 +353,28 @@ impl NexusConnectTransport for UnsupportedConnectTransport {
 }
 
 impl NexusToriiSubmitter for Client {
+    fn quote_fee_payment(
+        &self,
+        payload: &TransactionPayload,
+    ) -> Result<FeePaymentIntent, NexusAppError> {
+        let quote = self
+            .quote_fees(payload)
+            .map_err(|err| NexusAppError::FeeQuote(err.to_string()))?;
+        if !payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent)
+        {
+            return Err(NexusAppError::FeeQuote(
+                "Torii changed the selected payer, sponsor revision, or gas bound".to_owned(),
+            ));
+        }
+        quote
+            .intent
+            .validate()
+            .map_err(|err| NexusAppError::FeeQuote(err.to_string()))?;
+        Ok(quote.intent)
+    }
+
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -568,13 +610,17 @@ where
             None => return Err(NexusAppError::MissingSigningPublicKey),
         };
 
-        let mut builder = TransactionBuilder::new(self.config.chain_id.clone(), authority.clone())
-            .with_instructions([Transfer::asset_quantity(
-                input.source_asset_id.clone(),
-                input.quantity.clone(),
-                input.destination_account_id.clone(),
-            )])
-            .with_metadata(input.metadata.clone());
+        let mut builder = TransactionBuilder::new(
+            self.config.chain_id.clone(),
+            authority.clone(),
+            input.fee_payment.clone(),
+        )
+        .with_instructions([Transfer::asset_quantity(
+            input.source_asset_id.clone(),
+            input.quantity.clone(),
+            input.destination_account_id.clone(),
+        )])
+        .with_metadata(input.metadata.clone());
         if let Some(creation_time_ms) = input.creation_time_ms {
             builder.set_creation_time(Duration::from_millis(creation_time_ms));
         }
@@ -584,6 +630,24 @@ where
         if let Some(nonce) = input.nonce {
             builder.set_nonce(nonce);
         }
+        let mut payload = builder
+            .into_payload()
+            .map_err(|err| NexusAppError::TransactionBuild(err.to_string()))?;
+        let quoted_fee_payment = self.submitter.quote_fee_payment(&payload)?;
+        if !payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quoted_fee_payment)
+        {
+            return Err(NexusAppError::FeeQuote(
+                "quote changed the selected payer, sponsor revision, or gas bound".to_owned(),
+            ));
+        }
+        quoted_fee_payment
+            .validate()
+            .map_err(|err| NexusAppError::FeeQuote(err.to_string()))?;
+        payload.fee_payment = quoted_fee_payment;
+        let builder = TransactionBuilder::from_payload(payload)
+            .map_err(|err| NexusAppError::TransactionBuild(err.to_string()))?;
         let payload_bytes = builder.encode_payload();
         let payload_hash_hex = hex::encode(builder.payload_hash_bytes());
 
@@ -717,6 +781,13 @@ mod tests {
     }
 
     impl NexusToriiSubmitter for FakeSubmitter {
+        fn quote_fee_payment(
+            &self,
+            payload: &TransactionPayload,
+        ) -> Result<FeePaymentIntent, NexusAppError> {
+            Ok(payload.fee_payment.clone())
+        }
+
         fn submit_and_wait(
             &self,
             transaction: &SignedTransaction,
@@ -736,6 +807,13 @@ mod tests {
     struct MismatchedHashSubmitter;
 
     impl NexusToriiSubmitter for MismatchedHashSubmitter {
+        fn quote_fee_payment(
+            &self,
+            payload: &TransactionPayload,
+        ) -> Result<FeePaymentIntent, NexusAppError> {
+            Ok(payload.fee_payment.clone())
+        }
+
         fn submit_and_wait(
             &self,
             transaction: &SignedTransaction,
@@ -749,12 +827,42 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone)]
+    struct MismatchedQuoteSubmitter;
+
+    impl NexusToriiSubmitter for MismatchedQuoteSubmitter {
+        fn quote_fee_payment(
+            &self,
+            _payload: &TransactionPayload,
+        ) -> Result<FeePaymentIntent, NexusAppError> {
+            Ok(FeePaymentIntent::authority(
+                Vec::new(),
+                std::num::NonZeroU64::new(1),
+            ))
+        }
+
+        fn submit_and_wait(
+            &self,
+            _transaction: &SignedTransaction,
+            _options: NexusFinalizeOptions,
+        ) -> Result<NexusTransferReceipt, NexusAppError> {
+            unreachable!("a mismatched quote must fail before submission")
+        }
+    }
+
     #[derive(Debug)]
     struct FailingSubmitter {
         error: NexusAppError,
     }
 
     impl NexusToriiSubmitter for FailingSubmitter {
+        fn quote_fee_payment(
+            &self,
+            payload: &TransactionPayload,
+        ) -> Result<FeePaymentIntent, NexusAppError> {
+            Ok(payload.fee_payment.clone())
+        }
+
         fn submit_and_wait(
             &self,
             _transaction: &SignedTransaction,
@@ -779,6 +887,7 @@ mod tests {
             destination_account_id: authority.clone(),
             authority: Some(authority),
             metadata: Metadata::default(),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             creation_time_ms: Some(1_700_000_000_000),
             ttl: Some(Duration::from_secs(60)),
             nonce: Some(NonZeroU32::new(7).expect("nonzero")),
@@ -828,6 +937,7 @@ mod tests {
             destination_account_id: fixture_account("destination_account_id"),
             authority: Some(authority),
             metadata,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             creation_time_ms: Some(fixture_u64("creation_time_ms")),
             ttl: Some(Duration::from_millis(fixture_u64("ttl_ms"))),
             nonce: Some(
@@ -835,6 +945,21 @@ mod tests {
                     .expect("nonce"),
             ),
         }
+    }
+
+    #[test]
+    fn nexus_app_rejects_quote_that_changes_signature_bound_gas_selection() {
+        let key_pair = checked_ed25519_keypair();
+        let account = AccountId::new(key_pair.public_key().clone());
+        let client = NexusAppClient::new(
+            NexusAppConfig::new("test-chain".into()),
+            UnsupportedConnectTransport,
+            MismatchedQuoteSubmitter,
+        );
+        let error = client
+            .build_transfer_draft(sample_input(account))
+            .expect_err("mismatched fee quote must fail before wallet signing");
+        assert!(matches!(error, NexusAppError::FeeQuote(_)));
     }
 
     #[test]

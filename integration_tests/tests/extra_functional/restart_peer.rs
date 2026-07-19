@@ -109,7 +109,10 @@ fn ensure_account_alias_registration_lease(client: &Client, alias_literal: &str)
     }
 
     let request = test_account_alias_register_request(alias_literal, &client.account)?;
-    match client.sns().register(&request) {
+    match client.sns().register(
+        &request,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         Ok(_) => Ok(()),
         Err(err) if is_duplicate_sns_selector_error(&err) => {
             if wait_for_account_alias_registration_lease(client, alias_literal)? {
@@ -564,19 +567,22 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
-            .submit_all_blocking::<InstructionBox>([
-                Register::asset_definition({
-                    let __asset_definition_id = asset_definition_clone.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                })
-                .into(),
-                Mint::asset_quantity(
-                    mint_quantity,
-                    AssetId::new(asset_definition_clone, ALICE_ID.clone()),
-                )
-                .into(),
-            ])
+            .submit_all_blocking::<InstructionBox>(
+                [
+                    Register::asset_definition({
+                        let __asset_definition_id = asset_definition_clone.clone();
+                        AssetDefinition::numeric(__asset_definition_id.clone())
+                            .with_name(__asset_definition_id.name().to_string())
+                    })
+                    .into(),
+                    Mint::asset_quantity(
+                        mint_quantity,
+                        AssetId::new(asset_definition_clone, ALICE_ID.clone()),
+                    )
+                    .into(),
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| ())
     })
     .await
@@ -780,18 +786,21 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
-            .submit_all_blocking::<InstructionBox>([
-                Register::domain(Domain::new(submit_domain)).into(),
-                Register::account(Account::new(submit_account).with_label(Some(submit_alias)))
+            .submit_all_blocking::<InstructionBox>(
+                [
+                    Register::domain(Domain::new(submit_domain)).into(),
+                    Register::account(Account::new(submit_account).with_label(Some(submit_alias)))
+                        .into(),
+                    Register::asset_definition({
+                        let definition_id = submit_definition.clone();
+                        AssetDefinition::numeric(definition_id.clone())
+                            .with_name(definition_id.name().to_string())
+                    })
                     .into(),
-                Register::asset_definition({
-                    let definition_id = submit_definition.clone();
-                    AssetDefinition::numeric(definition_id.clone())
-                        .with_name(definition_id.name().to_string())
-                })
-                .into(),
-                Mint::asset_quantity(submit_quantity, submit_asset).into(),
-            ])
+                    Mint::asset_quantity(submit_quantity, submit_asset).into(),
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| ())
     })
     .await
@@ -1125,7 +1134,10 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let setup_client = network.client();
     let setup_res: eyre::Result<()> = spawn_blocking(move || {
         setup_client
-            .submit_all_blocking::<InstructionBox>(setup_instructions)
+            .submit_all_blocking::<InstructionBox>(
+                setup_instructions,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| ())
     })
     .await
@@ -1175,7 +1187,10 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let upload_client = network.client();
     let upload_res: eyre::Result<()> = spawn_blocking(move || {
         upload_client
-            .submit_all_blocking::<InstructionBox>(upload_instructions)
+            .submit_all_blocking::<InstructionBox>(
+                upload_instructions,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| ())
     })
     .await
@@ -1213,7 +1228,10 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let receipt_client = network.client();
     let receipt_res: eyre::Result<()> = spawn_blocking(move || {
         receipt_client
-            .submit_all_blocking::<InstructionBox>([receipt_instruction.into()])
+            .submit_all_blocking::<InstructionBox>(
+                [receipt_instruction.into()],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| ())
     })
     .await

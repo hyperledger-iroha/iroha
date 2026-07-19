@@ -55,7 +55,7 @@ use super::{
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkLimits,
+        V2LaneWorkLimits, require_validator_storage_platform,
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
@@ -517,6 +517,14 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         ingress_ready,
         output_guard,
     } = worker;
+
+    // Reject an unsupported voting host before any recovery or durable
+    // consensus constructor can touch validator storage. Observers remain
+    // available for sync and query service on other platforms.
+    require_validator_storage_platform(
+        config.role == NodeRole::Validator,
+        crate::kura::sumeragi_v2_validator_storage_supported(),
+    )?;
 
     let GenesisWithPubKey {
         genesis,
@@ -1080,6 +1088,14 @@ fn schedule_local_proposal(
     let directive = executor.local_proposal_directive()?;
     let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
     if directive.decided_subject().is_some() {
+        return Ok(());
+    }
+    // Do not consume a prepared candidate or register outbound payload bytes
+    // until the executor can reserve the local StoreBody owner. Timers,
+    // retransmission, and completions continue to run while this producer
+    // waits, so local proposal work cannot turn bounded capacity into a fatal
+    // adapter error.
+    if !executor.can_admit_local_proposal() {
         return Ok(());
     }
     // Bind the immutable disk acquisition to the current reducer incarnation
@@ -2338,6 +2354,21 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_storage_platform_rejects_runner_voter_and_admits_observer() {
+        let admit_role =
+            |role| require_validator_storage_platform(role == NodeRole::Validator, false);
+        assert!(matches!(
+            admit_role(NodeRole::Validator),
+            Err(super::super::v2_lane_work::V2LaneWorkError::UnsupportedValidatorStoragePlatform)
+        ));
+        assert_eq!(
+            admit_role(NodeRole::Observer),
+            Ok(()),
+            "an unsupported host may enter only the explicitly non-voting runner path"
+        );
+    }
+
+    #[test]
     fn explicit_observer_never_votes_even_when_present_in_roster() {
         let (context, keys) = context();
         let peer = PeerId::new(keys[0].public_key().clone());
@@ -2600,6 +2631,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             ChainId::from("height-one-resultless-projection"),
             AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "staged genesis execution".to_owned())])
         .sign(key_pair.private_key());
@@ -3057,18 +3089,18 @@ mod tests {
             .map(|validator| validator.validator.clone())
             .collect::<Vec<_>>();
 
-        let count_error = FairV2Ingress::new(4, 3 * 1024, 1024, 0)
+        let count_error = FairV2Ingress::new(6, 3 * 1024, 1024, 0)
             .configure_roster(validators.clone())
-            .expect_err("two validators require five protected message slots");
+            .expect_err("two validators require seven protected message slots");
         assert!(matches!(
             ingress_capacity_error(count_error),
             V2RunnerError::IngressCapacity {
-                configured: 4,
-                required: 5,
+                configured: 6,
+                required: 7,
             }
         ));
 
-        let byte_error = FairV2Ingress::new(5, 2 * 1024, 1024, 0)
+        let byte_error = FairV2Ingress::new(7, 2 * 1024, 1024, 0)
             .configure_roster(validators)
             .expect_err("two validators and untrusted traffic require three byte partitions");
         assert!(matches!(

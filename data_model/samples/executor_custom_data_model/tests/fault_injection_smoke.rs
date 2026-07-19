@@ -22,9 +22,13 @@ fn kotodama_bytecode_fault_injection_smoke() -> Result<(), iroha_crypto::Error> 
     let keypair = iroha_crypto::KeyPair::try_random()?;
     let account_id = AccountId::new(keypair.public_key().clone());
 
-    let mut tx = TransactionBuilder::new(chain, account_id)
-        .with_bytecode(IvmBytecode::from_compiled(vec![0xAA, 0xBB, 0xCC]))
-        .sign(keypair.private_key());
+    let mut tx = TransactionBuilder::new(
+        chain,
+        account_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_bytecode(IvmBytecode::from_compiled(vec![0xAA, 0xBB, 0xCC]))
+    .sign(keypair.private_key());
 
     let original = match tx.instructions() {
         Executable::Ivm(bytecode) => bytecode.as_ref().to_vec(),

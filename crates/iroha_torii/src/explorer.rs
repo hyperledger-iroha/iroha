@@ -2195,9 +2195,13 @@ mod tests {
     #[test]
     fn block_dto_counts_rejections() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 1_700_000_000_000, 0);
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
@@ -2239,8 +2243,12 @@ mod tests {
     #[test]
     fn block_dto_counts_sealed_commitment_entrypoints() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain.clone(), ALICE_ID.clone())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(ALICE_KEYPAIR.private_key());
         let reveal_deadline_height = 5;
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
@@ -2318,9 +2326,13 @@ mod tests {
     #[test]
     fn transaction_summary_reflects_status() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = transaction_summary_dto(&tx, 5, &result);
         assert_eq!(dto.block, 5);
@@ -2336,9 +2348,13 @@ mod tests {
             "purpose".parse().unwrap(),
             json::Value::String("test".into()),
         );
-        let mut builder = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .with_metadata(metadata);
+        let mut builder = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .with_metadata(metadata);
         builder.set_creation_time(StdDuration::from_millis(1_700_000_000));
         builder
             .set_ttl(StdDuration::from_secs(30))
@@ -2385,9 +2401,13 @@ mod tests {
     #[test]
     fn transaction_detail_includes_repetition_error_context_in_message() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
                 instruction: isi::InstructionType::Register,
@@ -2420,19 +2440,23 @@ mod tests {
         let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
             .expect("contract address");
         let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
-                entrypoint: "contribute".to_string(),
-                arguments: Some(
-                    iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
-                        arguments.clone(),
-                    )
-                    .expect("bounded argument fixture"),
-                ),
-            }))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
+            entrypoint: "contribute".to_string(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    arguments.clone(),
+                )
+                .expect("bounded argument fixture"),
+            ),
+        }))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = transaction_detail_dto(&tx, 9, &result);
 
@@ -2807,9 +2831,13 @@ mod tests {
         assert_eq!(kind, ExplorerInstructionKind::Custom);
 
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(core::iter::once(instruction.clone()))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction.clone()))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
@@ -2948,9 +2976,13 @@ mod tests {
         ));
         let instruction = InstructionBox::from(register);
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(core::iter::once(instruction.clone()))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction.clone()))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(
             &tx,

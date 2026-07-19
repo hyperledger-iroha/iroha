@@ -27,7 +27,8 @@ use iroha_data_model::{
         UpdateControllersRequestV1,
     },
     transaction::{
-        Executable, IvmBytecode, SignedTransaction, TransactionBuilder, signed::TransactionPayload,
+        Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
+        signed::TransactionPayload,
     },
 };
 use iroha_primitives::json::Json;
@@ -503,6 +504,7 @@ struct RawPayload {
     executable: RawExecutable,
     ttl_ms: Option<u64>,
     nonce: Option<u32>,
+    fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
 }
 
@@ -597,7 +599,10 @@ impl RawPayloadFixture {
             );
         }
 
-        let builder = self.payload.to_builder()?;
+        let builder = self
+            .payload
+            .to_builder()
+            .with_context(|| format!("failed to build Norito RPC fixture '{}'", self.name))?;
         let signed = builder.try_sign(keypair.private_key()).map_err(|err| {
             eyre!(
                 "failed to sign Norito RPC transaction fixture '{}': {err}",
@@ -649,7 +654,7 @@ impl RawPayload {
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
 
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(chain_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if let Some(ttl) = self.ttl_ms {
             builder.set_ttl(Duration::from_millis(ttl));
@@ -771,6 +776,16 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     let executable = parse_executable(executable_value)?;
     let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
     let nonce = parse_optional_u32(obj, "nonce")?;
+    let fee_payment = obj
+        .get("fee_payment")
+        .ok_or_else(|| eyre!("missing fee_payment"))
+        .and_then(|value| {
+            json::from_value::<FeePaymentIntent>(value.clone())
+                .map_err(|err| eyre!(err.to_string()))
+        })?;
+    fee_payment
+        .validate()
+        .map_err(|err| eyre!(err.to_string()))?;
     let metadata = match obj.get("metadata") {
         Some(value) => parse_metadata_object(value)?,
         None => Vec::new(),
@@ -783,6 +798,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         executable,
         ttl_ms,
         nonce,
+        fee_payment,
         metadata,
     })
 }
@@ -1680,6 +1696,7 @@ mod tests {
                 executable: RawExecutable::Instructions(Vec::new()),
                 ttl_ms: Some(60_000),
                 nonce: Some(1),
+                fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,

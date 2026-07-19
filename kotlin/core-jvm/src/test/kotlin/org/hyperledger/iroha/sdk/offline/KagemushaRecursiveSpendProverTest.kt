@@ -18,13 +18,13 @@ import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 
 class KagemushaRecursiveSpendProverTest {
     @Test
-    fun exactAbi20IsRequired() {
-        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(20))
-        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(19))
+    fun exactAbi21IsRequired() {
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(21))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(20))
         assertTrue(
             KagemushaRecursiveSpendProver.detectExactNativeAvailability(
                 loadLibrary = {},
-                abiVersion = { 20 },
+                abiVersion = { 21 },
                 symbolProbe = { true },
             ),
         )
@@ -461,7 +461,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
-        assertEquals(20, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(21, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
@@ -1150,7 +1150,7 @@ class KagemushaRecursiveSpendProverTest {
             artifact: KagemushaRecursiveSpendProver.AuthenticatedArtifactSet? = artifactSet(),
             proofBackendAvailable: Boolean = true,
         ) = KagemushaRecursiveSpendProver.ReadinessProjection(
-            20,
+            21,
             8,
             "xor#sora",
             9,

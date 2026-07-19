@@ -132,17 +132,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())]),
     )?;
     let tx_burn = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())]),
     )?;
     let tx_xfer = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::asset_quantity(a_coin.clone(), 5_u32, bob_id.clone()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::asset_quantity(
+            a_coin.clone(),
+            5_u32,
+            bob_id.clone(),
+        )]),
     )?;
     let (events_seq, _state_seq) = run_block_and_events(
         false,
@@ -156,58 +171,98 @@ fn main() -> Result<(), Box<dyn Error>> {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
     let tx_acc_set = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            SetKeyValue::account(
-                alice_id.clone(),
-                "k1".parse().unwrap(),
-                iroha_primitives::json::Json::new(1u32),
-            ),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::account(
+            alice_id.clone(),
+            "k1".parse().unwrap(),
+            iroha_primitives::json::Json::new(1u32),
+        )]),
     )?;
     let tx_dom_set = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            SetKeyValue::domain(
-                domain_id.clone(),
-                "dk".parse().unwrap(),
-                iroha_primitives::json::Json::new(3u32),
-            ),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::domain(
+            domain_id.clone(),
+            "dk".parse().unwrap(),
+            iroha_primitives::json::Json::new(3u32),
+        )]),
     )?;
     let tx_nft_reg = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Register::nft(Nft::new(nft_id.clone(), Metadata::default()))]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Register::nft(Nft::new(nft_id.clone(), Metadata::default()))]),
     )?;
     let tx_nft_set = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            SetKeyValue::nft(
-                nft_id.clone(),
-                "nk".parse().unwrap(),
-                iroha_primitives::json::Json::new("v"),
-            ),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::nft(
+            nft_id.clone(),
+            "nk".parse().unwrap(),
+            iroha_primitives::json::Json::new("v"),
+        )]),
     )?;
     let tx_nft_xfer = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::nft(alice_id.clone(), nft_id.clone(), bob_id.clone()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::nft(
+            alice_id.clone(),
+            nft_id.clone(),
+            bob_id.clone(),
+        )]),
     )?;
     let tx_nft_rm = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([RemoveKeyValue::nft(nft_id.clone(), "nk".parse().unwrap())]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RemoveKeyValue::nft(nft_id.clone(), "nk".parse().unwrap())]),
     )?;
     let tx_nft_unreg = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Unregister::nft(nft_id.clone())]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Unregister::nft(nft_id.clone())]),
     )?;
     let tx_acc_rm = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            RemoveKeyValue::account(alice_id.clone(), "k1".parse().unwrap()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RemoveKeyValue::account(
+            alice_id.clone(),
+            "k1".parse().unwrap(),
+        )]),
     )?;
     let tx_dom_rm = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            RemoveKeyValue::domain(domain_id.clone(), "dk".parse().unwrap()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RemoveKeyValue::domain(
+            domain_id.clone(),
+            "dk".parse().unwrap(),
+        )]),
     )?;
     let txs = vec![
         tx_acc_set,
@@ -231,18 +286,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         "rose".parse().unwrap(),
     );
     let tx_set = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            SetKeyValue::asset_definition(
-                ad.clone(),
-                "spec".parse().unwrap(),
-                iroha_primitives::json::Json::new("golden"),
-            ),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::asset_definition(
+            ad.clone(),
+            "spec".parse().unwrap(),
+            iroha_primitives::json::Json::new("golden"),
+        )]),
     )?;
     let tx_rm = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            RemoveKeyValue::asset_definition(ad.clone(), "spec".parse().unwrap()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RemoveKeyValue::asset_definition(
+            ad.clone(),
+            "spec".parse().unwrap(),
+        )]),
     )?;
     let (events_seq, _) = run_block_and_events(false, vec![tx_set.clone(), tx_rm.clone()])?;
     let (events_par, _) = run_block_and_events(true, vec![tx_set, tx_rm])?;
@@ -251,14 +315,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // 4) Owner transfers (domain + asset definition)
     let tx_dom_xfer = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::domain(alice_id.clone(), domain_id.clone(), bob_id.clone()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::domain(
+            alice_id.clone(),
+            domain_id.clone(),
+            bob_id.clone(),
+        )]),
     )?;
     let tx_ad_xfer = sign_fixture_transaction(
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::asset_definition(alice_id.clone(), ad.clone(), bob_id.clone()),
-        ]),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::asset_definition(
+            alice_id.clone(),
+            ad.clone(),
+            bob_id.clone(),
+        )]),
     )?;
     let (events_seq, _state_seq) =
         run_block_and_events(false, vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()])?;
@@ -282,8 +360,12 @@ mod tests {
     fn parity_fixture_transaction_uses_checked_signing_and_verifies() {
         let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let tx = sign_fixture_transaction(
-            TransactionBuilder::new(ChainId::from("chain"), alice_id)
-                .with_instructions([Log::new(Level::INFO, "checked parity fixture".to_owned())]),
+            TransactionBuilder::new(
+                ChainId::from("chain"),
+                alice_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "checked parity fixture".to_owned())]),
         )
         .expect("parity fixture transaction should sign");
 
@@ -295,8 +377,12 @@ mod tests {
     fn parity_fixture_block_uses_checked_signing() {
         let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let tx = sign_fixture_transaction(
-            TransactionBuilder::new(ChainId::from("chain"), alice_id)
-                .with_instructions([Log::new(Level::INFO, "checked parity block".to_owned())]),
+            TransactionBuilder::new(
+                ChainId::from("chain"),
+                alice_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "checked parity block".to_owned())]),
         )
         .expect("parity fixture transaction should sign");
 

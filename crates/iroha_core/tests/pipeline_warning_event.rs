@@ -65,16 +65,24 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
-    let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
-        .with_instructions([SetKeyValue::account(
-            bob_id.clone(),
-            "k".parse().unwrap(),
-            iroha_primitives::json::Json::new("v"),
-        )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id.clone(),
+        bob_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SetKeyValue::account(
+        bob_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let acc: Vec<_> = vec![tx1, tx2]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
@@ -182,16 +190,24 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
-    let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
-        .with_instructions([SetKeyValue::account(
-            bob_id.clone(),
-            "k".parse().unwrap(),
-            iroha_primitives::json::Json::new("v"),
-        )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id.clone(),
+        bob_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SetKeyValue::account(
+        bob_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let acc: Vec<_> = vec![tx1, tx2]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
