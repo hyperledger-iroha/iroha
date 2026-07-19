@@ -23709,7 +23709,16 @@ seiyaku GovernanceLifecycle {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &authority, &domain_id);
             let state = State::new(world, kura, query_handle);
-            let block = new_dummy_block();
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x52; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
+            let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
@@ -23720,6 +23729,48 @@ seiyaku GovernanceLifecycle {
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
                 "domain should be stored after registration"
+            );
+        }
+
+        #[test]
+        fn register_domain_rejects_active_sns_lease_owned_by_another_authority() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let (authority, _) = gen_account_in("tenants");
+            let (lease_owner, _) = gen_account_in("tenants");
+            assert_ne!(authority, lease_owner, "fixture accounts must be distinct");
+            let domain_id: DomainId = DomainId::try_new("leased-other", "world").expect("domain");
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &lease_owner, &domain_id);
+            let state = State::new(world, kura, query_handle);
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x53; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let err = Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect_err("a foreign active lease owner must fail");
+
+            let message = err.to_string();
+            assert!(
+                message.contains("active SNS domain-name lease")
+                    && message.contains("not")
+                    && message.contains(&authority.to_string())
+                    && message.contains(&lease_owner.to_string()),
+                "unexpected error: {message}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_none(),
+                "failed registration must not materialize the domain"
             );
         }
 

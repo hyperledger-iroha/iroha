@@ -880,6 +880,10 @@ required_production_liveness_tests=(
   kura::lane_geometry::tests::first_release_retirement_rejects_directory_substitution_at_pair_refresh
   kura::lane_geometry::tests::first_release_retirement_requires_bound_progress_sidecar_durability
   kura::lane_geometry::tests::geometry_gc_requires_bound_merge_receipt_durability_before_deletion
+  nexus::lane_relay::tests::actor_backpressure_retains_exact_relay_and_fifo_ticket
+  nexus::lane_relay::tests::blocked_relay_does_not_starve_a_responsive_relay
+  nexus::lane_relay::tests::terminal_actor_failures_return_exact_relay_ownership
+  nexus::lane_relay::tests::saturated_relay_owner_returns_sixty_fifth_exact_envelope
   sumeragi::v2_core::tests::prior_view_commit_votes_rebuild_the_exact_locked_round_quorum
   sumeragi::v2_core::tests::higher_tc_lock_prunes_superseded_commit_retransmission
   sumeragi::v2_core::tests::same_lock_tc_resigns_local_commit_and_rebuilds_quorum_without_self_delivery
@@ -1031,6 +1035,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::carrier_replacement_filters_persistence_and_output_sources_together
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
+  sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
   sumeragi::v2_runtime::tests::body_available_rebind_coalesces_exact_busy_deferred_destination_owner
@@ -1144,13 +1149,17 @@ required_production_liveness_tests=(
   network::tests::deferred_progress_survives_ttl_but_explicit_peer_removal_cancels_it
   network::tests::outside_topology_retransmit_is_not_misreported_as_delivered
   network::tests::accepted_draining_generation_delivers_reliable_progress_after_replacement
-  network::tests::direct_post_owner_forces_cross_kind_broadcast_parent_residual
-  network::tests::busy_broadcast_target_coalesces_exact_retry_but_distinct_residual_blocks_next_parent
+  network::tests::targetized_broadcast_coalesces_only_the_same_digest_and_membership
+  network::tests::distinct_broadcast_residual_is_target_isolated_and_its_rank_decreases
+  network::tests::exact_broadcast_retry_coalesces_but_distinct_and_direct_requests_do_not
+  network::tests::removed_membership_cancels_only_old_broadcast_debt_across_readd
+  network::tests::cancelled_target_child_with_pending_flush_ack_releases_exactly_once
+  network::tests::requested_topology_is_not_authority_and_closed_fanout_returns_all_targets
   network::tests::reliable_delivery_waits_for_its_route_subscriber
   network::tests::closed_reliable_subscriber_transfers_actor_pending_backlog_to_replacement
   tests::relay_fairness::seventeen_and_thousands_of_origins_cannot_multiply_one_authenticated_via
 )
-readonly expected_production_liveness_test_count=289
+readonly expected_production_liveness_test_count=298
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1168,7 +1177,7 @@ production_integration_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# twenty-module pre-network inventory.
+# twenty-one-module pre-network inventory.
 production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   cargo test --locked -p iroha_p2p --lib -- --list --ignored
@@ -1202,6 +1211,7 @@ done
 production_liveness_modules=(
   kura::tests
   kura::lane_geometry::tests
+  nexus::lane_relay::tests
   sumeragi::authoritative_runtime_gate_tests
   sumeragi::v2_core::tests
   sumeragi::v2_core::refinement::tests
@@ -1224,6 +1234,7 @@ production_liveness_modules=(
 production_liveness_leg_ids=(
   production-kura-progress-durability
   production-kura-lane-geometry
+  production-lane-relay-exact-ownership
   production-authoritative-ingress
   production-v2-core
   production-v2-core-refinement
@@ -1620,16 +1631,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^175 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^182 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 175 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 182 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 175 \
+  preflight-release-receipt pytest 182 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -1650,15 +1661,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^570 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^582 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 570 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 582 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 570 \
+  preflight-proof-fidelity pytest 582 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -1674,15 +1685,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 formal_launcher_pass_summary="$(
-  grep -Ec '^12 passed in [0-9]+([.][0-9]+)?s$' "$formal_launcher_contract_log" || true
+  grep -Ec '^16 passed in [0-9]+([.][0-9]+)?s$' "$formal_launcher_contract_log" || true
 )"
 if ((formal_launcher_pipeline_status[0] != 0 || formal_launcher_pipeline_status[1] != 0)) \
   || [[ "$formal_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly twelve passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 16 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-formal-launcher pytest 12 \
+  preflight-formal-launcher pytest 16 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${formal_launcher_contract_files[*]}" \
   "$formal_launcher_contract_log" \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"
@@ -1716,7 +1727,7 @@ record_corridor_log \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=40
+  readonly expected_corridor_leg_count=41
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -1859,10 +1870,32 @@ if [[ "$final_release_source_manifest_sha256" != "$release_source_manifest_sha25
   exit 1
 fi
 # Revalidate the deductive evidence after every long-running gate so a TLA+
-# edit during chaos or soak execution cannot inherit stale TLAPS success.
-python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
-  --release \
+# or production-source edit during chaos or soak execution cannot inherit
+# stale TLAPS/Verus/cross-tool success.
+cross_tool_obligations="$(
+  python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    --print-cross-tool-obligations
+)"
+final_proof_evidence_args=(
+  --release
   --evidence target/formal/sumeragi_v2/proof_evidence.json
+  --verus-evidence target/formal/sumeragi_v2/verus_evidence.json
+)
+readonly cross_tool_evidence_path="target/formal/sumeragi_v2/cross_tool_evidence.json"
+if [[ -n "$cross_tool_obligations" ]]; then
+  if [[ ! -f "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
+    echo "cross_tool_proved obligations require regular cross-tool evidence" >&2
+    exit 1
+  fi
+  final_proof_evidence_args+=(
+    --cross-tool-evidence "$cross_tool_evidence_path"
+  )
+elif [[ -e "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
+  echo "dormant cross-tool evidence must be absent" >&2
+  exit 1
+fi
+python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
+  "${final_proof_evidence_args[@]}"
 verify_release_identity "after final proof-evidence validation"
 
 seed_completion_path="$(<"$seed_completion_path_file")"

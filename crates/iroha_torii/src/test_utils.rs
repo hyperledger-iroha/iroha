@@ -1457,7 +1457,7 @@ mod tests {
 
         let tx = TransactionBuilder::new(
             chain_id.clone(),
-            authority,
+            authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
@@ -1465,6 +1465,7 @@ mod tests {
             "queued transaction fixture".to_owned(),
         )])
         .sign(keypair.private_key());
+        let first_tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
 
@@ -1472,13 +1473,74 @@ mod tests {
         assert_eq!(applied, 1);
         let view = state.view();
         assert_eq!(view.height(), 1);
+        let first_block = view
+            .latest_block()
+            .expect("committed test block remains readable from Kura");
+        let first_block_hash = first_block.hash();
+        assert_eq!(first_block.header().height().get(), 1);
         assert_eq!(
-            view.latest_block()
-                .expect("committed test block remains readable from Kura")
-                .header()
-                .height()
-                .get(),
-            1
+            view.kura().get_block_height_by_hash(first_block_hash),
+            core::num::NonZeroUsize::new(1)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        drop(view);
+
+        let second_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "second queued transaction fixture".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let second_tx_hash = second_tx.hash();
+        queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(second_tx)),
+                state.view(),
+            )
+            .expect("second queue push");
+        assert_eq!(apply_queued_in_one_block(&state, &queue, &chain_id, 2), 1);
+        let view = state.view();
+        assert_eq!(view.height(), 2);
+        let second_block = view
+            .latest_block()
+            .expect("second committed test block remains readable from Kura");
+        assert_eq!(second_block.header().height().get(), 2);
+        assert_eq!(
+            second_block.header().prev_block_hash(),
+            Some(first_block_hash),
+            "the synthetic test chain must preserve canonical parent linkage"
+        );
+        assert_eq!(
+            view.kura().get_block_height_by_hash(second_block.hash()),
+            core::num::NonZeroUsize::new(2)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(second_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(2).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index remains complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect(),
+            "storing the successor must preserve the first transaction index"
         );
     }
 }

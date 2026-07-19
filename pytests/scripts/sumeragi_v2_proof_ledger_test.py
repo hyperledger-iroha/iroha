@@ -748,6 +748,164 @@ def build_test_evidence(module, tmp_path: Path):
     return formal_dir, log_dir, evidence
 
 
+def complete_cross_tool_ledger(module):
+    """Return a synthetic complete ledger using the reviewed cross-tool status."""
+
+    ledger = copy.deepcopy(module.load_ledger())
+    ledger["machine_checked_completion"] = True
+    cross_tool_ids = set(module.CROSS_TOOL_REFINEMENT_BY_ID)
+    for obligation in ledger["obligations"]:
+        if obligation["id"] in cross_tool_ids:
+            obligation["status"] = "cross_tool_proved"
+        elif obligation["status"] == "specified_unproved":
+            obligation["status"] = "tlaps_proved"
+    return ledger
+
+
+def build_cross_tool_fixture(module, tmp_path: Path):
+    """Build canonical synthetic component logs for checker-only negative tests."""
+
+    ledger = complete_cross_tool_ledger(module)
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+
+    contracts_by_module = {}
+    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
+        contracts_by_module.setdefault(contract.module, []).append(contract)
+    for module_name, contracts in contracts_by_module.items():
+        path = formal_dir / f"{module_name}.tla"
+        source = path.read_text(encoding="utf-8")
+        end = source.rfind("====")
+        assert end >= 0
+        declarations = "".join(
+            "\nTHEOREM "
+            f"{contract.tla_theorem} ==\n"
+            f"  {contract.tla_statement}\n"
+            "PROOF\n"
+            "  OBVIOUS\n"
+            for contract in contracts
+        )
+        path.write_text(source[:end] + declarations + "\n====\n", encoding="utf-8")
+
+    verus_contract = module._verus_evidence_contract_module()
+    production_sources = {
+        relative
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        for relative in claim.production_sources
+    }
+    copied_sources = set(verus_contract.REQUIRED_SOURCE_PATHS) | production_sources
+    for relative in sorted(copied_sources):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source = ROOT_DIR / relative
+        if source.is_file():
+            shutil.copyfile(source, destination)
+        else:
+            # The fixture exercises the evidence schema independently of
+            # unrelated source-inventory migrations in the shared worktree.
+            destination.write_text("// synthetic fixture source\n", encoding="utf-8")
+
+    theorem_names_by_source = {}
+    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
+        for claim in contract.claims:
+            theorem_names_by_source.setdefault(claim.verus_source, []).append(
+                claim.verus_theorem
+            )
+    for relative, theorem_names in theorem_names_by_source.items():
+        path = tmp_path / relative
+        source = path.read_text(encoding="utf-8")
+        synthetic_proofs = "\nverus! {\n" + "".join(
+            f"pub proof fn {name}()\n"
+            "    ensures true,\n"
+            "{\n}\n"
+            for name in theorem_names
+        ) + "}\n"
+        path.write_text(source + synthetic_proofs, encoding="utf-8")
+
+    # Cross-tool release evidence must describe the exact ledger that is part
+    # of the source-bound checkout, not a separately supplied archive mutant.
+    (formal_dir / "proof_coverage.json").write_text(
+        json.dumps(ledger, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
+    log_dir.mkdir(parents=True)
+    formal_manifest_sha256 = module._formal_source_manifest(
+        formal_dir, tmp_path
+    )["sha256"]
+    for name in module.RELEASE_PROOF_MODULES:
+        (log_dir / f"{name}.log").write_text(
+            "[INFO]: All 1 obligation proved.\n"
+            f"{module._tlapm_runner_marker(name, formal_manifest_sha256)}\n",
+            encoding="utf-8",
+        )
+    tlaps_evidence = module.build_release_evidence(
+        tlapm_version=module.TLAPM_COMMIT[:7],
+        log_dir=log_dir,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+    )
+
+    host = verus_contract._host_key()
+    if host not in verus_contract.EXPECTED_TOOL_SHA256:
+        pytest.skip(f"cross-tool evidence fixture has no pinned Verus host {host}")
+    pinned_tool = verus_contract.EXPECTED_TOOL_SHA256[host]
+    workspace_manifest_sha256 = "a" * 64
+    nonce = "b" * 64
+    verus_log = tmp_path / verus_contract.EXPECTED_LOG_PATH
+    verus_log.parent.mkdir(parents=True, exist_ok=True)
+    verus_log.write_text(
+        verus_contract.begin_marker(nonce, workspace_manifest_sha256)
+        + "\n"
+        + "verification results:: "
+        + f"{verus_contract.EXPECTED_DEPENDENCY_VERIFIED} verified, 0 errors\n"
+        + "verification results:: "
+        + f"{verus_contract.EXPECTED_ROOT_VERIFIED} verified, 0 errors\n"
+        + verus_contract.success_marker(nonce, workspace_manifest_sha256)
+        + "\n",
+        encoding="utf-8",
+    )
+    verus_evidence = {
+        "schema_version": verus_contract.SCHEMA_VERSION,
+        "source_manifest_sha256": workspace_manifest_sha256,
+        "sources": verus_contract._source_entries(tmp_path),
+        "tool": {
+            "version": verus_contract.EXPECTED_VERUS_VERSION,
+            "platform": pinned_tool["platform"],
+            "verus_sha256": pinned_tool["verus"],
+            "cargo_verus_sha256": pinned_tool["cargo_verus"],
+        },
+        "invocation": list(verus_contract.EXPECTED_INVOCATION),
+        "log": verus_contract.EXPECTED_LOG_PATH,
+        "log_sha256": module._sha256_file(verus_log),
+        "nonce": nonce,
+        "results": {
+            "dependency_verified": verus_contract.EXPECTED_DEPENDENCY_VERIFIED,
+            "root_verified": verus_contract.EXPECTED_ROOT_VERIFIED,
+            "errors": 0,
+        },
+        "backend_verification": True,
+    }
+    cross_tool_evidence = module.build_cross_tool_evidence(
+        ledger,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest_sha256,
+    )
+    return (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest_sha256,
+    )
+
+
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
     tmp_path: Path,
 ) -> None:
@@ -849,6 +1007,592 @@ def test_release_evidence_requires_exact_pinned_tool_identity(tmp_path: Path) ->
             formal_dir=formal_dir,
             root_dir=tmp_path,
         )
+
+
+def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+
+    assert ledger["schema_version"] == module.LEDGER_SCHEMA_VERSION == 2
+    assert ledger["status_values"] == list(module.STATUS_VALUES)
+    assert [
+        len(contract.claims)
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+    ] == [4, 6, 6]
+    assert module._cross_tool_contract_errors() == []
+    canonical_contracts = module.CROSS_TOOL_REFINEMENT_CONTRACTS
+    first = canonical_contracts[0]
+    tautological = module.CrossToolObligationContract(
+        obligation_id=first.obligation_id,
+        module=first.module,
+        ledger_symbol=first.ledger_symbol,
+        tla_theorem=first.tla_theorem,
+        tla_statement=(
+            "ProductionEffectiveLockBodyAcquisitionRefinement => "
+            "ProductionEffectiveLockBodyAcquisitionRefinement"
+        ),
+        claims=first.claims,
+    )
+    module.CROSS_TOOL_REFINEMENT_CONTRACTS = (
+        tautological,
+        *canonical_contracts[1:],
+    )
+    assert any(
+        "must imply its exact ledger theorem symbol" in error
+        for error in module._cross_tool_contract_errors()
+    )
+    module.CROSS_TOOL_REFINEMENT_CONTRACTS = canonical_contracts
+    by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
+    assert all(
+        by_id[obligation_id]["status"] == "specified_unproved"
+        for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID
+    )
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        {},
+        tlaps_evidence=None,
+        verus_evidence=None,
+    ) == [
+        "cross-tool evidence is forbidden when no obligation is cross_tool_proved"
+    ]
+    with pytest.raises(ValueError, match="no cross_tool_proved obligations"):
+        module.build_cross_tool_evidence(
+            ledger,
+            tlaps_evidence={},
+            verus_evidence={},
+        )
+
+    forged = copy.deepcopy(ledger)
+    next(
+        obligation
+        for obligation in forged["obligations"]
+        if obligation["id"] == "dual-quorum-definition"
+    )["status"] = "cross_tool_proved"
+    errors = module.validate_ledger(forged, check_retired_paths=False).errors
+    assert any(
+        "uses cross_tool_proved outside the reviewed production refinement inventory"
+        in error
+        for error in errors
+    )
+
+    tlaps_only = copy.deepcopy(ledger)
+    next(
+        obligation
+        for obligation in tlaps_only["obligations"]
+        if obligation["id"]
+        == "effective-lock-body-acquisition-production-refinement"
+    )["status"] = "tlaps_proved"
+    errors = module.validate_ledger(tlaps_only, check_retired_paths=False).errors
+    assert any(
+        "cannot be promoted with TLAPS evidence alone" in error for error in errors
+    )
+
+    legacy_schema = copy.deepcopy(ledger)
+    legacy_schema["schema_version"] = 1
+    errors = module.validate_ledger(
+        legacy_schema,
+        check_retired_paths=False,
+    ).errors
+    assert "proof ledger schema_version must equal 2" in errors
+
+
+def test_cross_tool_obligation_query_is_dormant_canonical_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    ledger_path = tmp_path / "proof_coverage.json"
+    ledger_path.write_text(
+        json.dumps(module.load_ledger()),
+        encoding="utf-8",
+    )
+    dormant = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--ledger",
+            str(ledger_path),
+            "--print-cross-tool-obligations",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert dormant.returncode == 0, dormant.stderr
+    assert dormant.stdout.strip() == ""
+
+    complete = complete_cross_tool_ledger(module)
+    ledger_path.write_text(json.dumps(complete), encoding="utf-8")
+    required = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--ledger",
+            str(ledger_path),
+            "--print-cross-tool-obligations",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert required.returncode == 0, required.stderr
+    assert required.stdout.splitlines() == [
+        contract.obligation_id
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+    ]
+
+    next(
+        obligation
+        for obligation in complete["obligations"]
+        if obligation["id"] == "dual-quorum-definition"
+    )["status"] = "cross_tool_proved"
+    ledger_path.write_text(json.dumps(complete), encoding="utf-8")
+    unreviewed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--ledger",
+            str(ledger_path),
+            "--print-cross-tool-obligations",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert unreviewed.returncode == 1
+    assert "unreviewed cross_tool_proved obligations" in unreviewed.stderr
+
+
+def test_cross_tool_release_requires_linked_evidence(tmp_path: Path) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+
+    assert module._release_evidence_errors(
+        ledger,
+        tlaps_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+    ) == []
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    ) == []
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        None,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    ) == ["release gate requires cross-tool refinement evidence"]
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=None,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    ) == ["cross-tool refinement requires linked Verus evidence"]
+
+    unreviewed = copy.deepcopy(ledger)
+    next(
+        obligation
+        for obligation in unreviewed["obligations"]
+        if obligation["id"] == "dual-quorum-definition"
+    )["status"] = "cross_tool_proved"
+    with pytest.raises(ValueError, match="reviewed canonical selection"):
+        module.build_cross_tool_evidence(
+            unreviewed,
+            tlaps_evidence=tlaps_evidence,
+            verus_evidence=verus_evidence,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+            expected_verus_source_manifest_sha256=workspace_manifest,
+        )
+
+    verus_contract = module._verus_evidence_contract_module()
+    canonical_log = tmp_path / verus_contract.EXPECTED_LOG_PATH
+    archived_log = tmp_path / "archive" / "verus.log"
+    archived_log.parent.mkdir()
+    shutil.move(canonical_log, archived_log)
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+        verus_log_path=archived_log,
+    ) == []
+
+
+def test_cross_tool_evidence_rejects_every_missing_or_substituted_claim(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+
+    def errors_for(mutant):
+        return module._cross_tool_evidence_errors(
+            ledger,
+            mutant,
+            tlaps_evidence=tlaps_evidence,
+            verus_evidence=verus_evidence,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+            expected_verus_source_manifest_sha256=workspace_manifest,
+        )
+
+    for obligation_index, obligation in enumerate(
+        cross_tool_evidence["obligations"]
+    ):
+        for claim_index, _ in enumerate(obligation["claims"]):
+            substituted = copy.deepcopy(cross_tool_evidence)
+            substituted["obligations"][obligation_index]["claims"][claim_index][
+                "constant"
+            ] += "Substituted"
+            assert errors_for(substituted)
+
+        missing = copy.deepcopy(cross_tool_evidence)
+        missing["obligations"][obligation_index]["claims"].pop()
+        assert errors_for(missing)
+
+    substituted_theorem = copy.deepcopy(cross_tool_evidence)
+    substituted_theorem["obligations"][0]["claims"][0][
+        "verus_theorem"
+    ] += "_substituted"
+    assert errors_for(substituted_theorem)
+
+    mismatched_source = copy.deepcopy(cross_tool_evidence)
+    mismatched_source["obligations"][1]["claims"][0]["production_sources"][0][
+        "sha256"
+    ] = "0" * 64
+    assert errors_for(mismatched_source)
+
+
+def test_cross_tool_evidence_rejects_tool_log_manifest_and_ledger_substitution(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+
+    def errors_for(
+        *,
+        cross=cross_tool_evidence,
+        tlaps=tlaps_evidence,
+        verus=verus_evidence,
+        changed_ledger=ledger,
+    ):
+        return module._cross_tool_evidence_errors(
+            changed_ledger,
+            cross,
+            tlaps_evidence=tlaps,
+            verus_evidence=verus,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+            expected_verus_source_manifest_sha256=workspace_manifest,
+        )
+
+    missing_field = copy.deepcopy(cross_tool_evidence)
+    missing_field.pop("tools")
+    assert errors_for(cross=missing_field)
+
+    substituted_link = copy.deepcopy(cross_tool_evidence)
+    substituted_link["component_evidence"]["verus_sha256"] = "0" * 64
+    assert errors_for(cross=substituted_link)
+
+    substituted_manifest = copy.deepcopy(cross_tool_evidence)
+    substituted_manifest["source_manifests"]["formal_sha256"] = "0" * 64
+    assert errors_for(cross=substituted_manifest)
+
+    missing_dependency = copy.deepcopy(cross_tool_evidence)
+    missing_dependency["obligations"][1]["dependencies"].pop(0)
+    assert errors_for(cross=missing_dependency)
+
+    substituted_tlaps = copy.deepcopy(tlaps_evidence)
+    substituted_tlaps["tool"]["commit"] = "0" * 40
+    assert errors_for(tlaps=substituted_tlaps)
+
+    substituted_verus = copy.deepcopy(verus_evidence)
+    substituted_verus["tool"]["version"] = "forged"
+    assert errors_for(verus=substituted_verus)
+
+    changed_ledger = copy.deepcopy(ledger)
+    changed_ledger["obligations"][0]["requirement"] += " drift"
+    assert errors_for(changed_ledger=changed_ledger)
+    with pytest.raises(ValueError, match="source-bound canonical proof ledger"):
+        module.build_cross_tool_evidence(
+            changed_ledger,
+            tlaps_evidence=tlaps_evidence,
+            verus_evidence=verus_evidence,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+            expected_verus_source_manifest_sha256=workspace_manifest,
+        )
+
+    first_log = (
+        tmp_path
+        / cross_tool_evidence["obligations"][0]["tla"]["log"]
+    )
+    first_log.write_text(first_log.read_text(encoding="utf-8") + "stale\n")
+    assert errors_for()
+
+
+def test_cross_tool_evidence_rejects_stale_production_source(tmp_path: Path) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+    relative = cross_tool_evidence["obligations"][0]["claims"][0][
+        "production_sources"
+    ][0]["path"]
+    path = tmp_path / relative
+    path.write_text(path.read_text(encoding="utf-8") + "\n// stale\n", encoding="utf-8")
+
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert errors
+
+
+def test_cross_tool_evidence_rejects_named_verus_result_substitution(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+    claim = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims[0]
+    path = tmp_path / claim.verus_source
+    source = path.read_text(encoding="utf-8")
+    old = f"pub proof fn {claim.verus_theorem}()"
+    assert source.count(old) == 1
+    path.write_text(
+        source.replace(old, old.removesuffix("()") + "_substituted()", 1),
+        encoding="utf-8",
+    )
+    for entry in verus_evidence["sources"]:
+        if entry["path"] == claim.verus_source:
+            entry["sha256"] = module._sha256_file(path)
+            break
+    else:
+        raise AssertionError(claim.verus_source)
+
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert any("requires exactly one named Verus theorem" in error for error in errors)
+
+    path.write_text(
+        source.replace(old, f"#[cfg(any())]\n{old}", 1),
+        encoding="utf-8",
+    )
+    for entry in verus_evidence["sources"]:
+        if entry["path"] == claim.verus_source:
+            entry["sha256"] = module._sha256_file(path)
+            break
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert any("may not be gated or rewritten" in error for error in errors)
+
+
+def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        _,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+    contract = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0]
+    tla_path = formal_dir / f"{contract.module}.tla"
+    canonical_tla = tla_path.read_text(encoding="utf-8")
+    log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
+
+    def fresh_tlaps_evidence():
+        manifest = module._formal_source_manifest(formal_dir, tmp_path)["sha256"]
+        for name in module.RELEASE_PROOF_MODULES:
+            (log_dir / f"{name}.log").write_text(
+                "[INFO]: All 1 obligation proved.\n"
+                f"{module._tlapm_runner_marker(name, manifest)}\n",
+                encoding="utf-8",
+            )
+        return module.build_release_evidence(
+            tlapm_version=module.TLAPM_COMMIT[:7],
+            log_dir=log_dir,
+            formal_dir=formal_dir,
+            root_dir=tmp_path,
+        )
+
+    first_claim = contract.claims[0]
+    premise_conjunct = f"/\\ {first_claim.constant} = TRUE"
+    assert canonical_tla.count(premise_conjunct) == 1
+    tla_path.write_text(
+        canonical_tla.replace(
+            premise_conjunct,
+            f"/\\ {first_claim.constant}Substituted = TRUE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=fresh_tlaps_evidence(),
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert any("exact ordered claim mapping" in error for error in errors)
+
+    tautology = (
+        "ProductionEffectiveLockBodyAcquisitionRefinement "
+        "=> ProductionEffectiveLockBodyAcquisitionRefinement"
+    )
+    tla_path.write_text(
+        canonical_tla.replace(contract.tla_statement, tautology, 1),
+        encoding="utf-8",
+    )
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=fresh_tlaps_evidence(),
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert any("must state exactly" in error for error in errors)
+
+    tla_path.write_text(
+        canonical_tla.replace(
+            contract.tla_theorem,
+            contract.tla_theorem + "Substituted",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._cross_tool_evidence_errors(
+        ledger,
+        cross_tool_evidence,
+        tlaps_evidence=fresh_tlaps_evidence(),
+        verus_evidence=verus_evidence,
+        formal_dir=formal_dir,
+        root_dir=tmp_path,
+        expected_verus_source_manifest_sha256=workspace_manifest,
+    )
+    assert any("missing named TLA theorem" in error for error in errors)
+
+
+def test_cross_tool_evidence_requires_proved_dependency_closure(tmp_path: Path) -> None:
+    module = load_checker()
+    (
+        ledger,
+        formal_dir,
+        tlaps_evidence,
+        verus_evidence,
+        cross_tool_evidence,
+        workspace_manifest,
+    ) = build_cross_tool_fixture(module, tmp_path)
+
+    progress_closure = module._proof_dependency_closure(
+        "progress-witness-production-refinement"
+    )
+    assert "async-runner-scheduler-preservation" in progress_closure
+    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
+        for prerequisite_id in module._proof_dependency_closure(
+            contract.obligation_id
+        ):
+            incomplete = copy.deepcopy(ledger)
+            next(
+                obligation
+                for obligation in incomplete["obligations"]
+                if obligation["id"] == prerequisite_id
+            )["status"] = "specified_unproved"
+            errors = module._cross_tool_evidence_errors(
+                incomplete,
+                cross_tool_evidence,
+                tlaps_evidence=tlaps_evidence,
+                verus_evidence=verus_evidence,
+                formal_dir=formal_dir,
+                root_dir=tmp_path,
+                expected_verus_source_manifest_sha256=workspace_manifest,
+            )
+            assert any(
+                "requires proved prerequisite" in error for error in errors
+            ), (contract.obligation_id, prerequisite_id, errors)
 
 
 def test_tlaps_proved_symbol_must_be_a_theorem_declaration() -> None:
@@ -4527,6 +5271,34 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ), errors
         adapter.write_text(canonical_adapter, encoding="utf-8")
 
+    deferred_qc_adapter_mutations = (
+        (
+            "reducer_qc_matches_wire",
+            "                    && share.signature() == &aggregate",
+            "                    || share.signature() == &aggregate",
+            "exact deferred-QC wire identity comparator declaration, contract, "
+            "and complete control flow must match",
+        ),
+        (
+            "deferred_quorum_certificate_owner_tag",
+            "self.deferred_progress_inputs.iter().find_map",
+            "self.deferred_inputs.iter().find_map",
+            "exact Busy-deferred QC owner lookup declaration, contract, and "
+            "complete control flow must match",
+        ),
+    )
+    for item_name, old, new, expected_error in deferred_qc_adapter_mutations:
+        adapter.write_text(
+            mutate_adapter_item(item_name, old, new),
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        adapter.write_text(canonical_adapter, encoding="utf-8")
+
     adapter.write_text(
         mutate_adapter_item(
             "drain_deferred",
@@ -4672,6 +5444,80 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             + item.source.replace(old, new, 1)
             + canonical_runtime[end:]
         )
+
+    deferred_qc_runtime_mutations = (
+        (
+            "check_embedded_quorum_certificate_capacity",
+            "        if deferred_owner.is_some()\n            || self",
+            "        if false\n            || self",
+            "outer response runtime/deferred QC capacity union declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "can_admit_network_message",
+            "            let deferred_owner = self\n"
+            "                .driver\n"
+            "                .deferred_quorum_certificate_owner_tag(&response.certificate);",
+            "            let deferred_owner = None;",
+            "CommitCertificateResponse deferred-owner capacity preflight declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "enqueue_network",
+            "        let authenticated_deferred_qc_owner = match authenticated.payload() {\n"
+            "            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self\n"
+            "                .driver\n"
+            "                .deferred_quorum_certificate_owner_tag(certificate),\n"
+            "            _ => None,\n"
+            "        };",
+            "        let authenticated_deferred_qc_owner = deferred_qc_owner;",
+            "post-authenticated deferred-QC enqueue coalescing declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "enqueue_network",
+            "        if authenticated_deferred_qc_owner != deferred_qc_owner {",
+            "        if false {",
+            "post-authenticated deferred-QC enqueue coalescing declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "enqueue_network",
+            "            return Ok(owner_tag);",
+            "            let _ = owner_tag;",
+            "post-authenticated deferred-QC enqueue coalescing declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            "            Some(0),",
+            "            None,",
+            "Busy-deferred CommitQC response coalescing regression declaration, "
+            "contract, and complete control flow must match",
+        ),
+        (
+            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            "        assert_eq!(\n"
+            "            runtime.queued_commands(),\n"
+            "            queued_before,\n"
+            "            \"authenticated coalescing must not create a runtime-queued duplicate\"\n"
+            "        );",
+            "        assert!(runtime.queued_commands() >= queued_before);",
+            "Busy-deferred CommitQC response coalescing regression declaration, "
+            "contract, and complete control flow must match",
+        ),
+    )
+    for item_name, old, new, expected_error in deferred_qc_runtime_mutations:
+        runtime.write_text(
+            mutate_runtime_item(item_name, old, new),
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        runtime.write_text(canonical_runtime, encoding="utf-8")
 
     runtime.write_text(
         mutate_runtime_item(
@@ -6694,6 +7540,37 @@ def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
             errors,
         )
         path.write_text(source, encoding="utf-8")
+
+
+def test_async_source_fidelity_rejects_post_gst_responsive_crash(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "PreGstResponsiveCrash",
+            "  /\\ ~gst\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "PreGstResponsiveCrash omits required production behavior" in error
+        and "~gst" in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize(
@@ -10899,6 +11776,12 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         < final_marker
     )
     assert "proof_evidence.json" in source
+    cross_requirement = source.index("--print-cross-tool-obligations")
+    cross_generation = source.index("--write-cross-tool-evidence")
+    assert cross_requirement < tlaps < verus < cross_generation < final_release
+    assert 'rm -f -- "$cross_tool_evidence"' in source
+    assert '--verus-evidence "$verus_evidence"' in source
+    assert '--cross-tool-evidence "$cross_tool_evidence"' in source
 
     verus_source = (ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh").read_text()
     unit = verus_source.index("--unit")
@@ -11014,7 +11897,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 289 tests",
+            "must contain exactly 298 tests",
         ),
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -11022,9 +11905,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=289",
-            "readonly expected_production_liveness_test_count=288",
-            "production liveness source count must be sealed as 289",
+            "readonly expected_production_liveness_test_count=298",
+            "readonly expected_production_liveness_test_count=297",
+            "production liveness source count must be sealed as 298",
         ),
         (
             'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
@@ -11044,6 +11927,7 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -11056,6 +11940,37 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
 
     errors = module._production_liveness_release_inventory_errors(tmp_path)
     assert any(expected_error in error for error in errors), errors
+
+
+def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    for relative in (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("docs/formal/sumeragi_v2/README.md"),
+        Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+
+    liveness_path = tmp_path / "docs" / "source" / "sumeragi_v2_liveness.md"
+    source = liveness_path.read_text(encoding="utf-8")
+    old = "aggregate pre-network corridor to 41\nlegs"
+    assert source.count(old) == 1
+    liveness_path.write_text(
+        source.replace(old, "aggregate pre-network corridor to 40\nlegs", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(
+        "release inventory documentation must contain exact claim" in error
+        and "sumeragi_v2_liveness.md" in error
+        for error in errors
+    ), errors
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
@@ -11088,6 +12003,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ).read_text(encoding="utf-8")
     lane_work_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_lane_work.rs"
+    ).read_text(encoding="utf-8")
+    lane_relay_source = (
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "nexus" / "lane_relay.rs"
     ).read_text(encoding="utf-8")
     runner_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
@@ -11510,6 +12428,31 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert len(macro_step_production_inventory_additions) == 18
     latest_production_inventory_additions = (
         (
+            "nexus::lane_relay::tests::",
+            "actor_backpressure_retains_exact_relay_and_fifo_ticket",
+            lane_relay_source,
+        ),
+        (
+            "nexus::lane_relay::tests::",
+            "blocked_relay_does_not_starve_a_responsive_relay",
+            lane_relay_source,
+        ),
+        (
+            "nexus::lane_relay::tests::",
+            "terminal_actor_failures_return_exact_relay_ownership",
+            lane_relay_source,
+        ),
+        (
+            "nexus::lane_relay::tests::",
+            "saturated_relay_owner_returns_sixty_fifth_exact_envelope",
+            lane_relay_source,
+        ),
+        (
+            "sumeragi::v2_runtime::tests::",
+            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            runtime_source,
+        ),
+        (
             "sumeragi::v2_lane_work::tests::",
             "applied_lane_certificate_retires_alternative_qc_replays_without_weakening_conflicts",
             lane_work_source,
@@ -11581,11 +12524,36 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "network::tests::",
-            "direct_post_owner_forces_cross_kind_broadcast_parent_residual",
+            "targetized_broadcast_coalesces_only_the_same_digest_and_membership",
+            p2p_network_source,
+        ),
+        (
+            "network::tests::",
+            "distinct_broadcast_residual_is_target_isolated_and_its_rank_decreases",
+            p2p_network_source,
+        ),
+        (
+            "network::tests::",
+            "exact_broadcast_retry_coalesces_but_distinct_and_direct_requests_do_not",
+            p2p_network_source,
+        ),
+        (
+            "network::tests::",
+            "removed_membership_cancels_only_old_broadcast_debt_across_readd",
+            p2p_network_source,
+        ),
+        (
+            "network::tests::",
+            "cancelled_target_child_with_pending_flush_ack_releases_exactly_once",
+            p2p_network_source,
+        ),
+        (
+            "network::tests::",
+            "requested_topology_is_not_authority_and_closed_fanout_returns_all_targets",
             p2p_network_source,
         ),
     )
-    assert len(latest_production_inventory_additions) == 15
+    assert len(latest_production_inventory_additions) == 25
     production_inventory_additions = (
         new_production_inventory_additions
         + macro_step_production_inventory_additions
@@ -11642,9 +12610,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     pre_soak_manifest = release_source.index("pre_soak_source_manifest_sha256")
     taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
-    final_proof_check = release_source.index(
-        "check_sumeragi_v2_proof_ledger.py \\\n  --release \\\n  --evidence"
-    )
+    final_proof_check = release_source.index("final_proof_evidence_args=(")
     aggregate_receipt = release_source.index(
         "write_sumeragi_v2_release_receipt.py"
     )
@@ -11670,6 +12636,21 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         < aggregate_receipt
     )
     assert seed_matrix < pr_branch < pr_fast_formal
+    final_proof_region = release_source[final_proof_check:aggregate_receipt]
+    assert "--release" in final_proof_region
+    assert (
+        "--evidence target/formal/sumeragi_v2/proof_evidence.json"
+        in final_proof_region
+    )
+    assert (
+        "--verus-evidence target/formal/sumeragi_v2/verus_evidence.json"
+        in final_proof_region
+    )
+    assert '--print-cross-tool-obligations' in release_source[
+        final_manifest:final_proof_check
+    ]
+    assert '--cross-tool-evidence "$cross_tool_evidence_path"' in final_proof_region
+    assert '"${final_proof_evidence_args[@]}"' in final_proof_region
     assert "/tmp/iroha-sumeragi-v2-release-host-" not in release_source
     assert "IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE" not in release_source
     assert 'release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"' in release_source
@@ -11689,16 +12670,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "sumeragi::",
                 "sumeragi_v2_runner::",
                 "kura::",
+                "nexus::",
                 "peer::",
                 "network::",
                 "tests::relay_fairness::",
             )
         )
     )
-    assert len(production_inventory) == 289
-    assert len(set(production_inventory)) == 289
-    assert "readonly expected_production_liveness_test_count=289" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 289" in receipt_source
+    assert len(production_inventory) == 298
+    assert len(set(production_inventory)) == 298
+    assert "readonly expected_production_liveness_test_count=298" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 298" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -11708,7 +12690,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 289
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 298
     for _, module, expected_count in receipt_module._PRODUCTION_MODULES:
         assert (
             sum(test.startswith(f"{module}::") for test in production_inventory)
@@ -11883,8 +12865,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 71" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 175 passing tests" in release_source
-    assert "preflight-release-receipt pytest 175" in release_source
+    assert "did not run exactly 182 passing tests" in release_source
+    assert "preflight-release-receipt pytest 182" in release_source
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
@@ -11902,13 +12884,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                175,'
+        '"preflight-release-receipt",\n                "pytest",\n                182,'
         in receipt_source
     )
-    assert "did not run exactly 570 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 570" in release_source
+    assert "did not run exactly 582 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 582" in release_source
     assert (
-        "^570 passed in [0-9]+([.][0-9]+)?s( "
+        "^582 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -11927,10 +12909,15 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert contract_file in release_source
         assert contract_file in receipt_source
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                570,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                582,'
         in receipt_source
     )
-    assert "did not run exactly twelve passing tests" in release_source
+    assert "did not run exactly 16 passing tests" in release_source
+    assert "preflight-formal-launcher pytest 16" in release_source
+    assert (
+        '"preflight-formal-launcher",\n                "pytest",\n                16,'
+        in receipt_source
+    )
     assert "taira_release_ignored_contract_list=" in release_source
     assert "required Taira release-evidence contract test is ignored" in release_source
     for test_name in (
@@ -11943,7 +12930,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
-    assert "expected_corridor_leg_count=40" in release_source
+    assert "expected_corridor_leg_count=41" in release_source
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source
@@ -13367,30 +14354,31 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
     ("item_name", "old", "new", "expected_error"),
     (
         (
-            "try_reserve_broadcast_child",
-            "retained.request_digest == parent.request_digest",
-            "true",
-            "busy broadcast targets may coalesce only the same canonical request digest",
+            "try_reserve_for_source",
+            "if source_retained.is_some_and(|retained| retained.items >= 1) {",
+            "if source_retained.is_some_and(|retained| retained.items >= 2) {",
+            "distinct broadcast or direct requests remain FIFO-ranked behind a target owner",
         ),
         (
-            "split_reliable_actor_broadcast",
-            "// the older child as its reconstruction witness.\n"
-            "                    exact_residual.push_back(target);",
-            "// the older child as its reconstruction witness.\n"
-            "                    drop(target);",
+            "submit_progress_message_to_source",
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(false),",
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(true),",
             (
-                "same-digest broadcast retries coalesce while distinct requests and "
-                "unavailable children retain exact residuals"
+                "same-digest target retries coalesce while invalid or distinct ownership "
+                "cannot substitute for the original request"
             ),
         ),
         (
-            "split_reliable_actor_broadcast",
-            "BroadcastChildLeaseAttempt::DifferentRequestAlreadyOwned => {",
-            "BroadcastChildLeaseAttempt::SameRequestAlreadyOwned => {",
-            (
-                "same-digest broadcast retries coalesce while distinct requests and "
-                "unavailable children retain exact residuals"
-            ),
+            "broadcast_recoverable",
+            "&& Arc::ptr_eq(&ticket.topology, &self.reliable_broadcast_topology)",
+            "&& true",
+            "broadcast retry tickets bind digest, actor budget, and topology publication",
+        ),
+        (
+            "broadcast_recoverable",
+            "if !target.membership.is_active() {",
+            "if false && !target.membership.is_active() {",
+            "broadcast fanout admits each active membership through an isolated target source",
         ),
         (
             "progress_ticket_request_digest",
@@ -13446,7 +14434,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
 
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert any(
-        "progress lease drop must release only the source with the same canonical request digest"
+        "progress lease drop releases only the same digest, kind, and topology membership"
         in error
         for error in errors
     ), errors

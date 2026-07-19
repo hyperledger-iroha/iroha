@@ -29,7 +29,8 @@ use iroha_logger::prelude::*;
 use iroha_p2p::{
     Post, Priority, UpdatePeers, UpdateTopology,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionTicket, SubscriberFilter,
+        NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyRoute,
+        SubscriberFilter,
         message::{SubscriberRoute, Topic},
     },
     peer::message::PeerMessage,
@@ -63,6 +64,13 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         msg: Post<NetworkMessage>,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    /// Admit a reply over the exact authenticated route of its request.
+    fn post_reply_recoverable(
+        &self,
+        msg: Post<NetworkMessage>,
+        reply_route: &NetworkReplyRoute,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
     /// Subscribe to peer messages delivered by the P2P layer.
     fn subscribe(
         &self,
@@ -92,6 +100,20 @@ impl GenesisNetwork for IrohaNetwork {
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
         iroha_p2p::network::NetworkBaseHandle::post_recoverable(self, msg, ticket)
+    }
+
+    fn post_reply_recoverable(
+        &self,
+        msg: Post<NetworkMessage>,
+        reply_route: &NetworkReplyRoute,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        iroha_p2p::network::NetworkBaseHandle::post_reply_recoverable(
+            self,
+            msg,
+            reply_route,
+            ticket,
+        )
     }
 
     fn subscribe(
@@ -307,6 +329,7 @@ struct PreflightOutcome {
 struct PendingGenesisPost {
     message: Post<NetworkMessage>,
     ticket: Option<NetworkActorAdmissionTicket>,
+    reply_route: Option<NetworkReplyRoute>,
 }
 
 struct GenesisRequestTarget {
@@ -344,7 +367,11 @@ impl GenesisRequestFanout {
             if target.permanently_rejected {
                 continue;
             }
-            let PendingGenesisPost { message, ticket } =
+            let PendingGenesisPost {
+                message,
+                ticket,
+                reply_route,
+            } =
                 target.pending.take().unwrap_or_else(|| PendingGenesisPost {
                     message: Post {
                         data: self.message.clone(),
@@ -352,13 +379,19 @@ impl GenesisRequestFanout {
                         priority: Priority::High,
                     },
                     ticket: None,
+                    reply_route: None,
                 });
+            debug_assert!(reply_route.is_none());
             match network.post_recoverable(message, ticket) {
                 Ok(()) => {}
                 Err(NetworkActorAdmissionError::Backpressured {
                     message, ticket, ..
                 }) => {
-                    target.pending = Some(PendingGenesisPost { message, ticket });
+                    target.pending = Some(PendingGenesisPost {
+                        message,
+                        ticket,
+                        reply_route: None,
+                    });
                 }
                 Err(NetworkActorAdmissionError::Closed { .. }) => {
                     actor_open = false;
@@ -444,13 +477,26 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         tokio::spawn(async move {
             let mut pending_response: Option<PendingGenesisPost> = None;
             loop {
-                if let Some(PendingGenesisPost { message, ticket }) = pending_response.take() {
-                    match network.post_recoverable(message, ticket) {
+                if let Some(PendingGenesisPost {
+                    message,
+                    ticket,
+                    reply_route,
+                }) = pending_response.take()
+                {
+                    let result = match reply_route.as_ref() {
+                        Some(route) => network.post_reply_recoverable(message, route, ticket),
+                        None => network.post_recoverable(message, ticket),
+                    };
+                    match result {
                         Ok(()) => continue,
                         Err(NetworkActorAdmissionError::Backpressured {
                             message, ticket, ..
                         }) => {
-                            pending_response = Some(PendingGenesisPost { message, ticket });
+                            pending_response = Some(PendingGenesisPost {
+                                message,
+                                ticket,
+                                reply_route,
+                            });
                             time::sleep(retry_period).await;
                             continue;
                         }
@@ -476,6 +522,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                 let Some(msg) = rx.recv().await else {
                     break;
                 };
+                let reply_route = msg.reply_route().cloned();
                 match msg.payload {
                     NetworkMessage::GenesisRequest(request) => {
                         let trusted_guard = trusted
@@ -512,14 +559,22 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                                 peer_id: msg.peer.id().clone(),
                                 priority: Priority::High,
                             };
-                            match network.post_recoverable(post, None) {
+                            let result = match reply_route.as_ref() {
+                                Some(route) => network.post_reply_recoverable(post, route, None),
+                                None => network.post_recoverable(post, None),
+                            };
+                            match result {
                                 Ok(()) => {}
                                 Err(NetworkActorAdmissionError::Backpressured {
                                     message,
                                     ticket,
                                     ..
                                 }) => {
-                                    pending_response = Some(PendingGenesisPost { message, ticket });
+                                    pending_response = Some(PendingGenesisPost {
+                                        message,
+                                        ticket,
+                                        reply_route,
+                                    });
                                 }
                                 Err(NetworkActorAdmissionError::Closed { .. }) => {
                                     iroha_logger::warn!(
@@ -1289,6 +1344,15 @@ mod tests {
             }
             self.posted.lock().expect("posted mutex").push(msg);
             Ok(())
+        }
+
+        fn post_reply_recoverable(
+            &self,
+            msg: Post<NetworkMessage>,
+            _reply_route: &NetworkReplyRoute,
+            ticket: Option<NetworkActorAdmissionTicket>,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+            self.post_recoverable(msg, ticket)
         }
 
         fn subscribe(

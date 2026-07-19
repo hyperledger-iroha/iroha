@@ -25299,13 +25299,15 @@ non-cloneable authenticated-source credit follows inbound bytes through the
 actor-owned queues. Old-generation dispatch workers now drain accepted
 reliable work before normal teardown, and a closed subscriber returns its
 actor-side pending reliable backlog for FIFO replay to its replacement.
-Only a canonically identical retry coalesces with an existing broadcast child.
-A distinct payload or cross-kind collision retains an exact class-wide parent
-residual. Explicit topology removal releases a snapshotted child, but not that
-parent. Already-channelled subscriber items, direct-post ownership for a
-removed target, relay second-hop failure, and final application receipt still
-need a durable final-consumer acknowledgement or a proved reconstruction
-handoff.
+Only a canonically identical retry in the same membership tenure coalesces with
+an existing broadcast child. Distinct payloads and direct/broadcast cross-kind
+collisions retain exact per-target FIFO tickets, while responsive targets
+continue independently without a class-wide parent. Explicit topology removal
+cancels only the old broadcast tenure, remove/re-add creates a new generation,
+and direct-post ownership survives. Already-channelled subscriber items,
+direct-post ownership for a removed target, relay second-hop failure, and final
+application receipt still need a durable final-consumer acknowledgement or a
+proved reconstruction handoff.
 
 The exact Sumeragi output scheduler is now per-target FIFO and round-robin
 across fan-outs, so an actor-backpressured target does not suppress completion
@@ -25449,8 +25451,8 @@ regression saturates certified-request, Normal, and Progress ownership while
 preserving the Completion reserve, then uses durable reducer retransmission to
 reconstruct the blocked Fetch after the exact authenticated response with a
 still-live matching logical request registration releases capacity. The gate
-pins 289 required tests
-across 20 modules, including exact composite
+pins 298 required tests
+across 21 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
 catch-up. Post-decision regressions reject new durable timeout and TC formation
@@ -25499,16 +25501,19 @@ capacity-negative raises it to
 raised the preceding inventory to 230. Atomic lane-certificate, authenticated-
 via, historical-recovery, active-watchdog, peer flush/source-credit, network
 actor-retry, and daemon relay-fairness regressions raised the preceding
-inventory to 264. Twenty-six positive additions—10 exact-output/typed-rollover,
-2 peer-generation/flush, and 14 ticket/topology/broadcast/subscriber-network
-regressions—are offset by removal of one obsolete adapter cursor alias, raising
-the current inventory by a net 25 to 289. The rollover slice covers historical
+inventory to 264. Thirty-seven positive additions—10 exact-output/typed-rollover,
+2 peer-generation/flush, 20 ticket/topology/broadcast/subscriber-network
+regressions, 1 runtime/Busy-deferred exact CommitQC coalescing regression, and
+4 Nexus lane-relay ownership/fairness regressions—are offset by removal of the
+obsolete adapter cursor alias and two superseded broadcast-residual tests,
+raising the current inventory by a net 34 to 298. The rollover slice covers historical
 Kura CommitQC, body, and lane-certificate rereads; current global V2; lane
 proof/supersession, Native AMX, merge-share, certified-sidecar, and untyped
 fail-closed boundaries. The network slice pins identical-retry coalescing and
 exact per-target FIFO ownership for distinct/cross-kind collisions. The four
 integration names execute as one module-filtered leg; adding
-the peer, network, and daemon modules expands the totals to 20 modules and 40
+the peer, network, daemon, and Nexus lane-relay modules expands the totals to
+21 modules and 41
 pre-network legs. Fresh full discovery and serial execution are pending for
 that inventory; the preceding 170-name
 corridor was green with one passing row per name. The committed, detached,
@@ -25593,7 +25598,7 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 289 production-liveness tests across 20
+completion. The PR gate inventories 298 production-liveness tests across 21
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -25650,8 +25655,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 40 pre-network legs and their exact
-289-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 41 pre-network legs and their exact
+298-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25713,14 +25718,15 @@ remains false. Outstanding release work:
   end-to-end delivery theorem. Add final-target acknowledgement or persisted
   reconstruction authority for relay forwarding and direct-post ownership
   after topology removal, track items already accepted into a subscriber
-  channel until consumer acknowledgement, and replace the true-geometry
-  class-wide broadcast residual with bounded target-specific durable
-  reconstruction. Only a canonically identical retry may coalesce with an
-  already-owned broadcast child; distinct and cross-kind payloads retain the
-  exact parent, which topology removal does not clear. This preserves identity
-  but does not prove starvation freedom or final-target receipt. Prove the
-  production caller bound
-  for admission waiters or give every admitted caller a persistent fair rank;
+  channel until consumer acknowledgement, and persist or fairly retry every
+  caller-owned target-specific aggregate ticket. Recoverable fanout now admits
+  each `(target, class)` copy independently; only a canonically identical retry
+  in the same membership tenure coalesces, while distinct and cross-kind
+  payloads retain exact per-target FIFO positions. The bounded lane-relay owner
+  returns both envelope and aggregate ticket on overflow, but these local
+  ownership rules do not prove starvation freedom or final-target receipt.
+  Prove the production caller bound and fair retry schedule for admission
+  waiters, or persist every returned rank across producer restart;
   current local writer-flush and actor-backlog tests are necessary but not
   sufficient evidence;
 - discharge the ledgered abstract progress-ownership invariant and the Stage-4
@@ -25860,19 +25866,21 @@ remains false. Outstanding release work:
   four-validator exact PrepareQC count-and-power quorum regression raise the
   preceding inventory to 230. Atomic lane, authenticated-via, historical-
   recovery, active-watchdog, reliable peer/network, and daemon relay-fairness
-  coverage raised the preceding inventory to 264 across 20 modules. Twenty-six
+  coverage raised the preceding inventory to 264 across 20 modules. Thirty-seven
   positive additions—10 exact-output/typed-rollover, 2 peer-generation/flush,
-  and 14 ticket/topology/broadcast/subscriber-network regressions—are offset by
-  removal of one obsolete adapter cursor alias, raising the current inventory
-  by a net 25 to 289. The rollover slice covers historical Kura CommitQC, body,
+  20 ticket/topology/broadcast/subscriber-network regressions, 1 runtime/
+  Busy-deferred exact CommitQC coalescing regression, and 4 Nexus lane-relay
+  ownership/fairness regressions—are offset by removal of the obsolete adapter
+  cursor alias and two superseded broadcast-residual tests, raising the current
+  inventory by a net 34 to 298. The rollover slice covers historical Kura CommitQC, body,
   and lane-certificate rereads; current global V2; lane proof/supersession; Native
   AMX, merge-share, certified-sidecar, and untyped fail-closed boundaries. The
   network slice pins identical-retry coalescing and exact per-target FIFO
   ownership for distinct/cross-kind collisions. The four
   integration names run as one module-filtered leg, while the complete
-  pre-network corridor now has 40 legs. Fresh full
+  pre-network corridor now has 41 legs. Fresh full
   discovery/serial execution and the clean source-sealed rerun remain pending
-  for all 289 names. The 20-module pre-network
+  for all 298 names. The 21-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

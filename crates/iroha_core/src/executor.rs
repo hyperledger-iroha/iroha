@@ -5203,12 +5203,13 @@ impl Executor {
             .fee_payment_intent()
             .sponsor_program()
             .map(|(program_id, _)| program_id.clone());
-        let skip_nexus_fee = fee_exempt_transaction(
-            &state_transaction.world,
-            &state_transaction.nexus,
-            &transaction,
-            state_transaction.block_unix_timestamp_ms(),
-        );
+        let skip_nexus_fee = is_initial_genesis_context(state_transaction)
+            || fee_exempt_transaction(
+                &state_transaction.world,
+                &state_transaction.nexus,
+                &transaction,
+                state_transaction.block_unix_timestamp_ms(),
+            );
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
         if !skip_nexus_fee
@@ -5989,16 +5990,18 @@ impl Executor {
                                 fee_sponsor.as_ref(),
                             )?;
                         }
-                        Self::charge_nexus_fees(
-                            state_transaction,
-                            authority,
-                            &transaction_for_fee,
-                            tx_hash,
-                            fee_sponsor,
-                            tx_bytes_len,
-                            0,
-                            gas_used,
-                        )?;
+                        if !skip_nexus_fee {
+                            Self::charge_nexus_fees(
+                                state_transaction,
+                                authority,
+                                &transaction_for_fee,
+                                tx_hash,
+                                fee_sponsor,
+                                tx_bytes_len,
+                                0,
+                                gas_used,
+                            )?;
+                        }
                         return Ok(());
                     }
                 };
@@ -6154,16 +6157,18 @@ impl Executor {
                         fee_sponsor.as_ref(),
                     )?;
                 }
-                Self::charge_nexus_fees(
-                    state_transaction,
-                    authority,
-                    &transaction_for_fee,
-                    tx_hash,
-                    fee_sponsor,
-                    tx_bytes_len,
-                    0,
-                    gas_used,
-                )?;
+                if !skip_nexus_fee {
+                    Self::charge_nexus_fees(
+                        state_transaction,
+                        authority,
+                        &transaction_for_fee,
+                        tx_hash,
+                        fee_sponsor,
+                        tx_bytes_len,
+                        0,
+                        gas_used,
+                    )?;
+                }
                 Ok(())
             }
         }
@@ -12914,6 +12919,258 @@ mod tests {
             .sponsor_vault_custody_account_id = custody.clone();
         state_transaction.nexus.fees.settlement_mode = settlement_mode;
         configure_pipeline_fee_snapshot(state_transaction, tech_account, asset_definition_id, 1);
+    }
+
+    fn configure_direct_nexus_fee_snapshot(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        fee_asset: &AssetDefinitionId,
+    ) {
+        state_transaction.nexus.enabled = true;
+        state_transaction.nexus.fees.settlement_mode =
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+        state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
+        state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
+        state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
+        state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
+    }
+
+    fn test_asset_balance(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_id: &AssetId,
+    ) -> Quantity {
+        state_transaction
+            .world
+            .assets()
+            .get(asset_id)
+            .map(|asset| asset.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    }
+
+    fn configure_direct_genesis_ivm_fee_fixture(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        sink: &AccountId,
+        fee_asset: &AssetDefinitionId,
+    ) -> (AssetId, Quantity, AssetId, Quantity) {
+        configure_direct_nexus_fee_snapshot(state_transaction, fee_asset);
+        state_transaction.nexus.fees.fee_sink_account_id = sink.to_string();
+
+        let sink_asset_id = AssetId::new(fee_asset.clone(), sink.clone());
+        Mint::asset_quantity(11_u32, sink_asset_id.clone())
+            .execute(authority, state_transaction)
+            .expect("seed the direct-fee sink balance");
+        let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
+        let payer_before = test_asset_balance(state_transaction, &payer_asset_id);
+        let sink_before = test_asset_balance(state_transaction, &sink_asset_id);
+        (payer_asset_id, payer_before, sink_asset_id, sink_before)
+    }
+
+    #[test]
+    fn stateful_fee_admission_exempts_authenticated_genesis_with_missing_limit() {
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "genesis fee exemption".to_owned())])
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
+
+        assert!(is_initial_genesis_context(&state_transaction));
+        validate_transaction_fee_admission(&mut state_transaction, &transaction)
+            .expect("authenticated genesis must bypass Nexus fee intent validation");
+    }
+
+    #[test]
+    fn transaction_execution_keeps_authenticated_genesis_fee_free() {
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "fee-free genesis execution".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
+        let mut ivm_cache = IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect("authenticated genesis execution must not require Nexus fee limits");
+    }
+
+    #[test]
+    fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
+        let (state, keypair, authority, sink, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000_000)),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let (payer_asset_id, payer_before, sink_asset_id, sink_before) =
+            configure_direct_genesis_ivm_fee_fixture(
+                &mut state_transaction,
+                &authority,
+                &sink,
+                &fee_asset,
+            );
+        let mut ivm_cache = IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect("authenticated genesis generic IVM execution must remain fee-free");
+
+        assert_eq!(
+            test_asset_balance(&state_transaction, &payer_asset_id),
+            payer_before,
+            "generic IVM genesis execution must not debit its payer"
+        );
+        assert_eq!(
+            test_asset_balance(&state_transaction, &sink_asset_id),
+            sink_before,
+            "generic IVM genesis execution must not change its fee sink"
+        );
+    }
+
+    #[test]
+    fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
+        let (state, keypair, authority, sink, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let (program, _) = contract_program_with_entrypoint("run", None);
+        let verified =
+            ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            41,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive prepared contract address");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "contract_entrypoint".parse().expect("entrypoint key"),
+            Json::new("run"),
+        );
+        metadata.insert(
+            "contract_address".parse().expect("contract address key"),
+            Json::new(contract_address.to_string()),
+        );
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000_000)),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let (payer_asset_id, payer_before, sink_asset_id, sink_before) =
+            configure_direct_genesis_ivm_fee_fixture(
+                &mut state_transaction,
+                &authority,
+                &sink,
+                &fee_asset,
+            );
+        let subject_binding =
+            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        state_transaction
+            .world
+            .contract_subject_addresses
+            .insert(contract_address.subject_id(), contract_address.clone());
+        state_transaction
+            .world
+            .contract_subject_bindings
+            .insert(contract_address.clone(), subject_binding);
+        state_transaction
+            .world
+            .contract_code
+            .insert(code_hash, program);
+        state_transaction
+            .world
+            .contract_manifests
+            .insert(code_hash, verified.manifest.signed(&keypair));
+        state_transaction
+            .world
+            .contract_instances
+            .insert(contract_address, code_hash);
+        let mut ivm_cache = IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect("authenticated genesis prepared-contract IVM execution must remain fee-free");
+
+        assert_eq!(
+            test_asset_balance(&state_transaction, &payer_asset_id),
+            payer_before,
+            "prepared-contract IVM genesis execution must not debit its payer"
+        );
+        assert_eq!(
+            test_asset_balance(&state_transaction, &sink_asset_id),
+            sink_before,
+            "prepared-contract IVM genesis execution must not change its fee sink"
+        );
+    }
+
+    #[test]
+    fn stateful_fee_admission_does_not_exempt_non_genesis_with_missing_limit() {
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let transaction = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "non-genesis fee validation".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
+
+        assert!(!is_initial_genesis_context(&state_transaction));
+        let error = validate_transaction_fee_admission(&mut state_transaction, &transaction)
+            .expect_err("non-genesis must validate its signed Nexus fee limit");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(reason)
+                if reason.contains("signed fee intent is missing Nexus charge limit")
+        ));
     }
 
     #[test]

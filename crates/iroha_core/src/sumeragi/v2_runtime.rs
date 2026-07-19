@@ -1857,10 +1857,20 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
-        if let Some(owner_tag) = deferred_qc_owner {
-            // `authenticate` borrows the adapter immutably, so the exact
-            // deferred owner observed above cannot change between the raw
-            // capacity hint and this authenticated coalescing boundary.
+        let authenticated_deferred_qc_owner = match authenticated.payload() {
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self
+                .driver
+                .deferred_quorum_certificate_owner_tag(certificate),
+            _ => None,
+        };
+        if authenticated_deferred_qc_owner != deferred_qc_owner {
+            // Authentication does not mutate the adapter or envelope. Any
+            // disagreement would invalidate the raw-capacity hint rather than
+            // authorizing an unchecked queue insertion.
+            self.fail_closed = true;
+            return Err(NetworkIngressError::FailClosed);
+        }
+        if let Some(owner_tag) = authenticated_deferred_qc_owner {
             return Ok(owner_tag);
         }
         let class = if self
@@ -5812,8 +5822,11 @@ mod tests {
     #[test]
     fn commit_certificate_response_coalesces_with_exact_busy_deferred_qc() {
         let directory = TempDir::new().expect("temporary deferred-QC runtime directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
+        );
         let owner_tag = runtime.round_tag();
         let exact_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE1);
         let distinct_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE2);
@@ -5825,13 +5838,17 @@ mod tests {
             .driver
             .timeout_elapsed(owner_tag)
             .expect("open a signer fence before CommitQC dispatch");
-        assert!(matches!(
-            timeout.effects(),
-            [AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }]
-        ));
+        assert!(
+            matches!(
+                timeout.effects(),
+                [AdapterEffect::Sign {
+                    request: SignRequest::TimeoutVote(_),
+                    ..
+                }]
+            ),
+            "unexpected timeout effects: {:?}",
+            timeout.effects()
+        );
         runtime
             .enqueue_network(exact_message.clone())
             .expect("enqueue the authenticated CommitQC before the fence is observed");

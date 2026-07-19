@@ -12,7 +12,7 @@ use std::{
     io,
     net::{IpAddr, ToSocketAddrs},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
@@ -2293,13 +2293,13 @@ impl Drop for NetworkActorByteLease {
 /// a new generation, so a delayed retry from before the removal cannot cross
 /// the remove/re-add boundary by observing the peer id alone.
 #[derive(Debug)]
-struct ReliableBroadcastMembership {
+struct ReliableProgressMembership {
     peer_id: PeerId,
     generation: u64,
     active: AtomicBool,
 }
 
-impl ReliableBroadcastMembership {
+impl ReliableProgressMembership {
     fn is_active(&self) -> bool {
         self.active.load(Ordering::Acquire)
     }
@@ -2310,12 +2310,12 @@ impl ReliableBroadcastMembership {
 }
 
 #[derive(Debug)]
-struct ReliableBroadcastTopology {
+struct ReliableProgressTopology {
     generation: u64,
-    members: Vec<Arc<ReliableBroadcastMembership>>,
+    members: Vec<Arc<ReliableProgressMembership>>,
 }
 
-impl ReliableBroadcastTopology {
+impl ReliableProgressTopology {
     fn empty() -> Self {
         Self {
             generation: 0,
@@ -2323,13 +2323,17 @@ impl ReliableBroadcastTopology {
         }
     }
 
-    fn snapshot(&self) -> Vec<Arc<ReliableBroadcastMembership>> {
+    fn snapshot(&self) -> Vec<Arc<ReliableProgressMembership>> {
         self.members.clone()
     }
 
     /// Publish one accepted topology transition and cancel only memberships
     /// removed by that transition. Unchanged peers retain their exact token.
-    fn reconcile(&mut self, topology: &HashSet<PeerId>, self_id: &PeerId) -> usize {
+    fn reconcile(
+        &mut self,
+        topology: &HashSet<PeerId>,
+        self_id: &PeerId,
+    ) -> Vec<Arc<ReliableProgressMembership>> {
         let mut expected: Vec<_> = topology
             .iter()
             .filter(|peer_id| *peer_id != self_id)
@@ -2342,7 +2346,7 @@ impl ReliableBroadcastTopology {
             .map(|membership| membership.peer_id.clone())
             .collect();
         if current == expected {
-            return 0;
+            return Vec::new();
         }
 
         let next_generation = self
@@ -2359,20 +2363,237 @@ impl ReliableBroadcastTopology {
             if let Some(membership) = prior.remove(&peer_id) {
                 members.push(membership);
             } else {
-                members.push(Arc::new(ReliableBroadcastMembership {
+                members.push(Arc::new(ReliableProgressMembership {
                     peer_id,
                     generation: next_generation,
                     active: AtomicBool::new(true),
                 }));
             }
         }
-        let removed = prior.len();
-        for membership in prior.into_values() {
+        let removed = prior.into_values().collect::<Vec<_>>();
+        for membership in &removed {
             membership.cancel();
         }
         self.generation = next_generation;
         self.members = members;
         removed
+    }
+}
+
+/// One exact authenticated connection generation which may carry a reply to
+/// a semantic origin reached through that transport peer.
+#[derive(Debug)]
+struct ReliableReplyRouteTenure {
+    owner: Arc<()>,
+    delivery_peer: PeerId,
+    connection_id: ConnectionId,
+    generation: u128,
+    active: AtomicBool,
+}
+
+impl ReliableReplyRouteTenure {
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    fn cancel(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+/// Opaque return route attached to an authenticated inbound P2P message.
+///
+/// The semantic target can differ from the authenticated delivery peer when a
+/// trusted hub relays the request. The route is valid only for the exact
+/// accepted connection generation which delivered that request; callers
+/// cannot construct or retarget it.
+#[derive(Clone)]
+pub struct NetworkReplyRoute {
+    semantic_target: PeerId,
+    tenure: Arc<ReliableReplyRouteTenure>,
+}
+
+/// Opaque fairness key for replies sharing one authenticated transport source.
+///
+/// The key deliberately excludes the semantic origin and connection tenure:
+/// every origin relayed by the same authenticated peer shares one source lane,
+/// including after that peer reconnects. Actor identity is retained opaquely so
+/// keys minted by independent network actors can never alias.
+#[derive(Clone)]
+pub struct NetworkReplySourceKey {
+    owner: Arc<()>,
+    authenticated_via: PeerId,
+}
+
+impl NetworkReplySourceKey {
+    fn owner_address(&self) -> usize {
+        Arc::as_ptr(&self.owner) as usize
+    }
+}
+
+impl PartialEq for NetworkReplySourceKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner, &other.owner)
+            && self.authenticated_via == other.authenticated_via
+    }
+}
+
+impl Eq for NetworkReplySourceKey {}
+
+impl core::hash::Hash for NetworkReplySourceKey {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.owner_address(), state);
+        core::hash::Hash::hash(&self.authenticated_via, state);
+    }
+}
+
+impl PartialOrd for NetworkReplySourceKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NetworkReplySourceKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.owner_address()
+            .cmp(&other.owner_address())
+            .then_with(|| self.authenticated_via.cmp(&other.authenticated_via))
+    }
+}
+
+impl core::fmt::Debug for NetworkReplySourceKey {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("NetworkReplySourceKey(..)")
+    }
+}
+
+impl core::fmt::Debug for NetworkReplyRoute {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyRoute")
+            .field("semantic_target", &self.semantic_target)
+            .field("active", &self.is_active())
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyRoute {
+    fn new(semantic_target: PeerId, tenure: Arc<ReliableReplyRouteTenure>) -> Self {
+        Self {
+            semantic_target,
+            tenure,
+        }
+    }
+
+    /// Semantic peer identity to which a reply must be addressed.
+    #[must_use]
+    pub fn semantic_target(&self) -> &PeerId {
+        &self.semantic_target
+    }
+
+    /// Return the opaque authenticated-source key used for fair reply service.
+    ///
+    /// Semantic origins reached through one relay intentionally return the
+    /// same key. No connection identifier or tenure generation is exposed.
+    #[must_use]
+    pub fn source_key(&self) -> NetworkReplySourceKey {
+        NetworkReplySourceKey {
+            owner: Arc::clone(&self.tenure.owner),
+            authenticated_via: self.tenure.delivery_peer.clone(),
+        }
+    }
+
+    /// Whether this live route is a safe freshness replacement for `prior`.
+    ///
+    /// Replacement is permitted only within one actor and semantic target.
+    /// Equal generations must be the exact same tenure; otherwise the strictly
+    /// increasing, non-reused actor generation establishes successor order.
+    #[must_use]
+    pub fn refreshes(&self, prior: &Self) -> bool {
+        if !self.is_active()
+            || !Arc::ptr_eq(&self.tenure.owner, &prior.tenure.owner)
+            || self.semantic_target != prior.semantic_target
+        {
+            return false;
+        }
+        match self.tenure.generation.cmp(&prior.tenure.generation) {
+            core::cmp::Ordering::Less => false,
+            core::cmp::Ordering::Equal => Arc::ptr_eq(&self.tenure, &prior.tenure),
+            core::cmp::Ordering::Greater => true,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.tenure.is_active()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressAuthorityIdentity {
+    Topology(u64),
+    Reply(u128),
+}
+
+#[derive(Clone, Debug)]
+enum ProgressDeliveryAuthority {
+    Topology(Arc<ReliableProgressMembership>),
+    Reply(NetworkReplyRoute),
+}
+
+impl ProgressDeliveryAuthority {
+    fn identity(&self) -> ProgressAuthorityIdentity {
+        match self {
+            Self::Topology(membership) => {
+                ProgressAuthorityIdentity::Topology(membership.generation)
+            }
+            Self::Reply(route) => ProgressAuthorityIdentity::Reply(route.tenure.generation),
+        }
+    }
+
+    fn source_target(&self) -> &PeerId {
+        match self {
+            Self::Topology(membership) => &membership.peer_id,
+            Self::Reply(route) => &route.tenure.delivery_peer,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        match self {
+            Self::Topology(membership) => membership.is_active(),
+            Self::Reply(route) => route.is_active(),
+        }
+    }
+
+    fn downgrade(&self) -> WeakProgressDeliveryAuthority {
+        match self {
+            Self::Topology(membership) => {
+                WeakProgressDeliveryAuthority::Topology(Arc::downgrade(membership))
+            }
+            Self::Reply(route) => WeakProgressDeliveryAuthority::Reply {
+                semantic_target: route.semantic_target.clone(),
+                tenure: Arc::downgrade(&route.tenure),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+enum WeakProgressDeliveryAuthority {
+    Topology(Weak<ReliableProgressMembership>),
+    Reply {
+        semantic_target: PeerId,
+        tenure: Weak<ReliableReplyRouteTenure>,
+    },
+}
+
+impl WeakProgressDeliveryAuthority {
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Topology(membership) => membership
+                .upgrade()
+                .is_none_or(|membership| !membership.is_active()),
+            Self::Reply { tenure, .. } => tenure.upgrade().is_none_or(|tenure| !tenure.is_active()),
+        }
     }
 }
 
@@ -2383,9 +2604,10 @@ struct ProgressTicketShape {
     broadcast: bool,
     /// Binds the ticket to the exact canonical request which created it.
     request_digest: Hash,
-    /// Exact accepted-topology membership which owns a targetized broadcast.
-    /// Direct posts are independent of topology and therefore use `None`.
-    broadcast_membership_generation: Option<u64>,
+    /// Exact actor-published tenure which authorizes this target delivery.
+    /// Budget-only unit fixtures use `None`; live direct and broadcast posts
+    /// always bind an actor-published membership generation.
+    authority: Option<ProgressAuthorityIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2462,10 +2684,7 @@ impl ActorProgressSource {
             // accepted topology before actor admission.
             return None;
         };
-        let class = ActorProgressClass::for_route(
-            post.data.topic(),
-            post.data.subscriber_route(),
-        )?;
+        let class = ActorProgressClass::for_route(post.data.topic(), post.data.subscriber_route())?;
         Some(Self {
             target: Some(post.peer_id.clone()),
             class,
@@ -2499,7 +2718,13 @@ struct NetworkActorProgressRetention {
     items: usize,
     request_digest: Hash,
     broadcast: bool,
-    broadcast_membership_generation: Option<u64>,
+    authority: Option<ProgressAuthorityIdentity>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NetworkActorProgressWaiter {
+    id: u64,
+    shape: ProgressTicketShape,
 }
 
 #[derive(Debug, Default)]
@@ -2509,7 +2734,7 @@ struct NetworkActorProgressState {
     retained_sources_by_class: [usize; ActorProgressClass::COUNT],
     retained_by_source: HashMap<ActorProgressSource, NetworkActorProgressRetention>,
     next_ticket: u64,
-    waiters: HashMap<ActorProgressSource, VecDeque<u64>>,
+    waiters: HashMap<ActorProgressSource, VecDeque<NetworkActorProgressWaiter>>,
     waiter_count: usize,
     waiters_by_class: [usize; ActorProgressClass::COUNT],
 }
@@ -2526,6 +2751,7 @@ pub struct NetworkActorAdmissionTicket {
     id: u64,
     shape: ProgressTicketShape,
     source: ActorProgressSource,
+    authority: Option<WeakProgressDeliveryAuthority>,
     active: bool,
 }
 
@@ -2534,13 +2760,18 @@ impl NetworkActorAdmissionTicket {
     #[must_use]
     pub fn rank(&self) -> Option<usize> {
         self.active
-            .then(|| self.budget.rank(&self.source, self.id))
+            .then(|| self.budget.rank(&self.source, self.id, self.shape))
             .flatten()
     }
 
     fn commit(&mut self) {
         if self.active {
-            self.budget.commit(&self.source, self.id);
+            let authority_cancelled = self
+                .authority
+                .as_ref()
+                .is_some_and(WeakProgressDeliveryAuthority::is_cancelled);
+            self.budget
+                .commit(&self.source, self.id, self.shape, authority_cancelled);
             self.active = false;
         }
     }
@@ -2549,7 +2780,7 @@ impl NetworkActorAdmissionTicket {
 impl Drop for NetworkActorAdmissionTicket {
     fn drop(&mut self) {
         if self.active {
-            self.budget.cancel(&self.source, self.id);
+            self.budget.cancel(&self.source, self.id, self.shape);
             self.active = false;
         }
     }
@@ -2625,7 +2856,7 @@ impl<M> NetworkActorAdmissionError<M> {
 
 #[derive(Debug)]
 struct NetworkBroadcastTargetTicket {
-    membership: Arc<ReliableBroadcastMembership>,
+    membership: Arc<ReliableProgressMembership>,
     actor_ticket: Option<NetworkActorAdmissionTicket>,
 }
 
@@ -2642,7 +2873,7 @@ struct NetworkBroadcastTargetTicket {
 pub struct NetworkBroadcastAdmissionTicket {
     request_digest: Hash,
     budget: Arc<NetworkActorProgressBudget>,
-    topology: Arc<Mutex<ReliableBroadcastTopology>>,
+    topology: Arc<Mutex<ReliableProgressTopology>>,
     /// `true` until a non-empty accepted topology can be snapshotted.
     needs_topology_snapshot: bool,
     targets: VecDeque<NetworkBroadcastTargetTicket>,
@@ -2652,7 +2883,7 @@ impl NetworkBroadcastAdmissionTicket {
     fn fresh(
         request_digest: Hash,
         budget: Arc<NetworkActorProgressBudget>,
-        topology: Arc<Mutex<ReliableBroadcastTopology>>,
+        topology: Arc<Mutex<ReliableProgressTopology>>,
     ) -> Self {
         Self {
             request_digest,
@@ -2663,10 +2894,21 @@ impl NetworkBroadcastAdmissionTicket {
         }
     }
 
-    /// Number of exact target copies which still remain with the caller.
+    /// Number of already-snapshotted target copies which remain with the caller.
+    ///
+    /// Zero does not mean completion while [`Self::awaiting_topology_snapshot`]
+    /// is true, because actor-accepted target authority has not been published
+    /// yet.
     #[must_use]
     pub fn pending_targets(&self) -> usize {
         self.targets.len()
+    }
+
+    /// Whether this ticket still awaits its first non-empty actor-accepted
+    /// topology snapshot.
+    #[must_use]
+    pub fn awaiting_topology_snapshot(&self) -> bool {
+        self.needs_topology_snapshot
     }
 }
 
@@ -2708,7 +2950,7 @@ struct NetworkActorProgressLease {
     /// Cryptographic identity of the canonical request which owns this lease.
     request_digest: Hash,
     broadcast: bool,
-    broadcast_membership_generation: Option<u64>,
+    authority: Option<ProgressAuthorityIdentity>,
 }
 
 enum ProgressLeaseAttempt {
@@ -2719,6 +2961,8 @@ enum ProgressLeaseAttempt {
     /// This target lane already owns the same idempotent broadcast request in
     /// the same accepted-topology membership generation.
     SameRequestAlreadyOwned,
+    /// The accepted-topology membership was removed before actor admission.
+    CancelledMembership,
     Waiting {
         ticket: Option<NetworkActorAdmissionTicket>,
         rank: usize,
@@ -2790,7 +3034,7 @@ impl NetworkActorProgressBudget {
         shape: ProgressTicketShape,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> ProgressLeaseAttempt {
-        self.try_reserve_for_source(bytes, shape, ActorProgressSource::test(), ticket)
+        self.try_reserve_for_source(bytes, shape, ActorProgressSource::test(), None, ticket)
     }
 
     fn try_reserve_for_source(
@@ -2798,6 +3042,7 @@ impl NetworkActorProgressBudget {
         bytes: usize,
         shape: ProgressTicketShape,
         source: ActorProgressSource,
+        authority: Option<&ProgressDeliveryAuthority>,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> ProgressLeaseAttempt {
         let per_source_max_bytes = self.per_class_max_bytes.for_class(source.class);
@@ -2810,28 +3055,53 @@ impl NetworkActorProgressBudget {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let class_index = source.class.index();
+        match authority {
+            Some(authority)
+                if shape.authority == Some(authority.identity())
+                    && source.target.as_ref() == Some(authority.source_target()) =>
+            {
+                // Membership cancellation is published before the topology
+                // reconciler acquires this budget lock. Therefore either this
+                // check observes the cancellation, or the later reconciliation
+                // sweep observes and removes the waiter inserted below.
+                if !authority.is_active() {
+                    drop(state);
+                    drop(ticket);
+                    return ProgressLeaseAttempt::CancelledMembership;
+                }
+            }
+            None if !shape.broadcast && shape.authority.is_none() => {}
+            _ => {
+                drop(state);
+                drop(ticket);
+                return ProgressLeaseAttempt::InvalidTicket;
+            }
+        }
         let ticket = if let Some(ticket) = ticket {
             if !ticket.active
                 || !Arc::ptr_eq(&ticket.budget, self)
                 || ticket.shape != shape
                 || ticket.source != source
-                || !state
-                    .waiters
-                    .get(&source)
-                    .is_some_and(|waiters| waiters.contains(&ticket.id))
+                || !state.waiters.get(&source).is_some_and(|waiters| {
+                    waiters
+                        .iter()
+                        .any(|waiter| waiter.id == ticket.id && waiter.shape == ticket.shape)
+                })
             {
                 drop(state);
                 drop(ticket);
                 return ProgressLeaseAttempt::InvalidTicket;
             }
             if shape.broadcast
-                && shape.broadcast_membership_generation.is_some()
-                && state.retained_by_source.get(&source).is_some_and(|retained| {
-                    retained.broadcast
-                        && retained.request_digest == shape.request_digest
-                        && retained.broadcast_membership_generation
-                            == shape.broadcast_membership_generation
-                })
+                && shape.authority.is_some()
+                && state
+                    .retained_by_source
+                    .get(&source)
+                    .is_some_and(|retained| {
+                        retained.broadcast
+                            && retained.request_digest == shape.request_digest
+                            && retained.authority == shape.authority
+                    })
             {
                 drop(state);
                 drop(ticket);
@@ -2840,19 +3110,27 @@ impl NetworkActorProgressBudget {
             ticket
         } else {
             if shape.broadcast
-                && shape.broadcast_membership_generation.is_some()
-                && state.retained_by_source.get(&source).is_some_and(|retained| {
-                    retained.broadcast
-                        && retained.request_digest == shape.request_digest
-                        && retained.broadcast_membership_generation
-                            == shape.broadcast_membership_generation
-                })
+                && shape.authority.is_some()
+                && state
+                    .retained_by_source
+                    .get(&source)
+                    .is_some_and(|retained| {
+                        retained.broadcast
+                            && retained.request_digest == shape.request_digest
+                            && retained.authority == shape.authority
+                    })
             {
                 return ProgressLeaseAttempt::SameRequestAlreadyOwned;
             }
             // Bound every source independently so several local producers can
             // retain a real FIFO rank without consuming the ticket geometry
             // reserved for every other authenticated target and class.
+            let unregistered_rank = state.waiters.get(&source).map_or(1, |waiters| {
+                waiters
+                    .len()
+                    .checked_add(1)
+                    .expect("bounded per-source waiter rank cannot overflow")
+            });
             if state
                 .waiters
                 .get(&source)
@@ -2860,7 +3138,7 @@ impl NetworkActorProgressBudget {
             {
                 return ProgressLeaseAttempt::Waiting {
                     ticket: None,
-                    rank: self.max_waiters_per_source.saturating_add(1),
+                    rank: unregistered_rank,
                 };
             }
             if state.waiter_count >= self.max_waiters
@@ -2868,7 +3146,7 @@ impl NetworkActorProgressBudget {
             {
                 return ProgressLeaseAttempt::Waiting {
                     ticket: None,
-                    rank: 1,
+                    rank: unregistered_rank,
                 };
             }
             // Reset only once no live ticket can still carry the old sequence.
@@ -2880,7 +3158,7 @@ impl NetworkActorProgressBudget {
             let Some(next_ticket) = state.next_ticket.checked_add(1) else {
                 return ProgressLeaseAttempt::Waiting {
                     ticket: None,
-                    rank: 1,
+                    rank: unregistered_rank,
                 };
             };
             state.next_ticket = next_ticket;
@@ -2888,7 +3166,7 @@ impl NetworkActorProgressBudget {
                 .waiters
                 .entry(source.clone())
                 .or_default()
-                .push_back(id);
+                .push_back(NetworkActorProgressWaiter { id, shape });
             state.waiter_count = state
                 .waiter_count
                 .checked_add(1)
@@ -2901,6 +3179,7 @@ impl NetworkActorProgressBudget {
                 id,
                 shape,
                 source: source.clone(),
+                authority: authority.map(ProgressDeliveryAuthority::downgrade),
                 active: true,
             }
         };
@@ -2910,7 +3189,7 @@ impl NetworkActorProgressBudget {
             .get(&source)
             .into_iter()
             .flatten()
-            .position(|id| *id == ticket.id)
+            .position(|waiter| waiter.id == ticket.id && waiter.shape == ticket.shape)
             .map_or(0, |position| {
                 position
                     .checked_add(1)
@@ -2989,7 +3268,7 @@ impl NetworkActorProgressBudget {
                 items: 1,
                 request_digest: shape.request_digest,
                 broadcast: shape.broadcast,
-                broadcast_membership_generation: shape.broadcast_membership_generation,
+                authority: shape.authority,
             },
         );
         drop(state);
@@ -3000,20 +3279,25 @@ impl NetworkActorProgressBudget {
                 source,
                 request_digest: shape.request_digest,
                 broadcast: shape.broadcast,
-                broadcast_membership_generation: shape.broadcast_membership_generation,
+                authority: shape.authority,
             },
             ticket,
         }
     }
 
-    fn rank(&self, source: &ActorProgressSource, id: u64) -> Option<usize> {
+    fn rank(
+        &self,
+        source: &ActorProgressSource,
+        id: u64,
+        shape: ProgressTicketShape,
+    ) -> Option<usize> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .waiters
             .get(source)?
             .iter()
-            .position(|queued| *queued == id)
+            .position(|waiter| waiter.id == id && waiter.shape == shape)
             .map(|position| {
                 position
                     .checked_add(1)
@@ -3021,23 +3305,39 @@ impl NetworkActorProgressBudget {
             })
     }
 
-    fn commit(&self, source: &ActorProgressSource, id: u64) {
+    fn commit(
+        &self,
+        source: &ActorProgressSource,
+        id: u64,
+        shape: ProgressTicketShape,
+        authority_cancelled: bool,
+    ) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let queued = state.waiters.get_mut(source).and_then(VecDeque::pop_front);
-        assert_eq!(queued, Some(id), "only the head progress ticket may commit");
-        if queued.is_some() {
-            state.waiter_count = state
-                .waiter_count
-                .checked_sub(1)
-                .expect("progress ticket commit must match waiter ownership");
-            let class_index = source.class.index();
-            state.waiters_by_class[class_index] = state.waiters_by_class[class_index]
-                .checked_sub(1)
-                .expect("progress ticket commit must match class ownership");
+        let position = state.waiters.get(source).and_then(|waiters| {
+            waiters
+                .iter()
+                .position(|waiter| waiter.id == id && waiter.shape == shape)
+        });
+        match position {
+            Some(0) => {
+                let removed = state.waiters.get_mut(source).and_then(VecDeque::pop_front);
+                debug_assert!(removed.is_some());
+            }
+            Some(_) => panic!("only the exact head progress ticket may commit"),
+            None if authority_cancelled => return,
+            None => panic!("an active progress ticket must retain its exact waiter"),
         }
+        state.waiter_count = state
+            .waiter_count
+            .checked_sub(1)
+            .expect("progress ticket commit must match waiter ownership");
+        let class_index = source.class.index();
+        state.waiters_by_class[class_index] = state.waiters_by_class[class_index]
+            .checked_sub(1)
+            .expect("progress ticket commit must match class ownership");
         if state.waiters.get(source).is_some_and(VecDeque::is_empty) {
             state.waiters.remove(source);
         }
@@ -3046,13 +3346,16 @@ impl NetworkActorProgressBudget {
         }
     }
 
-    fn cancel(&self, source: &ActorProgressSource, id: u64) {
+    fn cancel(&self, source: &ActorProgressSource, id: u64, shape: ProgressTicketShape) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let removed = state.waiters.get_mut(source).is_some_and(|waiters| {
-            let Some(position) = waiters.iter().position(|queued| *queued == id) else {
+            let Some(position) = waiters
+                .iter()
+                .position(|waiter| waiter.id == id && waiter.shape == shape)
+            else {
                 return false;
             };
             waiters.remove(position);
@@ -3074,6 +3377,82 @@ impl NetworkActorProgressBudget {
         if state.waiter_count == 0 {
             state.next_ticket = 0;
         }
+    }
+
+    /// Cancel every caller-held waiter bound to one removed topology tenure.
+    ///
+    /// The payload remains with its caller, but topology removal is the exact
+    /// semantic cancellation witness for that target copy. Matching the full
+    /// waiter shape prevents a delayed old ticket from deleting a freshly
+    /// allocated waiter after the ticket sequence resets.
+    fn cancel_membership(&self, membership: &ReliableProgressMembership, broadcast: bool) -> usize {
+        self.cancel_authority_waiters(
+            &membership.peer_id,
+            ProgressAuthorityIdentity::Topology(membership.generation),
+            broadcast,
+        )
+    }
+
+    fn cancel_reply_route(&self, tenure: &ReliableReplyRouteTenure) -> usize {
+        self.cancel_authority_waiters(
+            &tenure.delivery_peer,
+            ProgressAuthorityIdentity::Reply(tenure.generation),
+            false,
+        )
+    }
+
+    fn cancel_authority_waiters(
+        &self,
+        source_peer: &PeerId,
+        authority: ProgressAuthorityIdentity,
+        broadcast: bool,
+    ) -> usize {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cancelled = 0usize;
+        for class in [
+            ActorProgressClass::Safety,
+            ActorProgressClass::Lane,
+            ActorProgressClass::Bulk,
+        ] {
+            let source = ActorProgressSource {
+                target: Some(source_peer.clone()),
+                class,
+            };
+            let removed = state.waiters.get_mut(&source).map_or(0, |waiters| {
+                let before = waiters.len();
+                waiters.retain(|waiter| {
+                    !(waiter.shape.broadcast == broadcast
+                        && waiter.shape.authority == Some(authority))
+                });
+                before
+                    .checked_sub(waiters.len())
+                    .expect("retaining waiters cannot increase their count")
+            });
+            if removed == 0 {
+                continue;
+            }
+            cancelled = cancelled
+                .checked_add(removed)
+                .expect("bounded cancelled waiter count cannot overflow");
+            state.waiter_count = state
+                .waiter_count
+                .checked_sub(removed)
+                .expect("membership cancellation must match waiter ownership");
+            let class_index = class.index();
+            state.waiters_by_class[class_index] = state.waiters_by_class[class_index]
+                .checked_sub(removed)
+                .expect("membership cancellation must match class ownership");
+            if state.waiters.get(&source).is_some_and(VecDeque::is_empty) {
+                state.waiters.remove(&source);
+            }
+        }
+        if state.waiter_count == 0 {
+            state.next_ticket = 0;
+        }
+        cancelled
     }
 
     #[cfg(test)]
@@ -3118,9 +3497,8 @@ impl Drop for NetworkActorProgressLease {
                 "progress actor source lease must retain its delivery kind"
             );
             assert_eq!(
-                retained.broadcast_membership_generation,
-                self.broadcast_membership_generation,
-                "progress actor source lease must retain its topology membership identity"
+                retained.authority, self.authority,
+                "progress actor source lease must retain its delivery-authority identity"
             );
             retained.bytes = retained
                 .bytes
@@ -3173,9 +3551,9 @@ impl From<NetworkActorProgressLease> for NetworkActorLease {
 struct AdmittedNetworkMessage<T> {
     message: Option<NetworkMessage<T>>,
     byte_lease: NetworkActorLease,
-    /// Exact topology tenure for a targetized reliable broadcast. Direct
-    /// posts and best-effort broadcasts do not carry topology ownership.
-    broadcast_membership: Option<Arc<ReliableBroadcastMembership>>,
+    /// Exact actor-published topology tenure for a reliable target delivery.
+    /// Best-effort traffic and budget-only test fixtures carry no membership.
+    progress_authority: Option<ProgressDeliveryAuthority>,
     /// Snapshot of broadcast targets that have not yet acquired downstream
     /// ownership. `None` means the first dispatch has not observed topology;
     /// `Some(empty)` is a completed fanout.
@@ -3196,7 +3574,7 @@ impl<T> AdmittedNetworkMessage<T> {
         Self {
             message: Some(message),
             byte_lease,
-            broadcast_membership: None,
+            progress_authority: None,
             remaining_broadcast_targets: None,
             pending_flush_acks: HashMap::new(),
         }
@@ -3205,28 +3583,45 @@ impl<T> AdmittedNetworkMessage<T> {
     fn new_targeted_broadcast(
         message: NetworkMessage<T>,
         byte_lease: NetworkActorProgressLease,
-        membership: Arc<ReliableBroadcastMembership>,
+        authority: ProgressDeliveryAuthority,
     ) -> Self {
         debug_assert!(matches!(message, NetworkMessage::Broadcast(_)));
-        debug_assert_eq!(
-            byte_lease.source.target.as_ref(),
-            Some(&membership.peer_id)
-        );
+        let ProgressDeliveryAuthority::Topology(membership) = &authority else {
+            unreachable!("reliable broadcasts require topology authority")
+        };
+        debug_assert_eq!(byte_lease.source.target.as_ref(), Some(&membership.peer_id));
         Self {
             message: Some(message),
             byte_lease: byte_lease.into(),
-            remaining_broadcast_targets: Some(VecDeque::from([
-                membership.peer_id.clone(),
-            ])),
-            broadcast_membership: Some(membership),
+            remaining_broadcast_targets: Some(VecDeque::from([membership.peer_id.clone()])),
+            progress_authority: Some(authority),
             pending_flush_acks: HashMap::new(),
         }
     }
 
-    fn cancelled_broadcast_membership(&self) -> bool {
-        self.broadcast_membership
+    fn new_targeted_post(
+        message: NetworkMessage<T>,
+        byte_lease: NetworkActorProgressLease,
+        authority: ProgressDeliveryAuthority,
+    ) -> Self {
+        debug_assert!(matches!(message, NetworkMessage::Post(_)));
+        debug_assert_eq!(
+            byte_lease.source.target.as_ref(),
+            Some(authority.source_target())
+        );
+        Self {
+            message: Some(message),
+            byte_lease: byte_lease.into(),
+            progress_authority: Some(authority),
+            remaining_broadcast_targets: None,
+            pending_flush_acks: HashMap::new(),
+        }
+    }
+
+    fn cancelled_progress_authority(&self) -> bool {
+        self.progress_authority
             .as_ref()
-            .is_some_and(|membership| !membership.is_active())
+            .is_some_and(|authority| !authority.is_active())
     }
 
     fn progress_source(&self) -> Option<&ActorProgressSource> {
@@ -3254,14 +3649,14 @@ impl<T> AdmittedNetworkMessage<T> {
         NetworkActorLease,
         Option<VecDeque<PeerId>>,
         HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
-        Option<Arc<ReliableBroadcastMembership>>,
+        Option<ProgressDeliveryAuthority>,
     ) {
         let Self {
             mut message,
             byte_lease,
             remaining_broadcast_targets,
             pending_flush_acks,
-            broadcast_membership,
+            progress_authority,
         } = self;
         (
             message
@@ -3270,7 +3665,7 @@ impl<T> AdmittedNetworkMessage<T> {
             byte_lease,
             remaining_broadcast_targets,
             pending_flush_acks,
-            broadcast_membership,
+            progress_authority,
         )
     }
 
@@ -3279,12 +3674,12 @@ impl<T> AdmittedNetworkMessage<T> {
         byte_lease: NetworkActorLease,
         remaining_broadcast_targets: Option<VecDeque<PeerId>>,
         pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
-        broadcast_membership: Option<Arc<ReliableBroadcastMembership>>,
+        progress_authority: Option<ProgressDeliveryAuthority>,
     ) -> Self {
         Self {
             message: Some(message),
             byte_lease,
-            broadcast_membership,
+            progress_authority,
             remaining_broadcast_targets,
             pending_flush_acks,
         }
@@ -3387,20 +3782,19 @@ impl<T: message::ClassifyTopic> ReliableActorPending<T> {
         self.len
     }
 
-    /// Release only targetized broadcasts whose exact topology membership was
-    /// cancelled. Direct posts remain owned across topology changes.
-    fn release_cancelled_broadcast_targets(&mut self) -> usize {
+    /// Release reliable target deliveries whose exact topology tenure was cancelled.
+    fn release_cancelled_targets(&mut self) -> usize {
         let mut released = 0usize;
         self.by_source.retain(|_source, entries| {
             let before = entries.len();
-            entries.retain(|entry| !entry.cancelled_broadcast_membership());
+            entries.retain(|entry| !entry.cancelled_progress_authority());
             released = released.saturating_add(before.saturating_sub(entries.len()));
             !entries.is_empty()
         });
         self.len = self
             .len
             .checked_sub(released)
-            .expect("released broadcast children must match reliable backlog ownership");
+            .expect("released target deliveries must match reliable backlog ownership");
         self.ready_sources
             .retain(|source| self.by_source.contains_key(source));
         self.ready_members
@@ -4893,7 +5287,12 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     /// Receiver of online peer transport capabilities.
     online_peer_capabilities_receiver: watch::Receiver<message::OnlinePeerCapabilities>,
     /// Relay-aware accepted topology shared with targetized broadcast admission.
-    reliable_broadcast_topology: Arc<Mutex<ReliableBroadcastTopology>>,
+    reliable_broadcast_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Accepted logical-topology and authenticated-peer authority for direct
+    /// reliable progress posts.
+    reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Unforgeable identity binding reply-route tokens to this actor instance.
+    reply_route_owner: Arc<()>,
     /// Latest [`UpdateTopology`] snapshot sender.
     update_topology_sender: ControlUpdateSender<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot sender.
@@ -4954,6 +5353,8 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             online_peers_receiver: self.online_peers_receiver.clone(),
             online_peer_capabilities_receiver: self.online_peer_capabilities_receiver.clone(),
             reliable_broadcast_topology: Arc::clone(&self.reliable_broadcast_topology),
+            reliable_direct_topology: Arc::clone(&self.reliable_direct_topology),
+            reply_route_owner: Arc::clone(&self.reply_route_owner),
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
             update_peer_capabilities_sender: self.update_peer_capabilities_sender.clone(),
@@ -5107,11 +5508,20 @@ fn inbound_source_memory_bound(
         .and_then(|high| high.checked_add(shared_low_bytes))
 }
 
+fn network_actor_progress_target_capacity(max_total_connections: usize) -> Option<usize> {
+    // Direct authority is the union of at most one bounded logical topology
+    // and at most one bounded authenticated-peer set. Broadcast route targets
+    // are a subset of those identities. Keep both sets independently usable
+    // during connection/topology transitions instead of letting stale direct
+    // identities consume validator-reserved slots.
+    max_total_connections.checked_mul(2)
+}
+
 fn network_actor_progress_source_capacity(max_total_connections: usize) -> Option<usize> {
-    // Each authenticated target can own one safety, lane, and bulk item.
+    // Every authorized target can own one safety, lane, and bulk item.
     // Reliable broadcasts acquire these same target lanes before crossing
     // admission; there is deliberately no class-wide broadcast parent.
-    max_total_connections
+    network_actor_progress_target_capacity(max_total_connections)?
         .checked_mul(ActorProgressClass::COUNT)
 }
 
@@ -5147,7 +5557,8 @@ fn inbound_source_credit_capacity(
 mod inbound_source_memory_bound_tests {
     use super::{
         inbound_source_credit_capacity, inbound_source_memory_bound,
-        network_actor_progress_source_capacity, network_actor_progress_waiter_capacity,
+        network_actor_progress_source_capacity, network_actor_progress_target_capacity,
+        network_actor_progress_waiter_capacity,
     };
 
     #[test]
@@ -5172,8 +5583,10 @@ mod inbound_source_memory_bound_tests {
 
     #[test]
     fn reliable_actor_source_geometry_counts_targets_broadcasts_and_classes() {
-        assert_eq!(network_actor_progress_source_capacity(4), Some(12));
-        assert_eq!(network_actor_progress_waiter_capacity(4), Some(48));
+        assert_eq!(network_actor_progress_target_capacity(4), Some(8));
+        assert_eq!(network_actor_progress_source_capacity(4), Some(24));
+        assert_eq!(network_actor_progress_waiter_capacity(4), Some(96));
+        assert_eq!(network_actor_progress_target_capacity(usize::MAX), None);
         assert_eq!(
             network_actor_progress_source_capacity(usize::MAX),
             None,
@@ -5434,8 +5847,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
         let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
-        let reliable_broadcast_topology =
-            Arc::new(Mutex::new(ReliableBroadcastTopology::empty()));
+        let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let reply_route_owner = Arc::new(());
 
         drop(update_topology_rx);
         drop(update_peers_rx);
@@ -5450,6 +5864,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             online_peers_receiver,
             online_peer_capabilities_receiver,
             reliable_broadcast_topology,
+            reliable_direct_topology,
+            reply_route_owner,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -5686,9 +6102,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     "network.max_total_connections overflows the reliable actor waiter geometry",
                 )
             })?;
+        let network_actor_progress_targets =
+            network_actor_progress_target_capacity(max_total_connections).ok_or_else(|| {
+                invalid_transport_geometry(
+                    "network.max_total_connections overflows the reliable actor target geometry",
+                )
+            })?;
         let network_actor_progress_budget = NetworkActorProgressBudget::new_classed(
             transport_geometry.actor_progress_bytes,
-            max_total_connections,
+            network_actor_progress_targets,
             network_actor_progress_waiters,
         )
         .ok_or_else(|| {
@@ -5958,8 +6380,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (online_peers_sender, online_peers_receiver) = watch::channel(HashSet::new());
         let (online_peer_capabilities_sender, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
-        let reliable_broadcast_topology =
-            Arc::new(Mutex::new(ReliableBroadcastTopology::empty()));
+        let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let reply_route_owner = Arc::new(());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::channel(p2p_subscriber_queue_cap.get());
         let (update_topology_sender, update_topology_receiver) = control_update_channel();
@@ -6146,6 +6569,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             online_peers_sender,
             online_peer_capabilities_sender,
             reliable_broadcast_topology: Arc::clone(&reliable_broadcast_topology),
+            reliable_direct_topology: Arc::clone(&reliable_direct_topology),
+            reply_route_owner: Arc::clone(&reply_route_owner),
+            reply_route_tenures: HashMap::new(),
+            next_reply_route_generation: 0,
+            network_actor_progress_budget: Arc::clone(&network_actor_progress_budget),
             update_topology_receiver,
             update_peers_receiver,
             update_peer_capabilities_receiver,
@@ -6166,6 +6594,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             service_message_receiver,
             service_message_sender,
             current_conn_id: 0,
+            requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout,
@@ -6271,6 +6700,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 online_peers_receiver,
                 online_peer_capabilities_receiver,
                 reliable_broadcast_topology,
+                reliable_direct_topology,
+                reply_route_owner,
                 update_topology_sender,
                 update_peers_sender,
                 update_peer_capabilities_sender,
@@ -6522,7 +6953,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         topic: message::Topic,
         broadcast: bool,
         source: ActorProgressSource,
-        broadcast_membership: Option<Arc<ReliableBroadcastMembership>>,
+        authority: ProgressDeliveryAuthority,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<bool, NetworkActorAdmissionError<NetworkMessage<T>>> {
         use tokio::sync::mpsc::error::TrySendError;
@@ -6533,7 +6964,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 return Err(NetworkActorAdmissionError::Rejected { message, reason });
             }
         };
-        debug_assert_eq!(broadcast, broadcast_membership.is_some());
         debug_assert!(source.target.is_some());
         if matches!(
             match &message {
@@ -6555,14 +6985,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             stream_wire_bytes: wire_bytes,
             broadcast,
             request_digest: progress_ticket_request_digest(&message),
-            broadcast_membership_generation: broadcast_membership
-                .as_ref()
-                .map(|membership| membership.generation),
+            authority: Some(authority.identity()),
         };
-        let (lease, mut ticket) = match self
-            .network_actor_progress_budget
-            .try_reserve_for_source(wire_bytes, shape, source, ticket)
-        {
+        let (lease, mut ticket) = match self.network_actor_progress_budget.try_reserve_for_source(
+            wire_bytes,
+            shape,
+            source,
+            Some(&authority),
+            ticket,
+        ) {
             ProgressLeaseAttempt::Ready { lease, ticket } => (lease, ticket),
             ProgressLeaseAttempt::Waiting { ticket, rank } => {
                 return Err(NetworkActorAdmissionError::Backpressured {
@@ -6572,6 +7003,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 });
             }
             ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(false),
+            ProgressLeaseAttempt::CancelledMembership => return Ok(false),
             ProgressLeaseAttempt::InvalidTicket => {
                 return Err(NetworkActorAdmissionError::Rejected {
                     message,
@@ -6597,10 +7029,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 &self.network_message_progress_deferred_permits,
             )
         };
-        let admitted = if let Some(membership) = broadcast_membership {
-            AdmittedNetworkMessage::new_targeted_broadcast(message, lease, membership)
+        let admitted = if broadcast {
+            AdmittedNetworkMessage::new_targeted_broadcast(message, lease, authority)
         } else {
-            AdmittedNetworkMessage::new(message, lease)
+            AdmittedNetworkMessage::new_targeted_post(message, lease, authority)
         };
         match sender.try_send(admitted) {
             Ok(()) => {
@@ -6655,7 +7087,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     pub fn post_recoverable(
         &self,
         mut msg: Post<T>,
-        ticket: Option<NetworkActorAdmissionTicket>,
+        mut ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<(), NetworkActorAdmissionError<Post<T>>> {
         let requested_priority = msg.priority;
         if !msg.data.is_outbound_allowed() {
@@ -6672,23 +7104,196 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 reason: NetworkActorAdmissionRejection::NotReliableProgress,
             });
         }
+        let actor_closed = if matches!(topic, message::Topic::ConsensusSafety) {
+            self.network_message_safety_sender.is_closed()
+        } else {
+            self.network_message_progress_sender.is_closed()
+        };
+        if actor_closed {
+            return Err(NetworkActorAdmissionError::Closed { message: msg });
+        }
+
+        let membership = self
+            .reliable_direct_topology
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot()
+            .into_iter()
+            .find(|membership| membership.peer_id == msg.peer_id);
+        if let Some(existing_ticket) = ticket.as_ref() {
+            let (prior_is_cancelled, same_membership) = match existing_ticket.authority.as_ref() {
+                Some(WeakProgressDeliveryAuthority::Topology(prior)) => {
+                    let prior = prior.upgrade();
+                    (
+                        prior
+                            .as_ref()
+                            .is_none_or(|membership| !membership.is_active()),
+                        prior.as_ref().is_some_and(|prior| {
+                            membership
+                                .as_ref()
+                                .is_some_and(|current| Arc::ptr_eq(prior, current))
+                        }),
+                    )
+                }
+                Some(WeakProgressDeliveryAuthority::Reply { .. }) | None => (false, false),
+            };
+            if prior_is_cancelled {
+                // Topology removal is the exact cancellation witness for the
+                // old rank. Retry under a re-added tenure as a fresh request.
+                drop(ticket.take());
+            } else if !same_membership {
+                return Err(NetworkActorAdmissionError::Rejected {
+                    message: msg,
+                    reason: NetworkActorAdmissionRejection::InvalidTicket,
+                });
+            }
+        }
+        let Some(membership) = membership else {
+            drop(ticket);
+            return Err(NetworkActorAdmissionError::Backpressured {
+                message: msg,
+                ticket: None,
+                rank: 1,
+            });
+        };
         msg.priority = canonical_outbound_priority(topic, route, msg.priority);
         let message = NetworkMessage::Post(msg);
         let source = ActorProgressSource::for_message(&message)
             .expect("a reliable post must have one exact target/class source");
-        self.submit_progress_message_to_source(message, topic, false, source, None, ticket)
-            .map(|_| ())
-            .map_err(|error| {
-                error.map_message(|message| match message {
-                    NetworkMessage::Post(mut post) => {
-                        post.priority = requested_priority;
-                        post
-                    }
-                    NetworkMessage::Broadcast(_) => {
-                        unreachable!("post admission must return the submitted post")
-                    }
-                })
+        self.submit_progress_message_to_source(
+            message,
+            topic,
+            false,
+            source,
+            ProgressDeliveryAuthority::Topology(membership),
+            ticket,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            error.map_message(|message| match message {
+                NetworkMessage::Post(mut post) => {
+                    post.priority = requested_priority;
+                    post
+                }
+                NetworkMessage::Broadcast(_) => {
+                    unreachable!("post admission must return the submitted post")
+                }
             })
+        })
+    }
+
+    /// Admit a reliable reply over the exact authenticated route which
+    /// delivered its request.
+    ///
+    /// Relayed requests address replies to their semantic origin while actor
+    /// accounting and writer ownership remain keyed by the authenticated hub
+    /// connection. A cancelled connection tenure retires this occurrence; the
+    /// requester's durable retry is its reconstruction path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same recoverable admission errors as [`Self::post_recoverable`].
+    /// A route from another actor, a retargeted post, or a live ticket from a
+    /// different route is rejected as an invalid ticket.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn post_reply_recoverable(
+        &self,
+        mut msg: Post<T>,
+        reply_route: &NetworkReplyRoute,
+        mut ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<T>>> {
+        let requested_priority = msg.priority;
+        if !msg.data.is_outbound_allowed() {
+            return Err(NetworkActorAdmissionError::Rejected {
+                message: msg,
+                reason: NetworkActorAdmissionRejection::OutboundDisallowed,
+            });
+        }
+        let topic = msg.data.topic();
+        let route = msg.data.subscriber_route();
+        if !is_reliable_progress_route(topic, route) {
+            return Err(NetworkActorAdmissionError::Rejected {
+                message: msg,
+                reason: NetworkActorAdmissionRejection::NotReliableProgress,
+            });
+        }
+        if msg.peer_id != *reply_route.semantic_target()
+            || !Arc::ptr_eq(&reply_route.tenure.owner, &self.reply_route_owner)
+        {
+            return Err(NetworkActorAdmissionError::Rejected {
+                message: msg,
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+            });
+        }
+        let actor_closed = if matches!(topic, message::Topic::ConsensusSafety) {
+            self.network_message_safety_sender.is_closed()
+        } else {
+            self.network_message_progress_sender.is_closed()
+        };
+        if actor_closed {
+            return Err(NetworkActorAdmissionError::Closed { message: msg });
+        }
+
+        if let Some(existing_ticket) = ticket.as_ref() {
+            let (prior_is_cancelled, same_route) = match existing_ticket.authority.as_ref() {
+                Some(WeakProgressDeliveryAuthority::Reply {
+                    semantic_target,
+                    tenure,
+                }) => {
+                    let tenure = tenure.upgrade();
+                    (
+                        tenure.as_ref().is_none_or(|tenure| !tenure.is_active()),
+                        semantic_target == reply_route.semantic_target()
+                            && tenure
+                                .as_ref()
+                                .is_some_and(|prior| Arc::ptr_eq(prior, &reply_route.tenure)),
+                    )
+                }
+                Some(WeakProgressDeliveryAuthority::Topology(_)) | None => (false, false),
+            };
+            if !same_route {
+                return Err(NetworkActorAdmissionError::Rejected {
+                    message: msg,
+                    reason: NetworkActorAdmissionRejection::InvalidTicket,
+                });
+            }
+            if prior_is_cancelled {
+                drop(ticket.take());
+            }
+        }
+        if !reply_route.is_active() {
+            drop(ticket);
+            return Ok(());
+        }
+
+        msg.priority = canonical_outbound_priority(topic, route, msg.priority);
+        let message = NetworkMessage::Post(msg);
+        let class = ActorProgressClass::for_route(topic, route)
+            .expect("a reliable progress route must have one actor class");
+        let source = ActorProgressSource {
+            target: Some(reply_route.tenure.delivery_peer.clone()),
+            class,
+        };
+        self.submit_progress_message_to_source(
+            message,
+            topic,
+            false,
+            source,
+            ProgressDeliveryAuthority::Reply(reply_route.clone()),
+            ticket,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            error.map_message(|message| match message {
+                NetworkMessage::Post(mut post) => {
+                    post.priority = requested_priority;
+                    post
+                }
+                NetworkMessage::Broadcast(_) => {
+                    unreachable!("reply admission must return the submitted post")
+                }
+            })
+        })
     }
 
     /// Admit a reliable semantic-progress broadcast as independent target copies.
@@ -6772,6 +7377,19 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             ),
         };
 
+        let actor_closed = if matches!(topic, message::Topic::ConsensusSafety) {
+            self.network_message_safety_sender.is_closed()
+        } else {
+            self.network_message_progress_sender.is_closed()
+        };
+        if actor_closed {
+            msg.priority = requested_priority;
+            return Err(NetworkBroadcastAdmissionError::Closed {
+                message: msg,
+                ticket,
+            });
+        }
+
         if ticket.needs_topology_snapshot {
             let targets = self
                 .reliable_broadcast_topology
@@ -6818,7 +7436,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 topic,
                 true,
                 source,
-                Some(Arc::clone(&target.membership)),
+                ProgressDeliveryAuthority::Topology(Arc::clone(&target.membership)),
                 target.actor_ticket.take(),
             ) {
                 Ok(_new_owner) => {}
@@ -7138,8 +7756,17 @@ async fn receive_control_update<T: Clone + Send + Sync>(
 }
 
 #[cfg(test)]
+fn test_network_actor_progress_budget() -> Arc<NetworkActorProgressBudget> {
+    NetworkActorProgressBudget::new(usize::MAX / 8, 8, 8)
+        .expect("bounded multi-source test progress budget must fit")
+}
+
+#[cfg(test)]
 mod handle_update_tests {
-    use std::{collections::HashSet, sync::atomic::AtomicUsize};
+    use std::{
+        collections::HashSet,
+        sync::{Barrier, atomic::AtomicUsize},
+    };
 
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256};
@@ -7295,11 +7922,6 @@ mod handle_update_tests {
             .expect("zero safety reserve must fit the test actor budget")
     }
 
-    fn test_network_actor_progress_budget() -> Arc<NetworkActorProgressBudget> {
-        NetworkActorProgressBudget::new(usize::MAX / 8, 8, 8)
-            .expect("bounded multi-source test progress budget must fit")
-    }
-
     fn test_topic_frame_caps() -> TopicFrameCaps {
         TopicFrameCaps {
             consensus: usize::MAX,
@@ -7385,7 +8007,7 @@ mod handle_update_tests {
             stream_wire_bytes: 10,
             broadcast: false,
             request_digest: Hash::new(b"progress-budget-waiter"),
-            broadcast_membership_generation: None,
+            authority: None,
         };
         let ProgressLeaseAttempt::Ready {
             lease: full_lease,
@@ -7431,9 +8053,9 @@ mod handle_update_tests {
         let shape = |tag| ProgressTicketShape {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
-            broadcast: true,
+            broadcast: false,
             request_digest: Hash::new([tag]),
-            broadcast_membership_generation: None,
+            authority: None,
         };
         let ProgressLeaseAttempt::Ready {
             lease: occupied,
@@ -7501,15 +8123,28 @@ mod handle_update_tests {
         .expect("one target per class must fit");
         let target = PeerId::from(KeyPair::random().public_key().clone());
         let source = ActorProgressSource {
-            target: Some(target),
+            target: Some(target.clone()),
             class: ActorProgressClass::Lane,
         };
+        let membership = |generation| {
+            Arc::new(ReliableProgressMembership {
+                peer_id: target.clone(),
+                generation,
+                active: AtomicBool::new(true),
+            })
+        };
+        let generation_seven = membership(7);
+        let generation_eight = membership(8);
+        let generation_seven_authority =
+            ProgressDeliveryAuthority::Topology(Arc::clone(&generation_seven));
+        let generation_eight_authority =
+            ProgressDeliveryAuthority::Topology(Arc::clone(&generation_eight));
         let shape = |request_digest, generation| ProgressTicketShape {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: true,
             request_digest,
-            broadcast_membership_generation: Some(generation),
+            authority: Some(ProgressAuthorityIdentity::Topology(generation)),
         };
 
         let first_digest = Hash::new(b"first-broadcast-request");
@@ -7520,6 +8155,7 @@ mod handle_update_tests {
             1,
             shape(first_digest, 7),
             source.clone(),
+            Some(&generation_seven_authority),
             None,
         )
         else {
@@ -7532,6 +8168,7 @@ mod handle_update_tests {
                 1,
                 shape(first_digest, 7),
                 source.clone(),
+                Some(&generation_seven_authority),
                 None,
             ),
             ProgressLeaseAttempt::SameRequestAlreadyOwned
@@ -7541,16 +8178,183 @@ mod handle_update_tests {
                 1,
                 shape(Hash::new(b"second-broadcast-request"), 7),
                 source.clone(),
+                Some(&generation_seven_authority),
                 None,
             ),
             ProgressLeaseAttempt::Waiting { rank: 1, .. }
         ));
         assert!(matches!(
-            budget.try_reserve_for_source(1, shape(first_digest, 8), source, None),
+            budget.try_reserve_for_source(
+                1,
+                shape(first_digest, 8),
+                source,
+                Some(&generation_eight_authority),
+                None,
+            ),
             ProgressLeaseAttempt::Waiting { rank: 1, .. }
         ));
         drop(first);
         assert_eq!(budget.retained(), 0);
+    }
+
+    #[test]
+    fn removed_membership_cancellation_is_race_safe_across_ticket_id_reuse() {
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let source = ActorProgressSource {
+            target: Some(target.clone()),
+            class: ActorProgressClass::Lane,
+        };
+        let membership = |generation| {
+            Arc::new(ReliableProgressMembership {
+                peer_id: target.clone(),
+                generation,
+                active: AtomicBool::new(true),
+            })
+        };
+        let broadcast_shape = |generation, tag| ProgressTicketShape {
+            topic: message::Topic::Consensus,
+            stream_wire_bytes: 1,
+            broadcast: true,
+            request_digest: Hash::new([tag]),
+            authority: Some(ProgressAuthorityIdentity::Topology(generation)),
+        };
+        let direct_shape = ProgressTicketShape {
+            topic: message::Topic::Consensus,
+            stream_wire_bytes: 1,
+            broadcast: false,
+            request_digest: Hash::new(b"membership-cancellation-direct-owner"),
+            authority: None,
+        };
+        let budget =
+            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 3)
+                .expect("one target and one waiter per class must fit");
+        let ProgressLeaseAttempt::Ready {
+            lease: direct_lease,
+            ticket: mut direct_ticket,
+        } = budget.try_reserve_for_source(1, direct_shape, source.clone(), None, None)
+        else {
+            panic!("direct fixture must retain the shared target lane");
+        };
+        direct_ticket.commit();
+
+        let old_membership = membership(7);
+        let old_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&old_membership));
+        let old_shape = broadcast_shape(7, 7);
+        let ProgressLeaseAttempt::Waiting {
+            ticket: Some(old_ticket),
+            rank: 1,
+        } = budget.try_reserve_for_source(1, old_shape, source.clone(), Some(&old_authority), None)
+        else {
+            panic!("old membership must own the first blocked rank");
+        };
+        old_membership.cancel();
+        assert_eq!(budget.cancel_membership(&old_membership, true), 1);
+        assert_eq!(old_ticket.rank(), None);
+
+        let new_membership = membership(8);
+        let new_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&new_membership));
+        let new_shape = broadcast_shape(8, 8);
+        let ProgressLeaseAttempt::Waiting {
+            ticket: Some(new_ticket),
+            rank: 1,
+        } = budget.try_reserve_for_source(1, new_shape, source.clone(), Some(&new_authority), None)
+        else {
+            panic!("new membership must reuse the released rank exactly");
+        };
+        assert_eq!(old_ticket.id, new_ticket.id, "empty waiter set resets ids");
+        drop(old_ticket);
+        assert_eq!(
+            new_ticket.rank(),
+            Some(1),
+            "delayed old-ticket drop must match its complete old shape"
+        );
+        drop(direct_lease);
+        let ProgressLeaseAttempt::Ready {
+            lease: new_lease,
+            ticket: mut new_ticket,
+        } = budget.try_reserve_for_source(
+            1,
+            new_shape,
+            source.clone(),
+            Some(&new_authority),
+            Some(new_ticket),
+        )
+        else {
+            panic!("new membership must acquire the released target lane");
+        };
+        new_ticket.commit();
+        drop(new_lease);
+
+        // Reconciliation can remove the waiter after `Ready` installs its
+        // lease but before the channel handoff commits the ticket. That exact
+        // cancelled commit is a no-op, not a panic or a cancellation of later
+        // work.
+        let commit_race_membership = membership(9);
+        let commit_race_authority =
+            ProgressDeliveryAuthority::Topology(Arc::clone(&commit_race_membership));
+        let commit_race_shape = broadcast_shape(9, 9);
+        let ProgressLeaseAttempt::Ready {
+            lease: commit_race_lease,
+            ticket: mut commit_race_ticket,
+        } = budget.try_reserve_for_source(
+            1,
+            commit_race_shape,
+            source.clone(),
+            Some(&commit_race_authority),
+            None,
+        )
+        else {
+            panic!("commit-race membership must initially acquire the lane");
+        };
+        commit_race_membership.cancel();
+        assert_eq!(budget.cancel_membership(&commit_race_membership, true), 1);
+        commit_race_ticket.commit();
+        drop(commit_race_lease);
+
+        // Force reservation to wait on the budget lock, publish cancellation,
+        // then race reservation against the reconciliation sweep. Since the
+        // membership check happens under the same budget lock, neither order
+        // can install a post-sweep stale waiter.
+        let cancelled_membership = membership(10);
+        let cancelled_shape = broadcast_shape(10, 10);
+        let barrier = Arc::new(Barrier::new(2));
+        let state_guard = budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::thread::scope(|scope| {
+            let worker_budget = Arc::clone(&budget);
+            let worker_membership = Arc::clone(&cancelled_membership);
+            let worker_source = source.clone();
+            let worker_barrier = Arc::clone(&barrier);
+            let worker = scope.spawn(move || {
+                worker_barrier.wait();
+                let worker_authority = ProgressDeliveryAuthority::Topology(worker_membership);
+                worker_budget.try_reserve_for_source(
+                    1,
+                    cancelled_shape,
+                    worker_source,
+                    Some(&worker_authority),
+                    None,
+                )
+            });
+            barrier.wait();
+            cancelled_membership.cancel();
+            drop(state_guard);
+            let swept = budget.cancel_membership(&cancelled_membership, true);
+            assert!(matches!(
+                worker.join().expect("reservation race thread"),
+                ProgressLeaseAttempt::CancelledMembership
+            ));
+            assert_eq!(swept, 0, "cancelled reservation never creates a waiter");
+        });
+        let state = budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.waiter_count, 0);
+        assert!(state.waiters.is_empty());
+        assert_eq!(state.retained_items, 0);
     }
 
     #[test]
@@ -7572,7 +8376,7 @@ mod handle_update_tests {
             stream_wire_bytes: 1,
             broadcast: false,
             request_digest: Hash::new(b"lane-progress-budget"),
-            broadcast_membership_generation: None,
+            authority: None,
         };
         let ProgressLeaseAttempt::Ready {
             lease: lane_lease,
@@ -7584,6 +8388,7 @@ mod handle_update_tests {
                 target: Some(first_target),
                 class: ActorProgressClass::Lane,
             },
+            None,
             None,
         )
         else {
@@ -7601,6 +8406,7 @@ mod handle_update_tests {
                 class: ActorProgressClass::Lane,
             },
             None,
+            None,
         )
         else {
             panic!("a second arbitrary lane target must remain with its caller");
@@ -7615,12 +8421,13 @@ mod handle_update_tests {
                 stream_wire_bytes: 1,
                 broadcast: false,
                 request_digest: Hash::new(b"safety-progress-budget"),
-                broadcast_membership_generation: None,
+                authority: None,
             },
             ActorProgressSource {
                 target: Some(second_target),
                 class: ActorProgressClass::Safety,
             },
+            None,
             None,
         )
         else {
@@ -7638,9 +8445,9 @@ mod handle_update_tests {
         let shape = ProgressTicketShape {
             topic: message::Topic::BlockSync,
             stream_wire_bytes: 1,
-            broadcast: true,
+            broadcast: false,
             request_digest: Hash::new(b"progress-ticket-wrap"),
-            broadcast_membership_generation: None,
+            authority: None,
         };
         let ProgressLeaseAttempt::Ready {
             lease,
@@ -7793,6 +8600,11 @@ mod handle_update_tests {
                 subscribe_to_peers_messages_sender: subscribe_tx,
                 online_peers_receiver,
                 online_peer_capabilities_receiver,
+                reliable_broadcast_topology: Arc::new(
+                    Mutex::new(ReliableProgressTopology::empty()),
+                ),
+                reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                reply_route_owner: Arc::new(()),
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -7848,7 +8660,7 @@ mod handle_update_tests {
         }
     }
 
-    fn handle_with_network_receivers<T: Pload>() -> (
+    pub(super) fn handle_with_network_receivers<T: Pload>() -> (
         NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
@@ -7889,9 +8701,9 @@ mod handle_update_tests {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
             online_peer_capabilities_receiver,
-            reliable_broadcast_topology: Arc::new(Mutex::new(
-                ReliableBroadcastTopology::empty(),
-            )),
+            reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reply_route_owner: Arc::new(()),
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -7962,9 +8774,11 @@ mod handle_update_tests {
                 subscribe_to_peers_messages_sender: subscribe_tx,
                 online_peers_receiver,
                 online_peer_capabilities_receiver,
-                reliable_broadcast_topology: Arc::new(Mutex::new(
-                    ReliableBroadcastTopology::empty(),
-                )),
+                reliable_broadcast_topology: Arc::new(
+                    Mutex::new(ReliableProgressTopology::empty()),
+                ),
+                reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                reply_route_owner: Arc::new(()),
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -8906,14 +9720,15 @@ mod handle_update_tests {
         assert_eq!(second.peer_id, peer_id);
         assert_eq!(second.priority, Priority::Low);
 
-        let _third = match handle.post_recoverable(post(), None) {
+        let (third, second_ticket) = match handle.post_recoverable(post(), None) {
             Err(NetworkActorAdmissionError::Backpressured {
                 message,
-                ticket: None,
+                ticket: Some(ticket),
                 rank: 2,
-            }) => message,
+            }) => (message, ticket),
             other => panic!("expected rank-two recoverable pressure, got {other:?}"),
         };
+        assert_eq!(third.priority, Priority::Low);
 
         let first = progress_rx
             .try_recv()
@@ -8928,20 +9743,41 @@ mod handle_update_tests {
         drop(first);
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
 
-        let _fresh = match handle.post_recoverable(post(), None) {
+        assert!(matches!(
+            handle.post_recoverable(post(), None),
             Err(NetworkActorAdmissionError::Backpressured {
-                message,
-                ticket: None,
-                rank: 2,
-            }) => message,
-            other => panic!("fresh work must not barge into released bytes: {other:?}"),
-        };
+                ticket: Some(_),
+                rank: 3,
+                ..
+            })
+        ));
         handle
             .post_recoverable(second, Some(first_ticket))
             .expect("the oldest ticket must acquire the released corridor");
+        assert_eq!(
+            second_ticket.rank(),
+            Some(1),
+            "committing the oldest ticket must decrease the next caller's rank"
+        );
         let admitted = progress_rx
             .try_recv()
             .expect("the oldest retry must enter the progress channel")
+            .into_inner();
+        assert!(matches!(
+            admitted,
+            NetworkMessage::Post(Post {
+                data: RoutedActorDummy::GenesisControl,
+                priority: Priority::High,
+                ..
+            })
+        ));
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+        handle
+            .post_recoverable(third, Some(second_ticket))
+            .expect("the second ticket must acquire the released corridor");
+        let admitted = progress_rx
+            .try_recv()
+            .expect("the second retry must enter the progress channel")
             .into_inner();
         assert!(matches!(
             admitted,
@@ -9328,7 +10164,7 @@ mod handle_update_tests {
 mod accept_stream_tests {
     use std::{
         collections::{HashMap, HashSet},
-        sync::Arc,
+        sync::{Arc, Mutex},
         time::Duration,
     };
 
@@ -10454,9 +11290,12 @@ mod accept_stream_tests {
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
             online_peer_capabilities_sender: online_peer_capabilities_tx,
-            reliable_broadcast_topology: Arc::new(Mutex::new(
-                ReliableBroadcastTopology::empty(),
-            )),
+            reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reply_route_owner: Arc::new(()),
+            reply_route_tenures: HashMap::new(),
+            next_reply_route_generation: 0,
+            network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
             update_peer_capabilities_receiver,
@@ -10477,6 +11316,7 @@ mod accept_stream_tests {
             update_handshake_receiver: update_handshake_rx,
             update_consensus_caps_receiver,
             current_conn_id: 0,
+            requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             chain_id: None,
@@ -10834,6 +11674,16 @@ mod accept_stream_tests {
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
             online_peer_capabilities_sender: online_peer_capabilities_tx,
+            reliable_broadcast_topology: Arc::new(Mutex::new(
+                super::ReliableProgressTopology::empty(),
+            )),
+            reliable_direct_topology: Arc::new(
+                Mutex::new(super::ReliableProgressTopology::empty()),
+            ),
+            reply_route_owner: Arc::new(()),
+            reply_route_tenures: HashMap::new(),
+            next_reply_route_generation: 0,
+            network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
             update_peer_capabilities_receiver,
@@ -10854,6 +11704,7 @@ mod accept_stream_tests {
             update_handshake_receiver: update_handshake_rx,
             update_consensus_caps_receiver,
             current_conn_id: 0,
+            requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
@@ -11054,6 +11905,16 @@ mod accept_stream_tests {
                 subscribe_to_peers_messages_receiver: subscribe_rx,
                 online_peers_sender: online_peers_tx,
                 online_peer_capabilities_sender: online_peer_capabilities_tx,
+                reliable_broadcast_topology: Arc::new(Mutex::new(
+                    super::ReliableProgressTopology::empty(),
+                )),
+                reliable_direct_topology: Arc::new(Mutex::new(
+                    super::ReliableProgressTopology::empty(),
+                )),
+                reply_route_owner: Arc::new(()),
+                reply_route_tenures: HashMap::new(),
+                next_reply_route_generation: 0,
+                network_actor_progress_budget: test_network_actor_progress_budget(),
                 update_topology_receiver: update_topology_rx,
                 update_peers_receiver: update_peers_rx,
                 update_peer_capabilities_receiver,
@@ -11074,6 +11935,7 @@ mod accept_stream_tests {
                 update_handshake_receiver: update_handshake_rx,
                 update_consensus_caps_receiver,
                 current_conn_id: 0,
+                requested_topology: HashSet::new(),
                 current_topology: HashSet::new(),
                 current_peers_addresses: Vec::new(),
                 idle_timeout: Duration::from_millis(50),
@@ -11293,6 +12155,16 @@ mod accept_stream_tests {
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
             online_peer_capabilities_sender: online_peer_capabilities_tx,
+            reliable_broadcast_topology: Arc::new(Mutex::new(
+                super::ReliableProgressTopology::empty(),
+            )),
+            reliable_direct_topology: Arc::new(
+                Mutex::new(super::ReliableProgressTopology::empty()),
+            ),
+            reply_route_owner: Arc::new(()),
+            reply_route_tenures: HashMap::new(),
+            next_reply_route_generation: 0,
+            network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
             update_peer_capabilities_receiver,
@@ -11313,6 +12185,7 @@ mod accept_stream_tests {
             update_handshake_receiver: update_handshake_rx,
             update_consensus_caps_receiver,
             current_conn_id: 0,
+            requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
@@ -12234,7 +13107,18 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Sender of online peer transport capabilities.
     online_peer_capabilities_sender: watch::Sender<message::OnlinePeerCapabilities>,
     /// Relay-aware topology publication used by targetized broadcast callers.
-    reliable_broadcast_topology: Arc<Mutex<ReliableBroadcastTopology>>,
+    reliable_broadcast_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-published authority for direct reliable posts. This contains the
+    /// accepted logical topology plus currently authenticated peer identities.
+    reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-instance identity and exact current connection tenures used to
+    /// mint unforgeable reply routes for inbound semantic origins.
+    reply_route_owner: Arc<()>,
+    reply_route_tenures: HashMap<ConnectionId, Arc<ReliableReplyRouteTenure>>,
+    next_reply_route_generation: u128,
+    /// Shared reliable-progress owner used to cancel waiters whose exact
+    /// broadcast membership was removed by an accepted topology transition.
+    network_actor_progress_budget: Arc<NetworkActorProgressBudget>,
     /// Latest [`UpdateTopology`] snapshot receiver.
     update_topology_receiver: ControlUpdateReceiver<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot receiver.
@@ -12275,6 +13159,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     update_consensus_caps_receiver: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     /// Current available connection id
     current_conn_id: ConnectionId,
+    /// Last accepted logical topology before relay-route projection.
+    requested_topology: HashSet<PeerId>,
     /// Current topology
     current_topology: HashSet<PeerId>,
     /// Peers which are not yet connected, but should.
@@ -12547,16 +13433,34 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             actor_lease,
             mut remaining_broadcast_targets,
             mut pending_flush_acks,
-            broadcast_membership,
+            progress_authority,
         ) = admitted.into_dispatch_parts();
-        if broadcast_membership
+        if progress_authority
             .as_ref()
-            .is_some_and(|membership| !membership.is_active())
+            .is_some_and(|authority| !authority.is_active())
         {
             // An accepted topology removal is the exact cancellation witness
-            // for this broadcast target tenure. Direct posts carry no token.
+            // for this reliable target tenure.
             drop(actor_lease);
             return Ok(());
+        }
+        if let Some(ProgressDeliveryAuthority::Reply(route)) = progress_authority.as_ref() {
+            let current_writer = self
+                .peers
+                .get(&route.tenure.delivery_peer)
+                .is_some_and(|peer| peer.conn_id == route.tenure.connection_id);
+            let current_tenure = self
+                .reply_route_tenures
+                .get(&route.tenure.connection_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &route.tenure));
+            if !current_writer || !current_tenure {
+                route.tenure.cancel();
+                let _ = self
+                    .network_actor_progress_budget
+                    .cancel_reply_route(&route.tenure);
+                drop(actor_lease);
+                return Ok(());
+            }
         }
         let (topic, route) = match &message {
             NetworkMessage::Post(post) => (post.data.topic(), post.data.subscriber_route()),
@@ -12608,9 +13512,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 } else if pending_flush_acks.contains_key(&post.peer_id) {
                     false
                 } else {
-                    let delivery_peer = self
-                        .relay_route_for_unconnected_post_target(&post.peer_id)
-                        .unwrap_or_else(|| post.peer_id.clone());
+                    let delivery_peer = match progress_authority.as_ref() {
+                        Some(ProgressDeliveryAuthority::Reply(route)) => {
+                            debug_assert_eq!(route.semantic_target(), &post.peer_id);
+                            route.tenure.delivery_peer.clone()
+                        }
+                        Some(ProgressDeliveryAuthority::Topology(_)) | None => self
+                            .relay_route_for_unconnected_post_target(&post.peer_id)
+                            .unwrap_or_else(|| post.peer_id.clone()),
+                    };
                     let frame = RelayMessage::new(
                         self.self_id.clone(),
                         RelayTarget::Direct(post.peer_id.clone()),
@@ -12683,7 +13593,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 actor_lease,
                 remaining_broadcast_targets,
                 pending_flush_acks,
-                broadcast_membership,
+                progress_authority,
             ))
         }
     }
@@ -12712,7 +13622,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         pending: &mut ReliableActorPending<T>,
         message: AdmittedNetworkMessage<T>,
     ) {
-        if message.cancelled_broadcast_membership() {
+        if message.cancelled_progress_authority() {
             return;
         }
         pending.push_back(message);
@@ -13118,17 +14028,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     break
                 },
             }
-            let removed_memberships = self.reconcile_reliable_broadcast_topology();
+            let (removed_memberships, cancelled_waiters) =
+                self.reconcile_reliable_progress_topologies();
             let released = safety_dispatch_pending
-                .release_cancelled_broadcast_targets()
-                .saturating_add(
-                    progress_dispatch_pending.release_cancelled_broadcast_targets(),
-                );
-            if removed_memberships > 0 || released > 0 {
+                .release_cancelled_targets()
+                .saturating_add(progress_dispatch_pending.release_cancelled_targets());
+            if removed_memberships > 0 || cancelled_waiters > 0 || released > 0 {
                 iroha_logger::debug!(
                     removed_memberships,
+                    cancelled_waiters,
                     released,
-                    "Cancelled exact reliable-broadcast ownership for removed topology memberships"
+                    "Cancelled exact reliable-progress ownership for removed topology memberships"
                 );
             }
             tokio::task::yield_now().await;
@@ -13235,7 +14145,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) {
         iroha_logger::debug!(?topology, "Network receive new topology");
-        let topology: HashSet<_> = topology
+        let logical_topology: HashSet<_> = topology
             .into_iter()
             .filter(|peer_id| peer_id.public_key() != self.key_pair.public_key())
             .filter(|peer_id| {
@@ -13249,6 +14159,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 true
             })
             .collect();
+        if !self.reliable_topology_candidate_fits(&logical_topology, "logical topology update") {
+            return;
+        }
         let relay_hub_peer = self.select_relay_hub_peer(tokio::time::Instant::now());
         if relay_hub_peer.is_none()
             && matches!(
@@ -13263,7 +14176,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 "Relay mode has no reachable hub peer id"
             );
         }
-        let topology = self.relay_topology_candidate(topology, relay_hub_peer.as_ref());
+        let topology =
+            self.relay_topology_candidate(logical_topology.clone(), relay_hub_peer.as_ref());
         if !self.reliable_topology_candidate_fits(&topology, "topology update") {
             return;
         }
@@ -13271,6 +14185,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         // final relay-aware geometry. A rejected public update therefore cannot
         // partially rotate the assist route while leaving the old topology.
         self.relay_hub_peer = relay_hub_peer;
+        self.requested_topology = logical_topology;
         self.current_topology = topology;
         self.apply_trusted_observers();
         self.update_topology()
@@ -13881,6 +14796,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     );
                     if let Some(ref_peer) = self.peers.remove(peer_id) {
                         ref_peer.handle.request_termination();
+                        let _ = self.cancel_reply_route_tenure(ref_peer.conn_id);
                         self.mark_connection_terminating(conn_id);
                         self.peer_reputations.record_disconnected(peer_id);
                     }
@@ -14223,6 +15139,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if outcome.is_some() {
             if let Some(ref_peer) = self.peers.remove(peer_id) {
                 ref_peer.handle.request_termination();
+                let _ = self.cancel_reply_route_tenure(ref_peer.conn_id);
                 self.deferred_send_queue.clear_generation(peer_id, conn_id);
                 self.mark_connection_terminating(conn_id);
                 self.peer_reputations.record_disconnected(peer_id);
@@ -14450,7 +15367,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn mark_connection_terminating(&mut self, conn_id: ConnectionId) {
         self.incoming_pending.remove(&conn_id);
         self.incoming_active.remove(&conn_id);
+        let _ = self.cancel_reply_route_tenure(conn_id);
         self.terminating_connections.insert(conn_id);
+    }
+
+    fn cancel_reply_route_tenure(&mut self, conn_id: ConnectionId) -> usize {
+        let Some(tenure) = self.reply_route_tenures.remove(&conn_id) else {
+            return 0;
+        };
+        tenure.cancel();
+        self.network_actor_progress_budget
+            .cancel_reply_route(&tenure)
     }
 
     fn disconnect_peer(&mut self, peer_id: &PeerId) {
@@ -14461,6 +15388,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         iroha_logger::debug!(listen_addr = %self.listen_addr, %peer.conn_id, "Disconnecting peer");
 
         peer.handle.request_termination();
+        let _ = self.cancel_reply_route_tenure(peer.conn_id);
         self.deferred_send_queue
             .clear_generation(peer_id, peer.conn_id);
         self.mark_connection_terminating(peer.conn_id);
@@ -14694,11 +15622,27 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             && replaced.conn_id != connection_id
         {
             replaced.handle.request_termination();
+            let _ = self.cancel_reply_route_tenure(replaced.conn_id);
             self.deferred_send_queue
                 .clear_generation(peer.id(), replaced.conn_id);
             self.mark_connection_terminating(replaced.conn_id);
             self.peer_reputations.record_disconnected(peer.id());
         }
+        let generation = self.next_reply_route_generation;
+        self.next_reply_route_generation = generation
+            .checked_add(1)
+            .expect("reply-route authority generation cannot wrap while the actor is live");
+        let prior = self.reply_route_tenures.insert(
+            connection_id,
+            Arc::new(ReliableReplyRouteTenure {
+                owner: Arc::clone(&self.reply_route_owner),
+                delivery_peer: peer.id().clone(),
+                connection_id,
+                generation,
+                active: AtomicBool::new(true),
+            }),
+        );
+        assert!(prior.is_none(), "accepted connection ids cannot be reused");
         match self.flush_deferred_frames_for_peer(peer.id()) {
             DeferredFlushOutcome::Flushed | DeferredFlushOutcome::Backpressured(_) => {}
             DeferredFlushOutcome::PeerMissing => {
@@ -14732,6 +15676,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         // independently of how far the connection progressed.
         self.incoming_pending.remove(&conn_id);
         self.incoming_active.remove(&conn_id);
+        // Natural transport death is the exact cancellation witness for every
+        // actor-owned message and caller-held waiter bound to this tenure. A
+        // stale predecessor notice cannot affect a replacement because
+        // connection ids and reply-route generations are never reused.
+        let _ = self.cancel_reply_route_tenure(conn_id);
         // If termination happened before handshake, the `peer` is None.
         // In that case use the pending `connecting_peers` map to find which peer failed.
         if let Some(peer) = peer {
@@ -14897,11 +15846,53 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         false
     }
 
-    fn reconcile_reliable_broadcast_topology(&mut self) -> usize {
-        self.reliable_broadcast_topology
+    fn reconcile_reliable_topology(
+        &self,
+        published: &Arc<Mutex<ReliableProgressTopology>>,
+        expected: &HashSet<PeerId>,
+        broadcast: bool,
+    ) -> (usize, usize) {
+        let removed = published
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .reconcile(&self.current_topology, &self.self_id)
+            .reconcile(expected, &self.self_id);
+        // `reconcile` marks every removed token inactive before this budget
+        // lock is acquired. A concurrent reservation therefore either sees
+        // the inactive token or is included in this exact generation sweep.
+        let mut cancelled_waiters = 0usize;
+        for membership in &removed {
+            cancelled_waiters = cancelled_waiters
+                .checked_add(
+                    self.network_actor_progress_budget
+                        .cancel_membership(membership, broadcast),
+                )
+                .expect("bounded reliable-progress waiter count cannot overflow");
+        }
+        (removed.len(), cancelled_waiters)
+    }
+
+    fn reconcile_reliable_progress_topologies(&mut self) -> (usize, usize) {
+        let (removed_broadcast, cancelled_broadcast_waiters) = self.reconcile_reliable_topology(
+            &self.reliable_broadcast_topology,
+            &self.current_topology,
+            true,
+        );
+        let mut direct_targets = self.requested_topology.clone();
+        direct_targets.extend(self.peers.keys().cloned());
+        debug_assert!(
+            direct_targets.len()
+                <= network_actor_progress_target_capacity(self.reliable_actor_target_capacity())
+                    .expect("validated reliable direct target geometry")
+        );
+        let (removed_direct, cancelled_direct_waiters) = self.reconcile_reliable_topology(
+            &self.reliable_direct_topology,
+            &direct_targets,
+            false,
+        );
+        (
+            removed_broadcast.saturating_add(removed_direct),
+            cancelled_broadcast_waiters.saturating_add(cancelled_direct_waiters),
+        )
     }
 
     fn reliable_broadcast_targets(&self) -> Option<VecDeque<PeerId>> {
@@ -15086,6 +16077,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             record_inbound_cap_violation(topic);
             if let Some(ref_peer) = self.peers.remove(&peer_id) {
                 ref_peer.handle.request_termination();
+                let _ = self.cancel_reply_route_tenure(ref_peer.conn_id);
                 self.deferred_send_queue
                     .clear_generation(&peer_id, ref_peer.conn_id);
                 self.mark_connection_terminating(ref_peer.conn_id);
@@ -15217,7 +16209,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
         if deliver_local {
             let origin_peer = self.resolve_origin_peer(&origin, &incoming_peer);
-            let deliver = msg.map_payload(origin_peer, |relay| relay.payload);
+            let reply_route = msg
+                .connection_id()
+                .and_then(|connection_id| self.reply_route_tenures.get(&connection_id))
+                .filter(|tenure| tenure.is_active() && tenure.delivery_peer == *incoming_peer.id())
+                .map(|tenure| NetworkReplyRoute::new(origin.clone(), Arc::clone(tenure)));
+            let mut deliver = msg.map_payload(origin_peer, |relay| relay.payload);
+            if let Some(reply_route) = reply_route {
+                deliver.set_reply_route(reply_route);
+            }
             if matches!(
                 topic,
                 message::Topic::TxGossip | message::Topic::TxGossipRestricted
@@ -15593,7 +16593,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
     fn get_conn_id(&mut self) -> ConnectionId {
         let conn_id = self.current_conn_id;
-        self.current_conn_id = conn_id.wrapping_add(1);
+        self.current_conn_id = conn_id
+            .checked_add(1)
+            .expect("P2P connection identifiers cannot wrap while the actor is live");
         conn_id
     }
 
@@ -15721,6 +16723,7 @@ mod tests {
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tokio::sync::mpsc::error::TryRecvError;
 
+    use super::handle_update_tests::handle_with_network_receivers;
     use super::*;
 
     #[derive(Clone, Debug, Decode, Encode)]
@@ -16305,6 +17308,12 @@ mod tests {
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
             online_peer_capabilities_sender: online_peer_capabilities_tx,
+            reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            reply_route_owner: Arc::new(()),
+            reply_route_tenures: HashMap::new(),
+            next_reply_route_generation: 0,
+            network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
             update_peer_capabilities_receiver,
@@ -16325,6 +17334,7 @@ mod tests {
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             current_conn_id: 0,
+            requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             chain_id: None,
@@ -16437,31 +17447,32 @@ mod tests {
         network.network_message_safety_receiver = safety_rx;
         let service_tx = network.service_message_sender.clone();
         // This white-box stress bypasses source admission to keep the safety
-        // receiver continuously ready. The payload must still carry the real
-        // safety classification enforced by `ReliableActorPending`.
+        // receiver continuously ready. Use a direct target because reliable
+        // broadcasts may enter the actor only after targetized admission has
+        // attached its exact topology-membership source.
+        let flood_target = PeerId::from(KeyPair::random().public_key().clone());
         for _ in 0..128 {
             safety_tx
-                .try_send(admitted_test_network_message(NetworkMessage::Broadcast(
-                    Broadcast {
-                        data: SafetyMsg(0),
-                        priority: Priority::High,
-                    },
-                )))
+                .try_send(admitted_test_network_message(NetworkMessage::Post(Post {
+                    data: SafetyMsg(0),
+                    peer_id: flood_target.clone(),
+                    priority: Priority::High,
+                })))
                 .expect("safety flood prefill should fit");
         }
 
         let shutdown = ShutdownSignal::new();
         let actor = tokio::spawn(network.run(shutdown.clone()));
         let flood_tx = safety_tx.clone();
+        let flood_target = flood_target.clone();
         let flood = tokio::spawn(async move {
             loop {
                 if flood_tx
-                    .send(admitted_test_network_message(NetworkMessage::Broadcast(
-                        Broadcast {
-                            data: SafetyMsg(0),
-                            priority: Priority::High,
-                        },
-                    )))
+                    .send(admitted_test_network_message(NetworkMessage::Post(Post {
+                        data: SafetyMsg(0),
+                        peer_id: flood_target.clone(),
+                        priority: Priority::High,
+                    })))
                     .await
                     .is_err()
                 {
@@ -19293,7 +20304,7 @@ mod tests {
             stream_wire_bytes: 1,
             broadcast: false,
             request_digest: Hash::new(b"blocked-live-source"),
-            broadcast_membership_generation: None,
+            authority: None,
         };
         let blocked_source = ActorProgressSource {
             target: Some(blocked_peer.clone()),
@@ -19306,7 +20317,7 @@ mod tests {
         let ProgressLeaseAttempt::Ready {
             lease: blocked_lease,
             ticket: mut blocked_admission,
-        } = budget.try_reserve_for_source(1, shape, blocked_source.clone(), None)
+        } = budget.try_reserve_for_source(1, shape, blocked_source.clone(), None, None)
         else {
             panic!("first blocked-source item must own its single slot");
         };
@@ -19314,14 +20325,14 @@ mod tests {
         let ProgressLeaseAttempt::Waiting {
             ticket: Some(_blocked_retry_ticket),
             rank: 1,
-        } = budget.try_reserve_for_source(1, shape, blocked_source, None)
+        } = budget.try_reserve_for_source(1, shape, blocked_source, None, None)
         else {
             panic!("second blocked-source item must stay recoverably with its caller");
         };
         let ProgressLeaseAttempt::Ready {
             lease: live_lease,
             ticket: mut live_admission,
-        } = budget.try_reserve_for_source(1, shape, live_source, None)
+        } = budget.try_reserve_for_source(1, shape, live_source, None, None)
         else {
             panic!("a distinct responsive source must retain independent admission");
         };
@@ -19516,7 +20527,7 @@ mod tests {
             handle_with_network_receivers::<DeferredProgressMsg>();
         let blocked_peer = PeerId::from(KeyPair::random().public_key().clone());
         let live_peer = PeerId::from(KeyPair::random().public_key().clone());
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19545,9 +20556,10 @@ mod tests {
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
                 request_digest: progress_ticket_request_digest(&direct),
-                broadcast_membership_generation: None,
+                authority: None,
             },
             direct_source,
+            None,
             None,
         )
         else {
@@ -19559,18 +20571,17 @@ mod tests {
             data: DeferredProgressMsg::Lane(tag),
             priority: Priority::High,
         };
-        let (first_ticket, first_rank) =
-            match handle.broadcast_recoverable(broadcast(1), None) {
-                Err(NetworkBroadcastAdmissionError::Backpressured {
-                    message,
-                    ticket,
-                    rank,
-                }) => {
-                    assert_eq!(message.data, DeferredProgressMsg::Lane(1));
-                    (ticket, rank)
-                }
-                _ => panic!("only the blocked target copy must remain with the caller"),
-            };
+        let (first_ticket, first_rank) = match handle.broadcast_recoverable(broadcast(1), None) {
+            Err(NetworkBroadcastAdmissionError::Backpressured {
+                message,
+                ticket,
+                rank,
+            }) => {
+                assert_eq!(message.data, DeferredProgressMsg::Lane(1));
+                (ticket, rank)
+            }
+            _ => panic!("only the blocked target copy must remain with the caller"),
+        };
         assert_eq!(first_rank, 1);
         assert_eq!(first_ticket.pending_targets(), 1);
         let first_live = progress_rx
@@ -19584,18 +20595,17 @@ mod tests {
         );
         drop(first_live);
 
-        let (second_ticket, second_rank) =
-            match handle.broadcast_recoverable(broadcast(2), None) {
-                Err(NetworkBroadcastAdmissionError::Backpressured {
-                    message,
-                    ticket,
-                    rank,
-                }) => {
-                    assert_eq!(message.data, DeferredProgressMsg::Lane(2));
-                    (ticket, rank)
-                }
-                _ => panic!("later blocked copy must remain independently exact"),
-            };
+        let (second_ticket, second_rank) = match handle.broadcast_recoverable(broadcast(2), None) {
+            Err(NetworkBroadcastAdmissionError::Backpressured {
+                message,
+                ticket,
+                rank,
+            }) => {
+                assert_eq!(message.data, DeferredProgressMsg::Lane(2));
+                (ticket, rank)
+            }
+            _ => panic!("later blocked copy must remain independently exact"),
+        };
         assert_eq!(second_rank, 2);
         let second_live = progress_rx
             .try_recv()
@@ -19615,13 +20625,12 @@ mod tests {
         let first_blocked = progress_rx
             .try_recv()
             .expect("first blocked target copy reaches actor ownership");
-        let second_ticket =
-            match handle.broadcast_recoverable(broadcast(2), Some(second_ticket)) {
-                Err(NetworkBroadcastAdmissionError::Backpressured {
-                    ticket, rank: 1, ..
-                }) => ticket,
-                _ => panic!("committing the predecessor must decrease the next rank"),
-            };
+        let second_ticket = match handle.broadcast_recoverable(broadcast(2), Some(second_ticket)) {
+            Err(NetworkBroadcastAdmissionError::Backpressured {
+                ticket, rank: 1, ..
+            }) => ticket,
+            _ => panic!("committing the predecessor must decrease the next rank"),
+        };
         drop(first_blocked);
         handle
             .broadcast_recoverable(broadcast(2), Some(second_ticket))
@@ -19634,7 +20643,7 @@ mod tests {
         let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
         let target = PeerId::from(KeyPair::random().public_key().clone());
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19685,7 +20694,7 @@ mod tests {
             handle_with_network_receivers::<DeferredProgressMsg>();
         let target = PeerId::from(KeyPair::random().public_key().clone());
         let topology = HashSet::from([target.clone()]);
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19711,9 +20720,10 @@ mod tests {
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
                 request_digest: progress_ticket_request_digest(&direct),
-                broadcast_membership_generation: None,
+                authority: None,
             },
             direct_source,
+            None,
             None,
         )
         else {
@@ -19737,7 +20747,7 @@ mod tests {
             .generation;
         let added = PeerId::from(KeyPair::random().public_key().clone());
         let expanded = HashSet::from([target.clone(), added.clone()]);
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19770,22 +20780,39 @@ mod tests {
             Some(&added)
         );
         drop((added_child, added_residual));
-        {
+        let removed = {
             let mut shared = handle
                 .reliable_broadcast_topology
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            assert_eq!(shared.reconcile(&HashSet::new(), &handle.self_id), 2);
-            assert_eq!(shared.reconcile(&topology, &handle.self_id), 0);
+            let removed = shared.reconcile(&HashSet::new(), &handle.self_id);
+            assert_eq!(removed.len(), 2);
+            assert!(shared.reconcile(&topology, &handle.self_id).is_empty());
+            removed
+        };
+        for membership in &removed {
+            handle
+                .network_actor_progress_budget
+                .cancel_membership(membership, true);
         }
+        // Do not retry or drop `old_ticket`: topology reconciliation itself
+        // must remove its old-generation rank. Once the unrelated direct
+        // owner retires, a new direct request must not wait behind the
+        // abandoned producer.
+        drop(direct_lease);
         handle
-            .broadcast_recoverable(message.clone(), Some(old_ticket))
-            .expect("removal discharges only the old membership");
-        assert!(matches!(
-            progress_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-
+            .post_recoverable(
+                Post {
+                    data: DeferredProgressMsg::Lane(10),
+                    peer_id: target.clone(),
+                    priority: Priority::High,
+                },
+                None,
+            )
+            .expect("removed broadcast tenure cannot block a fresh direct owner");
+        let fresh_direct = progress_rx
+            .try_recv()
+            .expect("fresh direct owner crosses after the old tenure is cancelled");
         let new_ticket = match handle.broadcast_recoverable(message.clone(), None) {
             Err(NetworkBroadcastAdmissionError::Backpressured { ticket, .. }) => ticket,
             _ => panic!("re-addition creates a new tenure behind the direct post"),
@@ -19797,11 +20824,26 @@ mod tests {
             .membership
             .generation;
         assert_ne!(old_generation, new_generation);
-        drop(direct_lease);
+        drop(fresh_direct);
         handle
-            .broadcast_recoverable(message, Some(new_ticket))
+            .broadcast_recoverable(message.clone(), Some(new_ticket))
             .expect("new membership copy crosses after the shared lane releases");
-        assert!(progress_rx.try_recv().is_ok());
+        let new_child = progress_rx
+            .try_recv()
+            .expect("new membership child enters actor ownership");
+
+        // Ticket ids may reset when the removed waiter was the last one. A
+        // delayed old retry/drop must match its complete old shape and cannot
+        // cancel the newly admitted generation, even if the numeric id was
+        // reused.
+        handle
+            .broadcast_recoverable(message, Some(old_ticket))
+            .expect("delayed removed-tenure retry is an exact cancellation no-op");
+        assert!(matches!(
+            progress_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        drop(new_child);
     }
 
     #[test]
@@ -19809,7 +20851,7 @@ mod tests {
         let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
         let target = PeerId::from(KeyPair::random().public_key().clone());
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19824,19 +20866,18 @@ mod tests {
             )
             .expect("target child enters actor ownership");
         let mut child = progress_rx.try_recv().expect("targetized actor child");
-        let membership = Arc::clone(
-            child
-                .broadcast_membership
-                .as_ref()
-                .expect("broadcast child carries exact membership"),
-        );
+        let Some(ProgressDeliveryAuthority::Topology(membership)) =
+            child.progress_authority.as_ref()
+        else {
+            panic!("broadcast child carries exact topology authority");
+        };
+        let membership = Arc::clone(membership);
         let (ack_sender, ack_receiver) = tokio::sync::oneshot::channel();
         child
             .pending_flush_acks
             .insert(target.clone(), ack_receiver);
 
-        let ordinary_budget =
-            NetworkActorByteBudget::new(1, 0).expect("direct fixture owner");
+        let ordinary_budget = NetworkActorByteBudget::new(1, 0).expect("direct fixture owner");
         let direct = AdmittedNetworkMessage::new(
             NetworkMessage::Post(Post {
                 data: DeferredProgressMsg::Lane(4),
@@ -19851,7 +20892,7 @@ mod tests {
         pending.push_back(child);
         pending.push_back(direct);
         membership.cancel();
-        assert_eq!(pending.release_cancelled_broadcast_targets(), 1);
+        assert_eq!(pending.release_cancelled_targets(), 1);
         assert_eq!(pending.len(), 1, "direct post remains exact");
         assert!(ack_sender.send(()).is_err());
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
@@ -19871,10 +20912,11 @@ mod tests {
             None,
         ) {
             Err(NetworkBroadcastAdmissionError::Backpressured {
-                ticket: NetworkBroadcastAdmissionTicket {
-                    needs_topology_snapshot: true,
-                    ..
-                },
+                ticket:
+                    NetworkBroadcastAdmissionTicket {
+                        needs_topology_snapshot: true,
+                        ..
+                    },
                 ..
             }) => match handle.broadcast_recoverable(
                 Broadcast {
@@ -19888,6 +20930,12 @@ mod tests {
             },
             _ => panic!("a requested topology is not actor-accepted authority"),
         };
+        assert!(empty_ticket.awaiting_topology_snapshot());
+        assert_eq!(
+            empty_ticket.pending_targets(),
+            0,
+            "no target count is invented before actor topology acceptance"
+        );
         let (other_handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
         assert!(matches!(
@@ -19912,8 +20960,58 @@ mod tests {
         assert_eq!(original_state.retained_items, 0);
         drop(original_state);
 
+        let (closed_empty_handle, _safety_rx, closed_empty_progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let closed_empty_message = Broadcast {
+            data: DeferredProgressMsg::Lane(2),
+            priority: Priority::High,
+        };
+        let closed_empty_ticket =
+            match closed_empty_handle.broadcast_recoverable(closed_empty_message.clone(), None) {
+                Err(NetworkBroadcastAdmissionError::Backpressured { ticket, .. }) => ticket,
+                _ => panic!("empty accepted topology must retain one unsnapshotted fanout"),
+            };
+        drop(closed_empty_progress_rx);
+        match closed_empty_handle
+            .broadcast_recoverable(closed_empty_message, Some(closed_empty_ticket))
+        {
+            Err(NetworkBroadcastAdmissionError::Closed { ticket, .. }) => {
+                assert!(ticket.awaiting_topology_snapshot());
+                assert_eq!(ticket.pending_targets(), 0);
+            }
+            _ => panic!("closed empty-topology actor must not report perpetual pressure"),
+        }
+
+        let (closed_owned_handle, _safety_rx, mut closed_owned_progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let closed_owned_target = PeerId::from(KeyPair::random().public_key().clone());
+        let _ = closed_owned_handle
+            .reliable_broadcast_topology
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reconcile(
+                &HashSet::from([closed_owned_target]),
+                &closed_owned_handle.self_id,
+            );
+        let closed_owned_message = Broadcast {
+            data: DeferredProgressMsg::Lane(3),
+            priority: Priority::High,
+        };
+        closed_owned_handle
+            .broadcast_recoverable(closed_owned_message.clone(), None)
+            .expect("first exact broadcast enters actor ownership");
+        let closed_owned_child = closed_owned_progress_rx
+            .try_recv()
+            .expect("exact target child remains live for the close race");
+        drop(closed_owned_progress_rx);
+        assert!(matches!(
+            closed_owned_handle.broadcast_recoverable(closed_owned_message, None),
+            Err(NetworkBroadcastAdmissionError::Closed { .. })
+        ));
+        drop(closed_owned_child);
+
         let target = PeerId::from(KeyPair::random().public_key().clone());
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19938,9 +21036,10 @@ mod tests {
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
                 request_digest: progress_ticket_request_digest(&direct),
-                broadcast_membership_generation: None,
+                authority: None,
             },
             direct_source,
+            None,
             None,
         )
         else {
@@ -19990,7 +21089,7 @@ mod tests {
         let peers: HashSet<_> = (0..3)
             .map(|_| PeerId::from(KeyPair::random().public_key().clone()))
             .collect();
-        handle
+        let _ = handle
             .reliable_broadcast_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

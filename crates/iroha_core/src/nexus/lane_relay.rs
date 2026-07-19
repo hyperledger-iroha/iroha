@@ -110,10 +110,7 @@ impl LaneRelayTx for IrohaNetwork {
                 envelope: lane_relay_from_broadcast(message),
                 token: Some(ticket),
             },
-            Err(NetworkBroadcastAdmissionError::Closed {
-                message,
-                ticket: _,
-            }) => {
+            Err(NetworkBroadcastAdmissionError::Closed { message, ticket: _ }) => {
                 LaneRelaySendDisposition::Closed {
                     envelope: lane_relay_from_broadcast(message),
                 }
@@ -122,12 +119,10 @@ impl LaneRelayTx for IrohaNetwork {
                 message,
                 ticket: _,
                 reason,
-            }) => {
-                LaneRelaySendDisposition::Rejected {
-                    envelope: lane_relay_from_broadcast(message),
-                    reason,
-                }
-            }
+            }) => LaneRelaySendDisposition::Rejected {
+                envelope: lane_relay_from_broadcast(message),
+                reason,
+            },
         }
     }
 }
@@ -249,10 +244,9 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                         LaneRelaySendDisposition::Accepted => {
                             immediately_transferred = immediately_transferred.saturating_add(1);
                         }
-                        LaneRelaySendDisposition::Retry {
-                            envelope,
-                            token,
-                        } => errors.push(LaneRelayBroadcastError::Capacity { envelope, token }),
+                        LaneRelaySendDisposition::Retry { envelope, token } => {
+                            errors.push(LaneRelayBroadcastError::Capacity { envelope, token })
+                        }
                         LaneRelaySendDisposition::Closed { envelope } => {
                             errors.push(LaneRelayBroadcastError::Closed { envelope });
                         }
@@ -290,8 +284,8 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
             }
         }
 
-        let transferred = immediately_transferred
-            .saturating_add(self.retry_pending_inner(&mut errors));
+        let transferred =
+            immediately_transferred.saturating_add(self.retry_pending_inner(&mut errors));
         if errors.is_empty() {
             Ok(transferred)
         } else {
@@ -301,9 +295,7 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
 
     /// Retry every currently owned relay at most once in round-robin order.
     #[must_use = "terminal lane-relay ownership must be handled"]
-    pub fn retry_pending(
-        &mut self,
-    ) -> Result<usize, Vec<LaneRelayBroadcastError<N::RetryToken>>> {
+    pub fn retry_pending(&mut self) -> Result<usize, Vec<LaneRelayBroadcastError<N::RetryToken>>> {
         let mut errors = Vec::new();
         let transferred = self.retry_pending_inner(&mut errors);
         if errors.is_empty() {

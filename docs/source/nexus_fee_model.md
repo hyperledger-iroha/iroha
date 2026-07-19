@@ -4,6 +4,13 @@ Nexus fees use a quote-to-sign protocol. A transaction always carries a typed,
 signature-bound `FeePaymentIntent`; fee sponsorship is never inferred from
 metadata and never falls back to charging the sender after a sponsor rejection.
 
+Authenticated genesis bootstrap execution is additionally fee-exempt.
+When Core applies the genesis block against an empty committed block history,
+it bypasses fee-intent admission and fee settlement so bootstrap state does not
+depend on balances, sponsor revisions, or receipt leases that genesis has not
+created yet. Public fee quotes and every non-genesis transaction retain the
+strict quote-to-sign, admission, and settlement rules described below.
+
 The `nexus` charge component uses canonical XOR (`xor#universal`, or its
 canonical asset definition literal). A `pipeline_gas` component may instead
 use one exact asset accepted by the governed gas schedule. A signed intent

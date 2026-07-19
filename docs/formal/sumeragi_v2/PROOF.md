@@ -257,12 +257,15 @@ Each recipient/source lane is bounded and the ready queue rotates every
 non-empty source. Within the selected source, ingress removes the oldest
 currently admissible entry; an auxiliary request waiting for I/O capacity
 therefore cannot hide later consensus or certified-body progress, and every
-earlier blocked entry remains in its original order. Exact authenticated
-envelopes coalesce while an equal occurrence remains owned anywhere in the
-scheduler, including deferred, causal, runtime, ready-completion, I/O, or
-outstanding-work ownership. Servicing that owner therefore cannot leave an
-equal replacement at the same logical rank. A pinned mutation demonstrates the
-old deferred-owner replacement lasso and the scheduler-wide coalescing repair.
+earlier blocked entry remains in its original order. In the abstract scheduler,
+exact authenticated envelopes coalesce while an equal occurrence remains owned
+anywhere in the scheduler, including deferred, causal, runtime,
+ready-completion, I/O, or outstanding-work ownership. Servicing that owner
+therefore cannot leave an equal replacement at the same logical rank. Production
+now performs the exact queued/Busy-deferred union for embedded CommitQCs and
+rechecks it after authentication; the wider causal/ready/I/O projection remains
+part of the separately unproved production-refinement seam. A pinned mutation
+demonstrates the old replacement lasso and the scheduler-wide coalescing repair.
 Transport packets and ingress entries retain occurrence-specific service
 arguments instead of being folded vacuously into that candidate rank. Timeout
 delivery also establishes membership in the full canonical envelope record set
@@ -736,14 +739,15 @@ work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
 reconstruction-refinement, or starvation obligations.
 
-The current pre-network release inventory names 289 tests across twenty Rust
-modules. Relative to the preceding 264-name inventory, 26 positive regressions
+The current pre-network release inventory names 298 tests across twenty-one Rust
+modules. Relative to the preceding 264-name inventory, 37 positive regressions
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
-2 peer-writer flush/old-generation custody tests, and 14 exact progress-ticket,
+2 peer-writer flush/old-generation custody tests, 20 exact progress-ticket,
 topology, removal, replacement, and identical-retry tests plus
-distinct/cross-kind broadcast-residual and subscriber-backlog tests. Removing
-one obsolete adapter cursor alias already superseded by its listed replacement
-yields the net delta of 25.
+distinct/cross-kind broadcast-residual and subscriber-backlog tests, and 1
+runtime/Busy-deferred exact CommitQC coalescing test, plus 4 Nexus lane-relay
+ownership/fairness tests. Removing the obsolete adapter cursor alias and two
+superseded network broadcast-residual tests yields the net delta of 34.
 They are local ownership and reconstruction
 contracts, not remote application acknowledgement, relay second-hop
 completion, or unbounded broadcast admission. The 264-name baseline added 32
@@ -756,10 +760,10 @@ owners (`4N+2` total), including a roster-origin completion relayed through an
 untrusted authenticated hop, and retains the capacity-negative boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 40 legs, including separate exact data-model status and atomic
+now has 41 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts. Its `iroha_p2p` legs use the crate's empty
 default feature set; feature-gated QUIC first-packet geometry tests are not
-claimed by the twenty-module, forty-leg corridor. It includes
+claimed by the twenty-one-module, forty-one-leg corridor. It includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
@@ -778,7 +782,7 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 289-name
+earlier 168-name inventory. Fresh 298-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt

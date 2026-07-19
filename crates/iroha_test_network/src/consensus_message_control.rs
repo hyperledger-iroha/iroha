@@ -144,7 +144,7 @@ impl ConsensusMessageControlAction {
 /// One exact receiver-local inbound rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsensusMessageControlRule {
-    /// Authenticated transport sender identity.
+    /// Semantic sender identity; controlled direct traffic must also authenticate via this peer.
     pub sender: PeerId,
     /// Exact v2 payload kind.
     pub kind: ConsensusMessageControlKind,
@@ -190,7 +190,7 @@ impl ConsensusMessageControlRule {
 pub struct ConsensusMessageControlHeld {
     /// Monotonic receiver-local ingress sequence.
     pub sequence: u64,
-    /// Authenticated transport sender.
+    /// Semantic origin carried by the P2P work item.
     pub sender: PeerId,
     /// P2P identity that authenticated the retained copy.
     ///
@@ -934,6 +934,60 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             "held descriptor certificate signers are not strictly increasing"
         ));
     }
+    let has_subject_and_execution = subject.is_some() && execution_commitment.is_some();
+    let has_no_subject_or_execution = subject.is_none() && execution_commitment.is_none();
+    let has_single_signer = signer.is_some();
+    let has_certificate_signers = !certificate_signers.is_empty();
+    let valid_payload_shape = match kind {
+        ConsensusMessageControlKind::Proposal => {
+            subject.is_some()
+                && execution_commitment.is_none()
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::PrepareVote | ConsensusMessageControlKind::CommitVote => {
+            has_subject_and_execution && has_single_signer && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::PrepareCertificate
+        | ConsensusMessageControlKind::CommitCertificate
+        | ConsensusMessageControlKind::CertifiedBodyRequest
+        | ConsensusMessageControlKind::CommitCertificateResponse => {
+            has_subject_and_execution && !has_single_signer && has_certificate_signers
+        }
+        ConsensusMessageControlKind::TimeoutVote => {
+            (has_subject_and_execution || has_no_subject_or_execution)
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::TimeoutCertificate => {
+            (has_subject_and_execution || has_no_subject_or_execution)
+                && !has_single_signer
+                && has_certificate_signers
+        }
+        ConsensusMessageControlKind::PayloadManifest => {
+            subject.is_some()
+                && execution_commitment.is_none()
+                && !has_single_signer
+                && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::PayloadChunk => {
+            has_no_subject_or_execution && has_single_signer && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::CertifiedBodyResponse => {
+            subject.is_some()
+                && execution_commitment.is_none()
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::CommitCertificateRequest => {
+            has_no_subject_or_execution && !has_single_signer && !has_certificate_signers
+        }
+    };
+    if !valid_payload_shape {
+        return Err(eyre!(
+            "held descriptor fields disagree with the exact payload-kind shape"
+        ));
+    }
     Ok(ConsensusMessageControlHeld {
         sequence,
         sender,
@@ -1316,6 +1370,144 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use tempfile::tempdir;
 
+    fn descriptor_peer() -> PeerId {
+        PeerId::new(
+            KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
+                .expect("deterministic descriptor peer")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn descriptor_subject() -> BlockSubject {
+        BlockSubject {
+            parent_block_hash: Some(HashOf::from_untyped_unchecked(CryptoHash::new(
+                b"descriptor-parent",
+            ))),
+            block_hash: HashOf::from_untyped_unchecked(CryptoHash::new(b"descriptor-block")),
+            payload_hash: CryptoHash::new(b"descriptor-payload"),
+        }
+    }
+
+    fn descriptor_execution_commitment() -> ExecutionCommitment {
+        ExecutionCommitment::without_topups(
+            CryptoHash::new(b"descriptor-parent-state"),
+            CryptoHash::new(b"descriptor-post-state"),
+            CryptoHash::new(b"descriptor-writes"),
+            CryptoHash::new(b"descriptor-executed-wire"),
+        )
+    }
+
+    fn held_descriptor(kind: ConsensusMessageControlKind) -> Value {
+        let peer = descriptor_peer().to_string();
+        let subject = descriptor_subject();
+        let subject_value = norito::json::to_value(&subject).expect("encode descriptor subject");
+        let commitment_value = norito::json::to_value(&descriptor_execution_commitment())
+            .expect("encode descriptor execution commitment");
+        let (height, view, subject, execution, signer, certificate_signers) = match kind {
+            ConsensusMessageControlKind::Proposal => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                subject_value,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::PrepareVote | ConsensusMessageControlKind::CommitVote => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                subject_value,
+                commitment_value,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::PrepareCertificate
+            | ConsensusMessageControlKind::CommitCertificate
+            | ConsensusMessageControlKind::CertifiedBodyRequest
+            | ConsensusMessageControlKind::CommitCertificateResponse => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                subject_value,
+                commitment_value,
+                Value::Null,
+                vec![Value::from(0_u64), Value::from(1_u64), Value::from(2_u64)],
+            ),
+            ConsensusMessageControlKind::TimeoutVote => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                Value::Null,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::TimeoutCertificate => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                vec![Value::from(0_u64), Value::from(1_u64), Value::from(2_u64)],
+            ),
+            ConsensusMessageControlKind::PayloadManifest => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                subject_value,
+                Value::Null,
+                Value::Null,
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::PayloadChunk => (
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::CertifiedBodyResponse => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                subject_value,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::CommitCertificateRequest => (
+                Value::from(9_u64),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Vec::new(),
+            ),
+        };
+        object_value([
+            ("authenticated_via", Value::from(peer.clone())),
+            (
+                "block_hash",
+                if subject.is_null() {
+                    Value::Null
+                } else {
+                    Value::from(descriptor_subject().block_hash.to_string())
+                },
+            ),
+            ("certificate_signers", Value::Array(certificate_signers)),
+            (
+                "envelope_digest",
+                Value::from(CryptoHash::new(kind.as_str().as_bytes()).to_string()),
+            ),
+            ("execution_commitment", execution),
+            ("height", height),
+            ("kind", Value::from(kind.as_str())),
+            ("sender", Value::from(peer)),
+            ("sequence", Value::from(1_u64)),
+            ("signer", signer),
+            ("size_bytes", Value::from(64_u64)),
+            ("subject", subject),
+            ("view", view),
+        ])
+    }
+
     #[test]
     fn writer_rejects_duplicate_and_reordered_release_sequences() {
         let parent = tempdir().expect("temporary parent");
@@ -1594,6 +1786,114 @@ mod tests {
         );
         assert!(parse_ack(&canonical_json(&ack(relayed)).expect("canonical relayed ack")).is_err());
 
+        let mut missing_signer = chunk.clone();
+        missing_signer
+            .as_object_mut()
+            .expect("chunk descriptor")
+            .insert("signer".to_owned(), Value::Null);
+        assert!(
+            parse_ack(&canonical_json(&ack(missing_signer)).expect("canonical missing-signer ack"))
+                .is_err()
+        );
+
+        let mut inconsistent_subject = chunk.clone();
+        inconsistent_subject
+            .as_object_mut()
+            .expect("chunk descriptor")
+            .insert(
+                "block_hash".to_owned(),
+                Value::from(CryptoHash::new(b"unbound-block").to_string()),
+            );
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(inconsistent_subject))
+                    .expect("canonical inconsistent-subject ack")
+            )
+            .is_err()
+        );
+
+        let mut malformed_digest = chunk.clone();
+        malformed_digest
+            .as_object_mut()
+            .expect("chunk descriptor")
+            .insert(
+                "envelope_digest".to_owned(),
+                Value::from("not-a-canonical-hash"),
+            );
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(malformed_digest)).expect("canonical malformed-digest ack")
+            )
+            .is_err()
+        );
+
+        let mut subjectless_vote = chunk.clone();
+        {
+            let subjectless_vote = subjectless_vote.as_object_mut().expect("chunk descriptor");
+            subjectless_vote.insert("height".to_owned(), Value::from(9_u64));
+            subjectless_vote.insert("kind".to_owned(), Value::from("prepare_vote"));
+            subjectless_vote.insert("view".to_owned(), Value::from(0_u64));
+        }
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(subjectless_vote)).expect("canonical subjectless-vote ack")
+            )
+            .is_err()
+        );
+
+        let mut timeout_certificate = chunk.clone();
+        let timeout_certificate_object = timeout_certificate
+            .as_object_mut()
+            .expect("chunk descriptor");
+        timeout_certificate_object.insert(
+            "certificate_signers".to_owned(),
+            Value::Array(vec![
+                Value::from(0_u64),
+                Value::from(1_u64),
+                Value::from(2_u64),
+            ]),
+        );
+        timeout_certificate_object.insert("height".to_owned(), Value::from(9_u64));
+        timeout_certificate_object.insert("kind".to_owned(), Value::from("timeout_certificate"));
+        timeout_certificate_object.insert("signer".to_owned(), Value::Null);
+        timeout_certificate_object.insert("view".to_owned(), Value::from(0_u64));
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(timeout_certificate.clone()))
+                    .expect("canonical timeout-certificate ack")
+            )
+            .is_ok()
+        );
+
+        let mut signerless_certificate = timeout_certificate.clone();
+        signerless_certificate
+            .as_object_mut()
+            .expect("timeout-certificate descriptor")
+            .insert("certificate_signers".to_owned(), Value::Array(Vec::new()));
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(signerless_certificate))
+                    .expect("canonical signerless-certificate ack")
+            )
+            .is_err()
+        );
+
+        let mut duplicate_certificate_signer = timeout_certificate;
+        duplicate_certificate_signer
+            .as_object_mut()
+            .expect("timeout-certificate descriptor")
+            .insert(
+                "certificate_signers".to_owned(),
+                Value::Array(vec![Value::from(0_u64), Value::from(0_u64)]),
+            );
+        assert!(
+            parse_ack(
+                &canonical_json(&ack(duplicate_certificate_signer))
+                    .expect("canonical duplicate-certificate-signer ack")
+            )
+            .is_err()
+        );
+
         let mut fabricated = chunk;
         fabricated
             .as_object_mut()
@@ -1602,6 +1902,54 @@ mod tests {
         assert!(
             parse_ack(&canonical_json(&ack(fabricated)).expect("canonical invalid ack")).is_err()
         );
+    }
+
+    #[test]
+    fn held_descriptor_parser_accepts_every_daemon_payload_shape() {
+        for kind in [
+            ConsensusMessageControlKind::Proposal,
+            ConsensusMessageControlKind::PrepareVote,
+            ConsensusMessageControlKind::CommitVote,
+            ConsensusMessageControlKind::PrepareCertificate,
+            ConsensusMessageControlKind::CommitCertificate,
+            ConsensusMessageControlKind::TimeoutVote,
+            ConsensusMessageControlKind::TimeoutCertificate,
+            ConsensusMessageControlKind::PayloadManifest,
+            ConsensusMessageControlKind::PayloadChunk,
+            ConsensusMessageControlKind::CertifiedBodyRequest,
+            ConsensusMessageControlKind::CertifiedBodyResponse,
+            ConsensusMessageControlKind::CommitCertificateRequest,
+            ConsensusMessageControlKind::CommitCertificateResponse,
+        ] {
+            let parsed = parse_held(&held_descriptor(kind))
+                .unwrap_or_else(|error| panic!("daemon {kind:?} descriptor failed: {error:#}"));
+            assert_eq!(parsed.kind, kind);
+            assert_eq!(parsed.sender, parsed.authenticated_via);
+            assert_ne!(parsed.envelope_digest, CryptoHash::new(b""));
+        }
+    }
+
+    #[test]
+    fn held_descriptor_parser_rejects_invalid_execution_and_certificate_shapes() {
+        let mut invalid_execution = held_descriptor(ConsensusMessageControlKind::PrepareVote);
+        invalid_execution
+            .as_object_mut()
+            .expect("vote descriptor")
+            .get_mut("execution_commitment")
+            .and_then(Value::as_object_mut)
+            .expect("execution commitment")
+            .insert("topup_anchor_count".to_owned(), Value::from(1_u64));
+        assert!(parse_held(&invalid_execution).is_err());
+
+        let mut reordered = held_descriptor(ConsensusMessageControlKind::PrepareCertificate);
+        reordered
+            .as_object_mut()
+            .expect("certificate descriptor")
+            .insert(
+                "certificate_signers".to_owned(),
+                Value::Array(vec![Value::from(1_u64), Value::from(0_u64)]),
+            );
+        assert!(parse_held(&reordered).is_err());
     }
 
     #[cfg(unix)]

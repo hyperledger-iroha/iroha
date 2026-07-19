@@ -38,7 +38,7 @@ use iroha_data_model::{
 use iroha_p2p::{
     Post, Priority,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionTicket,
+        NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyRoute,
         message::{ClassifyTopic as _, ProgressReconstruction},
     },
 };
@@ -79,7 +79,10 @@ enum V2IoCommand {
     Store(BodyStoreTask),
     Validate(BodyValidationTask),
     Apply(ApplyTask),
-    Serve(AuthenticatedCertifiedBodyRequest),
+    Serve {
+        request: AuthenticatedCertifiedBodyRequest,
+        reply_route: Option<NetworkReplyRoute>,
+    },
     LoadCandidate {
         acquisition_id: LockedCandidateAcquisitionId,
         subject: wire::BlockSubject,
@@ -100,7 +103,7 @@ enum V2IoAdmissionClass {
 impl V2IoCommand {
     const fn admission_class(&self) -> V2IoAdmissionClass {
         match self {
-            Self::Serve(_) => V2IoAdmissionClass::Auxiliary,
+            Self::Serve { .. } => V2IoAdmissionClass::Auxiliary,
             Self::Sign { .. } | Self::Store(_) | Self::Validate(_) | Self::Apply(_) => {
                 V2IoAdmissionClass::Consensus
             }
@@ -116,7 +119,10 @@ impl V2IoCommand {
             Self::Store(task) => Some(task.id()),
             Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
-            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+            Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
         }
     }
 
@@ -126,7 +132,7 @@ impl V2IoCommand {
             Self::Store(_) => Some(V2IoCancellableKind::Store),
             Self::Validate(_) => Some(V2IoCancellableKind::Validate),
             Self::Apply(_)
-            | Self::Serve(_)
+            | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
@@ -170,7 +176,10 @@ impl V2IoCommand {
                     validated_receipt: task.validated_receipt().clone(),
                 },
             )),
-            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+            Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
         }
     }
 }
@@ -744,6 +753,7 @@ enum V2IoCompletion {
     },
     CertifiedResponse {
         recipient: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
         response: wire::CertifiedBodyResponse,
     },
     CertifiedRequestIgnored,
@@ -1037,11 +1047,15 @@ impl V2IoHandle {
                                         }
                                         Err(error) => Err(error.to_string()),
                                     },
-                                    V2IoCommand::Serve(request) => serve_certified_body(
+                                    V2IoCommand::Serve {
+                                        request,
+                                        reply_route,
+                                    } => serve_certified_body(
                                         &body_store,
                                         &key_pair,
                                         local_validator,
                                         request,
+                                        reply_route,
                                     ),
                                     V2IoCommand::LoadCandidate { .. }
                                     | V2IoCommand::Retire(_)
@@ -1359,6 +1373,7 @@ fn serve_certified_body(
     key_pair: &KeyPair,
     local_validator: Option<wire::ValidatorIndex>,
     authenticated: AuthenticatedCertifiedBodyRequest,
+    reply_route: Option<NetworkReplyRoute>,
 ) -> Result<V2IoCompletion, String> {
     let request = authenticated.request();
     let Some(responder) = local_validator else {
@@ -1396,6 +1411,7 @@ fn serve_certified_body(
         .to_vec();
     Ok(V2IoCompletion::CertifiedResponse {
         recipient: request.requester.clone(),
+        reply_route,
         response,
     })
 }
@@ -1918,8 +1934,18 @@ struct RetainedOutboundPayload {
 /// lane so backpressure on that target does not stall the other targets. Only
 /// the exact current [`Post`] returned by recoverable admission is stored in a
 /// lane with its FIFO ticket.
+#[derive(Clone, Debug, Default)]
+enum ExactTargetRoute {
+    /// Resolve the target through the actor-published direct topology.
+    #[default]
+    Topology,
+    /// Return a response through the exact authenticated request tenure.
+    Reply(NetworkReplyRoute),
+}
+
 #[derive(Debug, Default)]
 struct PendingExactTarget {
+    route: ExactTargetRoute,
     message_index: usize,
     current: Option<Post<NetworkMessage>>,
     ticket: Option<NetworkActorAdmissionTicket>,
@@ -2282,12 +2308,28 @@ struct PendingExactFanout {
 
 impl PendingExactFanout {
     fn new(messages: Vec<NetworkMessage>, peers: Vec<PeerId>) -> Option<Self> {
+        let routes = vec![ExactTargetRoute::Topology; peers.len()];
+        Self::new_with_routes(messages, peers, routes)
+    }
+
+    fn new_with_routes(
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        routes: Vec<ExactTargetRoute>,
+    ) -> Option<Self> {
         if messages.is_empty() || peers.is_empty() {
             return None;
         }
+        if routes.len() != peers.len() {
+            return None;
+        }
         let message_hashes = messages.iter().map(HashOf::new).collect();
-        let targets = std::iter::repeat_with(PendingExactTarget::default)
-            .take(peers.len())
+        let targets = routes
+            .into_iter()
+            .map(|route| PendingExactTarget {
+                route,
+                ..PendingExactTarget::default()
+            })
             .collect();
         Some(Self {
             messages,
@@ -2304,7 +2346,20 @@ impl PendingExactFanout {
         peers: Vec<PeerId>,
         rollover_claim: ExactOutputRolloverClaim,
     ) -> Result<Option<Self>, String> {
-        let Some(mut fanout) = Self::new(messages, peers) else {
+        let routes = vec![ExactTargetRoute::Topology; peers.len()];
+        Self::claimed_with_routes(messages, peers, routes, rollover_claim)
+    }
+
+    fn claimed_with_routes(
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        routes: Vec<ExactTargetRoute>,
+        rollover_claim: ExactOutputRolloverClaim,
+    ) -> Result<Option<Self>, String> {
+        if routes.len() != peers.len() {
+            return Err("Sumeragi v2 exact-output route count changed target geometry".to_owned());
+        }
+        let Some(mut fanout) = Self::new_with_routes(messages, peers, routes) else {
             return Ok(None);
         };
         rollover_claim.validate_fanout(&fanout.messages, &fanout.peers)?;
@@ -2315,10 +2370,14 @@ impl PendingExactFanout {
     fn take_attempt(
         &mut self,
         target_index: usize,
-    ) -> Option<(Post<NetworkMessage>, Option<NetworkActorAdmissionTicket>)> {
+    ) -> Option<(
+        Post<NetworkMessage>,
+        Option<NetworkActorAdmissionTicket>,
+        ExactTargetRoute,
+    )> {
         let target = self.targets.get_mut(target_index)?;
         if let Some(post) = target.current.take() {
-            return Some((post, target.ticket.take()));
+            return Some((post, target.ticket.take(), target.route.clone()));
         }
         let data = self.messages.get(target.message_index)?.clone();
         let peer_id = self.peers.get(target_index)?.clone();
@@ -2329,6 +2388,7 @@ impl PendingExactFanout {
                 priority: Priority::High,
             },
             None,
+            target.route.clone(),
         ))
     }
 
@@ -2598,6 +2658,7 @@ impl PendingExactOutput {
         Attempt: FnMut(
             Post<NetworkMessage>,
             Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
         ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
     {
         let mut blocked_peers = BTreeSet::new();
@@ -2609,14 +2670,14 @@ impl PendingExactOutput {
                     "Sumeragi v2 exact-output scheduler found no per-target FIFO head".to_owned()
                 });
             };
-            let (post, ticket) = self
+            let (post, ticket, route) = self
                 .fanouts
                 .get_mut(fanout_index)
                 .expect("selected exact fanout must remain present")
                 .take_attempt(target_index)
                 .expect("selected exact-output target must own an attempt");
             let attempted_peer = post.peer_id.clone();
-            match attempt(post, ticket) {
+            match attempt(post, ticket, &route) {
                 Ok(()) => {
                     self.fanouts
                         .get_mut(fanout_index)
@@ -3444,7 +3505,22 @@ impl ProductionV2Services {
         &mut self,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<(), String> {
-        self.enqueue_io(V2IoCommand::Serve(request))
+        self.enqueue_io(V2IoCommand::Serve {
+            request,
+            reply_route: None,
+        })
+    }
+
+    /// Queue an authenticated certified-body request with its exact return route.
+    pub(crate) fn serve_certified_request_on_route(
+        &mut self,
+        request: AuthenticatedCertifiedBodyRequest,
+        reply_route: NetworkReplyRoute,
+    ) -> Result<(), String> {
+        self.enqueue_io(V2IoCommand::Serve {
+            request,
+            reply_route: Some(reply_route),
+        })
     }
 
     /// Load the exact durable body required by a lock-constrained proposal.
@@ -4030,16 +4106,23 @@ impl ProductionV2Services {
                         completion:
                             V2IoCompletion::CertifiedResponse {
                                 recipient,
+                                reply_route,
                                 response,
                             },
                         ..
                     } => {
-                        if let Err(reason) = self.post_to_peer(
-                            recipient,
-                            wire::ConsensusMessageV2::new(
-                                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                        let message = wire::ConsensusMessageV2::new(
+                            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                        );
+                        let result = match reply_route {
+                            Some(reply_route) => self.post_to_peer_on_reply_route(
+                                recipient,
+                                reply_route,
+                                message,
                             ),
-                        ) {
+                            None => self.post_to_peer(recipient, message),
+                        };
+                        if let Err(reason) = result {
                             return Err(executor.external_service_failed(reason, self));
                         }
                     }
@@ -4442,15 +4525,26 @@ impl ProductionV2Services {
                     let mut hook = hook.lock().map_err(|_| {
                         "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
                     })?;
-                    pending.drive_with(|post, ticket| hook(post, ticket))?
+                    pending.drive_with(|post, ticket, _route| hook(post, ticket))?
                 } else {
-                    pending
-                        .drive_with(|post, ticket| self.network.post_recoverable(post, ticket))?
+                    pending.drive_with(|post, ticket, route| match route {
+                        ExactTargetRoute::Topology => {
+                            self.network.post_recoverable(post, ticket)
+                        }
+                        ExactTargetRoute::Reply(reply_route) => self
+                            .network
+                            .post_reply_recoverable(post, reply_route, ticket),
+                    })?
                 }
             }
             #[cfg(not(test))]
             {
-                pending.drive_with(|post, ticket| self.network.post_recoverable(post, ticket))?
+                pending.drive_with(|post, ticket, route| match route {
+                    ExactTargetRoute::Topology => self.network.post_recoverable(post, ticket),
+                    ExactTargetRoute::Reply(reply_route) => self
+                        .network
+                        .post_reply_recoverable(post, reply_route, ticket),
+                })?
             }
         };
         if let Some(rank) = rank {
@@ -4471,6 +4565,31 @@ impl ProductionV2Services {
         _permit: &ConsensusOutputPermit<'_>,
     ) -> Result<ExactFanoutOwnership, String> {
         let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
+            return Ok(ExactFanoutOwnership::Owned);
+        };
+        let mut pending = self.lock_pending_exact_output()?;
+        let ownership = pending.enqueue(fanout)?;
+        if ownership == ExactFanoutOwnership::Owned {
+            let _ = self.drive_pending_exact_output(&mut pending)?;
+        }
+        Ok(ownership)
+    }
+
+    fn enqueue_exact_reply_while_guarded(
+        &self,
+        message: NetworkMessage,
+        peer: PeerId,
+        reply_route: NetworkReplyRoute,
+        rollover_claim: ExactOutputRolloverClaim,
+        _permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let Some(fanout) = PendingExactFanout::claimed_with_routes(
+            vec![message],
+            vec![peer],
+            vec![ExactTargetRoute::Reply(reply_route)],
+            rollover_claim,
+        )?
+        else {
             return Ok(ExactFanoutOwnership::Owned);
         };
         let mut pending = self.lock_pending_exact_output()?;
@@ -4622,15 +4741,42 @@ impl ProductionV2Services {
         peer: PeerId,
         message: wire::ConsensusMessageV2,
     ) -> Result<(), String> {
+        self.post_to_peer_with_route(peer, None, message)
+    }
+
+    /// Send one response through the exact authenticated request route.
+    pub(crate) fn post_to_peer_on_reply_route(
+        &self,
+        peer: PeerId,
+        reply_route: NetworkReplyRoute,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<(), String> {
+        self.post_to_peer_with_route(peer, Some(reply_route), message)
+    }
+
+    fn post_to_peer_with_route(
+        &self,
+        peer: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<(), String> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let ownership = self.post_block_message_while_guarded(
-            peer,
-            BlockMessage::V2(message),
-            operation.permit(),
-        )?;
+        let ownership = match reply_route {
+            Some(reply_route) => self.post_block_message_on_reply_route_while_guarded(
+                peer,
+                reply_route,
+                BlockMessage::V2(message),
+                operation.permit(),
+            )?,
+            None => self.post_block_message_while_guarded(
+                peer,
+                BlockMessage::V2(message),
+                operation.permit(),
+            )?,
+        };
         if ownership == ExactFanoutOwnership::SourceRetained {
             iroha_logger::debug!(
                 "deferred certified Sumeragi v2 response to requester reconstruction"
@@ -4644,6 +4790,27 @@ impl ProductionV2Services {
     pub(crate) fn post_durable_history_response_with_permit(
         &self,
         peer: PeerId,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<(), String> {
+        self.post_durable_history_response_with_route(peer, None, message, permit)
+    }
+
+    /// Send a durable historical response through an exact authenticated route.
+    pub(crate) fn post_durable_history_response_on_reply_route_with_permit(
+        &self,
+        peer: PeerId,
+        reply_route: NetworkReplyRoute,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<(), String> {
+        self.post_durable_history_response_with_route(peer, Some(reply_route), message, permit)
+    }
+
+    fn post_durable_history_response_with_route(
+        &self,
+        peer: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
         message: wire::ConsensusMessageV2,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
@@ -4696,8 +4863,24 @@ impl ProductionV2Services {
             self.context.height,
             self.kura.as_ref(),
         )?;
-        let ownership =
-            self.enqueue_exact_fanout_while_guarded(messages, peers, rollover_claim, permit)?;
+        let ownership = match reply_route {
+            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+                messages
+                    .into_iter()
+                    .next()
+                    .expect("durable response is a singleton"),
+                peers
+                    .into_iter()
+                    .next()
+                    .expect("durable response has one target"),
+                reply_route,
+                rollover_claim,
+                permit,
+            )?,
+            None => {
+                self.enqueue_exact_fanout_while_guarded(messages, peers, rollover_claim, permit)?
+            }
+        };
         if ownership == ExactFanoutOwnership::SourceRetained {
             iroha_logger::debug!(
                 "deferred historical Sumeragi v2 response to requester reconstruction"
@@ -4742,6 +4925,25 @@ impl ProductionV2Services {
         peer: PeerId,
         certificate: LaneBlockCertificateV1,
     ) -> Result<(), String> {
+        self.post_durable_lane_certificate_with_route(peer, None, certificate)
+    }
+
+    /// Send a Kura-backed lane certificate through its request's exact route.
+    pub(crate) fn post_durable_lane_certificate_on_reply_route(
+        &self,
+        peer: PeerId,
+        reply_route: NetworkReplyRoute,
+        certificate: LaneBlockCertificateV1,
+    ) -> Result<(), String> {
+        self.post_durable_lane_certificate_with_route(peer, Some(reply_route), certificate)
+    }
+
+    fn post_durable_lane_certificate_with_route(
+        &self,
+        peer: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
+        certificate: LaneBlockCertificateV1,
+    ) -> Result<(), String> {
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
@@ -4773,12 +4975,27 @@ impl ProductionV2Services {
             self.context.height,
             self.kura.as_ref(),
         )?;
-        let ownership = self.enqueue_exact_fanout_while_guarded(
-            messages,
-            peers,
-            rollover_claim,
-            operation.permit(),
-        )?;
+        let ownership = match reply_route {
+            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+                messages
+                    .into_iter()
+                    .next()
+                    .expect("durable lane response is a singleton"),
+                peers
+                    .into_iter()
+                    .next()
+                    .expect("durable lane response has one target"),
+                reply_route,
+                rollover_claim,
+                operation.permit(),
+            )?,
+            None => self.enqueue_exact_fanout_while_guarded(
+                messages,
+                peers,
+                rollover_claim,
+                operation.permit(),
+            )?,
+        };
         if ownership == ExactFanoutOwnership::SourceRetained {
             return Err(
                 "durable lane certificate reached an unreserved corridor boundary".to_owned(),
@@ -4793,6 +5010,16 @@ impl ProductionV2Services {
     pub(crate) fn post_certified_merge_sidecar(
         &self,
         peer: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) {
+        self.post_certified_merge_sidecar_with_reply_route(peer, None, message);
+    }
+
+    /// Send a sidecar request normally or a response on its exact request route.
+    pub(crate) fn post_certified_merge_sidecar_with_reply_route(
+        &self,
+        peer: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
         message: CertifiedMergeSidecarMessage,
     ) {
         let output_guard = Arc::clone(&self.output_guard);
@@ -4835,12 +5062,23 @@ impl ProductionV2Services {
                 return;
             }
         };
-        match self.enqueue_exact_fanout_while_guarded(
-            vec![NetworkMessage::CertifiedMergeSidecar(Box::new(message))],
-            vec![peer],
-            rollover_claim,
-            operation.permit(),
-        ) {
+        let data = NetworkMessage::CertifiedMergeSidecar(Box::new(message));
+        let result = match reply_route {
+            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+                data,
+                peer,
+                reply_route,
+                rollover_claim,
+                operation.permit(),
+            ),
+            None => self.enqueue_exact_fanout_while_guarded(
+                vec![data],
+                vec![peer],
+                rollover_claim,
+                operation.permit(),
+            ),
+        };
+        match result {
             Ok(ExactFanoutOwnership::Owned) => operation.complete(),
             Ok(ExactFanoutOwnership::SourceRetained) => {
                 iroha_logger::error!(
@@ -4855,6 +5093,16 @@ impl ProductionV2Services {
 
     /// Send one context-bound Native AMX v2 message to a participant peer.
     pub(crate) fn post_native_amx(&self, peer: PeerId, message: NativeAmxMessage) {
+        self.post_native_amx_with_reply_route(peer, None, message);
+    }
+
+    /// Send a Native AMX request normally or a request-induced vote on its exact route.
+    pub(crate) fn post_native_amx_with_reply_route(
+        &self,
+        peer: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
+        message: NativeAmxMessage,
+    ) {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
@@ -4876,12 +5124,23 @@ impl ProductionV2Services {
             round: body.round,
             message_hash: HashOf::new(&message),
         };
-        match self.enqueue_exact_fanout_while_guarded(
-            vec![NetworkMessage::NativeAmx(Box::new(message))],
-            vec![peer],
-            rollover_claim,
-            operation.permit(),
-        ) {
+        let data = NetworkMessage::NativeAmx(Box::new(message));
+        let result = match reply_route {
+            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+                data,
+                peer,
+                reply_route,
+                rollover_claim,
+                operation.permit(),
+            ),
+            None => self.enqueue_exact_fanout_while_guarded(
+                vec![data],
+                vec![peer],
+                rollover_claim,
+                operation.permit(),
+            ),
+        };
+        match result {
             Ok(ExactFanoutOwnership::Owned) => operation.complete(),
             Ok(ExactFanoutOwnership::SourceRetained) => {
                 iroha_logger::error!(
@@ -4944,6 +5203,35 @@ impl ProductionV2Services {
         })?;
         let data = NetworkMessage::SumeragiBlock(Box::new(wire));
         self.enqueue_exact_fanout_while_guarded(vec![data], vec![peer], rollover_claim, _permit)
+    }
+
+    fn post_block_message_on_reply_route_while_guarded(
+        &self,
+        peer: PeerId,
+        reply_route: NetworkReplyRoute,
+        message: BlockMessage,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let rollover_claim = match &message {
+            BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+            | BlockMessage::LaneBlockCertificate(_) => {
+                ExactOutputRolloverClaim::Lane(self.exact_output_scope())
+            }
+            _ => return Err("guarded v2 reply has no typed rollover claim".to_owned()),
+        };
+        let wire = BlockMessageWire::try_preencoded(Arc::new(message)).map_err(|error| {
+            format!("failed to encode guarded Sumeragi v2 reply for {peer}: {error}")
+        })?;
+        self.enqueue_exact_reply_while_guarded(
+            NetworkMessage::SumeragiBlock(Box::new(wire)),
+            peer,
+            reply_route,
+            rollover_claim,
+            permit,
+        )
     }
 
     fn preencode_v2_network_message(
@@ -6122,7 +6410,7 @@ pub(super) mod tests {
             .expect("retain final QC fanout");
 
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 assert!(ticket.is_none());
                 Err(NetworkActorAdmissionError::Backpressured {
                     message: post,
@@ -6149,7 +6437,7 @@ pub(super) mod tests {
 
         let mut admitted = Vec::new();
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 assert!(ticket.is_none());
                 admitted.push(post.peer_id);
                 Ok(())
@@ -6176,7 +6464,7 @@ pub(super) mod tests {
             .expect("retain merge fanout");
 
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 assert!(ticket.is_none());
                 Err(NetworkActorAdmissionError::Backpressured {
                     message: post,
@@ -6199,7 +6487,7 @@ pub(super) mod tests {
 
         let mut admitted = Vec::new();
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 assert!(ticket.is_none());
                 let NetworkMessage::MergeCommitteeSignature(signature) = &post.data else {
                     panic!("every fanout post must retain the merge share");
@@ -6244,7 +6532,7 @@ pub(super) mod tests {
         let mut blocked_attempts = 0usize;
         let mut admitted = Vec::new();
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 if post.peer_id == blocked {
                     blocked_attempts = blocked_attempts.saturating_add(1);
                     return Err(NetworkActorAdmissionError::Backpressured {
@@ -6287,7 +6575,7 @@ pub(super) mod tests {
         }
 
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 if post.peer_id == blocked {
                     blocked_attempts = blocked_attempts.saturating_add(1);
                     return Err(NetworkActorAdmissionError::Backpressured {
@@ -6318,7 +6606,7 @@ pub(super) mod tests {
 
         let mut admitted_to_recovered_target = Vec::new();
         assert_eq!(
-            pending.drive_with(|post, ticket| {
+            pending.drive_with(|post, ticket, _route| {
                 assert_eq!(post.peer_id, blocked);
                 assert!(ticket.is_none());
                 admitted_to_recovered_target.push(merge_share_digest(&post.data));
@@ -6469,7 +6757,7 @@ pub(super) mod tests {
             .expect("retain original exact fanout");
 
         let error = pending
-            .drive_with(|mut post, ticket| {
+            .drive_with(|mut post, ticket, _route| {
                 post.data = merge_share_message(b"mutated returned output");
                 Err(NetworkActorAdmissionError::Backpressured {
                     message: post,

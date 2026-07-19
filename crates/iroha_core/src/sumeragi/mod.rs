@@ -37,6 +37,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
+use iroha_p2p::network::NetworkReplyRoute;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as _;
 use parking_lot::Mutex;
@@ -704,15 +705,19 @@ pub enum LaneRelayMessage {
     MergeSignature(MergeCommitteeSignature),
     /// Certified merge-sidecar request or chunk with its transport sender.
     CertifiedMergeSidecar {
-        /// Authenticated transport sender.
+        /// Semantic protocol origin.
         sender: PeerId,
+        /// Exact authenticated return route for request-induced responses.
+        reply_route: Option<NetworkReplyRoute>,
         /// Certified sidecar protocol message.
         message: CertifiedMergeSidecarMessage,
     },
     /// Native AMX control message with its authenticated transport sender.
     NativeAmx {
-        /// Authenticated transport sender.
+        /// Semantic protocol origin.
         sender: PeerId,
+        /// Exact authenticated return route for request-induced votes.
+        reply_route: Option<NetworkReplyRoute>,
         /// Native AMX protocol message.
         message: crate::native_amx::NativeAmxMessage,
     },
@@ -726,6 +731,8 @@ pub struct InboundBlockMessage {
     sender: Option<PeerId>,
     /// Authenticated transport hop used exclusively for resource isolation.
     via: Option<PeerId>,
+    /// Exact authenticated route which may carry a response to this occurrence.
+    reply_route: Option<NetworkReplyRoute>,
 }
 
 impl InboundBlockMessage {
@@ -738,6 +745,7 @@ impl InboundBlockMessage {
             message: message.normalize(),
             via: sender.clone(),
             sender,
+            reply_route: None,
         }
     }
 
@@ -746,16 +754,34 @@ impl InboundBlockMessage {
     /// `sender` remains visible to consensus validation and response routing;
     /// `via` is the authenticated hop charged for every bounded ingress owner.
     pub fn from_transport(message: BlockMessage, sender: PeerId, via: PeerId) -> Self {
+        Self::from_transport_with_reply_route(message, sender, via, None)
+    }
+
+    /// Normalize one transport message and retain its exact authenticated return route.
+    pub fn from_transport_with_reply_route(
+        message: BlockMessage,
+        sender: PeerId,
+        via: PeerId,
+        reply_route: Option<NetworkReplyRoute>,
+    ) -> Self {
         Self {
             message: message.normalize(),
             sender: Some(sender),
             via: Some(via),
+            reply_route,
         }
     }
 
     /// Consume the envelope and return the normalized message and semantic origin.
     pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
         (self.message, self.sender)
+    }
+
+    /// Consume the envelope without losing its local-only authenticated reply authority.
+    pub(crate) fn into_message_sender_and_reply_route(
+        self,
+    ) -> (BlockMessage, Option<PeerId>, Option<NetworkReplyRoute>) {
+        (self.message, self.sender, self.reply_route)
     }
 
     /// Borrow the normalized message without removing it from its ingress lane.
@@ -2508,6 +2534,7 @@ impl SumeragiHandle {
     ) -> bool {
         self.try_incoming_lane_relay_owned(LaneRelayMessage::CertifiedMergeSidecar {
             sender,
+            reply_route: None,
             message,
         })
         .accepted_or_coalesced()
@@ -2528,7 +2555,11 @@ impl SumeragiHandle {
         sender: PeerId,
         message: crate::native_amx::NativeAmxMessage,
     ) -> bool {
-        self.try_incoming_lane_relay_owned(LaneRelayMessage::NativeAmx { sender, message })
+        self.try_incoming_lane_relay_owned(LaneRelayMessage::NativeAmx {
+            sender,
+            reply_route: None,
+            message,
+        })
             .accepted_or_coalesced()
     }
 

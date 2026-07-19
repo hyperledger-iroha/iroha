@@ -2417,7 +2417,8 @@ impl NetworkRelayShared {
             skip_test_control,
             completion,
         } = work;
-        let (peer, authenticated_via, msg, size_bytes, retention_guard) = work.into_parts();
+        let (peer, authenticated_via, msg, size_bytes, reply_route, retention_guard) =
+            work.into_parts_with_reply_route();
 
         #[cfg(not(feature = "test-network-message-control"))]
         let _ = skip_test_control;
@@ -2503,10 +2504,12 @@ impl NetworkRelayShared {
                 };
                 (
                     class,
-                    PreparedSumeragiRelayItem::Block(InboundBlockMessage::from_transport(
+                    PreparedSumeragiRelayItem::Block(
+                        InboundBlockMessage::from_transport_with_reply_route(
                         message,
                         peer_id.clone(),
                         authenticated_via.clone(),
+                        reply_route,
                     )),
                 )
             }
@@ -2522,6 +2525,7 @@ impl NetworkRelayShared {
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
                     sender: peer_id.clone(),
+                    reply_route,
                     message: *message,
                 }),
             ),
@@ -2529,6 +2533,7 @@ impl NetworkRelayShared {
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::NativeAmx {
                     sender: peer_id.clone(),
+                    reply_route,
                     message: *message,
                 }),
             ),

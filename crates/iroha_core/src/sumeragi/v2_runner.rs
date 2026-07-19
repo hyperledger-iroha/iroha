@@ -1521,15 +1521,16 @@ fn drain_v2_ingress(
         else {
             break;
         };
-        let (message, sender) = inbound.into_message_and_sender();
-        if message.is_lane_local() {
+        if inbound.message().is_lane_local() {
             let _ = lane_work.accept_lane_message(
-                InboundBlockMessage::new(message, sender),
+                inbound,
                 executor.current_tag().view(),
             );
             let _ = lane_work.service_next_historical_recovery()?;
             continue;
         }
+        let (message, sender, reply_route) =
+            inbound.into_message_sender_and_reply_route();
         let BlockMessage::V2(message) = message else {
             iroha_logger::debug!("rejected legacy global message on v2-only consensus ingress");
             continue;
@@ -1584,6 +1585,13 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
+                let Some(reply_route) = reply_route else {
+                    iroha_logger::debug!(
+                        %sender,
+                        "rejected certified body request without authenticated reply route"
+                    );
+                    continue;
+                };
                 if request.round.height < executor.context().height {
                     let response_peer = sender.clone();
                     match serve_block_sync_while_guarded(
@@ -1598,8 +1606,9 @@ fn drain_v2_ingress(
                             )
                         },
                         |response, permit| {
-                            services.post_durable_history_response_with_permit(
+                            services.post_durable_history_response_on_reply_route_with_permit(
                                 response_peer,
+                                reply_route,
                                 response,
                                 permit,
                             )
@@ -1615,7 +1624,7 @@ fn drain_v2_ingress(
                     match executor.authenticate_certified_body_request(request, &sender) {
                         Ok(request) => {
                             services
-                                .serve_certified_request(request)
+                                .serve_certified_request_on_route(request, reply_route)
                                 .map_err(V2RunnerError::Service)?;
                         }
                         Err(error) => {
@@ -1648,13 +1657,21 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
+                let Some(reply_route) = reply_route else {
+                    iroha_logger::debug!(
+                        %sender,
+                        "rejected CommitQC request without authenticated reply route"
+                    );
+                    continue;
+                };
                 let response_peer = sender.clone();
                 match serve_block_sync_while_guarded(
                     output_guard,
                     || block_sync_server.serve(kura, request, &sender, local_key),
                     |response, permit| {
-                        services.post_durable_history_response_with_permit(
+                        services.post_durable_history_response_on_reply_route_with_permit(
                             response_peer,
+                            reply_route,
                             response,
                             permit,
                         )

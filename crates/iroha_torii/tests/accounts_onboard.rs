@@ -12,6 +12,7 @@ use axum::{
 use http::StatusCode;
 use iroha_core::{
     block::BlockBuilder,
+    governance::manifest::LaneManifestRegistry,
     kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
@@ -87,6 +88,7 @@ fn install_account_alias_policy(
     policy.fund_splitter_account = authority.clone();
     policy.payment_asset_id = payment_asset_id.to_string();
     for tier in &mut policy.pricing {
+        tier.label_regex = r"^[a-z0-9_@.-]{3,255}$".to_owned();
         tier.base_price.asset_id = policy.payment_asset_id.clone();
     }
     world.smart_contract_state_mut_for_testing().insert(
@@ -169,6 +171,13 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         query,
         chain_id.clone(),
     ));
+    let nexus = state.nexus_snapshot();
+    let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &nexus.registry,
+    ));
+    state.install_lane_manifests(&lane_manifests);
     let seed_tx = TransactionBuilder::new(
         chain_id.clone(),
         authority_id.clone(),
@@ -219,6 +228,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         iroha_config::parameters::actual::Queue::default(),
         events_sender,
     ));
+    queue.install_lane_manifests_with_state(&lane_manifests, &state);
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     #[cfg(feature = "telemetry")]

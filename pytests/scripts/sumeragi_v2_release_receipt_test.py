@@ -163,6 +163,41 @@ def fixture_writer(tmp_path: Path) -> Path:
     fixture_cargo.mkdir()
     shutil.copy2(ROOT_DIR / ".cargo" / "config.toml", fixture_cargo / "config.toml")
     (formal / "check_sumeragi_v2_proof_ledger.py").write_text(
+        """import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+ledger_path = pathlib.Path(args[args.index("--ledger") + 1])
+ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+cross_ids = [
+    item.get("id")
+    for item in ledger.get("obligations", [])
+    if item.get("status") == "cross_tool_proved"
+]
+if "--print-cross-tool-obligations" in args:
+    print("\\n".join(cross_ids))
+    raise SystemExit(0)
+if "--release" in args:
+    if "--verus-evidence" not in args:
+        raise SystemExit(81)
+    if "--verus-log" not in args:
+        raise SystemExit(84)
+    has_cross = "--cross-tool-evidence" in args
+    if bool(cross_ids) != has_cross:
+        raise SystemExit(82)
+    if has_cross:
+        cross_path = pathlib.Path(args[args.index("--cross-tool-evidence") + 1])
+        if json.loads(cross_path.read_text(encoding="utf-8")) != {
+            "backend_verification": True,
+            "canonical": True,
+        }:
+            raise SystemExit(83)
+raise SystemExit(0)
+""",
+        encoding="utf-8",
+    )
+    (formal / "sumeragi_v2_verus_evidence.py").write_text(
         "raise SystemExit(0)\n", encoding="utf-8"
     )
     (scripts / "check_taira_v2_soak_evidence.py").write_text(
@@ -1160,6 +1195,14 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_ledger.write_text('{"machine_checked_completion":true}\n', encoding="utf-8")
     formal_evidence = formal_dir / "proof_evidence.json"
     formal_evidence.write_text('{"backend_verification":true}\n', encoding="utf-8")
+    formal_verus_evidence = formal_dir / "verus_evidence.json"
+    formal_verus_evidence.write_text(
+        '{"backend_verification":true}\n', encoding="utf-8"
+    )
+    formal_verus_log = formal_dir / "verus.log"
+    formal_verus_log.write_text(
+        "fixture production Verus verification passed\n", encoding="utf-8"
+    )
     formal_harness_lock = formal_dir / "harness-Cargo.lock"
     shutil.copy2(
         ROOT_DIR / "scripts" / "formal" / "sumeragi_v2_harness.lock",
@@ -1186,6 +1229,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "formal_gate_log_sha256": sha256(formal_log),
             "proof_coverage_sha256": sha256(formal_ledger),
             "proof_evidence_sha256": sha256(formal_evidence),
+            "verus_evidence_sha256": sha256(formal_verus_evidence),
+            "verus_log_sha256": sha256(formal_verus_log),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
         },
@@ -1346,6 +1391,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_log": formal_log,
         "formal_ledger": formal_ledger,
         "formal_evidence": formal_evidence,
+        "formal_verus_evidence": formal_verus_evidence,
+        "formal_verus_log": formal_verus_log,
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
         "formal_verus_tool": tool_paths["verus"],
@@ -1366,6 +1413,46 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "tree": tree,
         "lock": lock,
     }
+
+
+def enable_cross_tool_evidence(
+    evidence: dict[str, Path | str | list[Path]],
+) -> Path:
+    """Promote the fixture ledger and bind one canonical cross-tool document."""
+
+    ledger = evidence["formal_ledger"]
+    completion = evidence["formal_completion"]
+    assert isinstance(ledger, Path)
+    assert isinstance(completion, Path)
+    ledger.write_text(
+        json.dumps(
+            {
+                "machine_checked_completion": True,
+                "obligations": [
+                    {
+                        "id": "effective-lock-body-acquisition-production-refinement",
+                        "status": "cross_tool_proved",
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cross_tool = completion.with_name("cross_tool_evidence.json")
+    cross_tool.write_text(
+        '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
+    )
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    completion_fields["proof_coverage_sha256"] = sha256(ledger)
+    completion_fields["cross_tool_evidence_sha256"] = sha256(cross_tool)
+    write_tsv(completion, completion_fields)
+    evidence["formal_cross_tool_evidence"] = cross_tool
+    return cross_tool
 
 
 def run_writer(
@@ -1390,6 +1477,7 @@ def run_writer(
     for relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
+        Path("scripts/formal/sumeragi_v2_verus_evidence.py"),
         Path("scripts/check_taira_v2_soak_evidence.py"),
         Path(".cargo/config.toml"),
     ):
@@ -1667,6 +1755,8 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "formal_gate_log": "formal_log",
         "formal_proof_coverage": "formal_ledger",
         "formal_proof_evidence": "formal_evidence",
+        "formal_verus_evidence": "formal_verus_evidence",
+        "formal_verus_log": "formal_verus_log",
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
         "seed_matrix_completion": "seed_completion",
@@ -1684,6 +1774,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             "path": str(fixture_path.resolve()),
             "sha256": sha256(fixture_path),
         }
+    assert "formal_cross_tool_evidence" not in receipt["evidence"]
     seed_logs = evidence["seed_logs"]
     assert isinstance(seed_logs, list)
     assert receipt["evidence"]["seed_matrix_run_logs"] == [
@@ -1701,6 +1792,89 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         if artifact["path"].endswith("-preflight-proof-fidelity.log")
     ]
     assert len(proof_fidelity_logs) == 1
+
+
+def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    cross_tool = enable_cross_tool_evidence(evidence)
+    writer = fixture_writer(tmp_path)
+    output = terminal_output_path(evidence)
+
+    result = run_writer(evidence, output, writer)
+
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert receipt["evidence"]["formal_cross_tool_evidence"] == {
+        "path": str(cross_tool.resolve()),
+        "sha256": sha256(cross_tool),
+    }
+
+
+def test_receipt_rejects_missing_required_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool.unlink()
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "formal cross-tool evidence is not a regular file" in result.stderr
+
+
+def test_receipt_rejects_stale_cross_tool_evidence(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool.write_text('{"stale":true}\n', encoding="utf-8")
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "formal cross-tool evidence digest mismatch" in result.stderr
+
+
+def test_receipt_rejects_substituted_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool.write_text(
+        '{"backend_verification":true,"canonical":false}\n', encoding="utf-8"
+    )
+    completion = evidence["formal_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["cross_tool_evidence_sha256"] = sha256(cross_tool)
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "archived formal ledger/evidence failed release validation" in result.stderr
+
+
+def test_receipt_rejects_cross_tool_evidence_while_dormant(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    formal_completion = evidence["formal_completion"]
+    assert isinstance(formal_completion, Path)
+    formal_completion.with_name("cross_tool_evidence.json").write_text(
+        '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
+    )
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "forbidden dormant cross-tool evidence" in result.stderr
 
 
 def test_verify_existing_rebuilds_and_durably_accepts_the_exact_receipt(
@@ -2345,6 +2519,8 @@ def test_receipt_rejects_cross_source_completion(
         ("formal_log", "formal gate log digest mismatch"),
         ("formal_ledger", "formal proof ledger digest mismatch"),
         ("formal_evidence", "formal proof evidence digest mismatch"),
+        ("formal_verus_evidence", "formal Verus evidence digest mismatch"),
+        ("formal_verus_log", "formal Verus log digest mismatch"),
         ("formal_toolchain", "formal toolchain digest mismatch"),
         ("formal_verus_tool", "formal verus tool digest mismatch"),
         ("corridor_summary", "corridor summary digest mismatch"),

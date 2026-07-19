@@ -605,16 +605,18 @@ rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 289 named tests
-across 20 Rust modules. Relative to the preceding 264-name inventory, it adds
-26 positive regressions: 10 bind per-target exact-output scheduling and typed
+Before network startup, the executable wrapper inventories 298 named tests
+across 21 Rust modules. Relative to the preceding 264-name inventory, it adds
+37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
-old-generation dispatch-worker custody; and 14 bind exact progress-ticket identity
+old-generation dispatch-worker custody; 20 bind exact progress-ticket identity
 and rank, relay-aware topology geometry, explicit removal semantics, generation
 replacement, identical-retry coalescing, exact per-target FIFO ownership for
-distinct/cross-kind collisions, and actor-side subscriber backlog transfer. Removal of one obsolete
-adapter cursor alias already superseded by its listed replacement makes the net
-delta 25. These tests deliberately do not claim remote
+distinct/cross-kind collisions, and actor-side subscriber backlog transfer; and
+1 binds exact CommitQC coalescing across the runtime queue and Busy-deferred
+adapter owner; and 4 bind exact Nexus lane-relay ownership and source fairness.
+Removal of the obsolete adapter cursor alias and two superseded network
+broadcast-residual tests makes the net delta 34. These tests deliberately do not claim remote
 application acknowledgement, relay second-hop completion, or unbounded
 broadcast admission. The 264-name baseline added 32 regressions for atomic lane
 certificates, semantic-origin/authenticated-via ownership, P2P source fairness,
@@ -627,11 +629,11 @@ geometry pins four owners per validator plus two aggregate-untrusted owners
 untrusted authenticated hop, and retains the capacity-negative boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 40 legs, including separate exact
+the complete pre-network corridor now spans 41 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts. The inventory
 executes the `iroha_p2p` library with its empty default feature set. It does not
-claim the feature-gated QUIC first-packet geometry tests as part of those twenty
-modules or forty legs. The inventory includes five native-AMX lane-work
+claim the feature-gated QUIC first-packet geometry tests as part of those
+twenty-one modules or forty-one legs. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
@@ -706,8 +708,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 40 pre-network legs and the exact
-289-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 41 pre-network legs and the exact
+298-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

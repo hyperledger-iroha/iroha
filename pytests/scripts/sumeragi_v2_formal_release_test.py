@@ -42,6 +42,8 @@ def _fixture(
     gate_mode: str = "pass",
     drift_after: int = 0,
     checker_status: int = 0,
+    cross_tool_required: bool = False,
+    emit_cross_tool: bool | None = None,
 ) -> tuple[Path, dict[str, str], Path]:
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -61,6 +63,8 @@ def _fixture(
 
     checker = formal / "check_sumeragi_v2_proof_ledger.py"
     checker.write_text("raise SystemExit(99)\n", encoding="utf-8")
+    if emit_cross_tool is None:
+        emit_cross_tool = cross_tool_required
     gate = ci / "check_sumeragi_formal.sh"
     gate.write_text(
         f"""#!/usr/bin/env bash
@@ -77,6 +81,10 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >target/formal/sumeragi_v2/verus_evidence.json
     printf '%s\n' 'fixture production Verus verification passed' \
       >target/formal/sumeragi_v2/verus.log
+    if [[ "${{FORMAL_EMIT_CROSS_TOOL:-0}}" == 1 ]]; then
+      printf '%s\n' '{{"backend_verification":true,"canonical":true}}' \
+        >target/formal/sumeragi_v2/cross_tool_evidence.json
+    fi
     ;;
 esac
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
@@ -118,7 +126,26 @@ case "${{1:-}}" in
       printf '%s\n' '{identity}'
     fi
     ;;
-  *check_sumeragi_v2_proof_ledger.py) exit "$FORMAL_CHECKER_STATUS" ;;
+  *check_sumeragi_v2_proof_ledger.py)
+    case " $* " in
+      *" --print-cross-tool-obligations "*)
+        if [[ "$FORMAL_CROSS_TOOL_REQUIRED" == 1 ]]; then
+          printf '%s\n' 'effective-lock-body-acquisition-production-refinement'
+        fi
+        exit 0
+        ;;
+    esac
+    if [[ "$FORMAL_CROSS_TOOL_REQUIRED" == 1 ]]; then
+      [[ " $* " == *" --verus-evidence "* ]] || exit 86
+      [[ " $* " == *" --verus-log "* ]] || exit 90
+      [[ " $* " == *" --cross-tool-evidence "* ]] || exit 87
+    else
+      [[ " $* " == *" --verus-evidence "* ]] || exit 88
+      [[ " $* " == *" --verus-log "* ]] || exit 90
+      [[ " $* " != *" --cross-tool-evidence "* ]] || exit 89
+    fi
+    exit "$FORMAL_CHECKER_STATUS"
+    ;;
   *sumeragi_v2_verus_evidence.py) exit 0 ;;
   *seal_workspace_source.py) exit 0 ;;
   *) exec /usr/bin/python3 "$@" ;;
@@ -143,6 +170,8 @@ esac
     env["FORMAL_IDENTITY_COUNTER"] = str(counter)
     env["FORMAL_DRIFT_AFTER"] = str(drift_after)
     env["FORMAL_CHECKER_STATUS"] = str(checker_status)
+    env["FORMAL_CROSS_TOOL_REQUIRED"] = "1" if cross_tool_required else "0"
+    env["FORMAL_EMIT_CROSS_TOOL"] = "1" if emit_cross_tool else "0"
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = MANIFEST
     env["JAVA_BIN"] = str(tools["java"])
     env["TLAPM_BIN"] = str(tools["tlapm"])
@@ -207,6 +236,8 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
         invocation / "verus_evidence.json"
     )
     assert fields["verus_log_sha256"] == _sha256(invocation / "verus.log")
+    assert "cross_tool_evidence_sha256" not in fields
+    assert not (invocation / "cross_tool_evidence.json").exists()
     assert fields["harness_cargo_lock_sha256"] == _sha256(
         invocation / "harness-Cargo.lock"
     )
@@ -218,6 +249,48 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
     ] == FINAL_MARKER
     assert pointer.read_text(encoding="utf-8").strip() == str(completion)
     assert not (evidence / ".formal-release.lock").exists()
+
+
+def test_formal_launcher_archives_required_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(tmp_path, cross_tool_required=True)
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 0, result.stderr
+    invocation = _invocation(evidence)
+    cross_tool = invocation / "cross_tool_evidence.json"
+    assert cross_tool.is_file()
+    assert _fields(invocation / "COMPLETED.tsv")[
+        "cross_tool_evidence_sha256"
+    ] == _sha256(cross_tool)
+
+
+def test_formal_launcher_rejects_missing_required_cross_tool_evidence(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(
+        tmp_path, cross_tool_required=True, emit_cross_tool=False
+    )
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 1
+    assert "did not produce required cross-tool evidence" in result.stderr
+    assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
+
+
+def test_formal_launcher_rejects_cross_tool_evidence_while_dormant(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(tmp_path, emit_cross_tool=True)
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 1
+    assert "produced forbidden dormant cross-tool evidence" in result.stderr
+    assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
 
 
 def test_formal_launcher_preserves_pipeline_failure_without_completion(

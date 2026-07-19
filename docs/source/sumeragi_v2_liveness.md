@@ -192,6 +192,13 @@ runs before a `BodyAvailable` completion can prune conflicting queued
 proposals, so a non-exact retry cannot mutate consumer state and then hide as
 a duplicate.
 
+Commit-certificate response ownership likewise spans the authenticated runtime
+queue and the adapter's Busy-deferred Progress lane. An exact embedded CommitQC
+may cross a saturated Progress boundary only to coalesce with one of those
+owners; a distinct certificate remains backpressured. The raw capacity hint is
+recomputed after authentication, and any disagreement fails the serialized
+runtime closed instead of authorizing a second owner.
+
 The executor also calls one source-linked typed identity kernel at every
 `FetchBody -> BodyAvailable -> StoreBody -> ValidateBody` owner boundary. A
 certified Fetch may fill its initially absent manifest identity exactly once;
@@ -682,14 +689,15 @@ The following focused checks were recorded through 2026-07-18:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, ingress-ownership, transport, and active-watchdog
-additions. The current source-bound inventory contains 289 exact tests across
-20 modules, including the authoritative outer ingress, historical block sync,
+additions. The current source-bound inventory contains 298 exact tests across
+21 modules, including the authoritative outer ingress, historical block sync,
 Kura progress-witness durability, P2P actor/writer ownership, daemon relay
 accounting, and watchdog modules. Relative to the preceding 264-name baseline,
-26 positive additions comprise 10 exact-output/typed-rollover tests, 2 peer
-flush/generation tests, and 14 ticket/topology/broadcast/subscriber network
-tests. Removing one obsolete adapter cursor alias already superseded by its
-listed replacement makes the net delta 25. The rollover tests cover historical
+37 positive additions comprise 10 exact-output/typed-rollover tests, 2 peer
+flush/generation tests, 20 ticket/topology/broadcast/subscriber network tests,
+1 runtime/Busy-deferred exact CommitQC coalescing test, and 4 Nexus lane-relay
+ownership/fairness tests. Removing the obsolete adapter cursor alias and two
+superseded network broadcast-residual tests makes the net delta 34. The rollover tests cover historical
 Kura CommitQC, body, and lane-certificate rereads; current global V2; and lane
 proof/supersession, Native AMX, merge-share, certified-sidecar, and untyped
 fail-closed boundaries. The network tests distinguish identical-retry
@@ -703,7 +711,7 @@ The current inventory retains the four-per-validator plus two aggregate
 untrusted owners (`4N+2` total) capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-40 legs, including separate exact status and atomic lane-certificate decode
+41 legs, including separate exact status and atomic lane-certificate decode
 contracts. The complete inventory must still run as one clean committed,
 detached, source-sealed release leg before it becomes release evidence.
 
@@ -833,8 +841,8 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 289 exact production
-liveness tests and executes all 20 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 298 exact production
+liveness tests and executes all 21 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
@@ -894,20 +902,22 @@ raises it to 230. Two exact locked-Commit progress-witness regressions then
 raised the baseline to 232. The next 32-regression delta added atomic
 lane-certificate and semantic-origin ownership, P2P source/flush/reconnect
 ownership, authenticated-via relay isolation, and active-watchdog coverage,
-bringing that baseline to 264. Twenty-six positive additions—10 exact-output/
-typed-rollover, 2 peer flush/generation, and 14 ticket/topology/broadcast/
-subscriber-network regressions—are offset by removal of one obsolete adapter
-cursor alias, bringing the current inventory up by a net 25 to 289 tests across
-20 modules. The rollover slice covers historical Kura CommitQC, body, and
+bringing that baseline to 264. Thirty-seven positive additions—10 exact-output/
+typed-rollover, 2 peer flush/generation, 20 ticket/topology/broadcast/
+subscriber-network regressions, 1 runtime/Busy-deferred exact CommitQC
+coalescing regression, and 4 Nexus lane-relay ownership/fairness regressions—
+are offset by removal of the obsolete adapter cursor alias and two superseded
+network broadcast-residual tests, bringing the current inventory up by a net
+34 to 298 tests across 21 modules. The rollover slice covers historical Kura CommitQC, body, and
 lane-certificate rereads; current global V2; lane proof/supersession; Native AMX;
 merge-share, certified-sidecar, and untyped fail-closed boundaries. The network
 slice distinguishes identical-retry coalescing from distinct/cross-kind parent
 residuals.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
-unbounded broadcast admission. The integration filter
-remains a four-test module leg, while separate P2P, daemon, status, and atomic
-lane-certificate contracts bring the aggregate pre-network corridor to 40
+unbounded broadcast admission. The integration filter remains a four-test
+module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
+lane-certificate contracts bring the aggregate pre-network corridor to 41
 legs. That set needs fresh discovery and execution plus its clean source-sealed
 release rerun; the full PR corridor is not claimed passed.
 
@@ -1142,8 +1152,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 40 pre-network corridor legs and
-their exact 289-test inventory, semantic test names/counts, commands, logs, and
+evidence directory. That receipt binds the 41 pre-network corridor legs and
+their exact 298-test inventory, semantic test names/counts, commands, logs, and
 resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
 completion/log; and the exact-identity Taira completion/canonical JSON/full run

@@ -16695,6 +16695,9 @@ pub mod message {
         /// Exact authenticated connection generation that delivered the frame.
         /// Synthetic producers leave this unset.
         pub(crate) connection_id: Option<ConnectionId>,
+        /// Exact authenticated return route minted by the network actor after
+        /// relay validation. Synthetic messages carry no route.
+        reply_route: Option<crate::network::NetworkReplyRoute>,
         retention: Option<PeerMessageRetention>,
         source_credit: Option<AuthenticatedSourceCreditGuard>,
     }
@@ -16722,6 +16725,7 @@ pub mod message {
                 payload_bytes,
                 authenticated_via,
                 connection_id: None,
+                reply_route: None,
                 retention: None,
                 source_credit: None,
             }
@@ -16741,6 +16745,7 @@ pub mod message {
                 payload_bytes,
                 authenticated_via,
                 connection_id: Some(connection_id),
+                reply_route: None,
                 retention: None,
                 source_credit: None,
             }
@@ -16763,6 +16768,7 @@ pub mod message {
                 payload_bytes,
                 authenticated_via,
                 connection_id: None,
+                reply_route: None,
                 retention: Some(PeerMessageRetention::Dispatch(DispatchRetention {
                     _byte_lease: byte_lease,
                     budget,
@@ -16787,18 +16793,48 @@ pub mod message {
             self.connection_id
         }
 
+        /// Return the exact authenticated route on which a protocol reply may
+        /// be sent, when this message originated from a live P2P connection.
+        #[must_use]
+        pub fn reply_route(&self) -> Option<&crate::network::NetworkReplyRoute> {
+            self.reply_route.as_ref()
+        }
+
+        pub(crate) fn set_reply_route(&mut self, route: crate::network::NetworkReplyRoute) {
+            self.reply_route = Some(route);
+        }
+
         /// Split the message while preserving its byte-budget ownership.
         ///
         /// The returned guard must remain in scope for as long as the moved
         /// payload remains queued or is being processed.
         #[must_use]
         pub fn into_parts(self) -> (Peer, PeerId, T, usize, PeerMessageRetentionGuard) {
+            let (peer, authenticated_via, payload, payload_bytes, _reply_route, guard) =
+                self.into_parts_with_reply_route();
+            (peer, authenticated_via, payload, payload_bytes, guard)
+        }
+
+        /// Split the message while preserving both byte ownership and the
+        /// exact authenticated return route.
+        #[must_use]
+        pub fn into_parts_with_reply_route(
+            self,
+        ) -> (
+            Peer,
+            PeerId,
+            T,
+            usize,
+            Option<crate::network::NetworkReplyRoute>,
+            PeerMessageRetentionGuard,
+        ) {
             let Self {
                 peer,
                 payload,
                 payload_bytes,
                 authenticated_via,
                 connection_id: _,
+                reply_route,
                 retention,
                 source_credit,
             } = self;
@@ -16807,6 +16843,7 @@ pub mod message {
                 authenticated_via.clone(),
                 payload,
                 payload_bytes,
+                reply_route,
                 PeerMessageRetentionGuard {
                     _retention: retention,
                     authenticated_via,
@@ -16829,6 +16866,7 @@ pub mod message {
                 payload_bytes,
                 authenticated_via,
                 connection_id: Some(connection_id),
+                reply_route: None,
                 retention: Some(PeerMessageRetention::Source(frame)),
                 source_credit: None,
             }
@@ -16921,6 +16959,7 @@ pub mod message {
                 payload_bytes: self.payload_bytes,
                 authenticated_via: self.authenticated_via.clone(),
                 connection_id: self.connection_id,
+                reply_route: self.reply_route.clone(),
                 retention,
                 source_credit: None,
             })
@@ -16937,6 +16976,7 @@ pub mod message {
                 payload_bytes: self.payload_bytes,
                 authenticated_via: self.authenticated_via,
                 connection_id: self.connection_id,
+                reply_route: self.reply_route,
                 retention: self.retention,
                 source_credit: self.source_credit,
             }

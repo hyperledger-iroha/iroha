@@ -22,6 +22,7 @@ FORMAL_DIR = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
 LEDGER_PATH = FORMAL_DIR / "proof_coverage.json"
 VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "763bf3c1826d77a4cf206f43d5aa16775da1da33"
+LEDGER_SCHEMA_VERSION = 2
 EVIDENCE_SCHEMA_VERSION = 1
 CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 1
 
@@ -380,7 +381,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
         tla_theorem="EffectiveLockBodyAcquisitionCrossToolRefinement",
         tla_statement=(
             "ProductionEffectiveLockBodyAcquisitionRefinement "
-            "=> ProductionEffectiveLockBodyAcquisitionRefinement"
+            "=> EffectiveLockBodyAcquisitionProductionRefinementObligation"
         ),
         claims=(
             CrossToolClaimContract(
@@ -435,7 +436,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
         tla_theorem="ProgressWitnessCrossToolRefinement",
         tla_statement=(
             "ProductionProgressWitnessTraceRefinement "
-            "=> ProductionProgressWitnessTraceRefinement"
+            "=> ProgressWitnessProductionRefinementObligation"
         ),
         claims=(
             CrossToolClaimContract(
@@ -480,7 +481,8 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
-                    "crates/iroha_core/src/sumeragi/v2_ingress.rs",
+                    "crates/iroha_core/src/sumeragi/v2.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runtime.rs",
                     "crates/iroha_core/src/sumeragi/v2_transport.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                 ),
@@ -522,9 +524,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
         ),
         tla_statement=(
             "ProductionSuccessorAndExactRecoveryTraceRefinement => "
-            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
-            "/\\ (IndexedChainSpec => []"
-            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
         ),
         claims=(
             CrossToolClaimContract(
@@ -1510,6 +1510,30 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     ),
 }
 
+# Exact comment/literal-free token digests for the production ownership bridge
+# that lets an authenticated CommitQC response coalesce with its unique
+# adapter-owned Busy-deferred QC instead of claiming a second runtime slot.
+_DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
+    "reducer_qc_matches_wire": (
+        "6a33e438a552c3350b6870c75a583ca66e95bb380c5d60f0b015768793f8ad98"
+    ),
+    "deferred_quorum_certificate_owner_tag": (
+        "0a4829a381f776d10f33e89fabc5f5601bd8306201f86837f2ed7b4b6cb2c399"
+    ),
+    "check_embedded_quorum_certificate_capacity": (
+        "20468d6661055dc83aa2d40100caa82b5f9e8bed20c8d9fe80237f3da03c1362"
+    ),
+    "enqueue_network": (
+        "3880b061833d7c2382a7546f40703817106847353395697cb354e0a411264772"
+    ),
+    "can_admit_network_message": (
+        "9c02f1659adf7776faa272c51fe41772848aed5347d1fbc6564e528d84ee17df"
+    ),
+    "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
+        "38869b5fdb7e62b2b006a4bd58f97bc2dcdb1d9f51ce6f2fcd8fabbb8c545b8d"
+    ),
+}
+
 # Exact adversarial integration witnesses for the durable locked-Commit owner
 # alternatives.  These tests are release inventory, not deductive evidence;
 # whole-item seals prevent a renamed or weakened lookalike from satisfying the
@@ -1523,10 +1547,11 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 289
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 298
 _PRODUCTION_LIVENESS_RELEASE_MODULES = (
     "kura::tests",
     "kura::lane_geometry::tests",
+    "nexus::lane_relay::tests",
     "sumeragi::authoritative_runtime_gate_tests",
     "sumeragi::v2_core::tests",
     "sumeragi::v2_core::refinement::tests",
@@ -1548,6 +1573,10 @@ _PRODUCTION_LIVENESS_RELEASE_MODULES = (
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "kura::tests::certified_lane_block_encoding_enforces_source_envelope",
+    "nexus::lane_relay::tests::actor_backpressure_retains_exact_relay_and_fifo_ticket",
+    "nexus::lane_relay::tests::blocked_relay_does_not_starve_a_responsive_relay",
+    "nexus::lane_relay::tests::terminal_actor_failures_return_exact_relay_ownership",
+    "nexus::lane_relay::tests::saturated_relay_owner_returns_sixty_fifth_exact_envelope",
     "sumeragi::authoritative_runtime_gate_tests::direct_and_synthetic_envelopes_keep_identity_roles_consistent",
     "sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner",
     "sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly",
@@ -1560,6 +1589,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::historical_certificate_survives_successor_lock_decision_persistence_and_restart",
     "sumeragi::v2_lane_work::tests::carrier_replacement_filters_persistence_and_output_sources_together",
     "sumeragi::v2_lane_work::tests::applied_lane_certificate_retires_alternative_qc_replays_without_weakening_conflicts",
+    "sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
     "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
     "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
@@ -1601,8 +1631,12 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::deferred_progress_survives_ttl_but_explicit_peer_removal_cancels_it",
     "network::tests::outside_topology_retransmit_is_not_misreported_as_delivered",
     "network::tests::accepted_draining_generation_delivers_reliable_progress_after_replacement",
-    "network::tests::direct_post_owner_forces_cross_kind_broadcast_parent_residual",
-    "network::tests::busy_broadcast_target_coalesces_exact_retry_but_distinct_residual_blocks_next_parent",
+    "network::tests::targetized_broadcast_coalesces_only_the_same_digest_and_membership",
+    "network::tests::distinct_broadcast_residual_is_target_isolated_and_its_rank_decreases",
+    "network::tests::exact_broadcast_retry_coalesces_but_distinct_and_direct_requests_do_not",
+    "network::tests::removed_membership_cancels_only_old_broadcast_debt_across_readd",
+    "network::tests::cancelled_target_child_with_pending_flush_ack_releases_exactly_once",
+    "network::tests::requested_topology_is_not_authority_and_closed_fanout_returns_all_targets",
     "network::tests::reliable_delivery_waits_for_its_route_subscriber",
     "network::tests::closed_reliable_subscriber_transfers_actor_pending_backlog_to_replacement",
 )
@@ -1858,7 +1892,7 @@ _PRODUCTION_P2P_START_FRAME_ITEM_SHA256 = {
         "5305bae9d0febfc2a1348f8f3b9737fb5155a62084a80f731d75bc372ea3bbcd"
     ),
     "start_with_crypto": (
-        "634fcfb604d69431784c6b5e1c0719e078f628de374ce82caaafd80c584c00d1"
+        "0c1ce4ccb1ce2e81c7c12fb296278126b9ec41e49c061e01dbb11f85850f4d4e"
     ),
 }
 _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
@@ -1891,17 +1925,26 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
     "progress_ticket_request_digest": (
         "ab51b06be057b794221217b6505e2cd4abbb66c2d7f87504a6f2257c260124c4"
     ),
-    "try_reserve_broadcast_child": (
-        "09599eeb99c14929d99143cfa8fa43b971237e63d768e7e1ccfbcfab9e05b242"
+    "try_reserve_for_source": (
+        "373cb153cd983d53ccb2444914370c490d27857b14189db0a2b7ab2a5a6b3d01"
+    ),
+    "submit_progress_message_to_source": (
+        "3ed621c75212cd877169cde558743bae25618e73866fed73c50ae78d591397df"
+    ),
+    "broadcast_recoverable": (
+        "d1cca55748e9921670e4770c77de71010a2832f032d08177b49a349e482218e2"
     ),
     "into_dispatch_parts": (
-        "e22061f2df8bbb4e63645ccfe41be10b1cb99c61b9f101095a5081f1bdfc8b1f"
+        "3de4d4d0a205aefb714ba2827fcb516828431dfd632336fb6fa5f86407b8b94c"
     ),
     "from_dispatch_parts": (
-        "a35c12fc07f9f3fc7173189e7e5b05b9d32e9c1304dcc4f47417ab10397d6a66"
+        "a7220e8cf0ab0ba92067dd1bd927dbf09f2445f2b32f9525e0f7630133976f28"
+    ),
+    "release_cancelled_broadcast_targets": (
+        "3fc968b30523d59e5f4cda0256f37e2d9597c93d7085c146a97604ce3439e960"
     ),
     "dispatch_reliable_actor_message": (
-        "026e2dd7c8c95104fb1aef825eaf8b4c0ed66fb9a9e41c51ffdc4a592b7b6d20"
+        "672340ef9a74bb2c82ae257d6caefc2fa589f47e0c16a1286257b94c078bd9c8"
     ),
     "post_reliable_actor_frame_to_writer": (
         "e39ecfdb65d8640a7bfe012f15c23f4a800d23db2762f51884c4ab65291e2bcc"
@@ -1909,16 +1952,13 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
     "retry_reliable_actor_messages": (
         "5d59dda16998eea883d6c96f6fedde6fa3f8e35a82f16fff6849d35cd4f3ce7c"
     ),
-    "split_reliable_actor_broadcast": (
-        "26755317aa6a92cf84720b9c01367c673cc49f7cf696403e73a9b82bb98aef58"
-    ),
     "accept_reliable_actor_message": (
-        "3e366840c4c2d4bd8b7c5c71364dd86b5e6c3c2cafb6f11de46c1953152fdfb2"
+        "33bed4cc9424d1322b98e9b988280646426aa16dd2040927e8b8c4398c44dfee"
     ),
 }
 
 _PRODUCTION_P2P_PROGRESS_LEASE_DROP_SHA256 = (
-    "07ce8d705521a5b448511c611c2055c418a0b0559afe3c774a16541e6f11c44c"
+    "67d984b85f0a4589ab111c9115f8292cfece254fdb38271a148a8dd3be791cc9"
 )
 _PRODUCTION_DAEMON_FRAME_VALIDATION_ITEM_SHA256 = {
     "validate_config": (
@@ -2578,6 +2618,597 @@ def _tlapm_obligation_count(
     return int(completion.group(1))
 
 
+def _canonical_json_sha256(value: Any) -> str:
+    """Hash a JSON value using the evidence contract's canonical encoding."""
+
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _verus_evidence_contract_module() -> Any:
+    """Load the independently pinned Verus evidence validator."""
+
+    path = ROOT_DIR / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+    spec = importlib.util.spec_from_file_location(
+        "_sumeragi_v2_verus_evidence_contract", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Verus evidence contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _cross_tool_contract_errors() -> list[str]:
+    """Check the immutable 4 + 6 + 6 refinement mapping itself."""
+
+    errors: list[str] = []
+    expected_ids = (
+        "effective-lock-body-acquisition-production-refinement",
+        "progress-witness-production-refinement",
+        "successor-activation-exact-recovery-production-refinement",
+    )
+    observed_ids = tuple(
+        contract.obligation_id for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_ids != expected_ids:
+        errors.append(
+            "cross-tool obligation inventory must equal the canonical three "
+            f"production seams {expected_ids!r}; found {observed_ids!r}"
+        )
+    observed_counts = tuple(
+        len(contract.claims) for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_counts != (4, 6, 6):
+        errors.append(
+            "cross-tool production claim cardinalities must equal (4, 6, 6); "
+            f"found {observed_counts!r}"
+        )
+
+    expected_premises = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "ProductionEffectiveLockBodyAcquisitionRefinement"
+        ),
+        "progress-witness-production-refinement": (
+            "ProductionProgressWitnessTraceRefinement"
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "ProductionSuccessorAndExactRecoveryTraceRefinement"
+        ),
+    }
+
+    constants: list[str] = []
+    verus_theorems: list[str] = []
+    tla_theorems: list[str] = []
+    for contract in CROSS_TOOL_REFINEMENT_CONTRACTS:
+        reviewed_target = REQUIRED_PROOF_OBLIGATION_INVENTORY.get(
+            contract.obligation_id
+        )
+        if reviewed_target != (contract.module, contract.ledger_symbol):
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} targets "
+                f"{(contract.module, contract.ledger_symbol)!r}, not reviewed "
+                f"ledger target {reviewed_target!r}"
+            )
+        expected_premise = expected_premises.get(contract.obligation_id)
+        expected_statement = (
+            None
+            if expected_premise is None
+            else f"{expected_premise} => {contract.ledger_symbol}"
+        )
+        if contract.tla_statement != expected_statement:
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} must imply its "
+                f"exact ledger theorem symbol using {expected_statement!r}; "
+                f"found {contract.tla_statement!r}"
+            )
+        tla_theorems.append(contract.tla_theorem)
+        for claim in contract.claims:
+            constants.append(claim.constant)
+            verus_theorems.append(claim.verus_theorem)
+            if not claim.production_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has no production sources"
+                )
+            for relative in (claim.verus_source, *claim.production_sources):
+                path = Path(relative)
+                if path.is_absolute() or ".." in path.parts:
+                    errors.append(
+                        f"cross-tool claim {claim.constant} has unsafe source path "
+                        f"{relative!r}"
+                    )
+    for label, values, expected_count in (
+        ("TLA constants", constants, 16),
+        ("Verus theorem names", verus_theorems, 16),
+        ("TLA theorem names", tla_theorems, 3),
+    ):
+        if len(values) != expected_count or len(set(values)) != expected_count:
+            errors.append(
+                f"cross-tool {label} must contain {expected_count} unique names"
+            )
+    return errors
+
+
+def _cross_tool_status_contracts(
+    ledger: dict[str, Any],
+) -> tuple[CrossToolObligationContract, ...]:
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list):
+        return ()
+    statuses = {
+        obligation.get("id"): obligation.get("status")
+        for obligation in obligations
+        if isinstance(obligation, dict)
+    }
+    return tuple(
+        contract
+        for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+        if statuses.get(contract.obligation_id) == "cross_tool_proved"
+    )
+
+
+def _cross_tool_dependency_entries(
+    ledger: dict[str, Any], contract: CrossToolObligationContract
+) -> list[dict[str, str]]:
+    """Return the exact transitive proved-prerequisite closure."""
+
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list):
+        raise ValueError("proof ledger obligations must be an array")
+    by_id = {
+        obligation.get("id"): obligation
+        for obligation in obligations
+        if isinstance(obligation, dict) and _nonempty_string(obligation.get("id"))
+    }
+    entries: list[dict[str, str]] = []
+    for prerequisite_id in _proof_dependency_closure(contract.obligation_id):
+        prerequisite = by_id.get(prerequisite_id)
+        if prerequisite is None:
+            raise ValueError(
+                f"cross-tool obligation {contract.obligation_id} is missing "
+                f"prerequisite {prerequisite_id}"
+            )
+        status = prerequisite.get("status")
+        if status not in PROVED_STATUS_VALUES:
+            raise ValueError(
+                f"cross-tool obligation {contract.obligation_id} requires proved "
+                f"prerequisite {prerequisite_id}, found {status!r}"
+            )
+        entries.append({"id": prerequisite_id, "status": status})
+    return entries
+
+
+def _proof_dependency_closure(obligation_id: str) -> tuple[str, ...]:
+    """Return prerequisites in deterministic dependency-before-dependent order."""
+
+    ordered: list[str] = []
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(current: str) -> None:
+        if current in visiting:
+            raise ValueError(
+                f"proof dependency graph contains a cycle through {current}"
+            )
+        if current in visited:
+            return
+        visiting.add(current)
+        for prerequisite in PROOF_STATUS_DEPENDENCIES.get(current, ()):
+            visit(prerequisite)
+            if prerequisite not in visited:
+                visited.add(prerequisite)
+                ordered.append(prerequisite)
+        visiting.remove(current)
+
+    visit(obligation_id)
+    return tuple(ordered)
+
+
+def _cross_tool_tla_payload(
+    contract: CrossToolObligationContract,
+    *,
+    tlaps_evidence: dict[str, Any],
+    formal_dir: Path,
+    root_dir: Path,
+) -> dict[str, Any]:
+    """Build one source- and strict-log-bound TLA theorem payload."""
+
+    expected_tool = {
+        "name": "TLAPM",
+        "commit": TLAPM_COMMIT,
+        "version": TLAPM_COMMIT[:7],
+    }
+    if tlaps_evidence.get("tool") != expected_tool:
+        raise ValueError("cross-tool evidence requires the pinned TLAPM identity")
+    expected_manifest = _formal_source_manifest(formal_dir, root_dir)
+    if tlaps_evidence.get("source_manifest") != expected_manifest:
+        raise ValueError(
+            "cross-tool TLAPS evidence is stale relative to the current formal sources"
+        )
+    if tlaps_evidence.get("backend_verification") is not True:
+        raise ValueError("cross-tool TLAPS evidence is not backend verified")
+
+    module_path = formal_dir / f"{contract.module}.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        raise ValueError(
+            f"cross-tool TLA source is not a regular file: {module_path}"
+        )
+    module_source = module_path.read_text(encoding="utf-8")
+    premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
+    premise_operator = _top_level_operator_body(module_source, premise)
+    if premise_operator is None:
+        raise ValueError(
+            f"cross-tool obligation {contract.obligation_id} is missing "
+            f"production premise {contract.module}!{premise}"
+        )
+    premise_body, _ = premise_operator
+    observed_premise = " ".join(premise_body.split())
+    expected_premise = " ".join(
+        f"/\\ {claim.constant} = TRUE" for claim in contract.claims
+    )
+    if observed_premise != expected_premise:
+        raise ValueError(
+            f"cross-tool production premise {contract.module}!{premise} must "
+            "contain the exact ordered claim mapping "
+            f"{expected_premise!r}; found {observed_premise!r}"
+        )
+    theorem = _top_level_theorem_body(
+        module_source, contract.tla_theorem, preserve_string_contents=True
+    )
+    if theorem is None:
+        raise ValueError(
+            f"cross-tool obligation {contract.obligation_id} is missing named "
+            f"TLA theorem {contract.module}!{contract.tla_theorem}"
+        )
+    theorem_body, _ = theorem
+    theorem_parts = re.split(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", theorem_body, maxsplit=1
+    )
+    statement = " ".join(theorem_parts[0].split())
+    if statement != contract.tla_statement:
+        raise ValueError(
+            f"cross-tool theorem {contract.module}!{contract.tla_theorem} must "
+            f"state exactly {contract.tla_statement!r}; found {statement!r}"
+        )
+    if len(theorem_parts) != 2:
+        raise ValueError(
+            f"cross-tool theorem {contract.module}!{contract.tla_theorem} "
+            "must have an explicit proof body"
+        )
+
+    modules = tlaps_evidence.get("modules")
+    if not isinstance(modules, list):
+        raise ValueError("cross-tool TLAPS evidence modules must be an array")
+    matching = [
+        entry
+        for entry in modules
+        if isinstance(entry, dict) and entry.get("module") == contract.module
+    ]
+    if len(matching) != 1:
+        raise ValueError(
+            f"cross-tool TLAPS evidence must contain exactly one {contract.module} log"
+        )
+    entry = matching[0]
+    expected_log = f"target/formal/sumeragi_v2/tlaps/{contract.module}.log"
+    if entry.get("log") != expected_log:
+        raise ValueError(
+            f"cross-tool TLAPS evidence must use strict log {expected_log}"
+        )
+    manifest_sha256 = expected_manifest["sha256"]
+    if entry.get("source_manifest_sha256") != manifest_sha256:
+        raise ValueError(
+            f"cross-tool TLAPS log for {contract.module} is stale"
+        )
+    log_path = root_dir / expected_log
+    if not log_path.is_file() or log_path.is_symlink():
+        raise ValueError(f"cross-tool TLAPS log is not a regular file: {log_path}")
+    log_sha256 = _sha256_file(log_path)
+    if entry.get("log_sha256") != log_sha256:
+        raise ValueError(
+            f"cross-tool TLAPS log digest mismatch for {contract.module}"
+        )
+    proved = _tlapm_obligation_count(
+        log_path.read_text(encoding="utf-8"),
+        module=contract.module,
+        source_manifest_sha256=manifest_sha256,
+    )
+    if proved is None or proved <= 0 or entry.get("obligations_proved") != proved:
+        raise ValueError(
+            f"cross-tool TLAPS log for {contract.module} lacks a fresh strict "
+            "successful result"
+        )
+    return {
+        "module": contract.module,
+        "theorem": contract.tla_theorem,
+        "statement": contract.tla_statement,
+        "source_sha256": _sha256_file(module_path),
+        "log": expected_log,
+        "log_sha256": log_sha256,
+        "obligations_proved": proved,
+    }
+
+
+def _cross_tool_claim_payload(
+    claim: CrossToolClaimContract,
+    *,
+    verus_evidence: dict[str, Any],
+    root_dir: Path,
+) -> dict[str, Any]:
+    """Build one named Verus theorem and exact production-source binding."""
+
+    source_entries = verus_evidence.get("sources")
+    if not isinstance(source_entries, list):
+        raise ValueError("cross-tool Verus source inventory must be an array")
+    matching_sources = [
+        entry
+        for entry in source_entries
+        if isinstance(entry, dict) and entry.get("path") == claim.verus_source
+    ]
+    if len(matching_sources) != 1:
+        raise ValueError(
+            f"cross-tool Verus evidence must bind proof source {claim.verus_source}"
+        )
+    verus_path = root_dir / claim.verus_source
+    if not verus_path.is_file() or verus_path.is_symlink():
+        raise ValueError(
+            f"cross-tool Verus proof source is not a regular file: {verus_path}"
+        )
+    verus_sha256 = _sha256_file(verus_path)
+    if matching_sources[0].get("sha256") != verus_sha256:
+        raise ValueError(
+            f"cross-tool Verus proof source digest mismatch: {claim.verus_source}"
+        )
+    verus_source = verus_path.read_text(encoding="utf-8")
+    theorem_items = rust_items(verus_source, claim.verus_theorem)
+    if len(theorem_items) != 1:
+        raise ValueError(
+            f"cross-tool claim {claim.constant} requires exactly one named Verus "
+            f"theorem {claim.verus_theorem}; found {len(theorem_items)}"
+        )
+    theorem_item = theorem_items[0]
+    if theorem_item.brace_context != (("verus", "!"),):
+        raise ValueError(
+            f"cross-tool Verus result {claim.verus_theorem} must be a top-level "
+            "item in the verified verus! module"
+        )
+    if theorem_item.attributes or theorem_item.ancestor_inner_attributes:
+        raise ValueError(
+            f"cross-tool Verus result {claim.verus_theorem} may not be gated or "
+            "rewritten by attributes"
+        )
+    theorem_header = theorem_item.structural_source.split("{", 1)[0]
+    if re.search(
+        rf"\bpub\s+proof\s+fn\s+{re.escape(claim.verus_theorem)}\b",
+        theorem_header,
+    ) is None:
+        raise ValueError(
+            f"cross-tool Verus result {claim.verus_theorem} must be a public proof fn"
+        )
+    if re.search(r"\bensures\b", theorem_header) is None:
+        raise ValueError(
+            f"cross-tool Verus result {claim.verus_theorem} must declare its result "
+            "in an ensures clause"
+        )
+
+    production_sources: list[dict[str, str]] = []
+    for relative in claim.production_sources:
+        path = root_dir / relative
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(
+                f"cross-tool production source is not a regular file: {path}"
+            )
+        production_sources.append(
+            {"path": relative, "sha256": _sha256_file(path)}
+        )
+    return {
+        "constant": claim.constant,
+        "verus_theorem": claim.verus_theorem,
+        "verus_source": claim.verus_source,
+        "verus_source_sha256": verus_sha256,
+        "production_sources": production_sources,
+    }
+
+
+def build_cross_tool_evidence(
+    ledger: dict[str, Any],
+    *,
+    tlaps_evidence: dict[str, Any],
+    verus_evidence: dict[str, Any],
+    formal_dir: Path = FORMAL_DIR,
+    root_dir: Path = ROOT_DIR,
+    expected_verus_source_manifest_sha256: str | None = None,
+    verus_log_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build the canonical evidence for every cross-tool-proved obligation."""
+
+    contracts = _cross_tool_status_contracts(ledger)
+    obligations = ledger.get("obligations")
+    raw_cross_ids = (
+        []
+        if not isinstance(obligations, list)
+        else [
+            obligation.get("id")
+            for obligation in obligations
+            if isinstance(obligation, dict)
+            and obligation.get("status") == "cross_tool_proved"
+        ]
+    )
+    expected_cross_ids = [contract.obligation_id for contract in contracts]
+    if raw_cross_ids != expected_cross_ids:
+        raise ValueError(
+            "cross_tool_proved obligations must be exactly the reviewed canonical "
+            f"selection {expected_cross_ids!r}; found {raw_cross_ids!r}"
+        )
+    if not contracts:
+        raise ValueError("ledger has no cross_tool_proved obligations")
+    contract_errors = _cross_tool_contract_errors()
+    if contract_errors:
+        raise ValueError("; ".join(contract_errors))
+
+    try:
+        verus_module = _verus_evidence_contract_module()
+        verus_errors = verus_module.validate_evidence(
+            verus_evidence,
+            root=root_dir,
+            source_manifest_sha256=expected_verus_source_manifest_sha256,
+            log_path=verus_log_path,
+        )
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError(f"cannot validate linked Verus evidence: {error}") from error
+    if verus_errors:
+        raise ValueError(
+            "linked Verus evidence is invalid: " + "; ".join(verus_errors)
+        )
+
+    obligations: list[dict[str, Any]] = []
+    for contract in contracts:
+        obligations.append(
+            {
+                "id": contract.obligation_id,
+                "ledger_symbol": contract.ledger_symbol,
+                "dependencies": _cross_tool_dependency_entries(ledger, contract),
+                "tla": _cross_tool_tla_payload(
+                    contract,
+                    tlaps_evidence=tlaps_evidence,
+                    formal_dir=formal_dir,
+                    root_dir=root_dir,
+                ),
+                "claims": [
+                    _cross_tool_claim_payload(
+                        claim,
+                        verus_evidence=verus_evidence,
+                        root_dir=root_dir,
+                    )
+                    for claim in contract.claims
+                ],
+            }
+        )
+
+    canonical_ledger_path = formal_dir / "proof_coverage.json"
+    if not canonical_ledger_path.is_file() or canonical_ledger_path.is_symlink():
+        raise ValueError(
+            "cross-tool evidence requires a regular source-bound canonical "
+            f"proof ledger: {canonical_ledger_path}"
+        )
+    canonical_ledger = load_ledger(canonical_ledger_path)
+    if not isinstance(canonical_ledger, dict):
+        raise ValueError("source-bound canonical proof ledger must be a JSON object")
+    if canonical_ledger != ledger:
+        raise ValueError(
+            "cross-tool ledger differs from the source-bound canonical proof ledger"
+        )
+
+    formal_manifest = tlaps_evidence["source_manifest"]["sha256"]
+    workspace_manifest = verus_evidence["source_manifest_sha256"]
+    return {
+        "schema_version": CROSS_TOOL_EVIDENCE_SCHEMA_VERSION,
+        "protocol": "sumeragi-v2",
+        "backend_verification": True,
+        "ledger_sha256": _canonical_json_sha256(ledger),
+        "component_evidence": {
+            "tlaps_sha256": _canonical_json_sha256(tlaps_evidence),
+            "verus_sha256": _canonical_json_sha256(verus_evidence),
+        },
+        "tools": {
+            "tlaps": tlaps_evidence["tool"],
+            "verus": verus_evidence["tool"],
+        },
+        "source_manifests": {
+            "formal_sha256": formal_manifest,
+            "workspace_sha256": workspace_manifest,
+        },
+        "obligations": obligations,
+    }
+
+
+def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str | None:
+    """Return the first path at which two evidence values differ."""
+
+    if type(expected) is not type(observed):
+        return path
+    if isinstance(expected, dict):
+        if set(expected) != set(observed):
+            return path
+        for key in sorted(expected):
+            mismatch = _first_json_mismatch(
+                expected[key], observed[key], f"{path}.{key}"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(observed):
+            return path
+        for index, (expected_item, observed_item) in enumerate(
+            zip(expected, observed, strict=True)
+        ):
+            mismatch = _first_json_mismatch(
+                expected_item, observed_item, f"{path}[{index}]"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    return None if expected == observed else path
+
+
+def _cross_tool_evidence_errors(
+    ledger: dict[str, Any],
+    cross_tool_evidence: dict[str, Any] | None,
+    *,
+    tlaps_evidence: dict[str, Any] | None,
+    verus_evidence: dict[str, Any] | None,
+    formal_dir: Path = FORMAL_DIR,
+    root_dir: Path = ROOT_DIR,
+    expected_verus_source_manifest_sha256: str | None = None,
+    verus_log_path: Path | None = None,
+) -> list[str]:
+    """Reject any non-canonical, stale, or substituted cross-tool discharge."""
+
+    contracts = _cross_tool_status_contracts(ledger)
+    if not contracts:
+        if cross_tool_evidence is not None:
+            return [
+                "cross-tool evidence is forbidden when no obligation is "
+                "cross_tool_proved"
+            ]
+        return []
+    if cross_tool_evidence is None:
+        return ["release gate requires cross-tool refinement evidence"]
+    if not isinstance(cross_tool_evidence, dict):
+        return ["cross-tool refinement evidence must be a JSON object"]
+    if not isinstance(tlaps_evidence, dict):
+        return ["cross-tool refinement requires linked TLAPS evidence"]
+    if not isinstance(verus_evidence, dict):
+        return ["cross-tool refinement requires linked Verus evidence"]
+    try:
+        expected = build_cross_tool_evidence(
+            ledger,
+            tlaps_evidence=tlaps_evidence,
+            verus_evidence=verus_evidence,
+            formal_dir=formal_dir,
+            root_dir=root_dir,
+            expected_verus_source_manifest_sha256=(
+                expected_verus_source_manifest_sha256
+            ),
+            verus_log_path=verus_log_path,
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        return [f"cross-tool refinement evidence cannot be validated: {error}"]
+    mismatch = _first_json_mismatch(expected, cross_tool_evidence)
+    if mismatch is not None:
+        return [
+            "cross-tool refinement evidence does not match the canonical current "
+            f"contract at {mismatch}"
+        ]
+    return []
+
+
 def build_release_evidence(
     *,
     tlapm_version: str,
@@ -2854,7 +3485,15 @@ def _proofless_release_theorem_errors(
                 )
                 continue
             status = exact_entries[0].get("status")
-            if status != "specified_unproved":
+            obligation_id = exact_entries[0].get("id")
+            cross_tool_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(obligation_id)
+            cross_tool_discharge = (
+                status == "cross_tool_proved"
+                and cross_tool_contract is not None
+                and cross_tool_contract.module == module
+                and cross_tool_contract.ledger_symbol == symbol
+            )
+            if status != "specified_unproved" and not cross_tool_discharge:
                 errors.append(
                     f"{module}.tla:{extracted[1]}: proofless release theorem "
                     f"{module}!{symbol} must be ledgered specified_unproved, "
@@ -3111,13 +3750,20 @@ def _proof_status_dependency_errors(obligations: list[Any]) -> list[str]:
                     f"{prerequisite_id}"
                 )
             if (
-                dependent.get("status") == "tlaps_proved"
-                and prerequisite.get("status") != "tlaps_proved"
+                dependent.get("status") in PROVED_STATUS_VALUES
+                and prerequisite.get("status") not in PROVED_STATUS_VALUES
             ):
-                errors.append(
-                    f"proof obligation {dependent_id} cannot be tlaps_proved before "
-                    f"prerequisite {prerequisite_id} is tlaps_proved"
-                )
+                if dependent.get("status") == "tlaps_proved":
+                    errors.append(
+                        f"proof obligation {dependent_id} cannot be tlaps_proved "
+                        f"before prerequisite {prerequisite_id} is tlaps_proved"
+                    )
+                else:
+                    errors.append(
+                        f"proof obligation {dependent_id} cannot be "
+                        "cross_tool_proved before prerequisite "
+                        f"{prerequisite_id} is proved"
+                    )
     return errors
 
 
@@ -8753,16 +9399,30 @@ self.acknowledge_flushed_batch();
         count=2,
     )
 
+    network_handle_context = (
+        (
+            "impl", "<", "T", ":", "Pload", "+", "message", "::",
+            "ClassifyTopic", ",", "K", ":", "Kex", "+", "Sync", ",",
+            "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<",
+            "T", ",", "K", ",", "E", ">",
+        ),
+    )
     network_reliable_contexts = {
         "progress_ticket_request_digest": (),
-        "try_reserve_broadcast_child": (
-            ("impl", "NetworkActorProgressBudget"),
-        ),
+        "try_reserve_for_source": (("impl", "NetworkActorProgressBudget"),),
+        "submit_progress_message_to_source": network_handle_context,
+        "broadcast_recoverable": network_handle_context,
         "into_dispatch_parts": (
             ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
         ),
         "from_dispatch_parts": (
             ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
+        ),
+        "release_cancelled_broadcast_targets": (
+            (
+                "impl", "<", "T", ":", "message", "::", "ClassifyTopic",
+                ">", "ReliableActorPending", "<", "T", ">",
+            ),
         ),
     }
     network_actor_context = (
@@ -8825,61 +9485,154 @@ self.acknowledge_flushed_batch();
         p2p_network_path,
         p2p_network_source,
         """
-enum BroadcastChildLeaseAttempt {
-    Ready(NetworkActorProgressLease),
+enum ProgressLeaseAttempt {
+    Ready {
+        lease: NetworkActorProgressLease,
+        ticket: NetworkActorAdmissionTicket,
+    },
     SameRequestAlreadyOwned,
-    DifferentRequestAlreadyOwned,
-    Unavailable,
+    Waiting {
+        ticket: Option<NetworkActorAdmissionTicket>,
+        rank: usize,
+    },
+    InvalidTicket,
+    Oversize,
 }
 """,
-        "broadcast child ownership distinguishes exact coalescing, distinct residuals, and unavailable geometry",
+        "target-specific progress admission distinguishes exact coalescing, FIFO waiting, invalid tickets, and oversize requests",
         errors,
     )
     _require_rust_token_sequence(
         p2p_network_path,
-        network_reliable_items.get("try_reserve_broadcast_child"),
+        network_reliable_items.get("try_reserve_for_source"),
         """
-if let Some(retained) = state.retained_by_source.get(&source) {
-    return if retained.request_digest == parent.request_digest {
-        BroadcastChildLeaseAttempt::SameRequestAlreadyOwned
-    } else {
-        BroadcastChildLeaseAttempt::DifferentRequestAlreadyOwned
+if shape.broadcast
+    && shape.broadcast_membership_generation.is_some()
+    && state
+        .retained_by_source
+        .get(&source)
+        .is_some_and(|retained| {
+            retained.broadcast
+                && retained.request_digest == shape.request_digest
+                && retained.broadcast_membership_generation
+                    == shape.broadcast_membership_generation
+        })
+{
+    return ProgressLeaseAttempt::SameRequestAlreadyOwned;
+}
+""",
+        "targetized broadcasts coalesce only the same digest and membership generation",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("try_reserve_for_source"),
+        """
+let source_retained = state.retained_by_source.get(&source).copied();
+if source_retained.is_some_and(|retained| retained.items >= 1) {
+    return ProgressLeaseAttempt::Waiting {
+        ticket: Some(ticket),
+        rank,
     };
 }
 """,
-        "busy broadcast targets may coalesce only the same canonical request digest",
+        "distinct broadcast or direct requests remain FIFO-ranked behind a target owner",
         errors,
     )
     _require_rust_token_sequence(
         p2p_network_path,
-        network_reliable_items.get("try_reserve_broadcast_child"),
+        network_reliable_items.get("submit_progress_message_to_source"),
         """
-if state.retained_by_source.len() >= self.max_sources
-    || state.retained_sources_by_class[class_index] >= self.max_sources_per_class
-{
-    return BroadcastChildLeaseAttempt::Unavailable;
-}
-""",
-        "unavailable broadcast-child geometry remains distinct from an already-owned target",
-        errors,
-    )
-    _require_rust_token_sequence(
-        p2p_network_path,
-        network_reliable_items.get("split_reliable_actor_broadcast"),
-        """
-BroadcastChildLeaseAttempt::SameRequestAlreadyOwned => {
-}
-BroadcastChildLeaseAttempt::DifferentRequestAlreadyOwned => {
-    exact_residual.push_back(target);
-}
-BroadcastChildLeaseAttempt::Unavailable => {
-    exact_residual.push_back(target);
+ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(false),
+ProgressLeaseAttempt::InvalidTicket => {
+    return Err(NetworkActorAdmissionError::Rejected {
+        message,
+        reason: NetworkActorAdmissionRejection::InvalidTicket,
+    });
 }
 """,
         (
-            "same-digest broadcast retries coalesce while distinct requests and unavailable "
-            "children retain exact residuals; this is not a starvation or end-to-end delivery claim"
+            "same-digest target retries coalesce while invalid or distinct ownership "
+            "cannot substitute for the original request"
         ),
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("submit_progress_message_to_source"),
+        """
+let admitted = if let Some(membership) = broadcast_membership {
+    AdmittedNetworkMessage::new_targeted_broadcast(message, lease, membership)
+} else {
+    AdmittedNetworkMessage::new(message, lease)
+};
+""",
+        "accepted broadcast children carry their exact topology membership into the actor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("broadcast_recoverable"),
+        """
+Some(ticket)
+    if ticket.request_digest == request_digest
+        && Arc::ptr_eq(&ticket.budget, &self.network_actor_progress_budget)
+        && Arc::ptr_eq(&ticket.topology, &self.reliable_broadcast_topology) =>
+{
+    ticket
+}
+Some(ticket) => {
+    msg.priority = requested_priority;
+    return Err(NetworkBroadcastAdmissionError::Rejected {
+        message: msg,
+        ticket: Some(ticket),
+        reason: NetworkActorAdmissionRejection::InvalidTicket,
+    });
+}
+""",
+        "broadcast retry tickets bind digest, actor budget, and topology publication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("broadcast_recoverable"),
+        """
+if !target.membership.is_active() {
+    continue;
+}
+let source = ActorProgressSource {
+    target: Some(target.membership.peer_id.clone()),
+    class,
+};
+let target_message = NetworkMessage::Broadcast(msg.clone());
+match self.submit_progress_message_to_source(
+    target_message,
+    topic,
+    true,
+    source,
+    Some(Arc::clone(&target.membership)),
+    target.actor_ticket.take(),
+)
+""",
+        "broadcast fanout admits each active membership through an isolated target source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("broadcast_recoverable"),
+        """
+Err(NetworkActorAdmissionError::Backpressured {
+    message: _,
+    ticket: actor_ticket,
+    rank,
+}) => {
+    target.actor_ticket = actor_ticket;
+    minimum_rank = minimum_rank.min(rank.max(1));
+    ticket.targets.push_back(target);
+}
+""",
+        "backpressured broadcast targets retain exact membership, ticket, and decreasing rank",
         errors,
     )
     _require_rust_token_sequence(
@@ -8910,27 +9663,36 @@ assert_eq!(
     self.request_digest,
     "progress actor source lease must retain its canonical request identity"
 );
+assert_eq!(
+    retained.broadcast,
+    self.broadcast,
+    "progress actor source lease must retain its delivery kind"
+);
+assert_eq!(
+    retained.broadcast_membership_generation,
+    self.broadcast_membership_generation,
+    "progress actor source lease must retain its topology membership identity"
+);
 retained.bytes = retained
     .bytes
     .checked_sub(self.bytes)
 """,
-        "progress lease drop must release only the source with the same canonical request digest",
+        "progress lease drop releases only the same digest, kind, and topology membership",
         errors,
     )
     _require_rust_token_sequence(
         p2p_network_path,
         network_reliable_items.get("accept_reliable_actor_message"),
         """
-if unsplit_broadcast {
-    self.split_reliable_actor_broadcast(pending, message);
-} else {
-    pending.push_back(message);
+if message.cancelled_broadcast_membership() {
+    return;
 }
+pending.push_back(message);
 self.retry_reliable_actor_messages(pending, 2);
 """,
         (
-            "fresh broadcast acceptance delegates to sealed fail-closed local "
-            "ownership only; this is not a starvation or end-to-end delivery claim"
+            "actor acceptance cancels only an obsolete target membership and "
+            "otherwise gives the prior and fresh sources a fair retry turn"
         ),
         errors,
     )
@@ -8954,11 +9716,45 @@ struct ActorProgressSource {
 struct AdmittedNetworkMessage<T> {
     message: Option<NetworkMessage<T>>,
     byte_lease: NetworkActorLease,
+    broadcast_membership: Option<Arc<ReliableBroadcastMembership>>,
     remaining_broadcast_targets: Option<VecDeque<PeerId>>,
     pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
 }
 """,
-        "single actor owner carries message, bytes, target cursor, and flush receivers",
+        "single actor owner carries message, bytes, membership, target cursor, and flush receivers",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("release_cancelled_broadcast_targets"),
+        """
+self.by_source.retain(|_source, entries| {
+    let before = entries.len();
+    entries.retain(|entry| !entry.cancelled_broadcast_membership());
+    released = released.saturating_add(before.saturating_sub(entries.len()));
+    !entries.is_empty()
+});
+self.len = self
+    .len
+    .checked_sub(released)
+    .expect("released broadcast children must match reliable backlog ownership");
+""",
+        "topology cancellation releases only exact targetized broadcast children",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("dispatch_reliable_actor_message"),
+        """
+if broadcast_membership
+    .as_ref()
+    .is_some_and(|membership| !membership.is_active())
+{
+    drop(actor_lease);
+    return Ok(());
+}
+""",
+        "dispatch cancellation requires the exact inactive broadcast membership",
         errors,
     )
     _require_rust_token_sequence(
@@ -8987,6 +9783,7 @@ if transferred {
         actor_lease,
         remaining_broadcast_targets,
         pending_flush_acks,
+        broadcast_membership,
     ))
 }
 """,
@@ -9978,6 +10775,41 @@ def _production_causal_fifo_source_fidelity_errors(
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        deferred_qc_adapter_items = (
+            (
+                "reducer_qc_matches_wire",
+                (("impl", "WireRegistry"),),
+                "exact deferred-QC wire identity comparator",
+            ),
+            (
+                "deferred_quorum_certificate_owner_tag",
+                (("impl", "SumeragiV2Adapter"),),
+                "exact Busy-deferred QC owner lookup",
+            ),
+        )
+        for item_name, context, description in deferred_qc_adapter_items:
+            item = _require_rust_item(
+                adapter_path, adapter_source, item_name, errors
+            )
+            _require_rust_item_context(
+                adapter_path,
+                item,
+                context,
+                description,
+                errors,
+            )
+            if item is not None:
+                expected_sha256 = _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256[
+                    item_name
+                ]
+                observed_sha256 = _rust_item_token_sha256(item)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{adapter_path}:{item.line}: {description} declaration, "
+                        "contract, and complete control flow must match the exact "
+                        f"reviewed token digest {expected_sha256}; found "
+                        f"{observed_sha256}"
+                    )
         adapter_macro_bound = rust_code_tokens(
             """
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize =
@@ -10302,6 +11134,73 @@ fn wire_ingress_may_use_progress(
                 "production progress-capacity adapter bridge",
                 errors,
             )
+
+        deferred_qc_runtime_items = (
+            (
+                "check_embedded_quorum_certificate_capacity",
+                (("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
+                "outer response runtime/deferred QC capacity union",
+                (),
+            ),
+            (
+                "enqueue_network",
+                (
+                    (
+                        "impl",
+                        "SerializedV2Runtime",
+                        "<",
+                        "SumeragiV2Adapter",
+                        ">",
+                    ),
+                ),
+                "post-authenticated deferred-QC enqueue coalescing",
+                (),
+            ),
+            (
+                "can_admit_network_message",
+                (
+                    (
+                        "impl",
+                        "SerializedV2Runtime",
+                        "<",
+                        "SumeragiV2Adapter",
+                        ">",
+                    ),
+                ),
+                "CommitCertificateResponse deferred-owner capacity preflight",
+                (),
+            ),
+            (
+                "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+                (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                "Busy-deferred CommitQC response coalescing regression",
+                ("#[test]",),
+            ),
+        )
+        for item_name, context, description, attributes in deferred_qc_runtime_items:
+            item = _require_rust_item(
+                runtime_path, runtime_source, item_name, errors
+            )
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                context,
+                description,
+                errors,
+                expected_attributes=attributes,
+            )
+            if item is not None:
+                expected_sha256 = _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256[
+                    item_name
+                ]
+                observed_sha256 = _rust_item_token_sha256(item)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{runtime_path}:{item.line}: {description} declaration, "
+                        "contract, and complete control flow must match the exact "
+                        f"reviewed token digest {expected_sha256}; found "
+                        f"{observed_sha256}"
+                    )
 
         runtime_context = (
             (
@@ -12462,6 +13361,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "proposal.view, proposal.subject, proposal)",
         ),
         "PreGstResponsiveCrash": (
+            "~gst",
             'asyncRecoveryPhase = "Eligible"',
             "node \\in Responsive \\cap up",
             "generation[node] < MaxGeneration",
@@ -17298,8 +18198,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 58:
-        errors.append("internal release-regression seal must contain exactly 58 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 67:
+        errors.append("internal release-regression seal must contain exactly 67 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -17312,20 +18212,20 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered twenty-module inventory; found {modules}"
+            f"ordered twenty-one-module inventory; found {modules}"
         )
     leg_ids = shell_array("production_liveness_leg_ids")
     if len(leg_ids) != len(_PRODUCTION_LIVENESS_RELEASE_MODULES) or len(
         set(leg_ids)
     ) != len(leg_ids):
         errors.append(
-            f"{release_path}: production module leg IDs must be twenty unique "
+            f"{release_path}: production module leg IDs must be twenty-one unique "
             f"entries; found total={len(leg_ids)}, unique={len(set(leg_ids))}"
         )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=40") != 1:
+    if source.splitlines().count("  readonly expected_corridor_leg_count=41") != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at forty legs"
+            "sealed at forty-one legs"
         )
 
     p2p_region_start = source.find("production_p2p_unit_list=")
@@ -17367,12 +18267,17 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 289 named tests\nacross 20 Rust modules",
-            "all 40 pre-network legs and the exact\n289-test inventory",
+            "inventories 298 named tests\nacross 21 Rust modules",
+            "all 41 pre-network legs and the exact\n298-test inventory",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "release inventory names 289 tests across twenty Rust\nmodules",
-            "pre-network corridor\nnow has 40 legs",
+            "release inventory names 298 tests across twenty-one Rust\nmodules",
+            "pre-network corridor\nnow has 41 legs",
+        ),
+        repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
+            "module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic\n"
+            "lane-certificate contracts bring the aggregate pre-network corridor to 41\n"
+            "legs",
         ),
     }
     for path, claims in documentation_claims.items():
@@ -17535,7 +18440,11 @@ def validate_ledger(
     verus_source_dir: Path = VERUS_SOURCE_DIR,
     release: bool = False,
     evidence: dict[str, Any] | None = None,
+    verus_evidence: dict[str, Any] | None = None,
+    cross_tool_evidence: dict[str, Any] | None = None,
     evidence_root: Path = ROOT_DIR,
+    expected_verus_source_manifest_sha256: str | None = None,
+    verus_log_path: Path | None = None,
     check_retired_paths: bool = True,
 ) -> LedgerValidation:
     """Validate schema, source linkage, trust boundaries, and release evidence."""
@@ -17554,8 +18463,10 @@ def validate_ledger(
             f"{sorted(expected_ledger_keys)}, found {sorted(ledger)}; "
             "tool runs and counts belong only in generated proof evidence"
         )
-    if ledger.get("schema_version") != 1:
-        errors.append("proof ledger schema_version must equal 1")
+    if ledger.get("schema_version") != LEDGER_SCHEMA_VERSION:
+        errors.append(
+            f"proof ledger schema_version must equal {LEDGER_SCHEMA_VERSION}"
+        )
     if ledger.get("protocol") != "sumeragi-v2":
         errors.append("proof ledger protocol must equal sumeragi-v2")
     if ledger.get("status_values") != list(STATUS_VALUES):
@@ -17645,6 +18556,7 @@ def validate_ledger(
         errors.append("proof ledger obligations must be a non-empty array")
         obligations = []
     errors.extend(_proof_obligation_inventory_errors(obligations))
+    errors.extend(_cross_tool_contract_errors())
     errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
     errors.extend(_proof_status_dependency_errors(obligations))
     errors.extend(_proofless_release_theorem_errors(obligations, module_sources))
@@ -17690,7 +18602,23 @@ def validate_ledger(
             continue
         if not _nonempty_string(module) or not _nonempty_string(symbol):
             continue
-        if status in {"tlaps_proved", "specified_unproved"}:
+        cross_tool_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(obligation_id)
+        if status == "cross_tool_proved" and cross_tool_contract is None:
+            errors.append(
+                f"{where} uses cross_tool_proved outside the reviewed production "
+                "refinement inventory"
+            )
+            continue
+        if status == "tlaps_proved" and cross_tool_contract is not None:
+            errors.append(
+                f"{where} is a production refinement seam and cannot be "
+                "promoted with TLAPS evidence alone"
+            )
+        if status in {
+            "tlaps_proved",
+            "cross_tool_proved",
+            "specified_unproved",
+        }:
             if status == "tlaps_proved" and module not in RELEASE_PROOF_MODULES:
                 errors.append(
                     f"{where} claims TLAPS proof in non-release module {module}"
@@ -17742,6 +18670,20 @@ def validate_ledger(
                 root_dir=evidence_root,
             )
         )
+        errors.extend(
+            _cross_tool_evidence_errors(
+                ledger,
+                cross_tool_evidence,
+                tlaps_evidence=evidence,
+                verus_evidence=verus_evidence,
+                formal_dir=formal_dir,
+                root_dir=evidence_root,
+                expected_verus_source_manifest_sha256=(
+                    expected_verus_source_manifest_sha256
+                ),
+                verus_log_path=verus_log_path,
+            )
+        )
 
     return LedgerValidation(tuple(errors), bool(completion))
 
@@ -17765,10 +18707,36 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="fresh proof evidence generated by the pinned TLAPS runner",
     )
+    parser.add_argument(
+        "--verus-evidence",
+        type=Path,
+        help="fresh source-bound Verus evidence linked by cross-tool proofs",
+    )
+    parser.add_argument(
+        "--verus-log",
+        type=Path,
+        help=(
+            "archived Verus transcript to validate instead of the canonical "
+            "target path"
+        ),
+    )
+    parser.add_argument(
+        "--cross-tool-evidence",
+        type=Path,
+        help="canonical 4+6+6 production-refinement evidence",
+    )
     mode.add_argument(
         "--write-evidence",
         type=Path,
         help="write canonical source- and log-bound TLAPS evidence and exit",
+    )
+    mode.add_argument(
+        "--write-cross-tool-evidence",
+        type=Path,
+        help=(
+            "write canonical cross-tool evidence from --ledger, --evidence, "
+            "and --verus-evidence, then exit"
+        ),
     )
     parser.add_argument(
         "--tlapm-version",
@@ -17790,6 +18758,14 @@ def _parser() -> argparse.ArgumentParser:
         help="print the current canonical TLA+ source-manifest digest and exit",
     )
     mode.add_argument(
+        "--print-cross-tool-obligations",
+        action="store_true",
+        help=(
+            "print cross_tool_proved obligation IDs in canonical order; empty "
+            "output means no cross-tool evidence document is required"
+        ),
+    )
+    mode.add_argument(
         "--check-production-causal-fifo",
         action="store_true",
         help=(
@@ -17808,6 +18784,49 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.print_source_manifest_sha256:
         print(_formal_source_manifest()["sha256"])
         return 0
+    if args.print_cross_tool_obligations:
+        try:
+            ledger = load_ledger(args.ledger)
+        except (OSError, json.JSONDecodeError, DuplicateKeyError) as error:
+            print(f"proof ledger load failed: {error}", file=sys.stderr)
+            return 1
+        if not isinstance(ledger, dict):
+            print("proof ledger must be a JSON object", file=sys.stderr)
+            return 1
+        obligations = ledger.get("obligations")
+        if not isinstance(obligations, list):
+            print("proof ledger obligations must be an array", file=sys.stderr)
+            return 1
+        cross_ids = [
+            obligation.get("id")
+            for obligation in obligations
+            if isinstance(obligation, dict)
+            and obligation.get("status") == "cross_tool_proved"
+        ]
+        unknown = [
+            obligation_id
+            for obligation_id in cross_ids
+            if obligation_id not in CROSS_TOOL_REFINEMENT_BY_ID
+        ]
+        if unknown:
+            print(
+                "unreviewed cross_tool_proved obligations: " + repr(unknown),
+                file=sys.stderr,
+            )
+            return 1
+        expected = [
+            contract.obligation_id
+            for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+            if contract.obligation_id in cross_ids
+        ]
+        if cross_ids != expected:
+            print(
+                "cross_tool_proved obligations are not in canonical order",
+                file=sys.stderr,
+            )
+            return 1
+        print("\n".join(expected))
+        return 0
     if args.check_production_causal_fifo:
         errors = _production_causal_fifo_source_fidelity_errors()
         if errors:
@@ -17817,9 +18836,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("production persisted-continuation/causal-FIFO seam is source-bound")
         return 0
     if args.write_evidence is not None:
-        if args.evidence is not None:
+        if any(
+            value is not None
+            for value in (
+                args.evidence,
+                args.verus_evidence,
+                args.verus_log,
+                args.cross_tool_evidence,
+            )
+        ):
             print(
-                "--write-evidence cannot be combined with --evidence",
+                "--write-evidence cannot be combined with evidence inputs",
                 file=sys.stderr,
             )
             return 2
@@ -17844,8 +18871,94 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         print(f"wrote Sumeragi v2 proof evidence to {args.write_evidence}")
         return 0
+
+    if args.write_cross_tool_evidence is not None:
+        if args.evidence is None or args.verus_evidence is None:
+            print(
+                "--write-cross-tool-evidence requires --evidence and "
+                "--verus-evidence",
+                file=sys.stderr,
+            )
+            return 2
+        if args.cross_tool_evidence is not None:
+            print(
+                "--write-cross-tool-evidence cannot be combined with "
+                "--cross-tool-evidence",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            ledger = load_ledger(args.ledger)
+            tlaps_evidence = load_ledger(args.evidence)
+            verus_evidence = load_ledger(args.verus_evidence)
+            if not all(
+                isinstance(value, dict)
+                for value in (ledger, tlaps_evidence, verus_evidence)
+            ):
+                raise ValueError("ledger and component evidence must be JSON objects")
+            cross_tool_evidence = build_cross_tool_evidence(
+                ledger,
+                tlaps_evidence=tlaps_evidence,
+                verus_evidence=verus_evidence,
+                verus_log_path=args.verus_log,
+            )
+            args.write_cross_tool_evidence.parent.mkdir(
+                parents=True, exist_ok=True
+            )
+            args.write_cross_tool_evidence.write_text(
+                json.dumps(
+                    cross_tool_evidence,
+                    indent=2,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            DuplicateKeyError,
+            ValueError,
+        ) as error:
+            print(
+                f"cross-tool evidence generation failed: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "wrote Sumeragi v2 cross-tool evidence to "
+            f"{args.write_cross_tool_evidence}"
+        )
+        return 0
+
     if args.evidence is not None and not args.release:
-        print("--evidence is only valid with --release", file=sys.stderr)
+        print(
+            "--evidence is only valid with --release or "
+            "--write-cross-tool-evidence",
+            file=sys.stderr,
+        )
+        return 2
+    if args.verus_evidence is not None and not args.release:
+        print(
+            "--verus-evidence is only valid with --release or "
+            "--write-cross-tool-evidence",
+            file=sys.stderr,
+        )
+        return 2
+    if args.verus_log is not None and not args.release:
+        print(
+            "--verus-log is only valid with --release or "
+            "--write-cross-tool-evidence",
+            file=sys.stderr,
+        )
+        return 2
+    if args.verus_log is not None and args.verus_evidence is None:
+        print("--verus-log requires --verus-evidence", file=sys.stderr)
+        return 2
+    if args.cross_tool_evidence is not None and not args.release:
+        print("--cross-tool-evidence is only valid with --release", file=sys.stderr)
         return 2
     try:
         ledger = load_ledger(args.ledger)
@@ -17856,6 +18969,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("proof ledger must be a JSON object", file=sys.stderr)
         return 1
     evidence: dict[str, Any] | None = None
+    verus_evidence: dict[str, Any] | None = None
+    cross_tool_evidence: dict[str, Any] | None = None
     if args.release:
         if args.evidence is None:
             print("release gate requires --evidence", file=sys.stderr)
@@ -17868,7 +18983,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(evidence, dict):
             print("proof evidence must be a JSON object", file=sys.stderr)
             return 1
-    result = validate_ledger(ledger, release=args.release, evidence=evidence)
+        for label, path in (
+            ("Verus evidence", args.verus_evidence),
+            ("cross-tool evidence", args.cross_tool_evidence),
+        ):
+            if path is None:
+                continue
+            try:
+                loaded = load_ledger(path)
+            except (OSError, json.JSONDecodeError, DuplicateKeyError) as error:
+                print(f"{label} load failed: {error}", file=sys.stderr)
+                return 1
+            if not isinstance(loaded, dict):
+                print(f"{label} must be a JSON object", file=sys.stderr)
+                return 1
+            if label == "Verus evidence":
+                verus_evidence = loaded
+            else:
+                cross_tool_evidence = loaded
+    result = validate_ledger(
+        ledger,
+        release=args.release,
+        evidence=evidence,
+        verus_evidence=verus_evidence,
+        cross_tool_evidence=cross_tool_evidence,
+        verus_log_path=args.verus_log,
+    )
     if result.errors:
         for error in result.errors:
             print(f"error: {error}", file=sys.stderr)

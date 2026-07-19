@@ -27,13 +27,14 @@ use iroha::{
             },
         },
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
-        isi::Register,
+        isi::{Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
         peer::PeerId,
         prelude::FindAccountById,
         query::{
             account::prelude::FindAccounts, block::prelude::FindBlocks, prelude::QueryBuilderExt,
         },
+        transaction::Executable,
     },
 };
 use iroha_test_network::{
@@ -52,6 +53,8 @@ const LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES: usize = 2;
 const DISTINCT_PREPARE_QC_QUEUE_CAPACITY: usize = 512;
 const DISTINCT_PREPARE_QC_BLOCK_CADENCE: Duration = Duration::from_secs(8);
 const DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT: Duration = Duration::from_secs(120);
+const DISTINCT_PREPARE_QC_A_SELECTION_TIMEOUT: Duration = Duration::from_secs(25);
+const DISTINCT_PREPARE_QC_A_RELEASE_BUDGET: Duration = Duration::from_secs(40);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -486,33 +489,45 @@ fn held_prepare_vote_subject(
     subjects
         .into_iter()
         .find_map(|((subject, execution_commitment), votes)| {
-            (votes.len() >= required).then(|| {
-                let selected = votes.into_iter().take(required).collect::<Vec<_>>();
-                let senders = selected
+            if votes.len() < required {
+                return None;
+            }
+            let selected = votes.into_iter().take(required).collect::<Vec<_>>();
+            let senders = selected
+                .iter()
+                .map(|(_, (sender, _, _))| (*sender).clone())
+                .collect::<BTreeSet<_>>();
+            let signers = selected
+                .iter()
+                .map(|(signer, _)| *signer)
+                .collect::<BTreeSet<_>>();
+            let envelope_digests = selected
+                .iter()
+                .map(|(_, (_, _, digest))| *digest)
+                .collect::<Vec<_>>();
+            if senders.len() != required
+                || signers.len() != required
+                || envelope_digests
                     .iter()
-                    .map(|(_, (sender, _, _))| (*sender).clone())
-                    .collect::<BTreeSet<_>>();
-                let signers = selected
-                    .iter()
-                    .map(|(signer, _)| *signer)
-                    .collect::<BTreeSet<_>>();
-                let envelope_digests = selected
-                    .iter()
-                    .map(|(_, (_, _, digest))| *digest)
-                    .collect::<Vec<_>>();
-                let mut sequences = selected
-                    .into_iter()
-                    .map(|(_, (_, sequence, _))| sequence)
-                    .collect::<Vec<_>>();
-                sequences.sort_unstable();
-                HeldVoteSelection {
-                    subject: Some(subject),
-                    execution_commitment: Some(execution_commitment),
-                    senders,
-                    signers,
-                    envelope_digests,
-                    sequences,
-                }
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != required
+            {
+                return None;
+            }
+            let mut sequences = selected
+                .into_iter()
+                .map(|(_, (_, sequence, _))| sequence)
+                .collect::<Vec<_>>();
+            sequences.sort_unstable();
+            Some(HeldVoteSelection {
+                subject: Some(subject),
+                execution_commitment: Some(execution_commitment),
+                senders,
+                signers,
+                envelope_digests,
+                sequences,
             })
         })
 }
@@ -547,6 +562,45 @@ fn held_prepare_certificate_sequences(
             continue;
         }
         digests.push(message.envelope_digest);
+        sequences.push(message.sequence);
+        if sequences.len() == required {
+            sequences.sort_unstable();
+            return Some(sequences);
+        }
+    }
+    None
+}
+
+fn held_timeout_certificate_sequences(
+    ack: &ConsensusMessageControlAck,
+    height: u64,
+    view: u64,
+    allowed_senders: &BTreeSet<PeerId>,
+    expected_subject: Option<&BlockSubject>,
+    expected_execution_commitment: Option<&ExecutionCommitment>,
+    expected_signers: &[ValidatorIndex],
+    required: usize,
+) -> Option<Vec<u64>> {
+    let expected_block_hash = expected_subject.map(|subject| subject.block_hash);
+    let mut senders = BTreeSet::new();
+    let mut digests = BTreeSet::new();
+    let mut sequences = Vec::with_capacity(required);
+    for message in &ack.held {
+        if message.height != Some(height)
+            || message.view != Some(view)
+            || message.kind != ConsensusMessageControlKind::TimeoutCertificate
+            || message.sender != message.authenticated_via
+            || !allowed_senders.contains(&message.sender)
+            || message.subject.as_ref() != expected_subject
+            || message.execution_commitment.as_ref() != expected_execution_commitment
+            || message.block_hash != expected_block_hash
+            || message.signer.is_some()
+            || message.certificate_signers != expected_signers
+            || !senders.insert(message.sender.clone())
+            || !digests.insert(message.envelope_digest)
+        {
+            continue;
+        }
         sequences.push(message.sequence);
         if sequences.len() == required {
             sequences.sort_unstable();
@@ -889,6 +943,29 @@ mod prepare_qc_split_tests {
         }
     }
 
+    fn held_timeout_certificate(
+        sequence: u64,
+        sender: PeerId,
+        reference: Option<QuorumCertificateRef>,
+        certificate_signers: Vec<ValidatorIndex>,
+    ) -> ConsensusMessageControlHeld {
+        ConsensusMessageControlHeld {
+            sequence,
+            authenticated_via: sender.clone(),
+            sender,
+            kind: ConsensusMessageControlKind::TimeoutCertificate,
+            height: Some(HEIGHT),
+            view: Some(FIRST_VIEW),
+            block_hash: reference.map(|reference| reference.subject.block_hash),
+            subject: reference.map(|reference| reference.subject),
+            execution_commitment: reference.map(|reference| reference.execution_commitment),
+            signer: None,
+            certificate_signers,
+            envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
+            size_bytes: 96,
+        }
+    }
+
     #[test]
     fn classifies_prepare_qc_partitions_and_held_evidence() {
         let reproposed = snapshot(SECOND_VIEW, 0x40, 0x50);
@@ -997,6 +1074,24 @@ mod prepare_qc_split_tests {
             .is_none()
         );
 
+        let mut duplicate_digest = held_prepare_vote(12, peer_ids[1].clone(), 1, first_vote);
+        duplicate_digest.envelope_digest = hash(11);
+        assert!(
+            held_prepare_vote_subject(
+                &ack(vec![
+                    held_prepare_vote(11, peer_ids[0].clone(), 0, first_vote),
+                    duplicate_digest,
+                ]),
+                HEIGHT,
+                FIRST_VIEW,
+                &allowed,
+                None,
+                2,
+            )
+            .is_none(),
+            "a forged duplicate envelope digest cannot count as two signed votes"
+        );
+
         let timeout_ack = ack(vec![
             held_timeout_vote(5, peer_ids[0].clone(), 0),
             held_timeout_vote(6, peer_ids[1].clone(), 1),
@@ -1038,11 +1133,47 @@ mod prepare_qc_split_tests {
             Some(vec![7]),
         );
 
-        let mut relayed = held_timeout_vote(8, peer_ids[0].clone(), 0);
+        let timeout_certificate_ack = ack(vec![
+            held_timeout_certificate(8, peer_ids[0].clone(), None, certificate_signers.clone()),
+            held_timeout_certificate(
+                9,
+                peer_ids[1].clone(),
+                Some(first_vote),
+                certificate_signers.clone(),
+            ),
+        ]);
+        assert_eq!(
+            held_timeout_certificate_sequences(
+                &timeout_certificate_ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([peer_ids[0].clone()]),
+                None,
+                None,
+                &certificate_signers,
+                1,
+            ),
+            Some(vec![8]),
+        );
+        assert_eq!(
+            held_timeout_certificate_sequences(
+                &timeout_certificate_ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([peer_ids[1].clone()]),
+                Some(&first_vote.subject),
+                Some(&first_vote.execution_commitment),
+                &certificate_signers,
+                1,
+            ),
+            Some(vec![9]),
+        );
+
+        let mut relayed = held_timeout_vote(10, peer_ids[0].clone(), 0);
         relayed.authenticated_via = peer_ids[2].clone();
         assert!(
             held_no_high_timeout_vote_selection(
-                &ack(vec![relayed, held_timeout_vote(9, peer_ids[1].clone(), 1)]),
+                &ack(vec![relayed, held_timeout_vote(11, peer_ids[1].clone(), 1)]),
                 HEIGHT,
                 FIRST_VIEW,
                 &timeout_allowed,
@@ -1055,6 +1186,12 @@ mod prepare_qc_split_tests {
     #[test]
     fn exact_prepare_qc_requires_both_count_and_power_quorum() {
         assert!(strict_dual_quorum(3, 3, 3, 4));
+        // Three distinct signers satisfy the count threshold but their power
+        // does not strictly exceed two thirds of a weighted roster.
+        assert!(!strict_dual_quorum(3, 3, 3, 10));
+        // Two high-power signers exceed the power threshold but cannot replace
+        // the independently required third identity.
+        assert!(!strict_dual_quorum(2, 3, 8, 10));
         assert!(!strict_dual_quorum(2, 3, 4, 4));
         assert!(!strict_dual_quorum(3, 3, 2, 3));
         assert!(!strict_dual_quorum(3, 3, 2, 2));
@@ -2341,6 +2478,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             "distinct-subject PrepareQC regression requires four voting validators"
         );
         let peer_ids = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+        let validator_by_peer = validator_indices_by_peer(&peers)?;
         let expected_rules = peers
             .iter()
             .enumerate()
@@ -2395,6 +2533,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             "distinct-subject regression requires the canonical four-validator NPoS dual quorum: {initial:?}"
         );
         validate_open_round(&initial, height, first_view)?;
+        let view_zero_release_started = Instant::now();
 
         let first_leader_validator = initial[0].leader;
         ensure!(
@@ -2449,7 +2588,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         let first_prepare = wait_for_control_selection(
             &peers[first_lock_index],
             "two distinct view-zero Prepare votes for one subject",
-            STATUS_TIMEOUT,
+            DISTINCT_PREPARE_QC_A_SELECTION_TIMEOUT,
             |ack| {
                 held_prepare_vote_subject(
                     ack,
@@ -2481,6 +2620,10 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         validate_open_round(&immediately_before_a, height, first_view).wrap_err(
             "view zero closed after A votes were retained but before their exact release",
         )?;
+        ensure!(
+            view_zero_release_started.elapsed() < DISTINCT_PREPARE_QC_A_RELEASE_BUDGET,
+            "view-zero causal release exceeded its explicit pre-timeout budget before the release fence"
+        );
         release_exact_control_sequences(
             &peers[first_lock_index],
             &expected_rules[first_lock_index],
@@ -2489,6 +2632,24 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             CONTROL_TIMEOUT,
         )
         .await?;
+        ensure!(
+            view_zero_release_started.elapsed() < DISTINCT_PREPARE_QC_A_RELEASE_BUDGET,
+            "view-zero causal release exceeded its explicit pre-timeout budget while crossing the release fence"
+        );
+        let immediately_after_a = fetch_v2_status(&peers[first_lock_index]).await?;
+        ensure!(
+            immediately_after_a
+                .locked_prepare_qc
+                .as_ref()
+                .is_some_and(|qc| {
+                    qc.reference.round.height == height
+                        && qc.reference.round.view == first_view
+                        && qc.reference.subject == first_subject
+                        && qc.reference.execution_commitment == first_execution_commitment
+                })
+                || status_round_is_open(&immediately_after_a, height, first_view),
+            "view-zero timeout raced the exact A release fence before the controlled receiver could install its QC: {immediately_after_a:?}"
+        );
 
         let first_locked = wait_for_v2_status_condition(
             &peers,
@@ -2543,6 +2704,25 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             &first_locked[first_lock_index],
             &first_reference,
         )?;
+        let first_certificate_sender = BTreeSet::from([peer_ids[first_lock_index].clone()]);
+        let old_certificate_release = wait_for_control_selection(
+            &peers[first_qc_observer],
+            "the authenticated view-zero PrepareQC broadcast from its sole receiver",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_prepare_certificate_sequences(
+                    ack,
+                    height,
+                    first_view,
+                    &first_certificate_sender,
+                    &first_subject,
+                    &first_execution_commitment,
+                    &first_qc_signers,
+                    1,
+                )
+            },
+        )
+        .await?;
         let unsafe_proposal_before = ignore_count(
             &first_locked[first_lock_index],
             SumeragiV2IgnoreReason::UnsafeProposal,
@@ -2668,6 +2848,64 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 );
             }
         }
+
+        let unlocked_timeout_senders = unlocked
+            .iter()
+            .map(|index| peer_ids[*index].clone())
+            .collect::<BTreeSet<_>>();
+        let unlocked_timeout_signers = unlocked_validator_indices
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let _no_high_timeout_certificates = wait_for_control_selection(
+            &peers[first_lock_index],
+            "the three no-high-QC TimeoutCertificates with the exact unlocked signer set",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_timeout_certificate_sequences(
+                    ack,
+                    height,
+                    first_view,
+                    &unlocked_timeout_senders,
+                    None,
+                    None,
+                    &unlocked_timeout_signers,
+                    unlocked_timeout_senders.len(),
+                )
+            },
+        )
+        .await?;
+
+        let mut locked_timeout_signers = timeout_releases[first_lock_index].signers.clone();
+        locked_timeout_signers.insert(
+            *validator_by_peer
+                .get(&peer_ids[first_lock_index])
+                .expect("the A-locked peer belongs to the frozen roster"),
+        );
+        ensure!(
+            locked_timeout_signers.len() == 3,
+            "the A-preserving TC did not combine the locked validator with exactly two released remote votes: released={:?}, complete={locked_timeout_signers:?}",
+            timeout_releases[first_lock_index],
+        );
+        let locked_timeout_signers = locked_timeout_signers.into_iter().collect::<Vec<_>>();
+        let _locked_timeout_certificate = wait_for_control_selection(
+            &peers[second_leader_index],
+            "the A-preserving TimeoutCertificate with its exact three signer indices",
+            STATUS_TIMEOUT,
+            |ack| {
+                held_timeout_certificate_sequences(
+                    ack,
+                    height,
+                    first_view,
+                    &BTreeSet::from([peer_ids[first_lock_index].clone()]),
+                    Some(&first_subject),
+                    Some(&first_execution_commitment),
+                    &locked_timeout_signers,
+                    1,
+                )
+            },
+        )
+        .await?;
 
         let second_leader_prepare = wait_for_control_selection(
             &peers[second_leader_index],
@@ -2872,25 +3110,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         )
         .await?;
 
-        let first_certificate_sender = BTreeSet::from([peer_ids[first_lock_index].clone()]);
-        let old_certificate_release = wait_for_control_selection(
-            &peers[first_qc_observer],
-            "the authenticated view-zero PrepareQC broadcast from its sole receiver",
-            STATUS_TIMEOUT,
-            |ack| {
-                held_prepare_certificate_sequences(
-                    ack,
-                    height,
-                    first_view,
-                    &first_certificate_sender,
-                    &first_subject,
-                    &first_execution_commitment,
-                    &first_qc_signers,
-                    1,
-                )
-            },
-        )
-        .await?;
         release_exact_control_sequences(
             &peers[first_qc_observer],
             &expected_rules[first_qc_observer],
@@ -2997,6 +3216,16 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             .ensure_blocks_with(|block_height| block_height.total >= height)
             .await
             .wrap_err("healed distinct-subject validators did not finalize")?;
+        let successor = wait_for_exact_applied_successor(&peers, height, STATUS_TIMEOUT).await?;
+        validate_v2_status_set(&successor, VALIDATOR_COUNT)?;
+        for snapshot in &successor {
+            validate_applied_successor_witness(snapshot, height)?;
+            ensure!(
+                snapshot.last_committed_height == height,
+                "validator {} advanced beyond the exact controlled application witness: {snapshot:?}",
+                snapshot.peer,
+            );
+        }
         let committed_hashes = try_join_all(
             peers
                 .iter()
@@ -3034,17 +3263,28 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 &second_reference,
             )?;
         }
+        let frozen_context = &finality_proofs[0].finality_artifact.height_context;
+        validate_exact_prepare_signers_against_frozen_context(
+            &first_locked[first_lock_index],
+            &first_reference,
+            &first_qc_signers,
+            frozen_context,
+        )?;
+        for receiver_index in second_group {
+            validate_exact_prepare_signers_against_frozen_context(
+                &second_certified[receiver_index],
+                &second_reference,
+                &unlocked_certificate_signers,
+                frozen_context,
+            )?;
+        }
+        assert_account_registration_in_exact_block(&peers, height, &second_account).await?;
         wait_for_accounts_visible(
             &peers,
             &[first_account, second_account],
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-        let successor = wait_for_common_awaiting_v2_round(&peers, height, STATUS_TIMEOUT).await?;
-        validate_v2_status_set(&successor, VALIDATOR_COUNT)?;
-        for snapshot in &successor {
-            validate_applied_successor_witness(snapshot, height)?;
-        }
         Ok(())
     }
     .await;
@@ -3186,6 +3426,30 @@ async fn wait_for_common_awaiting_v2_round(
         }
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
+}
+
+async fn wait_for_exact_applied_successor(
+    peers: &[NetworkPeer],
+    committed_height: u64,
+    timeout: Duration,
+) -> Result<Vec<V2StatusSnapshot>> {
+    let successor_height = committed_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("controlled committed height cannot have a successor"))?;
+    wait_for_v2_status_condition(
+        peers,
+        "the exact controlled decision applied before another height committed",
+        timeout,
+        |snapshots| {
+            snapshots.iter().all(|snapshot| {
+                snapshot.last_committed_height == committed_height
+                    && snapshot.height == successor_height
+                    && status_is_awaiting_proposal(&snapshot.phase)
+                    && snapshot.body_state == SumeragiV2BodyState::Missing
+            })
+        },
+    )
+    .await
 }
 
 fn status_is_awaiting_proposal(phase: &Value) -> bool {
@@ -3340,6 +3604,51 @@ async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<Str
     .wrap_err_with(|| format!("block-hash query panicked for {}", peer.mnemonic()))?
 }
 
+async fn assert_account_registration_in_exact_block(
+    peers: &[NetworkPeer],
+    height: u64,
+    account_id: &AccountId,
+) -> Result<()> {
+    try_join_all(peers.iter().map(|peer| {
+        let client = peer.client();
+        let peer_name = peer.mnemonic().to_owned();
+        let account_id = account_id.clone();
+        async move {
+            task::spawn_blocking(move || {
+                let blocks = client
+                    .query(FindBlocks)
+                    .execute_all()
+                    .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
+                let block = blocks
+                    .iter()
+                    .find(|block| block.header().height().get() == height)
+                    .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))?;
+                let registered = block.external_transactions().any(|transaction| {
+                    let Executable::Instructions(instructions) = transaction.instructions() else {
+                        return false;
+                    };
+                    instructions.iter().any(|instruction| {
+                        matches!(
+                            instruction.as_any().downcast_ref::<RegisterBox>(),
+                            Some(RegisterBox::Account(register))
+                                if register.object().id() == &account_id
+                        )
+                    })
+                });
+                ensure!(
+                    registered,
+                    "{peer_name} height-{height} block does not contain the unique subject-B account registration {account_id}"
+                );
+                Ok::<(), eyre::Report>(())
+            })
+            .await
+            .wrap_err("exact block application query panicked")?
+        }
+    }))
+    .await?;
+    Ok(())
+}
+
 async fn fetch_bridge_finality_proof(
     peer: &NetworkPeer,
     height: u64,
@@ -3442,6 +3751,70 @@ fn validate_exact_finality_proof(
     Ok(())
 }
 
+fn validate_exact_prepare_signers_against_frozen_context(
+    snapshot: &V2StatusSnapshot,
+    expected: &QuorumCertificateRef,
+    exact_signers: &[ValidatorIndex],
+    context: &iroha::data_model::block::consensus_v2::HeightContext,
+) -> Result<()> {
+    ensure!(
+        context.id() == expected.round.context_id && context.height == expected.round.height,
+        "frozen height context does not govern the expected PrepareQC: context={:?}, expected={expected:?}",
+        context.id(),
+    );
+    ensure!(
+        !exact_signers.is_empty() && !exact_signers.windows(2).any(|pair| pair[0] >= pair[1]),
+        "exact PrepareQC signer evidence is empty, duplicated, or reordered: {exact_signers:?}"
+    );
+    let signer_count = u32::try_from(exact_signers.len())
+        .wrap_err("PrepareQC signer count does not fit the wire type")?;
+    let signed_power = exact_signers.iter().try_fold(0_u64, |power, signer| {
+        let index = usize::try_from(*signer).wrap_err("PrepareQC signer does not fit usize")?;
+        let signer_power = context
+            .roster
+            .get(index)
+            .ok_or_else(|| eyre!("PrepareQC signer {signer} is outside the frozen roster"))?
+            .power;
+        power
+            .checked_add(signer_power)
+            .ok_or_else(|| eyre!("PrepareQC signed power overflowed"))
+    })?;
+    ensure!(
+        strict_dual_quorum(
+            signer_count,
+            context.quorum.min_signers,
+            signed_power,
+            context.quorum.total_power,
+        ),
+        "exact held Prepare envelopes do not satisfy the frozen count-and-power quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
+        context.quorum,
+    );
+    let matching = snapshot
+        .prepare_quorums
+        .iter()
+        .filter(|quorum| {
+            quorum.round == expected.round
+                && quorum.subject == expected.subject
+                && quorum.execution_commitment == expected.execution_commitment
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matching.len() == 1,
+        "validator {} does not expose one exact Prepare pool for signer reconstruction: {matching:?}",
+        snapshot.peer,
+    );
+    let reported = matching[0];
+    ensure!(
+        reported.signer_count == signer_count
+            && reported.signed_power == signed_power
+            && reported.min_signers == context.quorum.min_signers
+            && reported.total_power == context.quorum.total_power,
+        "validator {} reported Prepare quorum power that differs from the exact held certificate signers: reported={reported:?}, signers={exact_signers:?}, recomputed_power={signed_power}",
+        snapshot.peer,
+    );
+    Ok(())
+}
+
 async fn wait_for_control_selection<T>(
     peer: &NetworkPeer,
     description: &str,
@@ -3475,10 +3848,16 @@ async fn wait_for_control_selection<T>(
                         .map(|message| (
                             message.sequence,
                             message.sender.clone(),
+                            message.authenticated_via.clone(),
                             message.kind,
                             message.height,
                             message.view,
                             message.block_hash,
+                            message.subject,
+                            message.execution_commitment,
+                            message.signer,
+                            message.certificate_signers.clone(),
+                            message.envelope_digest,
                         ))
                         .collect::<Vec<_>>()
                 )
