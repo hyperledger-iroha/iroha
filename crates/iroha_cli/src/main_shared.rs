@@ -89,6 +89,7 @@ fn format_gas_limit_validation_error(
     let executable_label = match executable {
         Executable::Instructions(_) => "instruction transactions",
         Executable::ContractCall(_) => "contract-call transactions",
+        Executable::Batch(_) => "mixed executable batches",
         Executable::Ivm(_) | Executable::IvmProved(_) => "IVM transactions",
     };
     match err {
@@ -619,6 +620,14 @@ trait RunContext {
                     )
                 }
                 Executable::IvmProved(proved)
+            }
+            Executable::Batch(items) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with mixed executable batches"
+                    )
+                }
+                Executable::Batch(items)
             }
             Executable::Instructions(instructions) => {
                 let mut out = instructions.into_vec();
@@ -6703,6 +6712,11 @@ mod trigger {
                 outer.insert("IvmProved".into(), Value::Object(inner));
                 Value::Object(outer)
             }
+            Executable::Batch(items) => {
+                let mut outer = BTreeMap::<String, Value>::new();
+                outer.insert("Batch".into(), to_value(items)?);
+                Value::Object(outer)
+            }
         };
         map.insert("executable".into(), executable_value);
 
@@ -10335,6 +10349,7 @@ transaction_status_timeout = "77s"
             Executable::ContractCall(_) => panic!("expected instructions"),
             Executable::Ivm(_) => panic!("expected instructions"),
             Executable::IvmProved(_) => panic!("expected instructions"),
+            Executable::Batch(_) => panic!("expected instructions"),
         };
         assert_eq!(instructions.len(), 1);
         let log = instructions[0]

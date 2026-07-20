@@ -88,6 +88,7 @@ public final class SccpClientExactTests {
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
+                      .setInstructions(Collections.emptyList())
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -102,6 +103,7 @@ public final class SccpClientExactTests {
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 9L))
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
+                      .setInstructions(Collections.emptyList())
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode fee-bound SCCP transaction fixture", ex);
@@ -288,6 +290,7 @@ public final class SccpClientExactTests {
                   TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
+                      .setInstructions(Collections.emptyList())
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -373,6 +376,7 @@ public final class SccpClientExactTests {
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                               .setAuthority(AUTHORITY)
                               .setCreationTimeMs(7)
+                              .setInstructions(Collections.emptyList())
                               .build()));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -399,6 +403,7 @@ public final class SccpClientExactTests {
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                               .setAuthority(OTHER_AUTHORITY)
                               .setCreationTimeMs(7)
+                              .setInstructions(Collections.emptyList())
                               .build()));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode mismatched SCCP authority fixture", ex);
@@ -1222,7 +1227,12 @@ public final class SccpClientExactTests {
   private static void detachedSigningResponseRejectsCrossFamilyLabels() throws Exception {
     final byte[] transactionBytes =
         new NoritoJavaCodecAdapter()
-            .encodeTransaction(TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setCreationTimeMs(10).build());
+            .encodeTransaction(
+                TransactionPayload.builder()
+                    .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setCreationTimeMs(10)
+                    .setInstructions(Collections.emptyList())
+                    .build());
     final Map<String, Object> response = map();
     response.put("submitted", false);
     response.put("payload_kind", "transfer");

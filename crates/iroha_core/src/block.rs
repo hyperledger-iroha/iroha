@@ -369,6 +369,12 @@ const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     )
 }
 
+/// Return whether the executable must run once against the scheduler's live state.
+#[must_use]
+const fn uses_live_batch_scheduler(executable: &Executable) -> bool {
+    matches!(executable, Executable::Batch(_))
+}
+
 fn missing_authority_requires_rejection(
     state_tx: &crate::state::StateTransaction<'_, '_>,
     tx: &SignedTransaction,
@@ -425,7 +431,7 @@ mod overlay_error_tests {
     use iroha_data_model::{
         ValidationFail,
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
-        transaction::{IvmBytecode, IvmProved},
+        transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
 
     use super::*;
@@ -468,6 +474,23 @@ mod overlay_error_tests {
 
         let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
         assert!(!uses_live_vm_overlay_scheduler(&instructions));
+    }
+
+    #[test]
+    fn mixed_batch_uses_live_scheduler_barrier_path() {
+        let batch = Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(InstructionBox::from(
+                iroha_data_model::isi::Log::new(
+                    iroha_data_model::level::Level::INFO,
+                    "live batch".to_owned(),
+                ),
+            ))]
+            .into(),
+        );
+        assert!(uses_live_batch_scheduler(&batch));
+
+        let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        assert!(!uses_live_batch_scheduler(&instructions));
     }
 }
 
@@ -1533,7 +1556,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{charge_fees_for_applied_overlay_with_encoded_len, configure_executor_fuel_budget},
+    executor::{
+        charge_fees_for_applied_overlay_with_encoded_len, charge_fees_for_rejected_live_batch,
+        configure_executor_fuel_budget,
+    },
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -4190,6 +4216,56 @@ pub(crate) mod valid {
         .map_err(TransactionRejectionReason::Validation)?;
         fee_tx.apply();
         Ok(())
+    }
+
+    fn charge_rejected_live_batch_fees(
+        state_block_mut: &mut StateBlock<'_>,
+        tx: &iroha_data_model::transaction::SignedTransaction,
+        authority: &AccountId,
+        gas_used: u64,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> Result<(), TransactionRejectionReason> {
+        if !rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+            return Ok(());
+        }
+
+        let mut fee_tx = state_block_mut.transaction();
+        fee_tx.current_lane_id = Some(lane_id);
+        fee_tx.current_dataspace_id = Some(dataspace_id);
+        fee_tx.world.current_dataspace_id = Some(dataspace_id);
+        fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        fee_tx.current_tx_hash = Some(tx.hash());
+
+        charge_fees_for_rejected_live_batch(&mut fee_tx, authority, tx, gas_used)
+            .map_err(TransactionRejectionReason::Validation)?;
+        fee_tx.apply();
+        Ok(())
+    }
+
+    fn rejected_live_batch_gas_is_accountable(
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> bool {
+        gas_used > 0
+            && !matches!(
+                rejection_reason,
+                TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(_)
+                )
+            )
+    }
+
+    fn account_rejected_live_batch_gas(
+        state_block_mut: &mut StateBlock<'_>,
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) {
+        if rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+            state_block_mut.gas_used_in_block =
+                state_block_mut.gas_used_in_block.saturating_add(gas_used);
+        }
     }
 
     /// Block that was validated and accepted.
@@ -11253,12 +11329,21 @@ pub(crate) mod valid {
                 cache_idx: usize,
             }
 
+            #[derive(Clone)]
+            enum PreparedBlockExecution {
+                Overlay(PreparedBlockOverlay),
+                /// Mixed batches are never detached, rebuilt, merged, or quarantined.
+                // TODO: Route classified batches through quarantine once that lane can preserve
+                // the global live-state barrier without rebuilding or replaying the batch.
+                LiveBatch,
+            }
+
             let capture_vm_access_log = |tx: &SignedTransaction| {
                 dynamic_prepass || uses_live_vm_overlay_scheduler(tx.instructions())
             };
 
             let mut prepared_overlays: Vec<
-                Result<PreparedBlockOverlay, crate::pipeline::overlay::OverlayBuildError>,
+                Result<PreparedBlockExecution, crate::pipeline::overlay::OverlayBuildError>,
             > = vec![Err(crate::pipeline::overlay::OverlayBuildError::IvmHeaderParse); txs.len()];
             // Normal lane overlays
             if build_parallel && workers > 1 {
@@ -11268,8 +11353,14 @@ pub(crate) mod valid {
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(i, slot)| {
+                                let tx = txs[i];
+                                if uses_live_batch_scheduler(tx.instructions()) {
+                                    if stateless_rejections[i].is_none() {
+                                        *slot = Ok(PreparedBlockExecution::LiveBatch);
+                                    }
+                                    return;
+                                }
                                 if !is_quarantine[i] && stateless_rejections[i].is_none() {
-                                    let tx = &txs[i];
                                     let metadata =
                                         crate::pipeline::overlay::resolve_streaming_metadata(
                                             state_block,
@@ -11308,7 +11399,7 @@ pub(crate) mod valid {
                                                     prepared.access_log.as_ref(),
                                                     state_block,
                                                 );
-                                            PreparedBlockOverlay {
+                                            PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                                 overlay: Arc::new(prepared.overlay),
                                                 access_log: prepared.access_log,
                                                 durable_state_reads,
@@ -11318,7 +11409,7 @@ pub(crate) mod valid {
                                                     .prepared_argument_record,
                                                 prepared_contract: prepared.prepared_contract,
                                                 cache_idx,
-                                            }
+                                            })
                                         });
                                 }
                             })
@@ -11328,8 +11419,14 @@ pub(crate) mod valid {
                         .par_iter_mut()
                         .enumerate()
                         .for_each(|(i, slot)| {
+                            let tx = txs[i];
+                            if uses_live_batch_scheduler(tx.instructions()) {
+                                if stateless_rejections[i].is_none() {
+                                    *slot = Ok(PreparedBlockExecution::LiveBatch);
+                                }
+                                return;
+                            }
                             if !is_quarantine[i] && stateless_rejections[i].is_none() {
-                                let tx = &txs[i];
                                 let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                                     state_block,
                                     tx.authority(),
@@ -11364,7 +11461,7 @@ pub(crate) mod valid {
                                         prepared.access_log.as_ref(),
                                         state_block,
                                     );
-                                    PreparedBlockOverlay {
+                                    PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                         overlay: Arc::new(prepared.overlay),
                                         access_log: prepared.access_log,
                                         durable_state_reads,
@@ -11373,13 +11470,19 @@ pub(crate) mod valid {
                                         prepared_argument_record: prepared.prepared_argument_record,
                                         prepared_contract: prepared.prepared_contract,
                                         cache_idx,
-                                    }
+                                    })
                                 });
                             }
                         });
                 }
             } else {
                 for (i, tx) in txs.iter().enumerate() {
+                    if uses_live_batch_scheduler(tx.instructions()) {
+                        if stateless_rejections[i].is_none() {
+                            prepared_overlays[i] = Ok(PreparedBlockExecution::LiveBatch);
+                        }
+                        continue;
+                    }
                     if !is_quarantine[i] && stateless_rejections[i].is_none() {
                         let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                             state_block,
@@ -11412,7 +11515,7 @@ pub(crate) mod valid {
                                     prepared.access_log.as_ref(),
                                     state_block,
                                 );
-                                PreparedBlockOverlay {
+                                PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                     overlay: Arc::new(prepared.overlay),
                                     access_log: prepared.access_log,
                                     durable_state_reads,
@@ -11421,13 +11524,16 @@ pub(crate) mod valid {
                                     prepared_argument_record: prepared.prepared_argument_record,
                                     prepared_contract: prepared.prepared_contract,
                                     cache_idx: 0,
-                                }
+                                })
                             });
                     }
                 }
             }
             // Quarantine lane overlays (caps): build only for allowed; mark overflow as error
             for (i, tx) in txs.iter().enumerate() {
+                if uses_live_batch_scheduler(tx.instructions()) {
+                    continue;
+                }
                 if is_quarantine[i] {
                     if quarantine_overflow.contains(&i) {
                         prepared_overlays[i] =
@@ -11458,15 +11564,17 @@ pub(crate) mod valid {
                                 &mut ivm_cache,
                                 None,
                             )
-                            .map(|prepared| PreparedBlockOverlay {
-                                overlay: Arc::new(prepared.overlay),
-                                access_log: prepared.access_log,
-                                durable_state_reads: None,
-                                access_fence: prepared.access_fence,
-                                force_live_rebuild: prepared.force_live_rebuild,
-                                prepared_argument_record: prepared.prepared_argument_record,
-                                prepared_contract: prepared.prepared_contract,
-                                cache_idx: 0,
+                            .map(|prepared| {
+                                PreparedBlockExecution::Overlay(PreparedBlockOverlay {
+                                    overlay: Arc::new(prepared.overlay),
+                                    access_log: prepared.access_log,
+                                    durable_state_reads: None,
+                                    access_fence: prepared.access_fence,
+                                    force_live_rebuild: prepared.force_live_rebuild,
+                                    prepared_argument_record: prepared.prepared_argument_record,
+                                    prepared_contract: prepared.prepared_contract,
+                                    cache_idx: 0,
+                                })
                             });
                     }
                 }
@@ -11514,13 +11622,19 @@ pub(crate) mod valid {
                     return (crate::pipeline::access::AccessSet::new(), None);
                 }
                 let (mut set, mut source) = match &prepared_overlays[idx] {
-                    Ok(prepared) => derive_for_prepared_overlay_with_source(
-                        tx,
-                        &*state_block,
-                        prepared.overlay.as_ref(),
-                        prepared.prepared_contract.as_ref(),
-                        prepared.access_log.as_ref(),
-                        dynamic_prepass,
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        derive_for_prepared_overlay_with_source(
+                            tx,
+                            &*state_block,
+                            prepared.overlay.as_ref(),
+                            prepared.prepared_contract.as_ref(),
+                            prepared.access_log.as_ref(),
+                            dynamic_prepass,
+                        )
+                    }
+                    Ok(PreparedBlockExecution::LiveBatch) => (
+                        crate::pipeline::access::AccessSet::global(),
+                        Some(AccessSetSource::ConservativeFallback),
                     ),
                     Err(_) => derive_for_transaction_with_source(
                         tx,
@@ -11528,7 +11642,7 @@ pub(crate) mod valid {
                         crate::pipeline::access::IvmStrategy::Conservative,
                     ),
                 };
-                if let Ok(prepared) = &prepared_overlays[idx]
+                if let Ok(PreparedBlockExecution::Overlay(prepared)) = &prepared_overlays[idx]
                     && !matches!(
                         source,
                         Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
@@ -11617,16 +11731,18 @@ pub(crate) mod valid {
                 timings.execution_tx_access_ms = to_ms(start.elapsed());
             }
 
-            let overlays: Vec<Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>> =
-                prepared_overlays
-                    .iter()
-                    .map(|result| {
-                        result
-                            .as_ref()
-                            .map(|prepared| Arc::clone(&prepared.overlay))
-                            .map_err(Clone::clone)
-                    })
-                    .collect();
+            let overlays: Vec<
+                Option<Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>>,
+            > = prepared_overlays
+                .iter()
+                .map(|result| match result {
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        Some(Ok(Arc::clone(&prepared.overlay)))
+                    }
+                    Ok(PreparedBlockExecution::LiveBatch) => None,
+                    Err(err) => Some(Err(err.clone())),
+                })
+                .collect();
 
             // VM overlays are prepared from a block-start snapshot. Before a
             // sequential merge, retain the cached overlay only while every
@@ -11649,7 +11765,7 @@ pub(crate) mod valid {
                 let is_vm = uses_live_vm_overlay_scheduler(tx.instructions());
                 let (stale_durable_read, force_live_rebuild, cache_idx, prepared_argument_record) =
                     match prepared_overlays[idx].as_ref() {
-                        Ok(prepared) => (
+                        Ok(PreparedBlockExecution::Overlay(prepared)) => (
                             prepared
                                 .durable_state_reads
                                 .as_ref()
@@ -11658,6 +11774,11 @@ pub(crate) mod valid {
                             prepared.cache_idx,
                             prepared.prepared_argument_record.clone(),
                         ),
+                        Ok(PreparedBlockExecution::LiveBatch) => {
+                            return Err(crate::pipeline::overlay::OverlayBuildError::ContractCall(
+                                "mixed batch reached the overlay rebuild path".to_owned(),
+                            ));
+                        }
                         Err(err) if is_vm && err.may_change_with_live_state() => (
                             false,
                             true,
@@ -11668,10 +11789,17 @@ pub(crate) mod valid {
                     };
                 let rebuild_quarantined_vm = is_quarantine[idx] && is_vm;
                 if !stale_durable_read && !force_live_rebuild && !rebuild_quarantined_vm {
-                    return prepared_overlays[idx]
-                        .as_ref()
-                        .map(|prepared| Arc::clone(&prepared.overlay))
-                        .map_err(Clone::clone);
+                    return match prepared_overlays[idx].as_ref() {
+                        Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                            Ok(Arc::clone(&prepared.overlay))
+                        }
+                        Ok(PreparedBlockExecution::LiveBatch) => {
+                            Err(crate::pipeline::overlay::OverlayBuildError::ContractCall(
+                                "mixed batch reached the overlay reuse path".to_owned(),
+                            ))
+                        }
+                        Err(err) => Err(err.clone()),
+                    };
                 }
 
                 let accounts = state_ro.accounts_snapshot();
@@ -12027,7 +12155,7 @@ pub(crate) mod valid {
                 }
 
                 for (idx, overlay_result) in overlays.iter().enumerate() {
-                    if let Ok(overlay) = overlay_result {
+                    if let Some(Ok(overlay)) = overlay_result {
                         if overlay.is_empty() {
                             continue;
                         }
@@ -12197,6 +12325,104 @@ pub(crate) mod valid {
                 );
                 tx_results[idx] = Some(result);
             };
+
+            let execute_live_batch = |state_block_mut: &mut StateBlock<'_>,
+                                      idx: usize|
+             -> TransactionResultInner {
+                let tx = txs[idx];
+                debug_assert!(uses_live_batch_scheduler(tx.instructions()));
+                let authority = tx.authority().clone();
+                let executable_items = match tx.instructions() {
+                    Executable::Batch(items) => items.len(),
+                    _ => 0,
+                };
+                let mut state_tx = state_block_mut.transaction();
+                state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
+                state_tx.current_dataspace_id = Some(routing_decisions[idx].dataspace_id);
+                state_tx.world.current_dataspace_id = Some(routing_decisions[idx].dataspace_id);
+                state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(
+                    prepared_txs[idx].metadata.entrypoint_hash,
+                ));
+                state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+
+                if missing_authority_requires_rejection(
+                    &state_tx,
+                    tx,
+                    &authority,
+                    executable_items,
+                    block.header().is_genesis(),
+                ) {
+                    return Err(TransactionRejectionReason::AccountDoesNotExist(
+                        iroha_data_model::query::error::FindError::Account(authority),
+                    ));
+                }
+                let admission = validate_block_transaction_admission(
+                    &mut state_tx,
+                    tx,
+                    routing_decisions[idx],
+                )?;
+                let executor = state_tx.world.executor.clone();
+                let mut ivm_cache = overlay_caches[0].lock();
+                let execution_result = executor.execute_transaction(
+                    &mut state_tx,
+                    &authority,
+                    tx.clone(),
+                    &mut ivm_cache,
+                );
+                drop(ivm_cache);
+                if let Err(error) = execution_result {
+                    let rejection_reason = TransactionRejectionReason::Validation(error);
+                    let gas_used = state_tx.last_tx_gas_used;
+                    drop(state_tx);
+                    let fee_result = charge_rejected_live_batch_fees(
+                        state_block_mut,
+                        tx,
+                        &authority,
+                        gas_used,
+                        routing_decisions[idx].lane_id,
+                        routing_decisions[idx].dataspace_id,
+                        &rejection_reason,
+                    );
+                    account_rejected_live_batch_gas(state_block_mut, gas_used, &rejection_reason);
+                    return match fee_result {
+                        Ok(()) => Err(rejection_reason),
+                        Err(fee_error) => Err(fee_error),
+                    };
+                }
+                let trigger_sequence = match state_tx.execute_data_triggers_dfs(&authority) {
+                    Ok(sequence) => sequence,
+                    Err(rejection_reason) => {
+                        let gas_used = state_tx.last_tx_gas_used;
+                        drop(state_tx);
+                        let fee_result = charge_rejected_live_batch_fees(
+                            state_block_mut,
+                            tx,
+                            &authority,
+                            gas_used,
+                            routing_decisions[idx].lane_id,
+                            routing_decisions[idx].dataspace_id,
+                            &rejection_reason,
+                        );
+                        account_rejected_live_batch_gas(
+                            state_block_mut,
+                            gas_used,
+                            &rejection_reason,
+                        );
+                        return match fee_result {
+                            Ok(()) => Err(rejection_reason),
+                            Err(fee_error) => Err(fee_error),
+                        };
+                    }
+                };
+                commit_stateful_admission_sequence(&mut state_tx, &admission)?;
+                let gas_used = state_tx.last_tx_gas_used;
+                state_tx.apply();
+                if gas_used > 0 {
+                    state_block_mut.gas_used_in_block =
+                        state_block_mut.gas_used_in_block.saturating_add(gas_used);
+                }
+                Ok(trigger_sequence)
+            };
             if let Some(start) = apply_setup_start {
                 apply_setup_ms = to_ms(start.elapsed());
             }
@@ -12246,7 +12472,10 @@ pub(crate) mod valid {
                             record_result(idx, Err(reason));
                             continue;
                         }
-                        if idx < is_quarantine.len() && is_quarantine[idx] {
+                        if idx < is_quarantine.len()
+                            && is_quarantine[idx]
+                            && !uses_live_batch_scheduler(txs[idx].instructions())
+                        {
                             layer_quar.push(idx);
                         } else {
                             layer_norm.push(idx);
@@ -12278,8 +12507,9 @@ pub(crate) mod valid {
                     let prepare_entry = |idx: usize| {
                         let tx = txs[idx];
                         let overlay = match overlays[idx].as_ref() {
-                            Ok(overlay) => Some(overlay.as_ref()),
-                            Err(err)
+                            None => None,
+                            Some(Ok(overlay)) => Some(overlay.as_ref()),
+                            Some(Err(err))
                                 if uses_live_vm_overlay_scheduler(tx.instructions())
                                     && err.may_change_with_live_state() =>
                             {
@@ -12289,7 +12519,7 @@ pub(crate) mod valid {
                                 // build to `overlay_for_live_state`.
                                 None
                             }
-                            Err(err) => return Err((idx, map_overlay_error(err))),
+                            Some(Err(err)) => return Err((idx, map_overlay_error(err))),
                         };
                         if let Some(overlay) = overlay {
                             let max_instrs = state_block.pipeline.overlay_max_instructions;
@@ -12417,7 +12647,7 @@ pub(crate) mod valid {
                                 }
                             }
                         }
-                        if let Some(Ok(overlay)) = overlays.get(entry.idx) {
+                        if let Some(Some(Ok(overlay))) = overlays.get(entry.idx) {
                             let _ = warm_overlay_chunk(overlay, entry.chunk_size);
                         }
                     }
@@ -12571,7 +12801,7 @@ pub(crate) mod valid {
                             })
                     };
                     let eval_detached = |p: &PreparedEntry| {
-                        if let Some(Ok(ovl)) = overlays.get(p.idx) {
+                        if let Some(Some(Ok(ovl))) = overlays.get(p.idx) {
                             if matches!(
                                 &*state_block.world.executor,
                                 crate::executor::Executor::UserProvided(_)
@@ -12583,8 +12813,12 @@ pub(crate) mod valid {
                                     .as_ref()
                                     .ok()
                                     .is_some_and(|prepared| {
-                                        prepared.durable_state_reads.is_some()
-                                            || prepared.force_live_rebuild
+                                        matches!(
+                                            prepared,
+                                            PreparedBlockExecution::Overlay(overlay)
+                                                if overlay.durable_state_reads.is_some()
+                                                    || overlay.force_live_rebuild
+                                        )
                                     })
                             {
                                 return (p.idx, None, Some(DetachedFallbackReason::DurableState));
@@ -12851,6 +13085,9 @@ pub(crate) mod valid {
                             }
                             let tx = txs[idx];
                             let hash = prepared_txs[idx].metadata.entrypoint_hash;
+                            if uses_live_batch_scheduler(tx.instructions()) {
+                                return execute_live_batch(state_block_mut, idx);
+                            }
                             let overlay = match overlay_for_live_state(state_block_mut, idx) {
                                 Ok(overlay) => overlay,
                                 Err(err) => {
@@ -13289,6 +13526,8 @@ pub(crate) mod valid {
                                                     result.and_then(|()| {
                                                         let overlay = overlays[p.idx]
                                                             .as_ref()
+                                                            .expect("detached delta requires an overlay")
+                                                            .as_ref()
                                                             .map_err(map_overlay_error)?;
                                                         charge_fees_for_applied_overlay_with_encoded_len(
                                                             &mut state_tx,
@@ -13723,6 +13962,14 @@ pub(crate) mod valid {
                     let hash = prepared_txs[idx].metadata.entrypoint_hash;
                     if let Some(reason) = stateless_rejections[idx].take() {
                         record_result(idx, Err(reason));
+                        continue;
+                    }
+                    if uses_live_batch_scheduler(tx.instructions()) {
+                        let result = execute_live_batch(state_block, idx);
+                        if result.is_err() {
+                            record_amx_abort(state_block, idx, "exec");
+                        }
+                        record_result(idx, result);
                         continue;
                     }
                     let overlay = match overlay_for_live_state(state_block, idx) {
@@ -26369,10 +26616,13 @@ mod tests {
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
-        transaction::signed::{
-            SealedTransactionCommitmentPayload, SealedTransactionReveal,
-            SignedSealedTransactionCommitment, SignedTransaction,
-            compute_sealed_transaction_commitment,
+        transaction::{
+            ExecutableBatchItem,
+            signed::{
+                SealedTransactionCommitmentPayload, SealedTransactionReveal,
+                SignedSealedTransactionCommitment, SignedTransaction,
+                compute_sealed_transaction_commitment,
+            },
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
@@ -30320,13 +30570,13 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn rejected_business_execution_still_charges_nexus_fee() {
+    fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
 
-        let chain_id = ChainId::from("rejected-business-fee-test");
+        let chain_id = ChainId::from("rejected-live-batch-fee-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sink_id, _sink_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -30395,7 +30645,13 @@ seiyaku DynamicTarget {
         let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
-            .with_instructions::<InstructionBox>([create_domain.into(), fail_instruction.into()])
+            .with_executable(Executable::Batch(
+                vec![
+                    ExecutableBatchItem::Instruction(create_domain.into()),
+                    ExecutableBatchItem::Instruction(fail_instruction.into()),
+                ]
+                .into(),
+            ))
             .sign(payer_keypair.private_key());
         let tx = AcceptedTransaction::accept(
             tx,
@@ -30437,12 +30693,304 @@ seiyaku DynamicTarget {
             .0
             .to_string();
 
-        assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
+        assert_eq!(
+            payer_balance, "9",
+            "rejected mixed batch must still pay its Nexus fee; tx error: {first_error:?}"
+        );
         assert_eq!(sink_balance, "0");
         assert!(
             state_block.world.domain(&created_domain_id).is_err(),
             "failed transaction state changes must still be rolled back"
         );
+    }
+
+    #[test]
+    fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("rejected-contract-batch-fee-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), payer_id.clone()),
+            Quantity::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), sink_id.clone()),
+            Quantity::zero(),
+        );
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku MeteredFailure {
+  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("must_not_be_written"),
+      value: Json::parse("true")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile metered failure contract");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &payer_id,
+            95,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let contract_subject = Account::new(contract_address.subject_id()).build(&payer_id);
+        let mut world = test_world_with_assets(
+            [domain],
+            [payer, sink, contract_subject],
+            [asset_definition],
+            [payer_asset, sink_asset],
+            [],
+        );
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&payer_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "run".to_owned(),
+            }
+            .into();
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(permissions.insert(entrypoint_permission));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(payer_id.clone(), permissions);
+
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address,
+            expected_code_hash: code_hash,
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            core::num::NonZeroU64::new(10),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_executable(Executable::Batch(
+                vec![ExecutableBatchItem::ContractCall(invocation)].into(),
+            ))
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let error = valid
+            .as_ref()
+            .errors()
+            .next()
+            .map(|(_, error)| error)
+            .expect("the gas-capped contract call must fail");
+        assert!(
+            matches!(
+                error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("gas")
+            ),
+            "unexpected VM rejection: {error:?}"
+        );
+
+        let assets = state_block.world.assets();
+        let payer_balance = assets
+            .get(&AssetId::of(asset_definition_id, payer_id.clone()))
+            .expect("payer balance exists")
+            .0
+            .to_string();
+        assert_eq!(
+            payer_balance, "9",
+            "failed contract VM work must remain chargeable"
+        );
+        assert_eq!(
+            state_block.gas_used_in_block, 10,
+            "failed contract VM work must consume the parent block gas budget"
+        );
+        let marker: Name = "must_not_be_written".parse().expect("marker name");
+        assert!(
+            state_block
+                .world
+                .account(&payer_id)
+                .expect("payer account")
+                .metadata()
+                .get(&marker)
+                .is_none(),
+            "contract business effects must roll back on VM failure"
+        );
+    }
+
+    #[test]
+    fn successful_live_batches_accumulate_parent_block_gas() {
+        for parallel_apply in [false, true] {
+            let chain_id = ChainId::from(format!("live-batch-parent-gas-{parallel_apply}"));
+            let (authority, keypair) = gen_account_in("wonderland");
+            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+            let world = World::with(
+                [Domain::new(domain_id).build(&authority)],
+                [Account::new(authority.clone()).build(&authority)],
+                [],
+            );
+            let mut state = State::new_with_chain_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_test_lane_manifests(&state);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.parallel_overlay = true;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline);
+
+            let log_instruction =
+                InstructionBox::from(Log::new(Level::INFO, "meter one live batch".to_owned()));
+            let expected_gas =
+                crate::gas::meter_instructions(core::slice::from_ref(&log_instruction));
+            assert!(expected_gas > 0, "the fixture must consume gas");
+
+            let (max_clock_drift, tx_limits) = {
+                let state_view = state.world.view();
+                let params = state_view.parameters();
+                (params.sumeragi().max_clock_drift(), params.transaction())
+            };
+            let transactions = [0_u64, 1_u64]
+                .into_iter()
+                .map(|creation_time_ms| {
+                    let mut builder = TransactionBuilder::new(
+                        chain_id.clone(),
+                        authority.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    );
+                    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+                    let transaction = builder
+                        .with_executable(Executable::Batch(
+                            vec![ExecutableBatchItem::Instruction(log_instruction.clone())].into(),
+                        ))
+                        .sign(keypair.private_key());
+                    AcceptedTransaction::accept(
+                        transaction,
+                        &chain_id,
+                        max_clock_drift,
+                        tx_limits,
+                        state.crypto().as_ref(),
+                    )
+                    .expect("batch must pass stateless admission")
+                })
+                .collect::<Vec<_>>();
+
+            let block = BlockBuilder::new(transactions)
+                .chain(0, None)
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(block.header());
+            state_block.gas_limit_per_block = expected_gas;
+            let valid = block
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {});
+            let results = valid
+                .as_ref()
+                .results()
+                .map(|result| result.0.clone())
+                .collect::<Vec<_>>();
+            let successes = results.iter().filter(|result| result.is_ok()).count();
+            let gas_limit_rejections = results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(message)
+                        )) if message.contains("block gas limit exceeded")
+                    )
+                })
+                .count();
+
+            assert_eq!(
+                successes, 1,
+                "only one live batch may fit with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                gas_limit_rejections, 1,
+                "the second live batch must observe parent gas with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                state_block.gas_used_in_block, expected_gas,
+                "successful live-batch gas must be retained by the parent block"
+            );
+        }
     }
 
     #[test]
@@ -33253,6 +33801,23 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
         }
         Executable::ContractCall(_) => {
             crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
+        }
+        Executable::Batch(items) => {
+            if items.iter().any(|item| {
+                matches!(
+                    item,
+                    iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
+                )
+            }) {
+                crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
+            } else {
+                let instructions = tx
+                    .instructions()
+                    .explicit_instructions()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                crate::gas::meter_instructions(&instructions)
+            }
         }
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {

@@ -22,12 +22,12 @@ if str(REPO_ROOT) not in sys.path:
 from scripts import sync_docs_i18n as i18n  # noqa: E402
 
 
-DEFAULT_SUFFIXES = (".sora", ".nexus", ".dao")
 ANNEX_LANGS = ("ar", "es", "fr", "pt", "ru", "ur")
 PORTAL_LANGS = ANNEX_LANGS
 MEMO_LANGS = ("ar", "es", "fr", "he", "ja", "pt", "ru", "ur")
 ANNEX_JOBS_PATH = REPO_ROOT / "docs" / "source" / "sns" / "regulatory" / "annex_jobs.json"
 PORTAL_REGULATORY_DIR = REPO_ROOT / "docs" / "portal" / "docs" / "sns" / "regulatory"
+SUFFIX_LITERAL_RE = re.compile(r"\.[a-z0-9]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -44,24 +44,34 @@ class AnnexMetadata:
     generated_at: str | None
 
 
-def parse_args() -> CycleContext:
+def parse_args(argv: Sequence[str] | None = None) -> CycleContext:
     parser = argparse.ArgumentParser(description="Add SNS KPI annex cycle scaffolding")
     parser.add_argument("cycle", help="Cycle in YYYY-MM format (e.g. 2026-10)")
     parser.add_argument(
         "--suffix",
         action="append",
         dest="suffixes",
-        help="Suffix to update (defaults to all known suffixes)",
+        required=True,
+        metavar=".NAME",
+        help="Suffix to update; repeat for each explicitly selected live SNS policy",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print actions without writing files")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not re.fullmatch(r"\d{4}-\d{2}", args.cycle):
         parser.error("cycle must be formatted as YYYY-MM")
-    suffixes = tuple(args.suffixes) if args.suffixes else DEFAULT_SUFFIXES
+    suffixes = tuple(args.suffixes)
+    seen_suffixes: set[str] = set()
     for suffix in suffixes:
         if not suffix.startswith("."):
-            parser.error(f"suffix values must include the leading dot (got {suffix!r})")
+            parser.error("suffix values must include the leading dot")
+        if SUFFIX_LITERAL_RE.fullmatch(suffix) is None:
+            parser.error(
+                "suffix values must be a dot followed by 1-64 lowercase ASCII letters or digits"
+            )
+        if suffix in seen_suffixes:
+            parser.error("suffix values must be unique")
+        seen_suffixes.add(suffix)
     return CycleContext(cycle=args.cycle, suffixes=suffixes, dry_run=args.dry_run)
 
 

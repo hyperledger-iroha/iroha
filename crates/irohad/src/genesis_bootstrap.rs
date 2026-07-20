@@ -36,6 +36,7 @@ use iroha_p2p::{
     peer::message::PeerMessage,
 };
 use iroha_primitives::addr::SocketAddr;
+use norito::codec::Encode as _;
 use tokio::{
     sync::mpsc,
     time::{self, Instant},
@@ -54,6 +55,11 @@ fn genesis_message_filter() -> SubscriberFilter {
 
 /// Minimal network surface needed for genesis bootstrap.
 pub trait GenesisNetwork: Clone + Send + Sync + 'static {
+    /// Opaque authenticated route retained for one request occurrence.
+    type ReplyRoute: Clone + Send + Sync + 'static;
+    /// Opaque authenticated transport owner used for fair reply scheduling.
+    type ReplySource: Clone + Eq + std::hash::Hash + Send + Sync + 'static;
+
     /// Admit a progress message while returning exact ownership under backpressure.
     ///
     /// # Errors
@@ -68,9 +74,13 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
     fn post_reply_recoverable(
         &self,
         msg: Post<NetworkMessage>,
-        reply_route: &NetworkReplyRoute,
+        reply_route: &Self::ReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    /// Extract the authenticated reply route carried by one inbound message.
+    fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute>;
+    /// Derive the stable authenticated-source owner of an opaque reply route.
+    fn reply_source(&self, reply_route: &Self::ReplyRoute) -> Self::ReplySource;
     /// Subscribe to peer messages delivered by the P2P layer.
     fn subscribe(
         &self,
@@ -94,6 +104,9 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
 }
 
 impl GenesisNetwork for IrohaNetwork {
+    type ReplyRoute = NetworkReplyRoute;
+    type ReplySource = iroha_p2p::network::NetworkReplySourceKey;
+
     fn post_recoverable(
         &self,
         msg: Post<NetworkMessage>,
@@ -114,6 +127,14 @@ impl GenesisNetwork for IrohaNetwork {
             reply_route,
             ticket,
         )
+    }
+
+    fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute> {
+        message.reply_route().cloned()
+    }
+
+    fn reply_source(&self, reply_route: &Self::ReplyRoute) -> Self::ReplySource {
+        reply_route.source_key()
     }
 
     fn subscribe(
@@ -302,6 +323,7 @@ struct ResponderState {
 struct LastGenesisResponse {
     at: Instant,
     request_id: u64,
+    request_hash: HashOf<GenesisRequest>,
 }
 
 struct ResponderCtx<'a> {
@@ -326,15 +348,189 @@ struct PreflightOutcome {
     size_bytes: u64,
 }
 
-struct PendingGenesisPost {
+struct PendingGenesisRequestPost {
     message: Post<NetworkMessage>,
     ticket: Option<NetworkActorAdmissionTicket>,
-    reply_route: Option<NetworkReplyRoute>,
+}
+
+struct PendingGenesisReplyPost<R> {
+    message: Post<NetworkMessage>,
+    ticket: Option<NetworkActorAdmissionTicket>,
+    reply_route: R,
+    encoded_bytes: u64,
+}
+
+/// Bounded round-robin retry ownership, isolated by authenticated transport source.
+struct PendingGenesisReplies<R, S> {
+    by_source: HashMap<S, VecDeque<PendingGenesisReplyPost<R>>>,
+    source_order: VecDeque<S>,
+    len: usize,
+    capacity: usize,
+    per_source_capacity: usize,
+    encoded_bytes: u64,
+    encoded_bytes_by_source: HashMap<S, u64>,
+    encoded_byte_capacity: u64,
+    encoded_byte_capacity_per_source: u64,
+}
+
+impl<R, S> PendingGenesisReplies<R, S>
+where
+    S: Clone + Eq + std::hash::Hash,
+{
+    fn new(capacity: NonZeroUsize, max_payload_bytes: u64) -> Self {
+        let capacity = capacity.get();
+        // Preserve capacity for several independent authenticated sources while
+        // still allowing a trusted hub to carry more than one bootstrap client.
+        let per_source_capacity = capacity.div_ceil(4).max(1);
+        const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
+        let encoded_byte_capacity_per_source =
+            max_payload_bytes.saturating_add(REPLY_ENVELOPE_ALLOWANCE);
+        let encoded_byte_capacity = encoded_byte_capacity_per_source.saturating_mul(2);
+        Self {
+            by_source: HashMap::new(),
+            source_order: VecDeque::new(),
+            len: 0,
+            capacity,
+            per_source_capacity,
+            encoded_bytes: 0,
+            encoded_bytes_by_source: HashMap::new(),
+            encoded_byte_capacity,
+            encoded_byte_capacity_per_source,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn push(
+        &mut self,
+        source: S,
+        pending: PendingGenesisReplyPost<R>,
+    ) -> Result<(), PendingGenesisReplyPost<R>> {
+        let source_bytes = self
+            .encoded_bytes_by_source
+            .get(&source)
+            .copied()
+            .unwrap_or(0);
+        let Some(next_bytes) = self.encoded_bytes.checked_add(pending.encoded_bytes) else {
+            return Err(pending);
+        };
+        let Some(next_source_bytes) = source_bytes.checked_add(pending.encoded_bytes) else {
+            return Err(pending);
+        };
+        if self.len >= self.capacity
+            || self
+                .by_source
+                .get(&source)
+                .is_some_and(|queue| queue.len() >= self.per_source_capacity)
+            || next_bytes > self.encoded_byte_capacity
+            || next_source_bytes > self.encoded_byte_capacity_per_source
+        {
+            return Err(pending);
+        }
+        let queue = self.by_source.entry(source.clone()).or_insert_with(|| {
+            self.source_order.push_back(source.clone());
+            VecDeque::new()
+        });
+        queue.push_back(pending);
+        self.len = self
+            .len
+            .checked_add(1)
+            .expect("bounded genesis reply count cannot overflow");
+        self.encoded_bytes = next_bytes;
+        self.encoded_bytes_by_source
+            .insert(source, next_source_bytes);
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<(S, PendingGenesisReplyPost<R>)> {
+        let source = self.source_order.pop_front()?;
+        let queue = self
+            .by_source
+            .get_mut(&source)
+            .expect("genesis reply source order mirrors its map");
+        let pending = queue
+            .pop_front()
+            .expect("genesis reply source queues are never empty");
+        self.len = self
+            .len
+            .checked_sub(1)
+            .expect("genesis reply count mirrors its queues");
+        self.encoded_bytes = self
+            .encoded_bytes
+            .checked_sub(pending.encoded_bytes)
+            .expect("genesis reply byte count mirrors its queues");
+        let source_bytes = self
+            .encoded_bytes_by_source
+            .get_mut(&source)
+            .expect("genesis reply source byte count mirrors its queues");
+        *source_bytes = source_bytes
+            .checked_sub(pending.encoded_bytes)
+            .expect("genesis reply source byte count cannot underflow");
+        if queue.is_empty() {
+            self.by_source.remove(&source);
+            self.encoded_bytes_by_source.remove(&source);
+        } else {
+            self.source_order.push_back(source.clone());
+        }
+        Some((source, pending))
+    }
+}
+
+fn post_or_retain_genesis_reply<N: GenesisNetwork>(
+    network: &N,
+    pending: &mut PendingGenesisReplies<N::ReplyRoute, N::ReplySource>,
+    response: PendingGenesisReplyPost<N::ReplyRoute>,
+) -> bool {
+    let PendingGenesisReplyPost {
+        message,
+        ticket,
+        reply_route,
+        encoded_bytes,
+    } = response;
+    match network.post_reply_recoverable(message, &reply_route, ticket) {
+        Ok(()) => true,
+        Err(NetworkActorAdmissionError::Backpressured {
+            message, ticket, ..
+        }) => {
+            let source = network.reply_source(&reply_route);
+            if let Err(dropped) = pending.push(
+                source,
+                PendingGenesisReplyPost {
+                    message,
+                    ticket,
+                    reply_route,
+                    encoded_bytes,
+                },
+            ) {
+                iroha_logger::debug!(
+                    peer = %dropped.message.peer_id,
+                    "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the reconstruction witness"
+                );
+            }
+            true
+        }
+        Err(NetworkActorAdmissionError::Closed { .. }) => {
+            iroha_logger::warn!("genesis response corridor closed with the P2P actor");
+            false
+        }
+        Err(NetworkActorAdmissionError::Rejected {
+            message, reason, ..
+        }) => {
+            iroha_logger::warn!(
+                peer = %message.peer_id,
+                ?reason,
+                "genesis response permanently rejected by P2P actor admission"
+            );
+            true
+        }
+    }
 }
 
 struct GenesisRequestTarget {
     peer_id: PeerId,
-    pending: Option<PendingGenesisPost>,
+    pending: Option<PendingGenesisRequestPost>,
     permanently_rejected: bool,
 }
 
@@ -367,31 +563,23 @@ impl GenesisRequestFanout {
             if target.permanently_rejected {
                 continue;
             }
-            let PendingGenesisPost {
-                message,
-                ticket,
-                reply_route,
-            } =
-                target.pending.take().unwrap_or_else(|| PendingGenesisPost {
+            let PendingGenesisRequestPost { message, ticket } = target
+                .pending
+                .take()
+                .unwrap_or_else(|| PendingGenesisRequestPost {
                     message: Post {
                         data: self.message.clone(),
                         peer_id: target.peer_id.clone(),
                         priority: Priority::High,
                     },
                     ticket: None,
-                    reply_route: None,
                 });
-            debug_assert!(reply_route.is_none());
             match network.post_recoverable(message, ticket) {
                 Ok(()) => {}
                 Err(NetworkActorAdmissionError::Backpressured {
                     message, ticket, ..
                 }) => {
-                    target.pending = Some(PendingGenesisPost {
-                        message,
-                        ticket,
-                        reply_route: None,
-                    });
+                    target.pending = Some(PendingGenesisRequestPost { message, ticket });
                 }
                 Err(NetworkActorAdmissionError::Closed { .. }) => {
                     actor_open = false;
@@ -470,59 +658,50 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let expected_pubkey = self.expected_pubkey.clone();
         let expected_hash = self.expected_hash;
         let response_history_cap = self.response_queue_cap.get();
+        let reply_queue_cap = self.response_queue_cap;
         let chain_id = self.chain_id.clone();
         let pending = Arc::clone(&self.pending);
         let network = self.network.clone();
         let retry_period = self.retry_interval.max(Duration::from_millis(1));
         tokio::spawn(async move {
-            let mut pending_response: Option<PendingGenesisPost> = None;
-            loop {
-                if let Some(PendingGenesisPost {
-                    message,
-                    ticket,
-                    reply_route,
-                }) = pending_response.take()
-                {
-                    let result = match reply_route.as_ref() {
-                        Some(route) => network.post_reply_recoverable(message, route, ticket),
-                        None => network.post_recoverable(message, ticket),
-                    };
-                    match result {
-                        Ok(()) => continue,
-                        Err(NetworkActorAdmissionError::Backpressured {
-                            message, ticket, ..
-                        }) => {
-                            pending_response = Some(PendingGenesisPost {
-                                message,
-                                ticket,
-                                reply_route,
-                            });
-                            time::sleep(retry_period).await;
-                            continue;
+            let mut pending_replies = PendingGenesisReplies::new(reply_queue_cap, max_bytes);
+            let mut retry_tick = time::interval(retry_period);
+            retry_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+            let mut rx_open = true;
+            'listener: loop {
+                // A due retry has deterministic precedence over a saturated
+                // inbound stream. `Delay` schedules the following tick in the
+                // future, so the precedence cannot starve inbound handling.
+                let msg = tokio::select! {
+                    biased;
+                    _ = retry_tick.tick(), if !pending_replies.is_empty() => {
+                        let (_source, response) = pending_replies
+                            .pop()
+                            .expect("non-empty genesis reply scheduler has one item");
+                        if !post_or_retain_genesis_reply(
+                            &network,
+                            &mut pending_replies,
+                            response,
+                        ) {
+                            break 'listener;
                         }
-                        Err(NetworkActorAdmissionError::Closed { .. }) => {
-                            iroha_logger::warn!(
-                                "genesis response corridor closed with the P2P actor"
-                            );
-                            break;
-                        }
-                        Err(NetworkActorAdmissionError::Rejected {
-                            message, reason, ..
-                        }) => {
-                            iroha_logger::warn!(
-                                peer = %message.peer_id,
-                                ?reason,
-                                "genesis response permanently rejected by P2P actor admission"
-                            );
-                            continue;
+                        None
+                    }
+                    message = rx.recv(), if rx_open => {
+                        match message {
+                            Some(message) => Some(message),
+                            None => {
+                                rx_open = false;
+                                None
+                            }
                         }
                     }
-                }
-
-                let Some(msg) = rx.recv().await else {
-                    break;
+                    else => break 'listener,
                 };
-                let reply_route = msg.reply_route().cloned();
+                let Some(msg) = msg else {
+                    continue;
+                };
+                let reply_route = network.reply_route(&msg);
                 match msg.payload {
                     NetworkMessage::GenesisRequest(request) => {
                         let trusted_guard = trusted
@@ -559,40 +738,25 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                                 peer_id: msg.peer.id().clone(),
                                 priority: Priority::High,
                             };
-                            let result = match reply_route.as_ref() {
-                                Some(route) => network.post_reply_recoverable(post, route, None),
-                                None => network.post_recoverable(post, None),
+                            let Some(reply_route) = reply_route else {
+                                iroha_logger::debug!(
+                                    peer = %msg.peer,
+                                    "dropping genesis response without authenticated reply route"
+                                );
+                                continue;
                             };
-                            match result {
-                                Ok(()) => {}
-                                Err(NetworkActorAdmissionError::Backpressured {
-                                    message,
-                                    ticket,
-                                    ..
-                                }) => {
-                                    pending_response = Some(PendingGenesisPost {
-                                        message,
-                                        ticket,
-                                        reply_route,
-                                    });
-                                }
-                                Err(NetworkActorAdmissionError::Closed { .. }) => {
-                                    iroha_logger::warn!(
-                                        "genesis response corridor closed with the P2P actor"
-                                    );
-                                    break;
-                                }
-                                Err(NetworkActorAdmissionError::Rejected {
-                                    message,
-                                    reason,
-                                    ..
-                                }) => {
-                                    iroha_logger::warn!(
-                                        peer = %message.peer_id,
-                                        ?reason,
-                                        "genesis response permanently rejected by P2P actor admission"
-                                    );
-                                }
+                            if !post_or_retain_genesis_reply(
+                                &network,
+                                &mut pending_replies,
+                                PendingGenesisReplyPost {
+                                    encoded_bytes: u64::try_from(post.data.encode().len())
+                                        .unwrap_or(u64::MAX),
+                                    message: post,
+                                    ticket: None,
+                                    reply_route,
+                                },
+                            ) {
+                                break 'listener;
                             }
                         }
                     }
@@ -911,10 +1075,13 @@ impl ResponderState {
         }
         if ctx.throttle != Duration::ZERO {
             let now = Instant::now();
-            // Request ids are deliberately idempotent: a requester keeps one id registered and
-            // retransmits it until its deadline, so losing the first response cannot poison that
-            // request. The one-record-per-peer cache contains no genesis bytes and is retained
-            // only for the active throttle window, so it cannot become historical unbounded state.
+            let request_hash = HashOf::new(request);
+            // An exact request is deliberately idempotent: a requester keeps one canonical
+            // request registered and retransmits it until its deadline, so losing the first
+            // response cannot poison that request. Binding the exemption to the full request hash
+            // prevents same-id/different-body reuse from bypassing the throttle. The one-record-
+            // per-peer cache contains no genesis bytes and is retained only for the active
+            // throttle window, so it cannot become historical unbounded state.
             while let Some(oldest_peer) = self.last_response_order.front() {
                 let expired = self
                     .last_response
@@ -930,7 +1097,7 @@ impl ResponderState {
                 self.last_response.remove(&oldest_peer);
             }
             if let Some(last) = self.last_response.get(peer.id()) {
-                if last.request_id != request.request_id {
+                if last.request_id != request.request_id || last.request_hash != request_hash {
                     return Some(error_response(
                         ctx.chain_id.clone(),
                         request.request_id,
@@ -950,6 +1117,7 @@ impl ResponderState {
                     LastGenesisResponse {
                         at: now,
                         request_id: request.request_id,
+                        request_hash,
                     },
                 );
                 self.last_response_order.push_back(peer.id().clone());
@@ -1293,6 +1461,7 @@ mod tests {
         sender: Arc<Mutex<Option<mpsc::Sender<PeerMessage<NetworkMessage>>>>>,
         posted: Arc<Mutex<Vec<Post<NetworkMessage>>>>,
         backpressure_remaining: Arc<std::sync::atomic::AtomicUsize>,
+        blocked_reply_peers: Arc<Mutex<HashSet<PeerId>>>,
     }
 
     impl Default for MockNetwork {
@@ -1301,6 +1470,7 @@ mod tests {
                 sender: Arc::new(Mutex::new(None)),
                 posted: Arc::new(Mutex::new(Vec::new())),
                 backpressure_remaining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                blocked_reply_peers: Arc::new(Mutex::new(HashSet::new())),
             }
         }
     }
@@ -1319,9 +1489,26 @@ mod tests {
             self.backpressure_remaining
                 .store(count, std::sync::atomic::Ordering::SeqCst);
         }
+
+        fn block_reply_peer(&self, peer: PeerId) {
+            self.blocked_reply_peers
+                .lock()
+                .expect("blocked reply peers")
+                .insert(peer);
+        }
+
+        fn unblock_reply_peer(&self, peer: &PeerId) {
+            self.blocked_reply_peers
+                .lock()
+                .expect("blocked reply peers")
+                .remove(peer);
+        }
     }
 
     impl GenesisNetwork for MockNetwork {
+        type ReplyRoute = PeerId;
+        type ReplySource = PeerId;
+
         fn post_recoverable(
             &self,
             msg: Post<NetworkMessage>,
@@ -1349,10 +1536,30 @@ mod tests {
         fn post_reply_recoverable(
             &self,
             msg: Post<NetworkMessage>,
-            _reply_route: &NetworkReplyRoute,
+            reply_route: &Self::ReplyRoute,
             ticket: Option<NetworkActorAdmissionTicket>,
         ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+            if self
+                .blocked_reply_peers
+                .lock()
+                .expect("blocked reply peers")
+                .contains(reply_route)
+            {
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: msg,
+                    ticket,
+                    rank: 1,
+                });
+            }
             self.post_recoverable(msg, ticket)
+        }
+
+        fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute> {
+            Some(message.peer.id().clone())
+        }
+
+        fn reply_source(&self, reply_route: &Self::ReplyRoute) -> Self::ReplySource {
+            reply_route.clone()
         }
 
         fn subscribe(
@@ -1405,6 +1612,46 @@ mod tests {
         .sign(signer.private_key());
         let signed_block = SignedBlock::genesis(vec![tx], signer.private_key(), None, None);
         GenesisBlock(signed_block)
+    }
+
+    fn pending_reply(peer: PeerId, encoded_bytes: u64) -> PendingGenesisReplyPost<PeerId> {
+        PendingGenesisReplyPost {
+            message: Post {
+                data: NetworkMessage::Health,
+                peer_id: peer.clone(),
+                priority: Priority::High,
+            },
+            ticket: None,
+            reply_route: peer,
+            encoded_bytes,
+        }
+    }
+
+    #[test]
+    fn pending_reply_bytes_are_bounded_per_source_without_consuming_other_source_capacity() {
+        let first = sample_peer().id().clone();
+        let second = sample_peer().id().clone();
+        let mut pending =
+            PendingGenesisReplies::new(NonZeroUsize::new(8).expect("non-zero queue"), 0);
+        assert!(
+            pending
+                .push(first.clone(), pending_reply(first.clone(), 40_000))
+                .is_ok()
+        );
+        assert!(
+            pending
+                .push(first.clone(), pending_reply(first, 40_000))
+                .is_err(),
+            "one source cannot retain more than its explicit byte budget"
+        );
+        assert!(
+            pending
+                .push(second.clone(), pending_reply(second, 40_000))
+                .is_ok(),
+            "an independent source retains its reserved byte ownership"
+        );
+        assert_eq!(pending.len, 2);
+        assert_eq!(pending.encoded_bytes, 80_000);
     }
 
     async fn wait_for_posts(network: &MockNetwork, expected: usize) {
@@ -1512,6 +1759,92 @@ mod tests {
             }
             other => panic!("unexpected bootstrap message: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn blocked_reply_source_does_not_starve_other_requests_or_inbound_response() {
+        let network = MockNetwork::default();
+        let chain_id = ChainId::from("chain-response-source-fairness");
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let block = sample_block(&chain_id, &kp);
+        let blocked = sample_peer();
+        let responsive = sample_peer();
+        let inbound_peer = sample_peer();
+        let cfg = GenesisConfig {
+            public_key: kp.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: vec![blocked.id().clone(), responsive.id().clone()],
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+        let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
+        let mut inbound = bootstrapper.register_request(99).await;
+        bootstrapper.spawn_listener().await;
+        bootstrapper.set_payload(&block).await.expect("payload set");
+        network.block_reply_peer(blocked.id().clone());
+
+        let sender = network
+            .sender
+            .lock()
+            .expect("sender")
+            .clone()
+            .expect("listener registered");
+        for (peer, request_id) in [(blocked.clone(), 41), (responsive.clone(), 42)] {
+            sender
+                .send(PeerMessage::new(
+                    peer,
+                    NetworkMessage::GenesisRequest(Box::new(GenesisRequest {
+                        request_id,
+                        chain_id: chain_id.clone(),
+                        expected_hash: None,
+                        expected_pubkey: Some(kp.public_key().clone()),
+                        kind: GenesisRequestKind::Preflight,
+                    })),
+                    0,
+                ))
+                .await
+                .expect("send genesis request");
+        }
+        network.push_response(
+            inbound_peer,
+            error_response(chain_id, 99, GenesisResponseError::MissingGenesis),
+        );
+
+        let received = time::timeout(Duration::from_secs(1), inbound.recv())
+            .await
+            .expect("blocked outbound reply must not stall inbound response polling")
+            .expect("registered inbound response remains deliverable");
+        assert_eq!(received.response.request_id, 99);
+        wait_for_posts(&network, 1).await;
+        {
+            let posted = network.posted.lock().expect("posted");
+            assert_eq!(posted.len(), 1);
+            let NetworkMessage::GenesisResponse(response) = &posted[0].data else {
+                panic!("unexpected bootstrap message: {:?}", posted[0].data)
+            };
+            assert_eq!(response.request_id, 42);
+        }
+
+        network.unblock_reply_peer(blocked.id());
+        wait_for_posts(&network, 2).await;
+        let mut response_ids = network
+            .posted
+            .lock()
+            .expect("posted")
+            .iter()
+            .map(|post| match &post.data {
+                NetworkMessage::GenesisResponse(response) => response.request_id,
+                other => panic!("unexpected bootstrap message: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        response_ids.sort_unstable();
+        assert_eq!(response_ids, vec![41, 42]);
     }
 
     #[tokio::test]
@@ -2145,7 +2478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_request_id_rebuilds_the_same_idempotent_response() {
+    async fn exact_duplicate_rebuilds_response_but_same_id_body_reuse_is_rate_limited() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-dup");
         let peer = sample_peer();
@@ -2190,8 +2523,31 @@ mod tests {
         }
 
         wait_for_posts(&network, 2).await;
+        let changed_request = GenesisRequest {
+            request_id: 11,
+            chain_id: chain_id.clone(),
+            expected_hash: None,
+            expected_pubkey: Some(kp.public_key().clone()),
+            kind: GenesisRequestKind::Fetch,
+        };
+        let sender = network
+            .sender
+            .lock()
+            .expect("sender")
+            .clone()
+            .expect("listener registered");
+        sender
+            .send(PeerMessage::new(
+                peer,
+                NetworkMessage::GenesisRequest(Box::new(changed_request)),
+                0,
+            ))
+            .await
+            .expect("send same-id request with a changed body");
+
+        wait_for_posts(&network, 3).await;
         let posted = network.posted.lock().expect("posted");
-        assert_eq!(posted.len(), 2);
+        assert_eq!(posted.len(), 3);
         let responses = posted
             .iter()
             .filter_map(|post| {
@@ -2202,9 +2558,11 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        assert_eq!(responses.len(), 2);
+        assert_eq!(responses.len(), 3);
         assert_eq!(responses[0], responses[1]);
         assert_eq!(responses[0].request_id, 11);
         assert_eq!(responses[0].error, None);
+        assert_eq!(responses[2].request_id, 11);
+        assert_eq!(responses[2].error, Some(GenesisResponseError::RateLimited));
     }
 }

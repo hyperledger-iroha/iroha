@@ -13,7 +13,30 @@
 //! collection-extraction, adapter-contract, WAL-byte, cross-tool, and liveness
 //! boundaries that remain before a complete production-correctness claim.
 
-use vstd::prelude::*;
+use vstd::{assert_seqs_equal, prelude::*};
+
+use crate::refinement::{
+    BOUNDARY_ACKNOWLEDGE_WAL, BOUNDARY_BEGIN_WAL, BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE,
+    BOUNDARY_RESUME_AFTER_REPLAY, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING,
+    CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
+    CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_PERSIST, EVENT_PERSISTED,
+    EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
+    IDENTITY_DOMAIN_SUBJECT,
+    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CONSENSUS_CONTEXT,
+    IDENTITY_KIND_CONSENSUS_SUBJECT, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY,
+    IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_REFERENCE_DIGEST,
+    IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD,
+    IDENTITY_KIND_SIDECAR_REQUEST, IDENTITY_KIND_SIDECAR_RESPONSE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE,
+    WAL_RECORD_DECISION,
+    WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
+    WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
+    WAL_RECORD_TIMEOUT_INTENT,
+};
 
 // These expressions are instantiated both as specifications and as executable
 // Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
@@ -171,8 +194,13 @@ pub proof fn production_fresh_causal_successors_excludes_prior_owners(
     if successors.len() != 0 {
         let candidate = successors.first();
         let remaining = successors.drop_first();
+        assert(successors =~= seq![candidate].add(remaining));
         if owned.contains(candidate) {
             production_fresh_causal_successors_excludes_prior_owners(owned, remaining);
+            assert(
+                production_fresh_causal_successors(owned, successors)
+                    =~= production_fresh_causal_successors(owned, remaining)
+            );
         } else {
             let next_owned = owned.insert(candidate);
             let tail = production_fresh_causal_successors(next_owned, remaining);
@@ -186,6 +214,10 @@ pub proof fn production_fresh_causal_successors_excludes_prior_owners(
                     assert(!next_owned.contains(tail[index - 1]));
                 }
             }
+            assert(
+                production_fresh_causal_successors(owned, successors)
+                    =~= seq![candidate].add(tail)
+            );
         }
     }
 }
@@ -3067,6 +3099,397 @@ pub proof fn crash_recovery_preserves_safety(
 // Exact executable production commit gate
 // ---------------------------------------------------------------------------
 
+/// Verus-side primitive durable-intent ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionDurableIntentTraceProjection {
+    pub event_tag: ProductionTagProjection,
+    pub owner_tag_before: ProductionTagProjection,
+    pub owner_tag_after: ProductionTagProjection,
+    pub event_kind: u8,
+    pub event_persistence_id: u64,
+    pub pending_before: ProductionPendingProjection,
+    pub pending_after: ProductionPendingProjection,
+    pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
+    pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
+    pub effects: ProductionEffectTraceProjection,
+    pub durable_sequence_before: u64,
+    pub durable_sequence_after: u64,
+}
+
+/// Verus-side complete semantic Decision identity.
+#[derive(Copy, Clone)]
+pub struct ProductionDecisionIdentityProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub phase: u8,
+    pub subject: CanonicalIdentityProjection,
+    pub block_hash: CanonicalIdentityProjection,
+    pub payload_hash: CanonicalIdentityProjection,
+    pub execution_commitment: CanonicalIdentityProjection,
+    pub executed_block_wire_hash: CanonicalIdentityProjection,
+}
+
+/// Verus-side complete quorum-certificate identity.
+#[derive(Copy, Clone)]
+pub struct ProductionQuorumCertificateIdentityProjection {
+    pub decision: ProductionDecisionIdentityProjection,
+    pub certificate: CanonicalIdentityProjection,
+    pub signer_count: u64,
+    pub aggregate_signature_len: u64,
+}
+
+/// Verus-side exact durable-body identity.
+#[derive(Copy, Clone)]
+pub struct ProductionDurableBodyIdentityProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub subject: CanonicalIdentityProjection,
+    pub block_hash: CanonicalIdentityProjection,
+    pub payload_hash: CanonicalIdentityProjection,
+    pub manifest: CanonicalIdentityProjection,
+    pub frame: CanonicalIdentityProjection,
+}
+
+/// Verus-side primitive pending-Decision recovery trace.
+#[derive(Copy, Clone)]
+pub struct ProductionDecisionRecoveryTraceProjection {
+    pub state_height: u64,
+    pub expected_context_id: CanonicalIdentityProjection,
+    pub expected_height: u64,
+    pub expected_block_hash: CanonicalIdentityProjection,
+    pub frozen_context_id: CanonicalIdentityProjection,
+    pub frozen_height: u64,
+    pub replay_tag: ProductionTagProjection,
+    pub replay_generation: u64,
+    pub commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub manifest_round: ProductionTagProjection,
+    pub manifest_subject: CanonicalIdentityProjection,
+    pub manifest: CanonicalIdentityProjection,
+    pub durable_body: ProductionDurableBodyIdentityProjection,
+    pub validated_body: ProductionDurableBodyIdentityProjection,
+    pub validated_execution_commitment: CanonicalIdentityProjection,
+    pub stage: u8,
+}
+
+/// Verus-side primitive scheduler ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionSchedulerTraceProjection {
+    pub fifo_owed_before: bool,
+    pub timeout_due: bool,
+    pub periodic_timer_due: bool,
+    pub fifo_ready: bool,
+    pub selected: u8,
+    pub fifo_owed_after: bool,
+}
+
+/// Verus-side primitive ingress identity and service-class trace.
+#[derive(Copy, Clone)]
+pub struct ProductionIngressIdentityAndClassTraceProjection {
+    pub incoming_height: u64,
+    pub incoming_view: u64,
+    pub incoming_generation: u64,
+    pub incoming_class: u8,
+    pub stored_height: u64,
+    pub stored_view: u64,
+    pub stored_generation: u64,
+    pub stored_class: u8,
+    pub queue_len_before: u64,
+    pub queue_len_after: u64,
+    pub queue_capacity: u64,
+}
+
+/// Verus-side primitive writer-flush ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionReliableFlushTraceProjection {
+    pub status: u8,
+    pub semantic_target: CanonicalIdentityProjection,
+    pub authenticated_source: CanonicalIdentityProjection,
+    pub requester: CanonicalIdentityProjection,
+    pub responder: CanonicalIdentityProjection,
+    pub connection_tenure_ordinal_high: u64,
+    pub connection_tenure_ordinal_low: u64,
+    pub delivery_ordinal_high: u64,
+    pub delivery_ordinal_low: u64,
+    pub ticket_id: u64,
+    pub ticket_rank: u64,
+    pub ticket_topic: u8,
+    pub canonical_request_digest: CanonicalIdentityProjection,
+    pub stream_wire_bytes: u64,
+    pub request_id: CanonicalIdentityProjection,
+    pub entry_hash: CanonicalIdentityProjection,
+    pub encoded_len: u64,
+    pub epoch_id: u64,
+    pub reference_digest: CanonicalIdentityProjection,
+    pub canonical_response_hash: CanonicalIdentityProjection,
+    pub sidecar_response_hash: CanonicalIdentityProjection,
+    pub chunk_hash: CanonicalIdentityProjection,
+    pub payload_digest: CanonicalIdentityProjection,
+    pub chunk_index: u64,
+    pub chunk_count: u64,
+    pub message_cursor_before: u64,
+    pub message_cursor_after: u64,
+    pub chunk_cursor_before: u64,
+    pub chunk_cursor_after: u64,
+    pub flushing_before: u64,
+    pub flushing_after: u64,
+    pub admitted_before: u64,
+    pub admitted_after: u64,
+    pub capacity: u64,
+}
+
+/// Verus-side primitive durable application-completion trace.
+#[derive(Copy, Clone)]
+pub struct ProductionApplicationTraceProjection {
+    pub task_tag: ProductionTagProjection,
+    pub task_generation: u64,
+    pub context_id: CanonicalIdentityProjection,
+    pub context_height: u64,
+    pub commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub validated_body: ProductionDurableBodyIdentityProjection,
+    pub validated_execution_commitment: CanonicalIdentityProjection,
+    pub proposal_block_hash: CanonicalIdentityProjection,
+    pub proposal_payload_hash: CanonicalIdentityProjection,
+    pub committed_block_hash: CanonicalIdentityProjection,
+    pub executed_block_wire_hash: CanonicalIdentityProjection,
+    pub kura_decision: ProductionDecisionIdentityProjection,
+    pub kura_artifact_hash: CanonicalIdentityProjection,
+    pub artifact_context_id: CanonicalIdentityProjection,
+    pub artifact_height: u64,
+    pub artifact_subject: CanonicalIdentityProjection,
+    pub artifact_block_hash: CanonicalIdentityProjection,
+    pub artifact_commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub artifact_hash: CanonicalIdentityProjection,
+    pub state_height_after: u64,
+    pub task_work_id: u64,
+    pub completion_work_id: u64,
+}
+
+/// Exact typed durable-intent projection consumed by the cross-tool theorem.
+pub closed spec fn production_durable_intent_trace_projection(
+    projection: ProductionDurableIntentTraceProjection,
+) -> ProductionDurableIntentTraceProjection {
+    projection
+}
+
+/// Exact typed pending-Decision projection consumed by the cross-tool theorem.
+pub closed spec fn production_decision_recovery_trace_projection(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> ProductionDecisionRecoveryTraceProjection {
+    projection
+}
+
+/// Exact typed scheduler projection consumed by the cross-tool theorem.
+pub closed spec fn production_scheduler_trace_projection(
+    projection: ProductionSchedulerTraceProjection,
+) -> ProductionSchedulerTraceProjection {
+    projection
+}
+
+/// Exact typed ingress projection consumed by the cross-tool theorem.
+pub closed spec fn production_ingress_identity_and_class_trace_projection(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> ProductionIngressIdentityAndClassTraceProjection {
+    projection
+}
+
+/// Exact typed flush projection consumed by the cross-tool theorem.
+pub closed spec fn production_reliable_flush_trace_projection(
+    projection: ProductionReliableFlushTraceProjection,
+) -> ProductionReliableFlushTraceProjection {
+    projection
+}
+
+/// Exact typed application projection consumed by the cross-tool theorem.
+pub closed spec fn production_application_trace_projection(
+    projection: ProductionApplicationTraceProjection,
+) -> ProductionApplicationTraceProjection {
+    projection
+}
+
+/// Exact Verus mirror of the reducer durable-intent production kernel.
+pub closed spec fn production_durable_intent_trace_refines_progress_witness_kernel(
+    projection: ProductionDurableIntentTraceProjection,
+) -> bool {
+    production_durable_intent_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the pending-Decision recovery production kernel.
+pub closed spec fn production_decision_trace_refines_recovery_witness_kernel(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> bool {
+    production_decision_recovery_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the scheduler ownership production kernel.
+pub closed spec fn production_scheduler_trace_refines_protected_ownership_kernel(
+    projection: ProductionSchedulerTraceProjection,
+) -> bool {
+    production_scheduler_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the ingress identity/class production kernel.
+pub closed spec fn production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> bool {
+    production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the writer-flush ownership production kernel.
+pub closed spec fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
+    projection: ProductionReliableFlushTraceProjection,
+) -> bool {
+    production_reliable_flush_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the durable application production kernel.
+pub closed spec fn production_application_trace_refines_decision_completion_kernel(
+    projection: ProductionApplicationTraceProjection,
+) -> bool {
+    production_application_trace_body!(projection)
+}
+
+/// A reducer step which satisfies the primitive WAL lifecycle owns either its
+/// unchanged pending intent or the exact next durable sequence position.
+pub proof fn production_durable_intent_trace_refines_progress_witness(
+    projection: ProductionDurableIntentTraceProjection,
+)
+    requires
+        production_durable_intent_trace_body!(projection),
+    ensures
+        production_durable_intent_trace_refines_progress_witness_kernel(
+            production_durable_intent_trace_projection(projection),
+        ),
+{
+    reveal(production_durable_intent_trace_refines_progress_witness_kernel);
+    reveal(production_durable_intent_trace_projection);
+    assert(production_durable_intent_trace_refines_progress_witness_kernel(
+        production_durable_intent_trace_projection(projection),
+    ));
+}
+
+/// A startup pending-tip classification reconstructs the exact durable
+/// Decision height and its pending Kura application owner.
+pub proof fn production_decision_trace_refines_recovery_witness(
+    projection: ProductionDecisionRecoveryTraceProjection,
+)
+    requires
+        production_decision_recovery_trace_body!(projection),
+    ensures
+        production_decision_trace_refines_recovery_witness_kernel(
+            production_decision_recovery_trace_projection(projection),
+        ),
+{
+    reveal(production_decision_trace_refines_recovery_witness_kernel);
+    reveal(production_decision_recovery_trace_projection);
+    assert(production_decision_trace_refines_recovery_witness_kernel(
+        production_decision_recovery_trace_projection(projection),
+    ));
+}
+
+/// One scheduler selection preserves the exact protected FIFO/timer owner.
+pub proof fn production_scheduler_trace_refines_protected_ownership(
+    projection: ProductionSchedulerTraceProjection,
+)
+    requires
+        projection.timeout_due
+            ==> projection.selected == 1u8
+                && projection.fifo_owed_after == projection.fifo_ready,
+        !projection.timeout_due && projection.fifo_ready && projection.fifo_owed_before
+            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
+        !projection.timeout_due
+            && !(projection.fifo_ready && projection.fifo_owed_before)
+            && projection.periodic_timer_due
+            ==> projection.selected == 2u8
+                && projection.fifo_owed_after == projection.fifo_ready,
+        !projection.timeout_due
+            && !(projection.fifo_ready && projection.fifo_owed_before)
+            && !projection.periodic_timer_due
+            && projection.fifo_ready
+            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
+        !projection.timeout_due
+            && !projection.fifo_ready
+            && !projection.periodic_timer_due
+            ==> projection.selected == 0u8 && !projection.fifo_owed_after,
+    ensures
+        production_scheduler_trace_refines_protected_ownership_kernel(
+            production_scheduler_trace_projection(projection),
+        ),
+{
+    reveal(production_scheduler_trace_refines_protected_ownership_kernel);
+    reveal(production_scheduler_trace_projection);
+    assert(production_scheduler_trace_refines_protected_ownership_kernel(
+        production_scheduler_trace_projection(projection),
+    ));
+}
+
+/// One bounded ingress admission preserves its complete tag and service class.
+pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+)
+    requires
+        projection.incoming_height == projection.stored_height,
+        projection.incoming_view == projection.stored_view,
+        projection.incoming_generation == projection.stored_generation,
+        projection.incoming_class == projection.stored_class,
+        projection.incoming_class >= 1u8,
+        projection.incoming_class <= 3u8,
+        projection.queue_len_before < u64::MAX,
+        projection.queue_len_after == projection.queue_len_before + 1u64,
+        projection.queue_len_after <= projection.queue_capacity,
+    ensures
+        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            production_ingress_identity_and_class_trace_projection(projection),
+        ),
+{
+    reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+    reveal(production_ingress_identity_and_class_trace_projection);
+    assert(
+        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            production_ingress_identity_and_class_trace_projection(projection),
+        )
+    );
+}
+
+/// Writer completion moves one sidecar cursor only on the exact flushed
+/// outcome; pending and closed outcomes cannot manufacture admission.
+pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
+    projection: ProductionReliableFlushTraceProjection,
+)
+    requires
+        production_reliable_flush_trace_body!(projection),
+    ensures
+        production_reliable_flush_trace_refines_outbound_ownership_kernel(
+            production_reliable_flush_trace_projection(projection),
+        ),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+    reveal(production_reliable_flush_trace_projection);
+    assert(production_reliable_flush_trace_refines_outbound_ownership_kernel(
+        production_reliable_flush_trace_projection(projection),
+    ));
+}
+
+/// A returned application completion binds the task to the exact durable
+/// receipt, finality artifact, and committed State height.
+pub proof fn production_application_trace_refines_decision_completion(
+    projection: ProductionApplicationTraceProjection,
+)
+    requires
+        production_application_trace_body!(projection),
+    ensures
+        production_application_trace_refines_decision_completion_kernel(
+            production_application_trace_projection(projection),
+        ),
+{
+    reveal(production_application_trace_refines_decision_completion_kernel);
+    reveal(production_application_trace_projection);
+    assert(production_application_trace_refines_decision_completion_kernel(
+        production_application_trace_projection(projection),
+    ));
+}
+
 /// Verus-side shape of one fixed-width effect capability key.
 #[derive(Copy, Clone)]
 pub struct ProductionTagProjection {
@@ -3078,17 +3501,33 @@ pub struct ProductionTagProjection {
 
 /// Verus-side complete safety identity of one optional quorum certificate.
 ///
-/// Signature bytes remain outside this fixed-width projection. The executable
-/// reducer separately compares the complete effect-carried certificate object
-/// with the durable certificate before committing the transition.
+/// The roster-indexed signer bitmap and quorum totals preserve the complete
+/// signer set. The evidence class is produced by full concrete certificate
+/// equality, including canonical signature/evidence bytes, against the local
+/// and incoming transition anchors.
+#[derive(Copy, Clone)]
+pub struct CanonicalIdentityProjection {
+    pub domain: u8,
+    pub kind: u8,
+    pub word0: u64,
+    pub word1: u64,
+    pub word2: u64,
+    pub word3: u64,
+}
+
 #[derive(Copy, Clone)]
 pub struct CertificateIdentityProjection {
     pub present: bool,
-    pub context_id: int,
+    pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
     pub phase: u8,
-    pub subject: int,
+    pub subject: CanonicalIdentityProjection,
+    pub signer_bitmap: u128,
+    pub signer_bitmap_count: u64,
+    pub signer_count: u64,
+    pub voting_power: u64,
+    pub evidence_class: u8,
 }
 
 /// Verus-side identity of one optional timeout certificate and its selected
@@ -3096,7 +3535,7 @@ pub struct CertificateIdentityProjection {
 #[derive(Copy, Clone)]
 pub struct TimeoutIdentityProjection {
     pub present: bool,
-    pub context_id: int,
+    pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
     pub highest_prepare: CertificateIdentityProjection,
@@ -3111,7 +3550,7 @@ pub struct TimeoutIdentityProjection {
 #[derive(Copy, Clone)]
 pub struct EnterViewProjection {
     pub active: bool,
-    pub context_id: int,
+    pub context_id: CanonicalIdentityProjection,
     pub before_tag: ProductionTagProjection,
     pub after_tag: ProductionTagProjection,
     pub pending_record_kind: u8,
@@ -3248,10 +3687,10 @@ pub struct ProductionPendingProjection {
     pub record_kind: u8,
     pub continuation: u8,
     pub persistence_id: u64,
-    pub context_id: int,
+    pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
-    pub subject: int,
+    pub subject: CanonicalIdentityProjection,
 }
 
 /// Verus-side durable-boundary capability key.
@@ -3263,8 +3702,10 @@ pub struct ProductionBoundaryCapabilityKeyProjection {
     pub replay_effect_kind: u8,
     pub persistence_id: u64,
     pub context_id: int,
+    pub context_identity: CanonicalIdentityProjection,
     pub tag: ProductionTagProjection,
     pub subject: ProductionSubjectProjection,
+    pub subject_identity: CanonicalIdentityProjection,
     pub replay_plan: ProductionReplayPlanProjection,
 }
 
@@ -3377,6 +3818,13 @@ pub open spec fn production_enter_view_projection_relation(
     enter_view_projection_gate_body!(projection)
 }
 
+/// Full locked-PrepareQC identity preserved across every persisted-TC seam.
+pub open spec fn production_enter_view_preserves_locked_prepare_qc_identity(
+    projection: EnterViewProjection,
+) -> bool {
+    enter_view_locked_prepare_qc_identity_body!(projection)
+}
+
 /// Exact fact derivation shared with the executable production kernel.
 pub closed spec fn production_facts_from_projection(
     projection: ProductionTransitionProjection,
@@ -3390,7 +3838,9 @@ pub closed spec fn production_facts_from_projection(
 pub closed spec fn production_enter_view_exact_fact(
     projection: ProductionTransitionProjection,
 ) -> bool {
-    production_enter_view_exact_body!(projection)
+    production_enter_view_projection_relation(projection.enter_view)
+        && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8)
 }
 
 /// The full source-linked constructor projects the isolated exact EnterView
@@ -3517,6 +3967,7 @@ pub fn verified_classification_facts_from_projection(
 
 /// Executable projection of volatile, durable-delta, capability, and effect
 /// facts from the exact shared constructor.
+#[verifier::spinoff_prover]
 pub fn verified_delta_facts_from_projection(
     projection: ProductionTransitionProjection,
 ) -> (facts: ProductionTransitionFactsProjection)
@@ -3531,13 +3982,19 @@ pub fn verified_delta_facts_from_projection(
         ProductionTransitionFactsProjection
     );
     proof {
-        reveal(production_delta_facts_equal);
-        reveal(production_facts_from_projection);
+        assert(production_delta_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        )) by {
+            reveal(production_delta_facts_equal);
+            reveal(production_facts_from_projection);
+        }
     }
     facts
 }
 
 /// Exact EnterView fact when the transition is inactive.
+#[verifier::spinoff_prover]
 pub fn verified_inactive_enter_view_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3548,12 +4005,15 @@ pub fn verified_inactive_enter_view_fact(
 {
     let enter_view_exact = production_enter_view_exact_body!(projection);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
 
 /// Exact active EnterView fact when neither a local nor incoming lock exists.
+#[verifier::spinoff_prover]
 pub fn verified_empty_enter_view_lock_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3566,13 +4026,16 @@ pub fn verified_empty_enter_view_lock_fact(
 {
     let enter_view_exact = production_enter_view_exact_body!(projection);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
 
 /// Exact active EnterView fact when only the incoming highest `PrepareQC`
 /// exists.
+#[verifier::spinoff_prover]
 pub fn verified_incoming_only_enter_view_lock_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3585,12 +4048,15 @@ pub fn verified_incoming_only_enter_view_lock_fact(
 {
     let enter_view_exact = production_enter_view_exact_body!(projection);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
 
 /// Exact active EnterView fact when only the pre-transition local lock exists.
+#[verifier::spinoff_prover]
 pub fn verified_local_only_enter_view_lock_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3603,13 +4069,16 @@ pub fn verified_local_only_enter_view_lock_fact(
 {
     let enter_view_exact = production_enter_view_exact_body!(projection);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
 
 /// Exact active EnterView fact when the local lock is at least as high as the
 /// incoming highest `PrepareQC`.
+#[verifier::spinoff_prover]
 pub fn verified_local_max_enter_view_lock_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3624,13 +4093,40 @@ pub fn verified_local_max_enter_view_lock_fact(
 {
     let enter_view_exact = production_enter_view_exact_body!(projection);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
 
 /// Exact active EnterView fact when the incoming highest `PrepareQC` is
 /// strictly higher than the local lock.
+#[verifier::spinoff_prover]
+pub fn verified_incoming_max_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> (accepted: bool)
+    requires
+        projection.active,
+        projection.local_lock_before.present,
+        projection.pending_record_timeout.highest_prepare.present,
+        projection.pending_record_timeout.highest_prepare.view
+            > projection.local_lock_before.view,
+    ensures
+        accepted == production_enter_view_projection_relation(projection),
+{
+    let accepted = enter_view_projection_gate_body!(projection);
+    proof {
+        assert(accepted == production_enter_view_projection_relation(projection)) by {
+            reveal(production_enter_view_projection_relation);
+        }
+    }
+    accepted
+}
+
+/// Compose the isolated higher-incoming-lock relation with the exact effect
+/// counts from the complete production transition projection.
+#[verifier::spinoff_prover]
 pub fn verified_incoming_max_enter_view_lock_fact(
     projection: ProductionTransitionProjection,
 ) -> (enter_view_exact: bool)
@@ -3643,9 +4139,14 @@ pub fn verified_incoming_max_enter_view_lock_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let enter_view_exact = production_enter_view_exact_body!(projection);
+    let enter_view_exact = verified_incoming_max_enter_view_projection_relation(
+        projection.enter_view,
+    ) && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8);
     proof {
-        reveal(production_enter_view_exact_fact);
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
     }
     enter_view_exact
 }
@@ -4621,6 +5122,7 @@ pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
         projection.enter_view.active,
     ensures
         production_enter_view_projection_relation(projection.enter_view),
+        production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
         certificate_identity_equal_body!(
             projection.enter_view.durable_lock_after,
             production_enter_view_selected_lock(projection.enter_view)
@@ -4639,8 +5141,26 @@ pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
     reveal(production_transition_action_relation);
     reveal(production_facts_from_projection);
     reveal(production_enter_view_projection_relation);
+    reveal(production_enter_view_preserves_locked_prepare_qc_identity);
     reveal(production_enter_view_selected_lock);
     reveal(production_enter_view_has_exact_following_fetch);
+}
+
+/// An accepted active persisted-TC transition exposes the complete exact
+/// `EnterView` fact consumed by the effective-lock production refinement.
+pub proof fn accepted_core_enter_view_has_exact_fact(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        production_kernel_relation(projection),
+        projection.enter_view.active,
+    ensures
+        production_enter_view_exact_fact(projection),
+{
+    reveal(production_kernel_relation);
+    reveal(production_transition_action_relation);
+    reveal(production_facts_from_projection);
+    reveal(production_enter_view_exact_fact);
 }
 
 /// Exact executable kernel called conceptually by `refinement::accepts`:

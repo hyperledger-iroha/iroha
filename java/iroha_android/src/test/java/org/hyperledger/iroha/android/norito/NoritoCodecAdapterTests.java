@@ -7,12 +7,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
+import org.hyperledger.iroha.android.model.ContractInvocation;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.FeeChargeKind;
 import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
@@ -64,6 +67,9 @@ public final class NoritoCodecAdapterTests {
     javaCodecEncodesChainIdLayout();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
+    javaCodecSupportsContractCallVariant();
+    javaCodecSupportsMixedBatchVariant();
+    javaCodecRejectsOversizedContractArgumentRecord();
     javaCodecEncodesIvmBytecodeLayout();
     javaCodecEncodesInstructionLayout();
     javaCodecEncodesTypedFeePayment();
@@ -73,7 +79,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecRoundTripsPayload() throws NoritoException {
     final byte[] instructions = "android-instructions".getBytes();
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000001")
             .setAuthority(sampleAuthority((byte) 0x01))
             .setCreationTimeMs(1_735_000_000_123L)
@@ -145,7 +151,7 @@ public final class NoritoCodecAdapterTests {
     }
     final String authority = i105;
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000002")
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
@@ -192,7 +198,7 @@ public final class NoritoCodecAdapterTests {
     }
     final String authority = i105;
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000002")
             .setAuthority(authority)
             .setCreationTimeMs(1_735_000_000_456L)
@@ -452,7 +458,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000003")
             .setAuthority(sampleAuthority((byte) 0x02))
             .setCreationTimeMs(1_735_000_000_789L)
@@ -532,7 +538,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecRejectsMalformedSignedTransactions() throws NoritoException {
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000003")
             .setAuthority(sampleAuthority((byte) 0x12))
             .setCreationTimeMs(1_735_000_001_000L)
@@ -559,7 +565,7 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesChainIdLayout() throws NoritoException {
     final String chainId = "00000003";
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId(chainId)
             .setAuthority(sampleAuthority((byte) 0x03))
             .setCreationTimeMs(1_735_000_000_789L)
@@ -649,10 +655,139 @@ public final class NoritoCodecAdapterTests {
         : "Wire payload bytes must round-trip";
   }
 
+  private static void javaCodecSupportsContractCallVariant() throws NoritoException {
+    final byte[] expectedCodeHash = fill(0x31, 32);
+    final byte[] arguments = new byte[] {0x4B, 0x4F, 0x54, 0x4F};
+    final ContractInvocation invocation =
+        new ContractInvocation(
+            sampleContractAddress(), expectedCodeHash, "invoke", arguments);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
+            .setChainId("00000015")
+            .setAuthority(sampleAuthority((byte) 0x09))
+            .setCreationTimeMs(1_735_444_444_123L)
+            .setContractCall(invocation)
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    assert decoded.executable().isContractCall() : "Executable should decode as ContractCall";
+    assert invocation.equals(decoded.executable().contractInvocation())
+        : "Contract invocation must round-trip";
+
+    final NoritoDecoder executableDecoder = canonicalDecoder(executableField(encoded));
+    assert NoritoAdapters.uint(32).decode(executableDecoder) == 1L
+        : "ContractCall must preserve executable tag 1";
+    final byte[] invocationField = readField(executableDecoder, "payload.executable.contract_call");
+    assert executableDecoder.remaining() == 0 : "ContractCall executable has trailing bytes";
+
+    final NoritoDecoder invocationDecoder = canonicalDecoder(invocationField);
+    final String decodedAddress =
+        decodeFieldPayload(
+            readField(invocationDecoder, "contract_call.contract_address"),
+            NoritoAdapters.stringAdapter(),
+            "contract_call.contract_address");
+    final byte[] decodedHash =
+        decodeFieldPayload(
+            readField(invocationDecoder, "contract_call.expected_code_hash"),
+            NoritoAdapters.fixedBytes(32),
+            "contract_call.expected_code_hash");
+    final String decodedEntrypoint =
+        decodeFieldPayload(
+            readField(invocationDecoder, "contract_call.entrypoint"),
+            NoritoAdapters.stringAdapter(),
+            "contract_call.entrypoint");
+    final Optional<byte[]> decodedArguments =
+        decodeFieldPayload(
+            readField(invocationDecoder, "contract_call.arguments"),
+            NoritoAdapters.option(RAW_BYTE_VECTOR_ADAPTER),
+            "contract_call.arguments");
+    assert invocationDecoder.remaining() == 0 : "ContractInvocation has trailing bytes";
+    assert sampleContractAddress().equals(decodedAddress) : "Contract address layout must match";
+    assert Arrays.equals(expectedCodeHash, decodedHash) : "Code hash must be raw fixed32 bytes";
+    assert "invoke".equals(decodedEntrypoint) : "Entrypoint layout must match";
+    assert decodedArguments.isPresent() && Arrays.equals(arguments, decodedArguments.get())
+        : "Arguments must use Option<raw Vec<u8>> layout";
+  }
+
+  private static void javaCodecSupportsMixedBatchVariant() throws NoritoException {
+    final InstructionBox first =
+        InstructionBox.fromWirePayload(
+            "iroha.batch.first",
+            NoritoCodec.encode("first", "iroha.test.Batch", NoritoAdapters.stringAdapter()));
+    final InstructionBox last =
+        InstructionBox.fromWirePayload(
+            "iroha.batch.last",
+            NoritoCodec.encode("last", "iroha.test.Batch", NoritoAdapters.stringAdapter()));
+    final ContractInvocation invocation =
+        new ContractInvocation(sampleContractAddress(), fill(0x41, 32), "run", null);
+    final List<ExecutableBatchItem> items =
+        listOf(
+            ExecutableBatchItem.instruction(first),
+            ExecutableBatchItem.contractCall(invocation),
+            ExecutableBatchItem.instruction(last));
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
+            .setChainId("00000016")
+            .setAuthority(sampleAuthority((byte) 0x0A))
+            .setCreationTimeMs(1_735_555_555_123L)
+            .setBatch(items)
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    assert decoded.executable().isBatch() : "Executable should decode as Batch";
+    assert items.equals(decoded.executable().batchItems())
+        : "Mixed batch items and order must round-trip";
+    assert decoded.executable().requiresTransactionGasLimit()
+        : "A mixed contract-call batch requires a signed gas limit";
+
+    final NoritoDecoder executableDecoder = canonicalDecoder(executableField(encoded));
+    assert NoritoAdapters.uint(32).decode(executableDecoder) == 4L
+        : "Batch must preserve executable tag 4";
+    final byte[] batchField = readField(executableDecoder, "payload.executable.batch");
+    assert executableDecoder.remaining() == 0 : "Batch executable has trailing bytes";
+
+    final NoritoDecoder batchDecoder = canonicalDecoder(batchField);
+    assert batchDecoder.readLength(false) == 3L : "Batch sequence must preserve its item count";
+    assertBatchItemTag(batchDecoder, 0L, "batch[0]");
+    assertBatchItemTag(batchDecoder, 1L, "batch[1]");
+    assertBatchItemTag(batchDecoder, 0L, "batch[2]");
+    assert batchDecoder.remaining() == 0 : "Batch sequence has trailing bytes";
+  }
+
+  private static void javaCodecRejectsOversizedContractArgumentRecord() throws NoritoException {
+    final byte[] arguments = new byte[] {0x4B, 0x4F, 0x54, 0x4F};
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
+            .setContractCall(
+                new ContractInvocation(
+                    sampleContractAddress(), fill(0x61, 32), "run", arguments))
+            .build();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final byte[] needle = new byte[Long.BYTES + arguments.length];
+    writeLittleEndianU64(needle, 0, arguments.length);
+    System.arraycopy(arguments, 0, needle, Long.BYTES, arguments.length);
+    final int recordOffset = indexOf(encoded, needle);
+    assert recordOffset >= 0 : "Encoded argument record must be present";
+    writeLittleEndianU64(
+        encoded, recordOffset, (long) ContractInvocation.MAX_ARGUMENT_BYTES + 1L);
+
+    expectNoritoFailure(() -> adapter.decodeTransaction(encoded));
+  }
+
   private static void javaCodecEncodesIvmBytecodeLayout() throws NoritoException {
     final byte[] ivmBytes = new byte[] {0x01, 0x02, 0x03, 0x04};
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000012")
             .setAuthority(sampleAuthority((byte) 0x06))
             .setCreationTimeMs(1_735_222_222_123L)
@@ -669,6 +804,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] executableField = readField(decoder, "payload.executable");
     readField(decoder, "payload.time_to_live_ms");
     readField(decoder, "payload.nonce");
+    readField(decoder, "payload.fee_payment");
     readField(decoder, "payload.metadata");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
@@ -710,6 +846,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] executableField = readField(decoder, "payload.executable");
     readField(decoder, "payload.time_to_live_ms");
     readField(decoder, "payload.nonce");
+    readField(decoder, "payload.fee_payment");
     readField(decoder, "payload.metadata");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
@@ -752,6 +889,29 @@ public final class NoritoCodecAdapterTests {
     return decoder.readBytes((int) length);
   }
 
+  private static byte[] executableField(final byte[] encoded) {
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
+    readField(decoder, "payload.chain_id");
+    readField(decoder, "payload.authority");
+    readField(decoder, "payload.creation_time_ms");
+    return readField(decoder, "payload.executable");
+  }
+
+  private static void assertBatchItemTag(
+      final NoritoDecoder batchDecoder, final long expectedTag, final String label) {
+    final long elementLength = batchDecoder.readLength(batchDecoder.compactLenActive());
+    if (elementLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(label + " payload too large");
+    }
+    final NoritoDecoder itemDecoder =
+        canonicalDecoder(batchDecoder.readBytes((int) elementLength));
+    final long actualTag = NoritoAdapters.uint(32).decode(itemDecoder);
+    assert actualTag == expectedTag : label + " discriminant mismatch";
+    final byte[] variantPayload = readField(itemDecoder, label + ".value");
+    assert variantPayload.length > 0 : label + " variant payload must be sized";
+    assert itemDecoder.remaining() == 0 : label + " has trailing bytes";
+  }
+
   private static <T> void encodeFieldPayload(
       final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
     final NoritoEncoder fieldEncoder = encoder.childEncoder();
@@ -770,6 +930,7 @@ public final class NoritoCodecAdapterTests {
     readField(payloadDecoder, "payload.executable");
     readField(payloadDecoder, "payload.time_to_live_ms");
     readField(payloadDecoder, "payload.nonce");
+    readField(payloadDecoder, "payload.fee_payment");
     final byte[] metadataField = readField(payloadDecoder, "payload.metadata");
     assert payloadDecoder.remaining() == 0 : "Payload has trailing bytes";
 
@@ -1057,10 +1218,37 @@ public final class NoritoCodecAdapterTests {
     }
   }
 
+  private static String sampleContractAddress() {
+    return "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+  }
+
   private static byte[] fill(final int value, final int length) {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static int indexOf(final byte[] haystack, final byte[] needle) {
+    for (int offset = 0; offset <= haystack.length - needle.length; offset++) {
+      boolean matches = true;
+      for (int index = 0; index < needle.length; index++) {
+        if (haystack[offset + index] != needle[index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return offset;
+      }
+    }
+    return -1;
+  }
+
+  private static void writeLittleEndianU64(
+      final byte[] destination, final int offset, final long value) {
+    for (int index = 0; index < Long.BYTES; index++) {
+      destination[offset + index] = (byte) (value >>> (8 * index));
+    }
   }
 
   private static void expectNoritoFailure(final CheckedNoritoRunnable action) {

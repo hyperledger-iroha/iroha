@@ -110,6 +110,10 @@ export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
 export IROHA_TEST_PROCESS_TIMEOUT_MS=300
 export IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300
+# This source-bound corridor is deliberately the fixed five-scenario,
+# four-validator acceptance matrix. The independent nine-peer signed-observer
+# pressure test is useful stress coverage, but is not one of these 32-by-5
+# release obligations and must not change the attested run count.
 readonly scenarios=(
   "authoritative_v2_genesis_commits_on_every_validator|authoritative_v2_genesis_commits_on_every_validator|normal"
   "authoritative_v2_finalizes_through_validator_restart|authoritative_v2_finalizes_through_validator_restart|normal"
@@ -148,13 +152,16 @@ printf 'pid=%s\nprofile=%s\nsource_manifest_sha256=%s\n' \
 evidence_dir="$(mktemp -d "${evidence_root}/invocation.XXXXXX")"
 readonly evidence_dir
 readonly run_log_dir="${evidence_dir}/runs"
+readonly localnet_manifest_dir="${evidence_dir}/localnet-manifests"
+readonly localnet_manifests="${evidence_dir}/localnet-manifests.tsv"
 readonly summary="${evidence_dir}/summary.tsv"
 readonly inventory_log="${evidence_dir}/test-inventory.log"
 readonly ignored_inventory_log="${evidence_dir}/ignored-test-inventory.log"
 readonly invocation_attestation="${evidence_dir}/invocation.tsv"
 readonly completion_attestation="${evidence_dir}/COMPLETED.tsv"
 readonly expected_runs="$((seed_count * ${#scenarios[@]}))"
-mkdir -p -- "$run_log_dir" "${evidence_dir}/localnets"
+mkdir -p -- "$run_log_dir" "$localnet_manifest_dir" "${evidence_dir}/localnets"
+printf '%s\n' $'run_index\tlocalnet\tmanifest\tmanifest_sha256' >"$localnet_manifests"
 printf '%s\t%s\n' \
   schema_version 1 \
   profile "$profile" \
@@ -282,6 +289,27 @@ for scenario_spec in "${scenarios[@]}"; do
       echo "expected exactly one ${module}::${test_name} test to run and pass with deterministic seed ${seed}; refusing zero-test, wrong-seed, or ambiguous Cargo success; output: ${run_log}; localnet: ${localnet_dir}; summary: ${summary}" >&2
       exit 1
     fi
+    manifest_index="$((run_index - 1))"
+    printf -v manifest_output 'localnet-manifests/run-%03d.tsv' "$manifest_index"
+    manifest_path="${evidence_dir}/${manifest_output}"
+    if ! python3 scripts/sumeragi_v2_localnet_manifest.py \
+      --root "$localnet_dir" --output "$manifest_path"; then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$profile" "$source_manifest_sha256" "$test_name" "$seed" "invalid_localnet" \
+        "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
+        "$run_output" "$localnet_output" "$command" \
+        >>"$summary"
+      echo "retained localnet for ${module}::${test_name} seed ${seed} is unsafe or unstable; localnet: ${localnet_dir}; summary: ${summary}" >&2
+      exit 1
+    fi
+    manifest_sha256="$(sha256_file "$manifest_path")"
+    if [[ ! "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "failed to hash retained-localnet manifest ${manifest_path}" >&2
+      exit 1
+    fi
+    printf '%s\t%s\t%s\t%s\n' \
+      "$manifest_index" "$localnet_output" "$manifest_output" "$manifest_sha256" \
+      >>"$localnet_manifests"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$profile" "$source_manifest_sha256" "$test_name" "$seed" "passed" \
       "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
@@ -294,16 +322,26 @@ if [[ "$run_index" != "$expected_runs" ]]; then
   echo "seed-matrix completed ${run_index} command runs, expected ${expected_runs}" >&2
   exit 1
 fi
+localnet_manifest_count="$(($(wc -l <"$localnet_manifests") - 1))"
+if [[ "$localnet_manifest_count" != "$expected_runs" ]]; then
+  echo "seed-matrix retained ${localnet_manifest_count} localnet manifests, expected ${expected_runs}" >&2
+  exit 1
+fi
 require_source_manifest "before completion attestation" || exit 1
 summary_sha256="$(sha256_file "$summary")"
 if [[ ! "$summary_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "failed to hash the seed-matrix summary" >&2
   exit 1
 fi
+localnet_manifests_sha256="$(sha256_file "$localnet_manifests")"
+if [[ ! "$localnet_manifests_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "failed to hash the retained-localnet manifest index" >&2
+  exit 1
+fi
 completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
 {
   printf '%s\t%s\n' \
-    schema_version 1 \
+    schema_version 2 \
     profile "$profile" \
     source_manifest_sha256 "$source_manifest_sha256"
   if [[ "$profile" == "release" ]]; then
@@ -315,7 +353,15 @@ completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
     completed_runs "$run_index" \
     expected_runs "$expected_runs" \
-    summary_sha256 "$summary_sha256"
+    summary_sha256 "$summary_sha256" \
+    localnet_manifest_count "$localnet_manifest_count" \
+    localnet_manifests_path "$(basename "$localnet_manifests")" \
+    localnet_manifests_sha256 "$localnet_manifests_sha256"
+  while IFS=$'\t' read -r manifest_index _ manifest_path manifest_sha256; do
+    [[ "$manifest_index" == "run_index" ]] && continue
+    printf 'localnet_manifest_%03d_path\t%s\n' "$manifest_index" "$manifest_path"
+    printf 'localnet_manifest_%03d_sha256\t%s\n' "$manifest_index" "$manifest_sha256"
+  done <"$localnet_manifests"
 } >"$completion_tmp"
 mv -- "$completion_tmp" "$completion_attestation"
 if ! require_source_manifest "after completion attestation"; then

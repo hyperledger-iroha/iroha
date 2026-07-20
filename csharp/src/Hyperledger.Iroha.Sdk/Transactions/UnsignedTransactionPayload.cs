@@ -9,14 +9,14 @@ namespace Hyperledger.Iroha.Transactions;
 /// </summary>
 public sealed class UnsignedTransactionPayload
 {
-    private readonly JsonObject instructions;
+    private readonly JsonObject executable;
     private readonly ReadOnlyDictionary<string, JsonNode?> metadata;
 
     internal UnsignedTransactionPayload(
         string chain,
         string authority,
         ulong creationTimeMilliseconds,
-        JsonObject instructions,
+        JsonObject executable,
         ulong? timeToLiveMilliseconds,
         uint? nonce,
         FeePaymentIntent feePayment,
@@ -25,7 +25,7 @@ public sealed class UnsignedTransactionPayload
         Chain = chain;
         Authority = authority;
         CreationTimeMilliseconds = creationTimeMilliseconds;
-        this.instructions = (JsonObject)instructions.DeepClone();
+        this.executable = (JsonObject)executable.DeepClone();
         TimeToLiveMilliseconds = timeToLiveMilliseconds;
         Nonce = nonce;
         FeePayment = feePayment;
@@ -52,7 +52,11 @@ public sealed class UnsignedTransactionPayload
 
     /// <summary>Canonical Norito JSON executable.</summary>
     [JsonPropertyName("instructions")]
-    public JsonObject Instructions => (JsonObject)instructions.DeepClone();
+    public JsonObject Executable => (JsonObject)executable.DeepClone();
+
+    /// <summary>Compatibility alias for <see cref="Executable"/>.</summary>
+    [JsonIgnore]
+    public JsonObject Instructions => Executable;
 
     /// <summary>Optional transaction time-to-live in milliseconds.</summary>
     [JsonPropertyName("time_to_live_ms")]

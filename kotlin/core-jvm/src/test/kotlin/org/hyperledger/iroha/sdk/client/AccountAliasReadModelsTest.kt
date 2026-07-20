@@ -72,6 +72,25 @@ class AccountAliasReadModelsTest {
                     .toByteArray(StandardCharsets.UTF_8),
             )
         }
+        for (retiredField in listOf(
+            "\"accountId\":\"$account\"",
+            "\"account_ids\":[\"$account\"]",
+            "\"accountIds\":[\"$account\"]",
+            "\"unexpected\":true",
+        )) {
+            assertFailsWith<IllegalStateException> {
+                AccountAliasJsonParser.parseResolution(
+                    """{"alias":"merchant@paynet","account_id":"$account",$retiredField}"""
+                        .toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountAliasJsonParser.parseResolution(
+                """{"alias":"Merchant@paynet","account_id":"$account"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
         assertFailsWith<IllegalArgumentException> {
             AccountAliasReadJsonParser.parseByAccount(
                 """{"account_id":"$account","total":2,"items":[{"alias":"merchant@paynet","dataspace":"paynet","is_primary":true}]}"""

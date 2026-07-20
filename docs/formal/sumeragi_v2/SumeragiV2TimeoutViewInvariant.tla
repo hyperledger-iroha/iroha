@@ -66,6 +66,8 @@ TimeoutViewFrontierProposalStableStep ==
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ValidateDecidedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       ValidateLockedBody(node, qc)
 
 TimeoutViewFrontierVoteStableStep ==
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
@@ -102,7 +104,8 @@ TimeoutViewFrontierTimeoutStableStep ==
        BeginInstallTC(node, tc)
 
 TimeoutViewFrontierRecoveryStableStep ==
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
@@ -468,7 +471,7 @@ BY IsaT(60)
        PersistProposal, CompleteProposalSignature,
        ByzantineBroadcastProposal, DeliverProposal,
        FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, RejectBody, ValidateDecidedBody
+       ValidateBody, RejectBody, ValidateDecidedBody, ValidateLockedBody
 
 THEOREM VoteStableStepLeavesTimeoutViewFrontier ==
   TimeoutViewFrontierVoteStableStep

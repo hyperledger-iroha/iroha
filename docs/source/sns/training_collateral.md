@@ -72,8 +72,7 @@ Use a typed, secret-free intent. A representative bulk-tool invocation is:
 ```bash
 python3 scripts/sns_bulk_onboard.py setup.json \
   --config client.toml \
-  --plan-file setup.plan.json \
-  --plan-only
+  --plan-file setup.plan.json
 ```
 
 The signed planner request must not mutate state. Review the authority,
@@ -87,6 +86,14 @@ The CLI or SDK must verify the plan hash, decode and re-encode the exact frames,
 locally sign one ordinary transaction, and submit it through the existing
 transaction endpoint. Do not split a parent/child setup into separate
 transactions. Do not substitute locally rebuilt instructions after verification.
+With the bulk wrapper, mutation must be requested explicitly:
+
+```bash
+python3 scripts/sns_bulk_onboard.py setup.json \
+  --config client.toml \
+  --plan-file setup.plan.json \
+  --apply
+```
 
 ### 2.4 Evidence packet
 

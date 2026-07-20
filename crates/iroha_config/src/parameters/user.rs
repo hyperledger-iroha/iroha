@@ -41,9 +41,7 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     domain::DomainId,
-    merge::{
-        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
-    },
+    merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };

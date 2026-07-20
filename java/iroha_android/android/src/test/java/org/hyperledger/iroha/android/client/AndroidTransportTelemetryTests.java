@@ -15,6 +15,7 @@ import okhttp3.WebSocketListener;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorFactory;
 import org.hyperledger.iroha.android.client.stream.ServerSentEvent;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
@@ -129,7 +130,7 @@ public final class AndroidTransportTelemetryTests {
   }
 
   @Test
-  public void webSocketEmitsTelemetryWithDefaultConnector() throws Exception {
+  public void webSocketEmitsTelemetryWithExplicitConnector() throws Exception {
     final TelemetryOptions telemetryOptions = telemetryOptions();
     final RecordingTelemetrySink sink = new RecordingTelemetrySink();
     final TelemetryObserver observer = new TelemetryObserver(telemetryOptions, sink);
@@ -150,7 +151,11 @@ public final class AndroidTransportTelemetryTests {
       final URI baseUri = server.url("/").uri();
 
       final ToriiWebSocketClient client =
-          ToriiWebSocketClient.builder().setBaseUri(baseUri).addObserver(observer).build();
+          ToriiWebSocketClient.builder()
+              .setBaseUri(baseUri)
+              .setWebSocketConnector(OkHttpWebSocketConnectorFactory.createDefault())
+              .addObserver(observer)
+              .build();
       final RecordingWsListener listener = new RecordingWsListener();
       final ToriiWebSocketSession session =
           client.connect("/ws", ToriiWebSocketOptions.defaultOptions(), listener);

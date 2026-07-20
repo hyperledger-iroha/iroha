@@ -36,12 +36,12 @@ NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy --workspace --benches --tests --example
 cargo run --bin kagami -- genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 default > ./defaults/genesis.json
 # update schema
 cargo run --bin kagami -- schema --genesis-out ./docs/source/references/genesis_schema.json > ./docs/source/references/schema.json
-# update command-line help
-cargo run --bin iroha -- tools markdown-help > ./crates/iroha_cli/CommandLineHelp.md
-cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
+# Validate live Iroha help and update Kagami's checked-in compact snapshot.
+cargo run --bin iroha -- tools markdown-help > /dev/null
+cargo run --bin kagami -- advanced markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
 cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
 # stage updates
-git add ./defaults/genesis.json ./docs/source/references/schema.json ./docs/source/references/genesis_schema.json ./crates/iroha_cli/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml
+git add ./defaults/genesis.json ./docs/source/references/schema.json ./docs/source/references/genesis_schema.json ./crates/iroha_kagami/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

@@ -5,7 +5,7 @@ set -euo pipefail
 
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
-readonly TLAPM_COMMIT="763bf3c1826d77a4cf206f43d5aa16775da1da33"
+readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
@@ -217,7 +217,22 @@ run_case effective-lock-future-completion-bug \
 run_case ownership-invariant-n1 \
   SumeragiV2OwnershipInvariantCheck.tla ownership_n1.cfg 0 \
   "Model checking completed. No error has been found." \
-  "454273 states generated, 49664 distinct states found" \
-  "depth of the complete state graph search is 48"
+  "983041 states generated, 99328 distinct states found" \
+  "depth of the complete state graph search is 49"
 
-echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, and ownership mutation matrix passed"
+run_case reply-route-fixed \
+  SumeragiV2ReplyRouteOwnershipMutation.tla reply_route_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "16 states generated, 16 distinct states found"
+run_case reply-route-cursor-reset-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_cursor_reset_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "messageCursor |-> 0"
+run_case reply-route-source-replacement-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_source_replacement_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "attempts = { [ connectionTenure |-> 1"
+
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, and per-source reply-route mutation matrix passed"

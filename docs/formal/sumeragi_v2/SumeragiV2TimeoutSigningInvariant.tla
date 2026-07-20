@@ -108,7 +108,7 @@ BY IsaT(120)
        PersistProposal, CompleteProposalSignature,
        ByzantineBroadcastProposal, DeliverProposal,
        FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, RejectBody, ValidateDecidedBody,
+       ValidateBody, RejectBody, ValidateDecidedBody, ValidateLockedBody,
        BeginPrepare, PersistPrepare, CompleteVoteSignature,
        ByzantineBroadcastVote, DeliverVote, FormPrepareQC, DeliverQC,
        BeginObservePrepare, PersistObservePrepare,

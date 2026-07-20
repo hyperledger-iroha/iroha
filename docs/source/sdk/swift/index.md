@@ -51,8 +51,8 @@ network.
 
 ### Bridge delivery and platform minimums
 - Toolchain/platform: Swift 5.9+ with iOS 15+ or macOS 12+ for both SPM and CocoaPods.
-- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` exercises the manifest with and without the bridge (missing-bridge path must fall back to Swift-only with warning), and `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/swift-packaging.yml`.
-- Policy: bridge loading is automatic. When `dist/NoritoBridge.xcframework` is present, native helpers are enabled; when it is absent, Swift-only fallback is used. SDK helper failures surface `bridgeUnavailable`/`nativeBridgeUnavailable` with the expected bridge location.
+- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` proves that the complete artifact builds and that a missing bridge is rejected, while `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/mobile_sdk_artifacts.yml`.
+- Policy: the bridge is mandatory. Package resolution fails when `dist/NoritoBridge.xcframework` is absent or incomplete; runtime `bridgeUnavailable`/`nativeBridgeUnavailable` errors identify a broken or unloaded required artifact rather than selecting a Swift-only codec fallback.
 
 ## Quickstart
 

@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   buildRegisterDomainTransaction,
+  buildExecutableBatchTransaction,
+  buildExecutableBatchTransactionPayload,
   buildTransaction,
   buildTransactionPayload,
   signQuotedTransactionPayload,
@@ -399,6 +401,133 @@ test("buildTransaction normalizes instruction objects", () => {
   assert.equal(call.ttlMs, 20);
   assert.equal(call.nonce, 5);
   assert.equal(call.privateKeyAlgorithm, "secp256k1");
+});
+
+test("mixed executable batch builder forwards ordered copied entries", () => {
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "2",
+  });
+  const expectedCodeHash = Buffer.alloc(32, 0x41);
+  const argumentsBytes = Uint8Array.from([0x4b, 0x4f, 0x54, 0x4f]);
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x04, 0x01]),
+    hash: Buffer.alloc(32, 0xab),
+  };
+  withNativeBinding(
+    {
+      buildExecutableBatchTransaction: (...args) => {
+        captures.push(args);
+        return fakeResult;
+      },
+    },
+    () => {
+      const result = buildExecutableBatchTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        entries: [
+          { kind: "instruction", instruction },
+          {
+            kind: "contractCall",
+            contractAddress:
+              "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            expectedCodeHash,
+            entrypoint: "run",
+            arguments: argumentsBytes,
+          },
+          { kind: "instruction", instruction },
+        ],
+        feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(result.signedTransaction, fakeResult.signed_transaction);
+      assert.deepEqual(result.hash, fakeResult.hash);
+    },
+  );
+  expectedCodeHash.fill(0);
+  argumentsBytes.fill(0);
+
+  assert.equal(captures.length, 1);
+  const entries = captures[0][2].map((entry) => JSON.parse(entry));
+  assert.deepEqual(entries.map(({ kind }) => kind), [
+    "instruction",
+    "contractCall",
+    "instruction",
+  ]);
+  assert.equal(entries[1].expectedCodeHash, "41".repeat(32).toUpperCase());
+  assert.deepEqual(entries[1].arguments, [0x4b, 0x4f, 0x54, 0x4f]);
+  assert.equal(JSON.parse(captures[0][3]).value.gas_limit, 1000);
+});
+
+test("mixed executable batch draft and validation reject missing requirements", () => {
+  const call = {
+    kind: "contractCall",
+    contractAddress:
+      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+    expectedCodeHash: Buffer.alloc(32, 0x41),
+    entrypoint: "run",
+  };
+  withNativeBinding(
+    {
+      buildExecutableBatchTransactionPayload: (...args) => ({
+        payload_json: JSON.stringify({ instructions: { Batch: [] } }),
+        payload_bytes: Buffer.from([4]),
+        payload_hash: Buffer.alloc(32, 5),
+        args,
+      }),
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [call],
+            feePayment: AUTHORITY_FEE_PAYMENT,
+          }),
+        /gasLimit is required/u,
+      );
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [],
+            feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+          }),
+        /non-empty array/u,
+      );
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [{ ...call, expectedCodeHash: Buffer.alloc(31) }],
+            feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+          }),
+        /exactly 32 bytes/u,
+      );
+      for (const contractAddress of [
+        "abc",
+        call.contractAddress.toUpperCase(),
+        `${call.contractAddress.slice(0, -1)}p`,
+        "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+        "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+      ]) {
+        assert.throws(
+          () =>
+            buildExecutableBatchTransactionPayload({
+              chainId: "test-chain",
+              authority: AUTHORITY_ID_INPUT,
+              entries: [{ ...call, contractAddress }],
+              feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+            }),
+          /contractAddress/u,
+        );
+      }
+    },
+  );
 });
 
 test("quote-to-sign helpers preserve the exact unsigned payload", () => {

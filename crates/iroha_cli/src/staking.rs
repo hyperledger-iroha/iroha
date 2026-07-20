@@ -256,7 +256,8 @@ mod tests {
                 }
                 crate::Executable::ContractCall(_)
                 | crate::Executable::Ivm(_)
-                | crate::Executable::IvmProved(_) => {
+                | crate::Executable::IvmProved(_)
+                | crate::Executable::Batch(_) => {
                     eyre::bail!("unexpected non-instruction executable in staking test context")
                 }
             }

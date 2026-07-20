@@ -45,7 +45,7 @@ const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const NODE_CAPABILITIES = {
   abi_version: 1,
-  data_model_version: 2,
+  data_model_version: 3,
   crypto: {
     sm: {
       enabled: false,

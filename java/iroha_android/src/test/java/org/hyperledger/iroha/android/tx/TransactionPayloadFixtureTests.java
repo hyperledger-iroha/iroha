@@ -10,13 +10,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.ContractInvocation;
+import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.FeeChargeKind;
 import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.junit.Test;
@@ -154,6 +158,37 @@ public final class TransactionPayloadFixtureTests {
         assert JsonValue.bool(true).equals(payload.metadata().get("checked"))
             : name + ": boolean metadata must be preserved";
       }
+      if ("mixed_executable_batch".equals(name)) {
+        assert payload.executable().isBatch() : name + ": executable must be a Batch";
+        final List<ExecutableBatchItem> items = payload.executable().batchItems();
+        assert items.size() == 3 : name + ": expected three ordered batch items";
+        assert items.get(0).isInstruction() : name + ": first item must be an Instruction";
+        assert items.get(1).isContractCall() : name + ": second item must be a ContractCall";
+        assert items.get(2).isInstruction() : name + ": third item must be an Instruction";
+        final ContractInvocation invocation = items.get(1).contractInvocation();
+        assert "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            .equals(invocation.contractAddress()) : name + ": contract address mismatch";
+        assert Arrays.equals(
+                HashLiteral.decode(
+                    "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22"),
+                invocation.expectedCodeHash()) : name + ": expected code hash mismatch";
+        assert "run".equals(invocation.entrypoint()) : name + ": entrypoint mismatch";
+        assert Arrays.equals(new byte[] {1, 2, 3, 4}, invocation.arguments())
+            : name + ": argument record mismatch";
+        assert Long.valueOf(100_000L).equals(payload.feePayment().gasLimit())
+            : name + ": gas limit mismatch";
+      }
+      if ("ivm_transfer".equals(name)) {
+        assert payload.executable().isIvm() : name + ": legacy executable must remain IVM";
+        assert payload.feePayment().gasLimit() == null : name + ": legacy fixture must remain gasless";
+        try {
+          adapter.encodeTransaction(payload);
+          throw new AssertionError(name + ": gasless IVM payload must not be re-encoded");
+        } catch (final NoritoException expected) {
+          // Historical wire data remains decodable but cannot enter a new signing flow.
+        }
+        continue;
+      }
       final byte[] encoded = adapter.encodeTransaction(payload);
       fixture.encoded().ifPresent(expected -> {
         if (payload.executable().isInstructions()) {
@@ -166,7 +201,7 @@ public final class TransactionPayloadFixtureTests {
         final String actual = Base64.getEncoder().encodeToString(encoded);
         assert expected.equals(actual) : name + ": encoded payload mismatch";
       });
-      if (fixture.encoded().isEmpty()) {
+      if (!fixture.encoded().isPresent()) {
         final String base64 = Base64.getEncoder().encodeToString(encoded);
         System.out.println("[fixture] " + name + "=" + base64);
       }
@@ -188,28 +223,89 @@ public final class TransactionPayloadFixtureTests {
       assert actual.executable().isIvm() : name + ": executable type mismatch";
       assert java.util.Arrays.equals(expected.executable().ivmBytes(), actual.executable().ivmBytes())
           : name + ": IVM bytes mismatch";
-    } else {
+    } else if (expected.executable().isInstructions()) {
       assert actual.executable().isInstructions() : name + ": executable type mismatch";
       final java.util.List<InstructionBox> expectedInstr = expected.executable().instructions();
       final java.util.List<InstructionBox> actualInstr = actual.executable().instructions();
       assert expectedInstr.size() == actualInstr.size() : name + ": instruction count mismatch";
       for (int i = 0; i < expectedInstr.size(); i++) {
-        final InstructionBox expectedBox = expectedInstr.get(i);
-        final InstructionBox actualBox = actualInstr.get(i);
-        assert expectedBox.kind() == actualBox.kind()
-            : name + ": instruction kind mismatch at index " + i;
-        assert Objects.equals(expectedBox.arguments(), actualBox.arguments())
-            : name + ": instruction arguments mismatch at index " + i;
-        assert expectedBox.payload().getClass().equals(actualBox.payload().getClass())
-            : name + ": instruction payload type mismatch at index " + i;
+        assertInstructionBoxEquals(name, i, expectedInstr.get(i), actualInstr.get(i));
       }
+    } else if (expected.executable().isContractCall()) {
+      assert actual.executable().isContractCall() : name + ": executable type mismatch";
+      assertContractInvocationEquals(
+          name,
+          expected.executable().contractInvocation(),
+          actual.executable().contractInvocation());
+    } else if (expected.executable().isBatch()) {
+      assert actual.executable().isBatch() : name + ": executable type mismatch";
+      final List<ExecutableBatchItem> expectedItems = expected.executable().batchItems();
+      final List<ExecutableBatchItem> actualItems = actual.executable().batchItems();
+      assert expectedItems.size() == actualItems.size() : name + ": batch item count mismatch";
+      for (int index = 0; index < expectedItems.size(); index++) {
+        final ExecutableBatchItem expectedItem = expectedItems.get(index);
+        final ExecutableBatchItem actualItem = actualItems.get(index);
+        if (expectedItem.isInstruction()) {
+          assert actualItem.isInstruction() : name + ": batch item tag mismatch at index " + index;
+          assertInstructionBoxEquals(
+              name + ": batch", index, expectedItem.instruction(), actualItem.instruction());
+        } else {
+          assert actualItem.isContractCall()
+              : name + ": batch item tag mismatch at index " + index;
+          assertContractInvocationEquals(
+              name + ": batch item " + index,
+              expectedItem.contractInvocation(),
+              actualItem.contractInvocation());
+        }
+      }
+    } else {
+      throw new AssertionError(name + ": unsupported executable type");
     }
     assert Objects.equals(expected.timeToLiveMs(), actual.timeToLiveMs())
         : name + ": TTL mismatch";
     assert Objects.equals(expected.nonce(), actual.nonce())
         : name + ": nonce mismatch";
-      assert Objects.equals(expected.metadata(), actual.metadata())
+    assert Objects.equals(expected.feePayment(), actual.feePayment())
+        : name + ": fee payment mismatch";
+    assert Objects.equals(expected.metadata(), actual.metadata())
         : name + ": metadata mismatch";
+  }
+
+  private static void assertInstructionBoxEquals(
+      final String name,
+      final int index,
+      final InstructionBox expected,
+      final InstructionBox actual) {
+    assert expected.kind() == actual.kind()
+        : name + ": instruction kind mismatch at index " + index;
+    assert Objects.equals(expected.arguments(), actual.arguments())
+        : name + ": instruction arguments mismatch at index " + index;
+    assert expected.payload().getClass().equals(actual.payload().getClass())
+        : name + ": instruction payload type mismatch at index " + index;
+    if (expected.payload() instanceof InstructionBox.WirePayload) {
+      final InstructionBox.WirePayload expectedWire =
+          (InstructionBox.WirePayload) expected.payload();
+      final InstructionBox.WirePayload actualWire =
+          (InstructionBox.WirePayload) actual.payload();
+      assert expectedWire.wireName().equals(actualWire.wireName())
+          : name + ": instruction wire name mismatch at index " + index;
+      assert Arrays.equals(expectedWire.payloadBytes(), actualWire.payloadBytes())
+          : name + ": instruction wire payload mismatch at index " + index;
+    }
+  }
+
+  private static void assertContractInvocationEquals(
+      final String name,
+      final ContractInvocation expected,
+      final ContractInvocation actual) {
+    assert expected.contractAddress().equals(actual.contractAddress())
+        : name + ": contract address mismatch";
+    assert Arrays.equals(expected.expectedCodeHash(), actual.expectedCodeHash())
+        : name + ": expected code hash mismatch";
+    assert expected.entrypoint().equals(actual.entrypoint())
+        : name + ": entrypoint mismatch";
+    assert Arrays.equals(expected.arguments(), actual.arguments())
+        : name + ": contract arguments mismatch";
   }
 
   private static boolean allInstructionsWire(final TransactionPayload payload) {

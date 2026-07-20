@@ -97,7 +97,9 @@ pub mod isi {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
             Executable::IvmProved(proved) => proved.bytecode.as_ref(),
-            Executable::Instructions(_) | Executable::ContractCall(_) => return Ok(()),
+            Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
+                return Ok(());
+            }
         };
         let admitted = crate::smartcontracts::ivm::cache::IvmCache::new()
             .summarize_executable(bytecode)

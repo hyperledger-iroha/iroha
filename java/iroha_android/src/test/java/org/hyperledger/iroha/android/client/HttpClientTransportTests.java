@@ -707,7 +707,11 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).build();
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setInstructions(Collections.emptyList())
+            .build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "queued-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -752,7 +756,11 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).build();
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setInstructions(Collections.emptyList())
+            .build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "skip-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -6208,7 +6216,7 @@ public final class HttpClientTransportTests {
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
             .setChainId(String.format("%08x", fillValue))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))

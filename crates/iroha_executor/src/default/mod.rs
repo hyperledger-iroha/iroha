@@ -729,6 +729,19 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
             }
         }
         Executable::ContractCall(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                if executor.verdict().is_err() {
+                    break;
+                }
+                if let iroha_smart_contract::data_model::transaction::ExecutableBatchItem::Instruction(
+                    isi,
+                ) = item
+                {
+                    executor.visit_instruction(isi);
+                }
+            }
+        }
         Executable::Instructions(instructions) => {
             let allow_deployment_self_bootstrap =
                 has_contract_deployment_self_bootstrap_prefix(

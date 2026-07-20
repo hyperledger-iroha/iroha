@@ -959,6 +959,12 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
             instructions.iter().any(is_time_sensitive_instruction)
         }
         Executable::ContractCall(_) => true,
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => {
+                is_time_sensitive_instruction(instruction)
+            }
+            ExecutableBatchItem::ContractCall(_) => true,
+        }),
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
@@ -1006,7 +1012,10 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
 
             instruction_self_registers_authority(first, authority)
         }
-        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_)
+        | Executable::Batch(_)
+        | Executable::IvmProved(_)
+        | Executable::Ivm(_) => false,
     }
 }
 
@@ -1148,11 +1157,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
     world: &impl WorldReadOnly,
     block_height: u64,
 ) -> Result<(), TransactionRejectionReason> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-
-    for instruction in instructions {
+    for instruction in executable.explicit_instructions() {
         let any = instruction.as_any();
         if let Some(shield) = any.downcast_ref::<zk::Shield>() {
             validate_confidential_policy_for_action(
@@ -2544,6 +2549,43 @@ impl<'tx> AcceptedTransaction<'tx> {
                     })
                 })?;
             }
+            Executable::Batch(items) => {
+                if items.is_empty() {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "Transaction executable batch must not be empty".into(),
+                        },
+                    ));
+                }
+
+                let item_limit = limits.max_instructions().get();
+                let item_count = u64::try_from(items.len()).unwrap_or(u64::MAX);
+                if item_count > item_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "Too many executable batch items, max number is {}, but got {}",
+                                limits.max_instructions(),
+                                items.len()
+                            ),
+                        },
+                    ));
+                }
+
+                if items
+                    .iter()
+                    .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+                {
+                    iroha_data_model::transaction::require_transaction_gas_limit(
+                        tx.fee_payment_intent(),
+                    )
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
+                }
+            }
             Executable::IvmProved(proved) => {
                 iroha_data_model::transaction::require_transaction_gas_limit(
                     tx.fee_payment_intent(),
@@ -3343,9 +3385,10 @@ impl StateBlock<'_> {
                 Executable::Instructions(instructions) => {
                     instructions_allow_multisig_envelope_authority(instructions)
                 }
-                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
-                    false
-                }
+                Executable::ContractCall(_)
+                | Executable::Batch(_)
+                | Executable::IvmProved(_)
+                | Executable::Ivm(_) => false,
             };
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
@@ -4348,10 +4391,7 @@ fn canonical_manifest_validators(
 }
 
 fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
-    let Executable::Instructions(instructions) = tx.instructions() else {
-        return false;
-    };
-    instructions.iter().any(|instruction| {
+    let contains_runtime_upgrade = |instruction: &InstructionBox| {
         instruction
             .as_any()
             .downcast_ref::<ProposeRuntimeUpgrade>()
@@ -4364,7 +4404,15 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
                 .as_any()
                 .downcast_ref::<CancelRuntimeUpgrade>()
                 .is_some()
-    })
+    };
+    match tx.instructions() {
+        Executable::Instructions(instructions) => instructions.iter().any(contains_runtime_upgrade),
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => contains_runtime_upgrade(instruction),
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+    }
 }
 
 fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bool {
@@ -4375,38 +4423,53 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
 
     let mut contract_targets_seen = false;
     let mut register_code_seen = false;
+    let inspect_instruction = |instruction: &InstructionBox| {
+        let is_contract_target = instruction
+            .as_any()
+            .downcast_ref::<ActivateContractInstance>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<CommitContractDeployment>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<DeactivateContractInstance>()
+                .is_some();
+        let is_code_registration = if is_contract_target {
+            false
+        } else {
+            let any = instruction.as_any();
+            any.is::<RegisterSmartContractCode>()
+                || any.is::<RegisterSmartContractBytes>()
+                || any.is::<UploadSmartContractCodeChunk>()
+                || any.is::<FinalizeSmartContractCodeUpload>()
+                || any.is::<RemoveSmartContractBytes>()
+        };
+        (is_contract_target, is_code_registration)
+    };
     match tx.instructions() {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                if instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<CommitContractDeployment>()
-                        .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<DeactivateContractInstance>()
-                        .is_some()
-                {
-                    contract_targets_seen = true;
-                } else {
-                    let any = instruction.as_any();
-                    if any.is::<RegisterSmartContractCode>()
-                        || any.is::<RegisterSmartContractBytes>()
-                        || any.is::<UploadSmartContractCodeChunk>()
-                        || any.is::<FinalizeSmartContractCodeUpload>()
-                        || any.is::<RemoveSmartContractBytes>()
-                    {
-                        register_code_seen = true;
-                    }
-                }
+                let (target, registration) = inspect_instruction(instruction);
+                contract_targets_seen |= target;
+                register_code_seen |= registration;
             }
         }
         Executable::ContractCall(_) => {
             contract_targets_seen = true;
+        }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        let (target, registration) = inspect_instruction(instruction);
+                        contract_targets_seen |= target;
+                        register_code_seen |= registration;
+                    }
+                    ExecutableBatchItem::ContractCall(_) => contract_targets_seen = true,
+                }
+            }
         }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
@@ -4530,6 +4593,46 @@ fn enforce_manifest_protected_namespaces(
         Executable::ContractCall(call) => {
             contract_targets.insert(call.contract_address.clone());
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        if let Some(commit) = instruction
+                            .as_any()
+                            .downcast_ref::<CommitContractDeployment>()
+                        {
+                            commit_deployment_count += 1;
+                            contract_targets.insert(commit.contract_address().clone());
+                        } else if let Some(activate) = instruction
+                            .as_any()
+                            .downcast_ref::<ActivateContractInstance>()
+                        {
+                            activate_seen = true;
+                            contract_targets.insert(activate.contract_address().clone());
+                        } else if let Some(deactivate) = instruction
+                            .as_any()
+                            .downcast_ref::<DeactivateContractInstance>(
+                        ) {
+                            deactivate_seen = true;
+                            contract_targets.insert(deactivate.contract_address().clone());
+                        } else {
+                            let any = instruction.as_any();
+                            if any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<UploadSmartContractCodeChunk>()
+                                || any.is::<FinalizeSmartContractCodeUpload>()
+                                || any.is::<RemoveSmartContractBytes>()
+                            {
+                                register_code_seen = true;
+                            }
+                        }
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_targets.insert(call.contract_address.clone());
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
 
@@ -4553,10 +4656,19 @@ fn enforce_manifest_protected_namespaces(
 
     let contract_instr_seen =
         register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
+    let explicit_contract_instruction_seen =
+        register_code_seen || commit_deployment_count > 0 || activate_seen || deactivate_seen;
+    let has_directly_addressed_call = match tx.instructions() {
+        Executable::ContractCall(_) => true,
+        Executable::Batch(items) => items
+            .iter()
+            .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
+        Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+    };
 
     if contract_instr_seen
         && metadata_governance_contract_address.is_none()
-        && !matches!(tx.instructions(), Executable::ContractCall(_))
+        && (!has_directly_addressed_call || explicit_contract_instruction_seen)
     {
         return Err(reject_lane_policy(
             alias,
@@ -4664,23 +4776,7 @@ fn enforce_runtime_upgrade_hook(
 }
 
 fn contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        return instructions.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
-                .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
-                    .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
-                    .is_some()
-        });
-    }
-    false
+    tx_contains_runtime_upgrade_instruction(tx)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4774,17 +4870,20 @@ fn extract_lane_authority_domains(
 }
 
 fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
+    let is_publish = |instruction: &InstructionBox| {
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>()
+            .is_some()
+    };
     match tx.instructions() {
         Executable::Instructions(instructions) if !instructions.is_empty() => {
-            instructions.iter().all(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<
-                        iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
-                    >()
-                    .is_some()
-            })
+            instructions.iter().all(is_publish)
         }
+        Executable::Batch(items) if !items.is_empty() => items.iter().all(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => is_publish(instruction),
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         _ => false,
     }
 }
@@ -4811,7 +4910,10 @@ fn enforce_lane_policies(
         Executable::Instructions(instructions) => {
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_)
+        | Executable::Batch(_)
+        | Executable::IvmProved(_)
+        | Executable::Ivm(_) => false,
     };
 
     let mut runtime_upgrade_present = false;
@@ -5808,6 +5910,7 @@ pub mod tests {
         runtime::RuntimeUpgradeManifest,
         transaction::{
             TransactionBuilder,
+            executable::ContractInvocation,
             signed::{MultisigSignature, MultisigSignatures},
         },
     };
@@ -10189,6 +10292,79 @@ pub mod tests {
             }
             other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mixed_batch_missing_gas_bound_rejected_at_admission() {
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let call = ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: Hash::new(b"batch-admission-contract-code"),
+            entrypoint: "call".to_owned(),
+            arguments: None,
+        };
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "before call".to_owned(),
+                ))),
+                ExecutableBatchItem::ContractCall(call),
+            ]
+            .into(),
+        ))
+        .sign(kp.private_key());
+
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect_err("mixed batch without a signed gas limit must be rejected");
+
+        assert!(matches!(
+            err,
+            AcceptTransactionFail::TransactionLimit(ref limit)
+                if limit.reason.contains("missing gas limit in fee payment intent")
+        ));
+    }
+
+    #[test]
+    fn empty_executable_batch_rejected_at_admission() {
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(ConstVec::new_empty()))
+        .sign(kp.private_key());
+
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect_err("empty executable batch must be rejected");
+
+        assert!(matches!(
+            err,
+            AcceptTransactionFail::TransactionLimit(ref limit)
+                if limit.reason.contains("must not be empty")
+        ));
     }
 
     #[test]

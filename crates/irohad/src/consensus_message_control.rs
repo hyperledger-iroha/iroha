@@ -35,6 +35,7 @@ use iroha_data_model::{
     },
     peer::{Peer, PeerId},
 };
+use iroha_p2p::network::NetworkReplyRoute;
 use norito::{
     codec::Encode,
     json::{Map, Value},
@@ -45,7 +46,7 @@ pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_D
 
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 2;
+const FORMAT_VERSION: u64 = 3;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -160,6 +161,7 @@ struct MessageMeta {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Rule {
     sender: PeerId,
+    authenticated_via: PeerId,
     kind: MessageKind,
     height: u64,
     view: u64,
@@ -170,6 +172,7 @@ struct Rule {
 impl Rule {
     fn matches(&self, meta: &MessageMeta) -> bool {
         self.sender == meta.sender
+            && self.authenticated_via == meta.authenticated_via
             && self.kind == meta.kind
             && Some(self.height) == meta.height
             && Some(self.view) == meta.view
@@ -196,17 +199,21 @@ struct HeldDescriptor {
     size_bytes: usize,
 }
 
-pub(crate) struct HeldMessage {
+pub(crate) struct HeldMessage<R = NetworkReplyRoute> {
     pub(crate) sequence: u64,
     pub(crate) peer: Peer,
+    pub(crate) authenticated_via: PeerId,
     pub(crate) message: NetworkMessage,
     pub(crate) size_bytes: usize,
+    pub(crate) reply_route: Option<R>,
 }
 
-struct HeldEntry {
+struct HeldEntry<R> {
     descriptor: HeldDescriptor,
     peer: Peer,
+    authenticated_via: PeerId,
     message: NetworkMessage,
+    reply_route: Option<R>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,17 +222,30 @@ pub(crate) enum Admission {
     Consumed,
 }
 
-struct State {
+/// Terminal disposition of one exact controlled release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseOutcome {
+    /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
+    Delivered,
+    /// The exact reply authority retired before ordinary ingress succeeded.
+    Retired,
+    /// The release could not reach a successful terminal state.
+    Failed,
+}
+
+struct State<R = NetworkReplyRoute> {
     revision: u64,
     command_digest: Option<Hash>,
     last_seen_digest: Option<Hash>,
     rules: Vec<Rule>,
     queue_capacity: usize,
-    held: BTreeMap<u64, HeldEntry>,
+    held: BTreeMap<u64, HeldEntry<R>>,
     held_bytes: usize,
     release_pending: VecDeque<u64>,
     in_flight: Option<u64>,
+    in_flight_bytes: usize,
     delivered: Vec<u64>,
+    retired: Vec<u64>,
     next_sequence: u64,
     dropped: u64,
     overflowed: u64,
@@ -236,7 +256,7 @@ struct State {
     drain_fence: Option<u64>,
 }
 
-impl Default for State {
+impl<R> Default for State<R> {
     fn default() -> Self {
         Self {
             revision: 0,
@@ -248,7 +268,9 @@ impl Default for State {
             held_bytes: 0,
             release_pending: VecDeque::new(),
             in_flight: None,
+            in_flight_bytes: 0,
             delivered: Vec::new(),
+            retired: Vec::new(),
             next_sequence: 1,
             dropped: 0,
             overflowed: 0,
@@ -270,14 +292,14 @@ struct RootIdentity {
 }
 
 /// Feature-only controller shared by relay workers and its file watcher.
-pub(crate) struct Controller {
+pub(crate) struct Controller<R = NetworkReplyRoute> {
     root: PathBuf,
     root_identity: RootIdentity,
-    state: Mutex<State>,
+    state: Mutex<State<R>>,
     ack_publish: Mutex<()>,
 }
 
-impl Controller {
+impl Controller<NetworkReplyRoute> {
     /// Open and pin the explicitly configured private control directory.
     pub(crate) fn from_env() -> Result<Option<Self>, ControlError> {
         let Some(raw) = env::var_os(CONTROL_DIR_ENV) else {
@@ -314,6 +336,34 @@ impl Controller {
         controller.publish_ack()?;
         Ok(Some(controller))
     }
+}
+
+impl<R> Controller<R> {
+    /// Construct an isolated controller for daemon boundary tests.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> (tempfile::TempDir, Self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let root = parent.path().join("control");
+        fs::create_dir(&root).expect("create control root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod control root");
+        let metadata = fs::symlink_metadata(&root).expect("control metadata");
+        let controller = Self {
+            root,
+            root_identity: root_identity(&metadata),
+            state: Mutex::new(State::default()),
+            ack_publish: Mutex::new(()),
+        };
+        (parent, controller)
+    }
+
+    /// Hold and FIFO-release every subsequently admitted message in tests.
+    #[cfg(test)]
+    pub(crate) fn drain_subsequent_messages_for_tests(&self) {
+        let mut state = self.state.lock().expect("message control state poisoned");
+        state.drain_next_rules = Some(Vec::new());
+    }
 
     fn validate_root(&self) -> Result<(), ControlError> {
         let metadata = fs::symlink_metadata(&self.root).map_err(ControlError::Io)?;
@@ -339,6 +389,9 @@ impl Controller {
         let digest = Hash::new(&bytes);
         {
             let state = self.state.lock().expect("message control state poisoned");
+            if state.fatal {
+                return Err(ControlError::ControllerFatal);
+            }
             if state.last_seen_digest == Some(digest) {
                 return Ok(());
             }
@@ -366,9 +419,35 @@ impl Controller {
         message: NetworkMessage,
         size_bytes: usize,
     ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize)>), ControlError> {
+        self.admit_with_reply_route(peer, authenticated_via, message, size_bytes, None)
+            .map(|(admission, message)| {
+                (
+                    admission,
+                    message.map(|(peer, message, size_bytes, reply_route)| {
+                        debug_assert!(reply_route.is_none());
+                        (peer, message, size_bytes)
+                    }),
+                )
+            })
+    }
+
+    /// Apply one rule while retaining an exact local-only reply authority.
+    pub(crate) fn admit_with_reply_route(
+        &self,
+        peer: Peer,
+        authenticated_via: &PeerId,
+        message: NetworkMessage,
+        size_bytes: usize,
+        reply_route: Option<R>,
+    ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize, Option<R>)>), ControlError> {
         let meta = match message_meta(&peer, authenticated_via, &message) {
             Ok(Some(meta)) => meta,
-            Ok(None) => return Ok((Admission::Pass, Some((peer, message, size_bytes)))),
+            Ok(None) => {
+                return Ok((
+                    Admission::Pass,
+                    Some((peer, message, size_bytes, reply_route)),
+                ));
+            }
             Err(error) => {
                 let mut state = self.state.lock().expect("message control state poisoned");
                 state.fatal = true;
@@ -393,7 +472,10 @@ impl Controller {
         {
             action
         } else {
-            return Ok((Admission::Pass, Some((peer, message, size_bytes))));
+            return Ok((
+                Admission::Pass,
+                Some((peer, message, size_bytes, reply_route)),
+            ));
         };
         match action {
             Action::Drop => {
@@ -425,7 +507,9 @@ impl Controller {
                         HeldEntry {
                             descriptor,
                             peer,
+                            authenticated_via: authenticated_via.clone(),
                             message,
+                            reply_route,
                         },
                     );
                     state.held_bytes = state
@@ -444,7 +528,7 @@ impl Controller {
     }
 
     /// Take the next prevalidated release entry in exact ingress order.
-    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage>, ControlError> {
+    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R>>, ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.fatal || state.in_flight.is_some() {
             return Ok(None);
@@ -461,13 +545,16 @@ impl Controller {
             .checked_sub(entry.descriptor.size_bytes)
             .ok_or(ControlError::HeldBytesUnderflow)?;
         state.in_flight = Some(sequence);
+        state.in_flight_bytes = entry.descriptor.size_bytes;
         drop(state);
         self.publish_ack()?;
         Ok(Some(HeldMessage {
             sequence,
             peer: entry.peer,
+            authenticated_via: entry.authenticated_via,
             message: entry.message,
             size_bytes: entry.descriptor.size_bytes,
+            reply_route: entry.reply_route,
         }))
     }
 
@@ -475,7 +562,7 @@ impl Controller {
     pub(crate) fn complete_release(
         &self,
         sequence: u64,
-        delivered: bool,
+        outcome: ReleaseOutcome,
     ) -> Result<(), ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.in_flight != Some(sequence) {
@@ -486,16 +573,24 @@ impl Controller {
             return Err(ControlError::ReleaseCompletionMismatch);
         }
         state.in_flight = None;
-        if delivered {
-            state.delivered.push(sequence);
-            finish_drain_if_empty(&mut state);
-        } else {
-            state.fatal = true;
-            state.last_error = Some("downstream_delivery_failed".to_owned());
+        state.in_flight_bytes = 0;
+        match outcome {
+            ReleaseOutcome::Delivered => {
+                state.delivered.push(sequence);
+                finish_drain_if_empty(&mut state);
+            }
+            ReleaseOutcome::Retired => {
+                state.retired.push(sequence);
+                finish_drain_if_empty(&mut state);
+            }
+            ReleaseOutcome::Failed => {
+                state.fatal = true;
+                state.last_error = Some("downstream_delivery_failed".to_owned());
+            }
         }
         drop(state);
         self.publish_ack()?;
-        if delivered {
+        if outcome != ReleaseOutcome::Failed {
             Ok(())
         } else {
             Err(ControlError::DownstreamDeliveryFailed)
@@ -520,21 +615,30 @@ impl Controller {
     }
 }
 
-fn hold_capacity_available(state: &State, incoming_bytes: usize) -> bool {
-    state.held.len() < state.queue_capacity
+fn hold_capacity_available<R>(state: &State<R>, incoming_bytes: usize) -> bool {
+    state
+        .held
+        .len()
+        .checked_add(if state.in_flight.is_some() { 1 } else { 0 })
+        .is_some_and(|count| count < state.queue_capacity)
         && state
             .held_bytes
-            .checked_add(incoming_bytes)
+            .checked_add(state.in_flight_bytes)
+            .and_then(|bytes| bytes.checked_add(incoming_bytes))
             .is_some_and(|bytes| bytes <= MAX_HELD_BYTES)
 }
 
-fn fail_hold_overflow(state: &mut State) {
+fn fail_hold_overflow<R>(state: &mut State<R>) {
     state.overflowed = state.overflowed.saturating_add(1);
     state.fatal = true;
     state.last_error = Some("hold_queue_overflow".to_owned());
 }
 
-fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<(), ControlError> {
+fn apply_command<R>(
+    state: &mut State<R>,
+    command: Command,
+    digest: Hash,
+) -> Result<(), ControlError> {
     if state.fatal {
         return Err(ControlError::ControllerFatal);
     }
@@ -544,7 +648,12 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
     if state.in_flight.is_some() || !state.release_pending.is_empty() {
         return Err(ControlError::ReleaseBusy);
     }
-    if command.queue_capacity < state.held.len() {
+    if command.queue_capacity
+        < state
+            .held
+            .len()
+            .saturating_add(if state.in_flight.is_some() { 1 } else { 0 })
+    {
         return Err(ControlError::QueueCapacityBelowHeld);
     }
     if command.drain && !command.release.is_empty() {
@@ -556,6 +665,7 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
     state.command_digest = Some(digest);
     state.queue_capacity = command.queue_capacity;
     state.delivered.clear();
+    state.retired.clear();
     state.last_error = None;
     if command.drain {
         state.drain_fence = Some(command.revision);
@@ -570,8 +680,8 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
 }
 
 /// Activate post-drain rules at the same linearization point that observes all
-/// retained and in-flight messages delivered.
-fn finish_drain_if_empty(state: &mut State) {
+/// retained and in-flight messages successfully delivered or retired.
+fn finish_drain_if_empty<R>(state: &mut State<R>) {
     if state.held.is_empty()
         && state.release_pending.is_empty()
         && state.in_flight.is_none()
@@ -647,6 +757,7 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
         let rule = parse_rule(value)?;
         if rules.iter().any(|prior: &Rule| {
             prior.sender == rule.sender
+                && prior.authenticated_via == rule.authenticated_via
                 && prior.kind == rule.kind
                 && prior.height == rule.height
                 && prior.view == rule.view
@@ -685,7 +796,15 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
 fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     let object = exact_object(
         value,
-        &["action", "block_hash", "height", "kind", "sender", "view"],
+        &[
+            "action",
+            "authenticated_via",
+            "block_hash",
+            "height",
+            "kind",
+            "sender",
+            "view",
+        ],
     )?;
     let sender_literal = object
         .get("sender")
@@ -699,6 +818,19 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
         .map_err(|_| ControlError::InvalidField("sender"))?;
     if sender.to_string() != sender_literal {
         return Err(ControlError::NonCanonicalField("sender"));
+    }
+    let authenticated_via_literal = object
+        .get("authenticated_via")
+        .and_then(Value::as_str)
+        .ok_or(ControlError::InvalidField("authenticated_via"))?;
+    if authenticated_via_literal.is_empty() || authenticated_via_literal.len() > MAX_SENDER_BYTES {
+        return Err(ControlError::FieldTooLarge("authenticated_via"));
+    }
+    let authenticated_via = authenticated_via_literal
+        .parse::<PeerId>()
+        .map_err(|_| ControlError::InvalidField("authenticated_via"))?;
+    if authenticated_via.to_string() != authenticated_via_literal {
+        return Err(ControlError::NonCanonicalField("authenticated_via"));
     }
     let block_hash = match object.get("block_hash") {
         Some(Value::Null) => None,
@@ -732,6 +864,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     }
     Ok(Rule {
         sender,
+        authenticated_via,
         kind,
         height: {
             let height = required_u64(object, "height")?;
@@ -771,7 +904,7 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
         .map_err(|_| ControlError::JsonEncode)
 }
 
-fn ack_value(state: &State) -> Result<Value, ControlError> {
+fn ack_value<R>(state: &State<R>) -> Result<Value, ControlError> {
     let held = state
         .held
         .values()
@@ -786,6 +919,12 @@ fn ack_value(state: &State) -> Result<Value, ControlError> {
         .collect::<Vec<_>>();
     let delivered = state
         .delivered
+        .iter()
+        .copied()
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    let retired = state
+        .retired
         .iter()
         .copied()
         .map(Value::from)
@@ -815,6 +954,12 @@ fn ack_value(state: &State) -> Result<Value, ControlError> {
             state.in_flight.map_or(Value::Null, Value::from),
         ),
         (
+            "in_flight_bytes",
+            Value::from(
+                u64::try_from(state.in_flight_bytes).expect("in-flight byte bound fits u64"),
+            ),
+        ),
+        (
             "last_error",
             state
                 .last_error
@@ -828,6 +973,7 @@ fn ack_value(state: &State) -> Result<Value, ControlError> {
         ),
         ("rejected_commands", Value::from(state.rejected_commands)),
         ("release_pending", Value::Array(release_pending)),
+        ("retired", Value::Array(retired)),
         ("revision", Value::from(state.revision)),
         ("rules", Value::Array(rules)),
         ("version", Value::from(FORMAT_VERSION)),
@@ -907,6 +1053,10 @@ fn rule_value(rule: &Rule) -> Value {
     object_value([
         ("action", Value::from(rule.action.as_str())),
         (
+            "authenticated_via",
+            Value::from(rule.authenticated_via.to_string()),
+        ),
+        (
             "block_hash",
             rule.block_hash
                 .as_ref()
@@ -939,9 +1089,6 @@ fn message_meta(
         return Ok(None);
     };
     let sender = peer.id().clone();
-    if &sender != authenticated_via {
-        return Err(ControlError::RelayedIdentityMismatch);
-    }
     let envelope_digest = Hash::new(message.encode());
     let (kind, round, subject, execution_commitment, signer, certificate_signers) =
         match &message.payload {
@@ -1087,8 +1234,7 @@ fn message_meta(
 /// test-network client. Invalid traffic therefore fails the controller closed
 /// without poisoning its acknowledgement with an unrepresentable entry.
 fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
-    if meta.sender != meta.authenticated_via
-        || meta.height == Some(0)
+    if meta.height == Some(0)
         || meta
             .execution_commitment
             .as_ref()
@@ -1381,7 +1527,6 @@ pub(crate) enum ControlError {
     HeldBytesOverflow,
     HeldBytesUnderflow,
     HoldQueueOverflow,
-    RelayedIdentityMismatch,
     InvalidMessageDescriptor,
 }
 
@@ -1425,7 +1570,6 @@ impl ControlError {
             Self::HeldBytesOverflow => "held_bytes_overflow",
             Self::HeldBytesUnderflow => "held_bytes_underflow",
             Self::HoldQueueOverflow => "hold_queue_overflow",
-            Self::RelayedIdentityMismatch => "relayed_identity_mismatch",
             Self::InvalidMessageDescriptor => "invalid_message_descriptor",
         }
     }
@@ -1559,24 +1703,12 @@ mod tests {
     }
 
     fn test_controller() -> (tempfile::TempDir, Controller) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let parent = tempdir().expect("temporary parent");
-        let root = parent.path().join("control");
-        fs::create_dir(&root).expect("create control root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod control root");
-        let metadata = fs::symlink_metadata(&root).expect("control metadata");
-        let controller = Controller {
-            root,
-            root_identity: root_identity(&metadata),
-            state: Mutex::new(State::default()),
-            ack_publish: Mutex::new(()),
-        };
-        (parent, controller)
+        Controller::for_tests()
     }
 
     fn rule(sender: PeerId, kind: MessageKind, height: u64, view: u64) -> Rule {
         Rule {
+            authenticated_via: sender.clone(),
             sender,
             kind,
             height,
@@ -1607,6 +1739,10 @@ mod tests {
         for changed in [
             MessageMeta {
                 sender: peer(2),
+                ..exact.clone()
+            },
+            MessageMeta {
+                authenticated_via: peer(2),
                 ..exact.clone()
             },
             MessageMeta {
@@ -1662,10 +1798,6 @@ mod tests {
     #[test]
     fn descriptor_contract_rejects_unparseable_adversarial_shapes() {
         let mut cases = Vec::new();
-
-        let mut wrong_identity = valid_meta(MessageKind::PrepareVote);
-        wrong_identity.authenticated_via = peer(43);
-        cases.push(wrong_identity);
 
         let mut zero_height = valid_meta(MessageKind::PrepareVote);
         zero_height.height = Some(0);
@@ -1755,7 +1887,13 @@ mod tests {
             parse_command(&command(vec![rule_value(&wildcard), rule_value(&specific)])),
             Err(ControlError::AmbiguousRule)
         ));
-        let mut zero_height = specific;
+        let mut relayed = specific.clone();
+        relayed.authenticated_via = peer(4);
+        assert!(
+            parse_command(&command(vec![rule_value(&specific), rule_value(&relayed)])).is_ok(),
+            "independent authenticated relays are distinct rule dimensions"
+        );
+        let mut zero_height = specific.clone();
         zero_height.height = 0;
         assert!(matches!(
             parse_command(&command(vec![rule_value(&zero_height)])),
@@ -1770,10 +1908,19 @@ mod tests {
             parse_command(&command(vec![invalid_sender])),
             Err(ControlError::InvalidField("sender"))
         ));
+        let mut invalid_via = rule_value(&wildcard);
+        invalid_via
+            .as_object_mut()
+            .expect("rule object")
+            .insert("authenticated_via".to_owned(), Value::from("not-a-peer"));
+        assert!(matches!(
+            parse_command(&command(vec![invalid_via])),
+            Err(ControlError::InvalidField("authenticated_via"))
+        ));
         let mut uppercase_hash = rule_value(&specific);
         uppercase_hash.as_object_mut().expect("rule object").insert(
             "block_hash".to_owned(),
-            Value::from(hash(1).to_string().to_ascii_uppercase()),
+            Value::from(hash(0xAB).to_string().to_ascii_uppercase()),
         );
         assert!(matches!(
             parse_command(&command(vec![uppercase_hash])),
@@ -1783,7 +1930,7 @@ mod tests {
 
     #[test]
     fn stale_duplicate_reordered_and_unknown_releases_are_atomic() {
-        let mut state = State::default();
+        let mut state = State::<NetworkReplyRoute>::default();
         state.revision = 4;
         let original_rules = state.rules.clone();
         assert!(matches!(
@@ -1810,7 +1957,7 @@ mod tests {
 
     #[test]
     fn hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic() {
-        let mut state = State::default();
+        let mut state = State::<NetworkReplyRoute>::default();
         state.queue_capacity = 2;
         state.held_bytes = MAX_HELD_BYTES - 4;
         assert!(hold_capacity_available(&state, 4));
@@ -1820,10 +1967,116 @@ mod tests {
         state.queue_capacity = 0;
         state.held_bytes = 0;
         assert!(!hold_capacity_available(&state, 0));
+
+        state.queue_capacity = 1;
+        state.in_flight = Some(1);
+        state.in_flight_bytes = 4;
+        assert!(
+            !hold_capacity_available(&state, 0),
+            "an in-flight release retains its count slot"
+        );
+        state.queue_capacity = 2;
+        state.in_flight_bytes = MAX_HELD_BYTES;
+        assert!(
+            !hold_capacity_available(&state, 1),
+            "an in-flight release retains its exact byte charge"
+        );
+        state.in_flight = None;
+        state.in_flight_bytes = 0;
         fail_hold_overflow(&mut state);
         assert!(state.fatal);
         assert_eq!(state.overflowed, 1);
         assert_eq!(state.last_error.as_deref(), Some("hold_queue_overflow"));
+    }
+
+    #[test]
+    fn retired_release_finishes_drain_without_claiming_delivery() {
+        let (_parent, controller) = test_controller();
+        let sender = transport_peer(31);
+        let authenticated_via = sender.id().clone();
+        controller.drain_subsequent_messages_for_tests();
+        controller
+            .admit(sender, &authenticated_via, chunk_message(1), 101)
+            .expect("hold one drain occurrence");
+
+        let released = controller
+            .next_release()
+            .expect("take release")
+            .expect("held occurrence is releasable");
+        {
+            let state = controller.state.lock().expect("control state");
+            assert_eq!(state.held_bytes, 0);
+            assert_eq!(state.in_flight, Some(released.sequence));
+            assert_eq!(state.in_flight_bytes, 101);
+        }
+        controller
+            .complete_release(released.sequence, ReleaseOutcome::Retired)
+            .expect("retirement is a successful terminal release");
+        let state = controller.state.lock().expect("control state");
+        assert!(!state.fatal);
+        assert!(state.delivered.is_empty());
+        assert_eq!(state.retired, vec![released.sequence]);
+        assert_eq!(state.in_flight, None);
+        assert_eq!(state.in_flight_bytes, 0);
+        assert!(state.drain_next_rules.is_none());
+    }
+
+    #[test]
+    fn failed_release_clears_in_flight_ownership_and_latches_fatal() {
+        let (_parent, controller) = test_controller();
+        let sender = transport_peer(32);
+        let authenticated_via = sender.id().clone();
+        controller.drain_subsequent_messages_for_tests();
+        controller
+            .admit(sender, &authenticated_via, chunk_message(1), 202)
+            .expect("hold one failing occurrence");
+        let released = controller
+            .next_release()
+            .expect("take release")
+            .expect("held occurrence is releasable");
+
+        assert!(matches!(
+            controller.complete_release(released.sequence, ReleaseOutcome::Failed),
+            Err(ControlError::DownstreamDeliveryFailed)
+        ));
+        let state = controller.state.lock().expect("control state");
+        assert!(state.fatal);
+        assert!(state.delivered.is_empty());
+        assert!(state.retired.is_empty());
+        assert_eq!(state.in_flight, None);
+        assert_eq!(state.in_flight_bytes, 0);
+        assert!(state.drain_next_rules.is_some());
+    }
+
+    #[test]
+    fn fatal_controller_rejects_an_unchanged_command_poll() {
+        let (_control_dir, controller) = test_controller();
+        let bytes = canonical_json(&object_value([
+            ("drain", Value::from(false)),
+            ("queue_capacity", Value::from(1_u64)),
+            ("release", Value::Array(Vec::new())),
+            ("revision", Value::from(1_u64)),
+            ("rules", Value::Array(Vec::new())),
+            ("version", Value::from(FORMAT_VERSION)),
+        ]))
+        .expect("canonical command");
+        write_atomic_private_file(&controller.root, CONTROL_FILE, &bytes)
+            .expect("install private command");
+        controller.poll_command().expect("initial command poll");
+
+        {
+            let mut state = controller
+                .state
+                .lock()
+                .expect("message control state poisoned");
+            state.fatal = true;
+            state.last_error = Some("test_fatal".to_owned());
+        }
+
+        assert!(matches!(
+            controller.poll_command(),
+            Err(ControlError::ControllerFatal)
+        ));
     }
 
     #[test]
@@ -1860,6 +2113,7 @@ mod tests {
 
         let next_rules = vec![Rule {
             sender: sender.id().clone(),
+            authenticated_via: sender.id().clone(),
             kind: MessageKind::PrepareVote,
             height: 9,
             view: 2,
@@ -1912,14 +2166,14 @@ mod tests {
             }
         });
         controller
-            .complete_release(first.sequence, true)
+            .complete_release(first.sequence, ReleaseOutcome::Delivered)
             .expect("complete first release");
 
         let mut released = vec![first.sequence];
         while let Some(message) = controller.next_release().expect("take drain release") {
             released.push(message.sequence);
             controller
-                .complete_release(message.sequence, true)
+                .complete_release(message.sequence, ReleaseOutcome::Delivered)
                 .expect("complete drain release");
         }
         assert_eq!(released, vec![1, 2, 3]);
@@ -1942,19 +2196,41 @@ mod tests {
     }
 
     #[test]
-    fn controlled_v2_admission_rejects_relay_identity_ambiguity() {
+    fn controlled_v2_admission_preserves_distinct_relay_identity() {
         let (_parent, controller) = test_controller();
         let semantic_sender = transport_peer(21);
         let authenticated_via = peer(22);
-        let result = controller.admit(semantic_sender, &authenticated_via, chunk_message(1), 101);
-        assert!(matches!(result, Err(ControlError::RelayedIdentityMismatch)));
+        {
+            let mut state = controller.state.lock().expect("control state");
+            state.drain_next_rules = Some(Vec::new());
+        }
+        let result = controller
+            .admit(
+                semantic_sender.clone(),
+                &authenticated_via,
+                chunk_message(1),
+                101,
+            )
+            .expect("relay-authenticated message must remain controllable");
+        assert_eq!(result.0, Admission::Consumed);
         let state = controller.state.lock().expect("control state");
-        assert!(state.fatal);
-        assert_eq!(
-            state.last_error.as_deref(),
-            Some("relayed_identity_mismatch")
-        );
-        assert!(state.held.is_empty());
+        assert!(!state.fatal);
+        let held = state.held.get(&1).expect("relayed message is retained");
+        assert_eq!(held.descriptor.meta.sender, semantic_sender.id().clone());
+        assert_eq!(held.descriptor.meta.authenticated_via, authenticated_via);
+        assert_eq!(held.authenticated_via, authenticated_via);
+        drop(state);
+
+        let released = controller
+            .next_release()
+            .expect("take relayed message release")
+            .expect("relayed message remains releasable");
+        assert_eq!(released.peer, semantic_sender);
+        assert_eq!(released.authenticated_via, authenticated_via);
+        assert!(released.reply_route.is_none());
+        controller
+            .complete_release(released.sequence, ReleaseOutcome::Delivered)
+            .expect("complete relayed message release");
     }
 
     #[test]

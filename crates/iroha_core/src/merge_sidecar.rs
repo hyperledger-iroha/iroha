@@ -11,6 +11,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,6 +21,16 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
     peer::PeerId,
+};
+#[cfg(test)]
+use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
+use iroha_p2p::{
+    Post, Priority,
+    network::{
+        NetworkReplyFlushIdentity, NetworkReplyRoute, NetworkReplyRouteSourceUpdate,
+        NetworkReplyRoutes, NetworkReplySourceKey,
+        message::{ClassifyTopic as _, Topic},
+    },
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -47,13 +58,13 @@ const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
 const MAX_FUTURE_BLOCK_DISTANCE: u64 = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-const MAX_OUTBOUND_SESSIONS: usize = 8;
-const MAX_OUTBOUND_SESSIONS_PER_PEER: usize = 2;
-const MAX_OUTBOUND_BYTES: usize = 32 * 1024 * 1024;
-const MAX_OUTBOUND_BYTES_PER_PEER: usize = 16 * 1024 * 1024;
-const MAX_SERVER_REQUEST_GATES: usize = 64;
-const MAX_SERVER_REQUEST_GATES_PER_PEER: usize = 4;
+#[cfg(test)]
+const DEFAULT_REPLY_SOURCE_CAPACITY: usize = 8;
+const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 2;
+const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 16 * 1024 * 1024;
+const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 4;
 const SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
+const CHUNK_PAYLOAD_DIGEST_DOMAIN: &[u8] = b"iroha:merge-sidecar:chunk-payload:v1";
 
 const SIGNING_GUARD_VERSION: u8 = 1;
 const SIGNING_GUARD_DIR: &str = "merge-signing-guard-v1";
@@ -124,6 +135,255 @@ pub enum CertifiedMergeSidecarMessage {
     Request(CertifiedMergeSidecarRequestV1),
     /// Return one bounded chunk of the requested entry.
     Chunk(CertifiedMergeSidecarChunkV1),
+}
+
+/// Lossless process-local projection of one admitted response-chunk flush.
+///
+/// This projection deliberately retains native peer, route-source, topic, and
+/// canonical hash types. It contains no capability constructor and no wire
+/// codec. The materialized response bytes remain shared by the transport;
+/// only their canonical identities and the exact chunk payload digest are
+/// repeated per authenticated source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedMergeSidecarChunkFlushProjection {
+    /// Semantic target named by the response post and opaque reply route.
+    pub(crate) semantic_target: PeerId,
+    /// Authenticated transport source which owns this independent attempt.
+    pub(crate) authenticated_source: PeerId,
+    /// Actor-global ordinal of the exact authenticated connection tenure.
+    pub(crate) connection_tenure_ordinal: u128,
+    /// Actor-global ordinal of the exact local delivery occurrence.
+    pub(crate) delivery_ordinal: u128,
+    /// Actor-budget-local ticket identifier.
+    pub(crate) ticket_id: u64,
+    /// One-based actor service rank at admission.
+    pub(crate) ticket_rank: usize,
+    /// Canonical reliable-progress topic bound into the actor ticket.
+    pub(crate) ticket_topic: Topic,
+    /// Digest of the canonical priority, semantic target, and encoded response.
+    pub(crate) canonical_request_digest: Hash,
+    /// Exact encrypted-stream queue charge assigned by the network actor.
+    pub(crate) stream_wire_bytes: usize,
+    /// Semantic sidecar request nonce.
+    pub(crate) request_id: Hash,
+    /// Canonical hash of the requested full merge-ledger entry.
+    pub(crate) entry_hash: HashOf<MergeLedgerEntry>,
+    /// Exact canonical byte length of the full entry.
+    pub(crate) encoded_len: u64,
+    /// Merge epoch committed by the compact reference.
+    pub(crate) epoch_id: u64,
+    /// Digest of the complete compact reference.
+    pub(crate) reference_digest: Hash,
+    /// Semantic requester copied from the request.
+    pub(crate) requester: PeerId,
+    /// Exact response signer.
+    pub(crate) responder: PeerId,
+    /// Canonical identity of the complete network response envelope payload.
+    pub(crate) canonical_response_hash: HashOf<crate::NetworkMessage>,
+    /// Canonical identity of the sidecar response enum.
+    pub(crate) sidecar_response_hash: HashOf<CertifiedMergeSidecarMessage>,
+    /// Canonical identity of the exact fixed-boundary chunk.
+    pub(crate) chunk_hash: HashOf<CertifiedMergeSidecarChunkV1>,
+    /// Domain-separated digest of only the exact chunk payload bytes.
+    pub(crate) payload_digest: Hash,
+    /// Zero-based fixed-boundary chunk index.
+    pub(crate) chunk_index: u32,
+    /// Exact number of chunks in the materialized response.
+    pub(crate) chunk_count: u32,
+    /// Exact per-source output-message cursor before actor admission.
+    pub(crate) message_cursor_before: usize,
+    /// Exact per-source output-message cursor after actor admission.
+    pub(crate) message_cursor_after: usize,
+    /// Exact per-source sidecar chunk cursor before writer flush.
+    pub(crate) chunk_cursor_before: usize,
+    /// Exact per-source sidecar chunk cursor after writer flush.
+    pub(crate) chunk_cursor_after: usize,
+}
+
+/// Process-local evidence for one response chunk awaiting its peer-writer flush.
+///
+/// The value is never serialized. It binds the immutable projection to the
+/// opaque actor-owned ticket and route occurrence which admitted the exact
+/// canonical post. Possessing this value is not evidence of delivery by
+/// itself: exact worker output may pass it to
+/// [`MergeSidecarTransport::acknowledge_outbound_chunk`] only after the same
+/// acknowledgement reports a successful full write and flush.
+#[derive(Clone, Debug)]
+pub(crate) struct CertifiedMergeSidecarChunkAdmission {
+    projection: CertifiedMergeSidecarChunkFlushProjection,
+    source_key: NetworkReplySourceKey,
+    flush_identity: NetworkReplyFlushIdentity,
+}
+
+impl CertifiedMergeSidecarChunkAdmission {
+    /// Bind an exact sidecar output cursor to its actor-owned flush identity.
+    pub(crate) fn from_admitted_reply(
+        post: &Post<crate::NetworkMessage>,
+        reply_route: &NetworkReplyRoute,
+        message_cursor_before: usize,
+        message_cursor_after: usize,
+        flush_identity: &NetworkReplyFlushIdentity,
+    ) -> Result<Self, MergeSidecarError> {
+        let crate::NetworkMessage::CertifiedMergeSidecar(message) = &post.data else {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "canonical response is not a certified merge-sidecar message",
+            ));
+        };
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "canonical response is not a certified merge-sidecar chunk",
+            ));
+        };
+        let Some(expected_message_cursor_after) = message_cursor_before.checked_add(1) else {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "output message cursor overflowed",
+            ));
+        };
+        if message_cursor_before != 0 || message_cursor_after != expected_message_cursor_after {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "single-response output message cursor did not advance exactly once",
+            ));
+        }
+        let chunk_cursor_before = usize::try_from(chunk.chunk_index).map_err(|_| {
+            MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
+        })?;
+        let chunk_cursor_after = chunk_cursor_before.checked_add(1).ok_or(
+            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
+        )?;
+        let chunk_count = usize::try_from(chunk.chunk_count).map_err(|_| {
+            MergeSidecarError::FlushIdentityMismatch("chunk count is not representable")
+        })?;
+        if chunk_count == 0 || chunk_cursor_after > chunk_count {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "chunk cursor is outside the certified response",
+            ));
+        }
+        if post.peer_id != chunk.requester
+            || reply_route.semantic_target() != &chunk.requester
+            || !flush_identity.is_bound_to_delivery(reply_route)
+            || !flush_identity.is_bound_to_canonical_reply(post)
+        {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "actor flush identity is not bound to the exact response occurrence",
+            ));
+        }
+
+        let source_key = flush_identity.source_key();
+        let projection = CertifiedMergeSidecarChunkFlushProjection {
+            semantic_target: flush_identity.semantic_target().clone(),
+            authenticated_source: flush_identity.authenticated_source_peer().clone(),
+            connection_tenure_ordinal: flush_identity.connection_tenure_ordinal(),
+            delivery_ordinal: flush_identity.delivery_ordinal(),
+            ticket_id: flush_identity.ticket_id(),
+            ticket_rank: flush_identity.ticket_rank(),
+            ticket_topic: flush_identity.ticket_topic(),
+            canonical_request_digest: flush_identity.canonical_request_digest(),
+            stream_wire_bytes: flush_identity.ticket_stream_wire_bytes(),
+            request_id: chunk.request_id,
+            entry_hash: chunk.entry_hash,
+            encoded_len: chunk.encoded_len,
+            epoch_id: chunk.epoch_id,
+            reference_digest: chunk.reference_digest,
+            requester: chunk.requester.clone(),
+            responder: chunk.responder.clone(),
+            canonical_response_hash: HashOf::new(&post.data),
+            sidecar_response_hash: HashOf::new(message.as_ref()),
+            chunk_hash: HashOf::new(chunk),
+            payload_digest: Hash::new_from_chunks(&[
+                CHUNK_PAYLOAD_DIGEST_DOMAIN,
+                chunk.bytes.as_slice(),
+            ]),
+            chunk_index: chunk.chunk_index,
+            chunk_count: chunk.chunk_count,
+            message_cursor_before,
+            message_cursor_after,
+            chunk_cursor_before,
+            chunk_cursor_after,
+        };
+        Ok(Self {
+            projection,
+            source_key,
+            flush_identity: flush_identity.clone(),
+        })
+    }
+
+    /// Immutable exact identity projection consumed by the shared pure kernel.
+    #[must_use]
+    pub(crate) fn projection(&self) -> &CertifiedMergeSidecarChunkFlushProjection {
+        &self.projection
+    }
+
+    /// Whether `ack_identity` is the exact actor completion queued here.
+    #[must_use]
+    pub(crate) fn matches_ack_identity(
+        &self,
+        ack_identity: &NetworkReplyFlushIdentity,
+    ) -> bool {
+        self.flush_identity
+            .same_delivery_occurrence(ack_identity)
+            && self.projection_matches_identity(ack_identity)
+    }
+
+    fn projection_matches_identity(&self, identity: &NetworkReplyFlushIdentity) -> bool {
+        let projection = &self.projection;
+        projection.semantic_target == *identity.semantic_target()
+            && projection.authenticated_source == *identity.authenticated_source_peer()
+            && self.source_key == identity.source_key()
+            && projection.connection_tenure_ordinal == identity.connection_tenure_ordinal()
+            && projection.delivery_ordinal == identity.delivery_ordinal()
+            && projection.ticket_id == identity.ticket_id()
+            && projection.ticket_rank == identity.ticket_rank()
+            && projection.ticket_topic == identity.ticket_topic()
+            && projection.canonical_request_digest == identity.canonical_request_digest()
+            && projection.stream_wire_bytes == identity.ticket_stream_wire_bytes()
+    }
+
+    /// Whether the retained actor identity is bound to this live attempt tenure.
+    #[must_use]
+    fn is_bound_to_attempt(&self, route: &NetworkReplyRoute) -> bool {
+        self.flush_identity.is_bound_to_tenure(route)
+            && self.projection.semantic_target == *route.semantic_target()
+            && self.source_key == route.source_key()
+    }
+
+    /// Whether materialized bytes reconstruct the exact admitted response.
+    fn matches_materialized_chunk(&self, chunk: &CertifiedMergeSidecarChunkV1) -> bool {
+        let Ok(chunk_cursor_before) = usize::try_from(chunk.chunk_index) else {
+            return false;
+        };
+        let Some(chunk_cursor_after) = chunk_cursor_before.checked_add(1) else {
+            return false;
+        };
+        let message = CertifiedMergeSidecarMessage::Chunk(chunk.clone());
+        let data = crate::NetworkMessage::CertifiedMergeSidecar(Box::new(message.clone()));
+        let post = Post {
+            data: data.clone(),
+            peer_id: chunk.requester.clone(),
+            priority: Priority::High,
+        };
+        let projection = &self.projection;
+        projection.semantic_target == chunk.requester
+            && projection.request_id == chunk.request_id
+            && projection.entry_hash == chunk.entry_hash
+            && projection.encoded_len == chunk.encoded_len
+            && projection.epoch_id == chunk.epoch_id
+            && projection.reference_digest == chunk.reference_digest
+            && projection.requester == chunk.requester
+            && projection.responder == chunk.responder
+            && projection.canonical_response_hash == HashOf::new(&data)
+            && projection.sidecar_response_hash == HashOf::new(&message)
+            && projection.chunk_hash == HashOf::new(chunk)
+            && projection.payload_digest
+                == Hash::new_from_chunks(&[CHUNK_PAYLOAD_DIGEST_DOMAIN, chunk.bytes.as_slice()])
+            && projection.chunk_index == chunk.chunk_index
+            && projection.chunk_count == chunk.chunk_count
+            && projection.chunk_cursor_before == chunk_cursor_before
+            && projection.chunk_cursor_after == chunk_cursor_after
+            && projection.message_cursor_before.checked_add(1)
+                == Some(projection.message_cursor_after)
+            && projection.ticket_topic == post.data.topic()
+            && self.flush_identity.is_bound_to_canonical_reply(&post)
+    }
 }
 
 /// Digest the exact compact reference carried by a global block.
@@ -254,6 +514,9 @@ pub enum MergeSidecarError {
     /// Message was not solicited by an active exact request.
     #[error("unsolicited or stale certified merge-sidecar response")]
     UnsolicitedResponse,
+    /// Process-local actor flush identity differs from the queued exact response.
+    #[error("certified merge-sidecar reliable flush identity mismatch: {0}")]
+    FlushIdentityMismatch(&'static str),
     /// Response did not come from the selected QC signer.
     #[error("certified merge-sidecar response sender is not the selected holder")]
     UnexpectedResponder,
@@ -338,22 +601,91 @@ struct InboundAssembly {
 }
 
 type InboundSidecarKey = (HashOf<MergeLedgerEntry>, Hash);
+type ServerRequestKey = (PeerId, Hash);
+type OutboundAttemptKey = (ServerRequestKey, ServerRequestSource);
 
 #[derive(Debug)]
 struct OutboundTransfer {
     request: CertifiedMergeSidecarRequestV1,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
+    attempts: BTreeMap<ServerRequestSource, OutboundAttempt>,
+}
+
+#[derive(Debug)]
+struct OutboundAttempt {
+    reply_route: Option<NetworkReplyRoute>,
+    /// First chunk without a successful exact peer-writer flush receipt.
     next_chunk: usize,
+    /// Chunk handed downstream while its exact peer-writer flush is pending.
+    in_flight_chunk: Option<usize>,
+    queued: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ServerRequestSource {
+    Synthetic(PeerId),
+    Authenticated(NetworkReplySourceKey),
+}
+
+#[derive(Clone, Debug)]
+struct ServerRequestGate {
+    request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
+    source_capacity: Option<usize>,
+    attempts: BTreeMap<ServerRequestSource, ServerRequestGateAttempt>,
+}
+
+#[derive(Clone, Debug)]
+struct ServerRequestGateAttempt {
+    reply_route: Option<NetworkReplyRoute>,
+    materialization_authorized: bool,
+    authorized_materialization_route: Option<NetworkReplyRoute>,
+    /// A local lookup failed before immutable response bytes were installed.
+    ///
+    /// This keeps the bounded route/cursor history while allowing the exact
+    /// authenticated delivery to retry the same terminating local work.
+    materialization_retryable: bool,
+    /// First chunk still lacking an exact writer-flush acknowledgement, or a
+    /// terminal cursor after this authenticated source completed the transfer.
+    ///
+    /// Keeping completion distinct from chunk zero prevents any delivery from
+    /// replaying a fully acknowledged response. Reconnect replaces only the
+    /// tenure-bound writer authority; it retries a pending current chunk and
+    /// leaves a completed source terminal.
+    cursor: ServerResponseCursor,
+    inserted: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerResponseCursor {
+    Pending(usize),
+    Complete,
 }
 
 /// Network action emitted by the bounded transfer manager.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct MergeSidecarPost {
     /// Authenticated destination peer.
     pub(crate) peer: PeerId,
+    /// Exact authenticated return route for response chunks.
+    pub(crate) reply_route: Option<NetworkReplyRoute>,
     /// Request or chunk to send.
     pub(crate) message: CertifiedMergeSidecarMessage,
 }
+
+impl PartialEq for MergeSidecarPost {
+    fn eq(&self, other: &Self) -> bool {
+        let same_reply_authority = match (&self.reply_route, &other.reply_route) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.semantic_target() == right.semantic_target() && left.same_delivery(right)
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        self.peer == other.peer && same_reply_authority && self.message == other.message
+    }
+}
+
+impl Eq for MergeSidecarPost {}
 
 /// Fully reassembled response awaiting canonical/QC validation and persistence.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,31 +708,68 @@ pub(crate) enum ChunkIngestOutcome {
 /// In-memory bounded transport state. Incomplete bytes are never durable.
 #[derive(Debug)]
 pub(crate) struct MergeSidecarTransport {
+    reply_source_capacity: usize,
+    outbound_session_capacity: usize,
+    outbound_byte_capacity: usize,
+    server_request_gate_capacity: usize,
     inbound: BTreeMap<InboundSidecarKey, InboundAssembly>,
     inbound_cursor: Option<InboundSidecarKey>,
-    outbound: BTreeMap<(PeerId, Hash), OutboundTransfer>,
-    outbound_cursor: usize,
+    outbound: BTreeMap<ServerRequestKey, OutboundTransfer>,
+    /// Exact source-attempt ownership order. Every serviced incomplete attempt
+    /// moves to the tail and every new source starts behind all current owners.
+    outbound_order: VecDeque<OutboundAttemptKey>,
     tick_response_next: bool,
-    server_request_gates: BTreeMap<(PeerId, Hash), Instant>,
+    server_request_gates: BTreeMap<ServerRequestKey, ServerRequestGate>,
     next_request_nonce: u64,
     boot_nonce: Hash,
 }
 
 impl MergeSidecarTransport {
-    /// Construct an empty transport. Complete Kura sidecars survive restart;
-    /// partial assemblies intentionally do not.
+    /// Construct an empty transport with the dependent-test source geometry.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_reply_source_capacity(DEFAULT_REPLY_SOURCE_CAPACITY)
+            .expect("default sidecar reply-source geometry is representable")
+    }
+
+    /// Construct an empty transport whose global corridors reserve every
+    /// configured authenticated source's independent per-source limits.
+    pub(crate) fn with_reply_source_capacity(
+        reply_source_capacity: usize,
+    ) -> Result<Self, MergeSidecarError> {
+        if reply_source_capacity == 0 {
+            return Err(MergeSidecarError::Capacity(
+                "reply-source geometry must be non-zero",
+            ));
+        }
+        let outbound_session_capacity = reply_source_capacity
+            .checked_mul(MAX_OUTBOUND_SESSIONS_PER_SOURCE)
+            .ok_or(MergeSidecarError::Capacity(
+                "outbound response session geometry",
+            ))?;
+        let outbound_byte_capacity = reply_source_capacity
+            .checked_mul(MAX_OUTBOUND_BYTES_PER_SOURCE)
+            .ok_or(MergeSidecarError::Capacity(
+                "outbound response byte geometry",
+            ))?;
+        let server_request_gate_capacity = reply_source_capacity
+            .checked_mul(MAX_SERVER_REQUEST_GATES_PER_SOURCE)
+            .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
         let unix_nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos()
             .to_le_bytes();
         let process_id = std::process::id().to_le_bytes();
-        Self {
+        Ok(Self {
+            reply_source_capacity,
+            outbound_session_capacity,
+            outbound_byte_capacity,
+            server_request_gate_capacity,
             inbound: BTreeMap::new(),
             inbound_cursor: None,
             outbound: BTreeMap::new(),
-            outbound_cursor: 0,
+            outbound_order: VecDeque::new(),
             tick_response_next: true,
             server_request_gates: BTreeMap::new(),
             next_request_nonce: 0,
@@ -409,7 +778,7 @@ impl MergeSidecarTransport {
                 unix_nanos.as_slice(),
                 process_id.as_slice(),
             ]),
-        }
+        })
     }
 
     fn validate_reference_len(
@@ -627,6 +996,7 @@ impl MergeSidecarTransport {
         self.inbound_cursor = Some(key);
         Ok(Some(MergeSidecarPost {
             peer: holder,
+            reply_route: None,
             message: CertifiedMergeSidecarMessage::Request(request),
         }))
     }
@@ -990,20 +1360,187 @@ impl MergeSidecarTransport {
             .collect()
     }
 
-    fn prune_server_gates(&mut self, now: Instant) {
-        self.server_request_gates.retain(|_, inserted| {
-            now.saturating_duration_since(*inserted) <= SERVER_REQUEST_GATE_TTL
+    fn retire_inactive_outbound_attempts(&mut self, now: Instant) {
+        let retired = self
+            .outbound
+            .iter()
+            .flat_map(|(key, transfer)| {
+                transfer.attempts.iter().filter_map(|(source, attempt)| {
+                    attempt
+                        .reply_route
+                        .as_ref()
+                        .is_some_and(|route| !route.is_active())
+                        .then(|| {
+                            (
+                                key.clone(),
+                                source.clone(),
+                                attempt.in_flight_chunk.unwrap_or(attempt.next_chunk),
+                            )
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        for (key, source, resume_chunk) in retired {
+            if let Some(gate_attempt) = self
+                .server_request_gates
+                .get_mut(&key)
+                .and_then(|gate| gate.attempts.get_mut(&source))
+            {
+                gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);
+                gate_attempt.inserted = now;
+            }
+            if let Some(transfer) = self.outbound.get_mut(&key) {
+                transfer.attempts.remove(&source);
+                if transfer.attempts.is_empty() {
+                    self.outbound.remove(&key);
+                }
+            }
+        }
+        self.outbound_order.retain(|(key, source)| {
+            self.outbound
+                .get(key)
+                .and_then(|transfer| transfer.attempts.get(source))
+                .is_some_and(|attempt| attempt.queued)
         });
     }
 
+    fn prune_server_gates(&mut self, now: Instant) {
+        self.retire_inactive_outbound_attempts(now);
+        let outbound = &self.outbound;
+        self.server_request_gates.retain(|key, gate| {
+            // A pending cursor is the source's bounded progress reservation,
+            // including while its tenure is inactive and shared bytes have
+            // been released. Only terminal no-outbound tombstones age out.
+            gate.attempts.retain(|source, attempt| {
+                outbound
+                    .get(key)
+                    .is_some_and(|transfer| transfer.attempts.contains_key(source))
+                    || attempt.cursor != ServerResponseCursor::Complete
+                    || now.saturating_duration_since(attempt.inserted) <= SERVER_REQUEST_GATE_TTL
+            });
+            !gate.attempts.is_empty()
+        });
+    }
+
+    fn server_request_source(
+        sender: &PeerId,
+        reply_route: Option<&NetworkReplyRoute>,
+    ) -> ServerRequestSource {
+        reply_route.map_or_else(
+            || ServerRequestSource::Synthetic(sender.clone()),
+            |route| ServerRequestSource::Authenticated(route.source_key()),
+        )
+    }
+
+    fn source_gate_count(&self, source: &ServerRequestSource) -> usize {
+        self.server_request_gates
+            .values()
+            .filter(|gate| gate.attempts.contains_key(source))
+            .count()
+    }
+
+    fn server_gate_attempt_count(&self) -> usize {
+        self.server_request_gates
+            .values()
+            .map(|gate| gate.attempts.len())
+            .sum()
+    }
+
+    fn outbound_attempt_count(&self) -> usize {
+        self.outbound
+            .values()
+            .map(|transfer| transfer.attempts.len())
+            .sum()
+    }
+
+    fn source_outbound_count(&self, source: &ServerRequestSource) -> usize {
+        self.outbound
+            .values()
+            .filter(|transfer| transfer.attempts.contains_key(source))
+            .count()
+    }
+
+    fn global_outbound_bytes(&self) -> usize {
+        self.outbound
+            .values()
+            .map(|transfer| transfer.bytes.len())
+            .sum()
+    }
+
+    fn source_outbound_bytes(&self, source: &ServerRequestSource) -> usize {
+        self.outbound
+            .values()
+            .filter(|transfer| transfer.attempts.contains_key(source))
+            .map(|transfer| transfer.bytes.len())
+            .sum()
+    }
+
+    fn route_update(
+        candidate: Option<&NetworkReplyRoute>,
+        prior: Option<&NetworkReplyRoute>,
+    ) -> Result<NetworkReplyRouteSourceUpdate, MergeSidecarError> {
+        match (candidate, prior) {
+            (None, None) => Ok(NetworkReplyRouteSourceUpdate::Exact),
+            (Some(candidate), Some(prior)) => candidate
+                .source_update_from(prior)
+                .map_err(|_| MergeSidecarError::UnsolicitedResponse),
+            (None, Some(_)) | (Some(_), None) => Err(MergeSidecarError::UnsolicitedResponse),
+        }
+    }
+
+    fn alternate_source_is_authorized(
+        gate: &ServerRequestGate,
+        candidate: Option<&NetworkReplyRoute>,
+    ) -> bool {
+        match candidate {
+            Some(candidate) => gate.attempts.values().all(|attempt| {
+                attempt.reply_route.as_ref().is_some_and(|prior| {
+                    candidate.same_request_authority(prior)
+                        && !candidate.equal_ordinal_different_tenure(prior)
+                })
+            }),
+            None => gate
+                .attempts
+                .values()
+                .all(|attempt| attempt.reply_route.is_none()),
+        }
+    }
+
+    fn route_source_capacity(
+        reply_route: Option<&NetworkReplyRoute>,
+    ) -> Result<Option<usize>, MergeSidecarError> {
+        reply_route
+            .map(|route| {
+                NetworkReplyRoutes::try_from_route(route.clone())
+                    .map(|routes| routes.source_capacity())
+                    .map_err(|_| MergeSidecarError::UnsolicitedResponse)
+            })
+            .transpose()
+    }
+
+    fn can_add_outbound_attempt(&self, source: &ServerRequestSource, bytes: usize) -> bool {
+        self.outbound_attempt_count() < self.outbound_session_capacity
+            && self.source_outbound_count(source) < MAX_OUTBOUND_SESSIONS_PER_SOURCE
+            && self.source_outbound_bytes(source).saturating_add(bytes)
+                <= MAX_OUTBOUND_BYTES_PER_SOURCE
+    }
+
     /// Rate-limit authenticated requests before any potentially expensive Kura lookup.
+    ///
+    /// Returns `true` when the caller must materialize the canonical response
+    /// from Kura. `false` means that the semantic request already owns local
+    /// work or immutable response bytes; the observed source was attached.
+    /// Every delivery update retains the authenticated source cursor. A
+    /// reconnect has no writer-flush continuity, so it retries that source's
+    /// current chunk. A newly observed alternate source starts at chunk zero.
     pub(crate) fn admit_server_request(
         &mut self,
         sender: &PeerId,
         request: &CertifiedMergeSidecarRequestV1,
+        reply_route: Option<&NetworkReplyRoute>,
         local_peer: &PeerId,
         now: Instant,
-    ) -> Result<(), MergeSidecarError> {
+    ) -> Result<bool, MergeSidecarError> {
         self.prune_server_gates(now);
         if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {
             return Err(MergeSidecarError::UnsupportedVersion(request.version));
@@ -1011,35 +1548,362 @@ impl MergeSidecarTransport {
         if &request.requester != sender || &request.responder != local_peer {
             return Err(MergeSidecarError::PeerIdentityMismatch);
         }
+        if reply_route.is_some_and(|route| route.semantic_target() != sender) {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if reply_route.is_some_and(|route| !route.is_active()) {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
         let len = usize::try_from(request.encoded_len)
             .map_err(|_| MergeSidecarError::InvalidEncodedLength(request.encoded_len))?;
         if len == 0 || len > MAX_MERGE_LEDGER_ENTRY_BYTES {
             return Err(MergeSidecarError::InvalidEncodedLength(request.encoded_len));
         }
         let key = (sender.clone(), request.request_id);
-        if self.server_request_gates.contains_key(&key) {
+        let request_hash = HashOf::new(request);
+        let source = Self::server_request_source(sender, reply_route);
+        let source_capacity = Self::route_source_capacity(reply_route)?;
+        if source_capacity.is_some_and(|capacity| capacity != self.reply_source_capacity) {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
-        let peer_count = self
-            .server_request_gates
-            .keys()
-            .filter(|(peer, _)| peer == sender)
-            .count();
-        if self.server_request_gates.len() >= MAX_SERVER_REQUEST_GATES
-            || peer_count >= MAX_SERVER_REQUEST_GATES_PER_PEER
+        if let Some(existing) = self.server_request_gates.get(&key).cloned() {
+            if existing.request_hash != request_hash {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+            if existing.source_capacity != source_capacity {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+            if self
+                .outbound
+                .get(&key)
+                .is_some_and(|transfer| &transfer.request != request)
+            {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+
+            if let Some(prior) = existing.attempts.get(&source) {
+                let update = Self::route_update(reply_route, prior.reply_route.as_ref())?;
+                if prior.cursor == ServerResponseCursor::Complete {
+                    let gate = self
+                        .server_request_gates
+                        .get_mut(&key)
+                        .expect("existing server gate remains present");
+                    let attempt = gate
+                        .attempts
+                        .get_mut(&source)
+                        .expect("completed source gate remains present");
+                    if update != NetworkReplyRouteSourceUpdate::Exact {
+                        attempt.reply_route = reply_route.cloned();
+                        attempt.inserted = now;
+                    }
+                    attempt.materialization_authorized = false;
+                    attempt.authorized_materialization_route = None;
+                    attempt.materialization_retryable = false;
+                    return Ok(false);
+                }
+                if self
+                    .outbound
+                    .get(&key)
+                    .is_some_and(|transfer| transfer.attempts.contains_key(&source))
+                {
+                    let mut enqueue_attempt = false;
+                    let mut reconnect_retry_chunk = None;
+                    if update != NetworkReplyRouteSourceUpdate::Exact {
+                        let transfer = self
+                            .outbound
+                            .get_mut(&key)
+                            .expect("observed outbound transfer remains present");
+                        let attempt = transfer
+                            .attempts
+                            .get_mut(&source)
+                            .expect("observed source attempt remains present");
+                        attempt.reply_route = reply_route.cloned();
+                        if update == NetworkReplyRouteSourceUpdate::Reconnected {
+                            let retry_chunk = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);
+                            attempt.next_chunk = retry_chunk;
+                            attempt.in_flight_chunk = None;
+                            reconnect_retry_chunk = Some(retry_chunk);
+                        }
+                        if !attempt.queued {
+                            attempt.queued = true;
+                            enqueue_attempt = true;
+                        }
+                    }
+                    let gate = self
+                        .server_request_gates
+                        .get_mut(&key)
+                        .expect("existing server gate remains present");
+                    let attempt = gate
+                        .attempts
+                        .get_mut(&source)
+                        .expect("existing source gate remains present");
+                    if update != NetworkReplyRouteSourceUpdate::Exact {
+                        attempt.reply_route = reply_route.cloned();
+                        if let Some(retry_chunk) = reconnect_retry_chunk {
+                            attempt.cursor = ServerResponseCursor::Pending(retry_chunk);
+                        }
+                        attempt.inserted = now;
+                    }
+                    attempt.materialization_authorized = false;
+                    attempt.authorized_materialization_route = None;
+                    attempt.materialization_retryable = false;
+                    if enqueue_attempt {
+                        self.outbound_order.push_back((key, source));
+                    }
+                    return Ok(false);
+                }
+
+                if self.outbound.contains_key(&key) {
+                    let bytes = self
+                        .outbound
+                        .get(&key)
+                        .expect("observed outbound transfer remains present")
+                        .bytes
+                        .len();
+                    if !self.can_add_outbound_attempt(&source, bytes) {
+                        return Err(MergeSidecarError::Capacity("outbound response budget"));
+                    }
+                    let ServerResponseCursor::Pending(resume_chunk) = prior.cursor else {
+                        unreachable!("completed source returned before outbound reattachment")
+                    };
+                    let gate = self
+                        .server_request_gates
+                        .get_mut(&key)
+                        .expect("existing server gate remains present");
+                    let attempt = gate
+                        .attempts
+                        .get_mut(&source)
+                        .expect("existing source gate remains present");
+                    attempt.reply_route = reply_route.cloned();
+                    attempt.cursor = ServerResponseCursor::Pending(resume_chunk);
+                    attempt.materialization_authorized = false;
+                    attempt.authorized_materialization_route = None;
+                    attempt.materialization_retryable = false;
+                    attempt.inserted = now;
+                    self.outbound
+                        .get_mut(&key)
+                        .expect("observed outbound transfer remains present")
+                        .attempts
+                        .insert(
+                            source.clone(),
+                            OutboundAttempt {
+                                reply_route: reply_route.cloned(),
+                                next_chunk: resume_chunk,
+                                in_flight_chunk: None,
+                                queued: true,
+                            },
+                        );
+                    self.outbound_order.push_back((key, source));
+                    return Ok(false);
+                }
+
+                if prior.materialization_authorized {
+                    if update != NetworkReplyRouteSourceUpdate::Exact {
+                        let gate = self
+                            .server_request_gates
+                            .get_mut(&key)
+                            .expect("existing server gate remains present");
+                        let attempt = gate
+                            .attempts
+                            .get_mut(&source)
+                            .expect("existing source gate remains present");
+                        attempt.reply_route = reply_route.cloned();
+                        attempt.inserted = now;
+                    }
+                    return Ok(false);
+                }
+                if update == NetworkReplyRouteSourceUpdate::Exact {
+                    if !prior.materialization_retryable {
+                        return Err(MergeSidecarError::UnsolicitedResponse);
+                    }
+                    let materialization_in_progress = existing
+                        .attempts
+                        .values()
+                        .any(|attempt| attempt.materialization_authorized);
+                    let gate = self
+                        .server_request_gates
+                        .get_mut(&key)
+                        .expect("existing server gate remains present");
+                    let attempt = gate
+                        .attempts
+                        .get_mut(&source)
+                        .expect("existing source gate remains present");
+                    attempt.materialization_authorized = true;
+                    attempt.authorized_materialization_route = reply_route.cloned();
+                    attempt.materialization_retryable = false;
+                    attempt.inserted = now;
+                    return Ok(!materialization_in_progress);
+                }
+                let gate = self
+                    .server_request_gates
+                    .get_mut(&key)
+                    .expect("existing server gate remains present");
+                let attempt = gate
+                    .attempts
+                    .get_mut(&source)
+                    .expect("existing source gate remains present");
+                attempt.reply_route = reply_route.cloned();
+                attempt.materialization_authorized = true;
+                attempt.authorized_materialization_route = reply_route.cloned();
+                attempt.materialization_retryable = false;
+                attempt.inserted = now;
+                return Ok(true);
+            }
+
+            if !Self::alternate_source_is_authorized(&existing, reply_route) {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+            if source_capacity.is_some_and(|capacity| existing.attempts.len() >= capacity)
+                || self.server_gate_attempt_count() >= self.server_request_gate_capacity
+                || self.source_gate_count(&source) >= MAX_SERVER_REQUEST_GATES_PER_SOURCE
+            {
+                return Err(MergeSidecarError::Capacity("server request rate gate"));
+            }
+            if let Some(bytes) = self.outbound.get(&key).map(|transfer| transfer.bytes.len()) {
+                if !self.can_add_outbound_attempt(&source, bytes) {
+                    return Err(MergeSidecarError::Capacity("outbound response budget"));
+                }
+                self.server_request_gates
+                    .get_mut(&key)
+                    .expect("existing server gate remains present")
+                    .attempts
+                    .insert(
+                        source.clone(),
+                        ServerRequestGateAttempt {
+                            reply_route: reply_route.cloned(),
+                            materialization_authorized: false,
+                            authorized_materialization_route: None,
+                            materialization_retryable: false,
+                            cursor: ServerResponseCursor::Pending(0),
+                            inserted: now,
+                        },
+                    );
+                self.outbound
+                    .get_mut(&key)
+                    .expect("observed outbound transfer remains present")
+                    .attempts
+                    .insert(
+                        source.clone(),
+                        OutboundAttempt {
+                            reply_route: reply_route.cloned(),
+                            next_chunk: 0,
+                            in_flight_chunk: None,
+                            queued: true,
+                        },
+                    );
+                self.outbound_order.push_back((key, source));
+                return Ok(false);
+            }
+
+            let materialization_in_progress = existing
+                .attempts
+                .values()
+                .any(|attempt| attempt.materialization_authorized);
+            self.server_request_gates
+                .get_mut(&key)
+                .expect("existing server gate remains present")
+                .attempts
+                .insert(
+                    source,
+                    ServerRequestGateAttempt {
+                        reply_route: reply_route.cloned(),
+                        materialization_authorized: true,
+                        authorized_materialization_route: reply_route.cloned(),
+                        materialization_retryable: false,
+                        cursor: ServerResponseCursor::Pending(0),
+                        inserted: now,
+                    },
+                );
+            return Ok(!materialization_in_progress);
+        }
+        let source_count = self.source_gate_count(&source);
+        if self.server_gate_attempt_count() >= self.server_request_gate_capacity
+            || source_count >= MAX_SERVER_REQUEST_GATES_PER_SOURCE
         {
             return Err(MergeSidecarError::Capacity("server request rate gate"));
         }
-        self.server_request_gates.insert(key, now);
-        Ok(())
+        self.server_request_gates.insert(
+            key,
+            ServerRequestGate {
+                request_hash,
+                source_capacity,
+                attempts: BTreeMap::from([(
+                    source,
+                    ServerRequestGateAttempt {
+                        reply_route: reply_route.cloned(),
+                        materialization_authorized: true,
+                        authorized_materialization_route: reply_route.cloned(),
+                        materialization_retryable: false,
+                        cursor: ServerResponseCursor::Pending(0),
+                        inserted: now,
+                    },
+                )]),
+            },
+        );
+        Ok(true)
     }
 
-    /// Queue one validated local entry for bounded chunk transmission.
+    /// Cancel a rate-gate reservation which never became an outbound transfer.
+    ///
+    /// Materialization performs Kura lookup and exact metadata validation only
+    /// after bounded admission. Every failure on that path must release its
+    /// authorization so a later authenticated delivery is not suppressed
+    /// without a reply. A parked attempt may remain to preserve its bounded
+    /// route history and source-local non-regressing chunk cursor.
+    pub(crate) fn cancel_unmaterialized_server_request(
+        &mut self,
+        sender: &PeerId,
+        request: &CertifiedMergeSidecarRequestV1,
+    ) {
+        let key = (sender.clone(), request.request_id);
+        if self.outbound.contains_key(&key) {
+            return;
+        }
+        let request_hash = HashOf::new(request);
+        if let Some(gate) = self
+            .server_request_gates
+            .get_mut(&key)
+            .filter(|gate| gate.request_hash == request_hash)
+        {
+            for attempt in gate
+                .attempts
+                .values_mut()
+                .filter(|attempt| attempt.materialization_authorized)
+            {
+                attempt.materialization_authorized = false;
+                attempt.authorized_materialization_route = None;
+                attempt.materialization_retryable = true;
+            }
+        }
+    }
+
+    fn park_authorized_server_request_attempts(gate: &mut ServerRequestGate, now: Instant) {
+        for attempt in gate
+            .attempts
+            .values_mut()
+            .filter(|attempt| attempt.materialization_authorized)
+        {
+            attempt.materialization_authorized = false;
+            attempt.authorized_materialization_route = None;
+            attempt.materialization_retryable = false;
+            attempt.inserted = now;
+        }
+    }
+
+    /// Consume one exact admitted request and queue its validated local entry.
+    ///
+    /// The admission gate binds the canonical request and exact authenticated
+    /// delivery. Materialized bytes are shared by every admitted source, while
+    /// each source receives its own source-local non-regressing chunk cursor.
+    /// After the bounded duplicate window expires, an exact live delivery may authorize
+    /// another durable lookup, so local admission never becomes height-long
+    /// deduplication.
     pub(crate) fn enqueue_response(
         &mut self,
         request: CertifiedMergeSidecarRequestV1,
+        reply_route: Option<NetworkReplyRoute>,
         bytes: Vec<u8>,
-        _now: Instant,
+        now: Instant,
     ) -> Result<(), MergeSidecarError> {
         let len = usize::try_from(request.encoded_len)
             .map_err(|_| MergeSidecarError::InvalidEncodedLength(request.encoded_len))?;
@@ -1053,101 +1917,371 @@ impl MergeSidecarTransport {
         if self.outbound.contains_key(&key) {
             return Err(MergeSidecarError::Capacity("duplicate outbound session"));
         }
-        let peer_sessions = self
-            .outbound
-            .keys()
-            .filter(|(peer, _)| peer == &request.requester)
-            .count();
-        let global_bytes: usize = self
-            .outbound
-            .values()
-            .map(|transfer| transfer.bytes.len())
-            .sum();
-        let peer_bytes: usize = self
-            .outbound
-            .iter()
-            .filter(|((peer, _), _)| peer == &request.requester)
-            .map(|(_, transfer)| transfer.bytes.len())
-            .sum();
-        if self.outbound.len() >= MAX_OUTBOUND_SESSIONS
-            || peer_sessions >= MAX_OUTBOUND_SESSIONS_PER_PEER
-            || global_bytes.saturating_add(bytes.len()) > MAX_OUTBOUND_BYTES
-            || peer_bytes.saturating_add(bytes.len()) > MAX_OUTBOUND_BYTES_PER_PEER
+        let source = Self::server_request_source(&request.requester, reply_route.as_ref());
+        let gate = self
+            .server_request_gates
+            .get(&key)
+            .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+        let gate_attempt = gate
+            .attempts
+            .get(&source)
+            .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+        let same_route = match (
+            reply_route.as_ref(),
+            gate_attempt.authorized_materialization_route.as_ref(),
+        ) {
+            (None, None) => true,
+            (Some(candidate), Some(admitted)) => candidate.same_delivery(admitted),
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        if gate.request_hash != HashOf::new(&request)
+            || !gate_attempt.materialization_authorized
+            || !same_route
         {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        let mut capacity_rejected_attempts = Vec::new();
+        let mut admitted_attempts = Vec::new();
+        let mut remaining_global_sessions = self
+            .outbound_session_capacity
+            .saturating_sub(self.outbound_attempt_count());
+        for (source, attempt) in &gate.attempts {
+            if !attempt.materialization_authorized {
+                continue;
+            }
+            let ServerResponseCursor::Pending(resume_chunk) = attempt.cursor else {
+                continue;
+            };
+            if attempt
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| !route.is_active())
+            {
+                continue;
+            }
+            if remaining_global_sessions == 0
+                || self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE
+                || self
+                    .source_outbound_bytes(source)
+                    .saturating_add(bytes.len())
+                    > MAX_OUTBOUND_BYTES_PER_SOURCE
+            {
+                capacity_rejected_attempts.push(source.clone());
+                continue;
+            }
+            remaining_global_sessions -= 1;
+            admitted_attempts.push((source.clone(), attempt.reply_route.clone(), resume_chunk));
+        }
+        if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty() {
+            let gate = self
+                .server_request_gates
+                .get_mut(&key)
+                .expect("validated server request gate remains present");
+            Self::park_authorized_server_request_attempts(gate, now);
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if admitted_attempts.is_empty()
+            || self.global_outbound_bytes().saturating_add(bytes.len())
+                > self.outbound_byte_capacity
+        {
+            let gate = self
+                .server_request_gates
+                .get_mut(&key)
+                .expect("validated server request gate remains present");
+            Self::park_authorized_server_request_attempts(gate, now);
             return Err(MergeSidecarError::Capacity("outbound response budget"));
         }
-        self.outbound.insert(
+        let gate = self
+            .server_request_gates
+            .get_mut(&key)
+            .expect("validated server request gate remains present");
+        // Shared materialization satisfied the semantic lookup, but a
+        // partitioned source may not have acquired an outbound session. Retain
+        // every pending source's bounded route history and source-local cursor
+        // so a later delivery can attach to the shared bytes (or rematerialize
+        // after they leave) without restarting. A completed source remains
+        // terminal across connection tenures while this semantic gate exists.
+        Self::park_authorized_server_request_attempts(gate, now);
+        let mut attempts = BTreeMap::new();
+        for (source, reply_route, resume_chunk) in admitted_attempts {
+            self.outbound_order.push_back((key.clone(), source.clone()));
+            attempts.insert(
+                source,
+                OutboundAttempt {
+                    reply_route,
+                    next_chunk: resume_chunk,
+                    in_flight_chunk: None,
+                    queued: true,
+                },
+            );
+        }
+        let replaced = self.outbound.insert(
             key,
             OutboundTransfer {
                 request,
-                bytes,
-                next_chunk: 0,
+                bytes: Arc::from(bytes),
+                attempts,
             },
         );
+        debug_assert!(replaced.is_none());
         Ok(())
     }
 
     /// Emit at most `limit` response chunks in deterministic session order.
+    ///
+    /// The owned queue, rather than an index into a rebuilt map snapshot, makes
+    /// each source attempt's service rank decrease even when another source
+    /// completes or experiences backpressure. Reconnect retries only that
+    /// source's retained current chunk.
     pub(crate) fn drain_outbound_chunks(
         &mut self,
         limit: usize,
-        _now: Instant,
+        now: Instant,
     ) -> Vec<MergeSidecarPost> {
         let mut posts = Vec::new();
-        let mut keys = self.outbound.keys().cloned().collect::<Vec<_>>();
-        while posts.len() < limit && !keys.is_empty() {
-            self.outbound_cursor %= keys.len();
-            let key = keys[self.outbound_cursor].clone();
+        while posts.len() < limit {
+            let Some((key, source)) = self.outbound_order.pop_front() else {
+                break;
+            };
             let mut completed = false;
+            let mut retired = false;
+            let cursor;
             if let Some(transfer) = self.outbound.get_mut(&key) {
-                let count = transfer
-                    .bytes
-                    .len()
-                    .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
-                let index = transfer.next_chunk;
-                if index >= count {
-                    completed = true;
+                let request = &transfer.request;
+                let bytes = &transfer.bytes;
+                let Some(attempt) = transfer.attempts.get_mut(&source) else {
+                    debug_assert!(false, "outbound response order lost its source attempt");
+                    continue;
+                };
+                attempt.queued = false;
+                if attempt
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| !route.is_active())
+                {
+                    retired = true;
+                    cursor = ServerResponseCursor::Pending(
+                        attempt.in_flight_chunk.unwrap_or(attempt.next_chunk),
+                    );
                 } else {
-                    let start = index * MAX_CERTIFIED_MERGE_CHUNK_BYTES;
-                    let end = transfer
+                    let count = transfer
                         .bytes
                         .len()
-                        .min(start + MAX_CERTIFIED_MERGE_CHUNK_BYTES);
-                    let request = &transfer.request;
-                    let chunk = CertifiedMergeSidecarChunkV1 {
-                        version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-                        request_id: request.request_id,
-                        entry_hash: request.entry_hash,
-                        encoded_len: request.encoded_len,
-                        epoch_id: request.epoch_id,
-                        reference_digest: request.reference_digest,
-                        requester: request.requester.clone(),
-                        responder: request.responder.clone(),
-                        chunk_index: u32::try_from(index).expect("protocol chunk index fits u32"),
-                        chunk_count: u32::try_from(count).expect("protocol chunk count fits u32"),
-                        bytes: transfer.bytes[start..end].to_vec(),
-                    };
-                    posts.push(MergeSidecarPost {
-                        peer: request.requester.clone(),
-                        message: CertifiedMergeSidecarMessage::Chunk(chunk),
-                    });
-                    transfer.next_chunk += 1;
-                    completed = transfer.next_chunk == count;
-                }
-            }
-            if completed {
-                self.outbound.remove(&key);
-                keys.remove(self.outbound_cursor);
-                if !keys.is_empty() {
-                    self.outbound_cursor %= keys.len();
-                } else {
-                    self.outbound_cursor = 0;
+                        .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+                    let index = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);
+                    if index >= count {
+                        completed = true;
+                        cursor = ServerResponseCursor::Complete;
+                    } else {
+                        let start = index * MAX_CERTIFIED_MERGE_CHUNK_BYTES;
+                        let end = bytes.len().min(start + MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+                        let chunk = CertifiedMergeSidecarChunkV1 {
+                            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                            request_id: request.request_id,
+                            entry_hash: request.entry_hash,
+                            encoded_len: request.encoded_len,
+                            epoch_id: request.epoch_id,
+                            reference_digest: request.reference_digest,
+                            requester: request.requester.clone(),
+                            responder: request.responder.clone(),
+                            chunk_index: u32::try_from(index)
+                                .expect("protocol chunk index fits u32"),
+                            chunk_count: u32::try_from(count)
+                                .expect("protocol chunk count fits u32"),
+                            bytes: bytes[start..end].to_vec(),
+                        };
+                        posts.push(MergeSidecarPost {
+                            peer: request.requester.clone(),
+                            reply_route: attempt.reply_route.clone(),
+                            message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                        });
+                        attempt.in_flight_chunk = Some(index);
+                        cursor = ServerResponseCursor::Pending(index);
+                    }
                 }
             } else {
-                self.outbound_cursor = (self.outbound_cursor + 1) % keys.len();
+                debug_assert!(false, "outbound response order lost its transfer");
+                continue;
+            }
+
+            if let Some(gate_attempt) = self
+                .server_request_gates
+                .get_mut(&key)
+                .and_then(|gate| gate.attempts.get_mut(&source))
+            {
+                gate_attempt.cursor = cursor;
+                if retired || completed {
+                    gate_attempt.inserted = now;
+                }
+            }
+            if retired || completed {
+                let transfer = self
+                    .outbound
+                    .get_mut(&key)
+                    .expect("serviced outbound transfer remains present");
+                transfer.attempts.remove(&source);
+                if transfer.attempts.is_empty() {
+                    self.outbound.remove(&key);
+                }
             }
         }
         posts
+    }
+
+    /// Advance one source cursor after its exact peer writer flushes the current chunk.
+    ///
+    /// Actor admission alone is insufficient. Duplicate or late flush receipts
+    /// after conservative teardown are harmless. A receipt which still names
+    /// retained state must match the immutable transfer, source, chunk index,
+    /// and fixed chunk count exactly.
+    pub(crate) fn acknowledge_outbound_chunk(
+        &mut self,
+        admission: &CertifiedMergeSidecarChunkAdmission,
+        now: Instant,
+    ) -> Result<bool, MergeSidecarError> {
+        let projection = admission.projection();
+        if !admission.projection_matches_identity(&admission.flush_identity) {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "retained actor identity differs from its immutable projection",
+            ));
+        }
+        let key = (projection.requester.clone(), projection.request_id);
+        let Some(transfer) = self.outbound.get_mut(&key) else {
+            return Ok(false);
+        };
+        let request = &transfer.request;
+        let count = transfer
+            .bytes
+            .len()
+            .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        if request.request_id != projection.request_id
+            || request.entry_hash != projection.entry_hash
+            || request.encoded_len != projection.encoded_len
+            || request.epoch_id != projection.epoch_id
+            || request.reference_digest != projection.reference_digest
+            || request.requester != projection.requester
+            || request.responder != projection.responder
+            || usize::try_from(projection.chunk_count).ok() != Some(count)
+            || projection.message_cursor_before != 0
+            || projection.message_cursor_after != 1
+        {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "response request or exact-output cursor changed before acknowledgement",
+            ));
+        }
+        let chunk_index = usize::try_from(projection.chunk_index).map_err(|_| {
+            MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
+        })?;
+        let expected_chunk_cursor_after = chunk_index.checked_add(1).ok_or(
+            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
+        )?;
+        let start = chunk_index
+            .checked_mul(MAX_CERTIFIED_MERGE_CHUNK_BYTES)
+            .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                "chunk boundary overflowed",
+            ))?;
+        let end = transfer
+            .bytes
+            .len()
+            .min(start.saturating_add(MAX_CERTIFIED_MERGE_CHUNK_BYTES));
+        if start >= end {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "chunk boundary is outside the materialized response",
+            ));
+        }
+        let expected_chunk = CertifiedMergeSidecarChunkV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: request.request_id,
+            entry_hash: request.entry_hash,
+            encoded_len: request.encoded_len,
+            epoch_id: request.epoch_id,
+            reference_digest: request.reference_digest,
+            requester: request.requester.clone(),
+            responder: request.responder.clone(),
+            chunk_index: projection.chunk_index,
+            chunk_count: u32::try_from(count).map_err(|_| {
+                MergeSidecarError::FlushIdentityMismatch("chunk count is not representable")
+            })?,
+            bytes: transfer.bytes[start..end].to_vec(),
+        };
+        if !admission.matches_materialized_chunk(&expected_chunk) {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "materialized response differs from the actor-admitted chunk",
+            ));
+        }
+
+        let source = ServerRequestSource::Authenticated(admission.source_key.clone());
+        let Some(attempt) = transfer.attempts.get_mut(&source) else {
+            return Ok(false);
+        };
+        if !attempt
+            .reply_route
+            .as_ref()
+            .is_some_and(|route| admission.is_bound_to_attempt(route))
+        {
+            return Ok(false);
+        }
+        if attempt.in_flight_chunk != Some(chunk_index) {
+            if chunk_index < attempt.next_chunk {
+                return Ok(false);
+            }
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "acknowledgement does not name the in-flight source chunk",
+            ));
+        }
+        if attempt.next_chunk != projection.chunk_cursor_before
+            || projection.chunk_cursor_before != chunk_index
+            || projection.chunk_cursor_after != expected_chunk_cursor_after
+        {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "per-source sidecar chunk cursor changed before acknowledgement",
+            ));
+        }
+        attempt.next_chunk = projection.chunk_cursor_after;
+        attempt.in_flight_chunk = None;
+        let completed = attempt.next_chunk == count;
+        let active = attempt
+            .reply_route
+            .as_ref()
+            .is_none_or(NetworkReplyRoute::is_active);
+        let cursor = if completed {
+            ServerResponseCursor::Complete
+        } else {
+            ServerResponseCursor::Pending(attempt.next_chunk)
+        };
+        if let Some(gate_attempt) = self
+            .server_request_gates
+            .get_mut(&key)
+            .and_then(|gate| gate.attempts.get_mut(&source))
+        {
+            gate_attempt.cursor = cursor;
+            if completed || !active {
+                gate_attempt.inserted = now;
+            }
+        }
+        if completed || !active {
+            let transfer = self
+                .outbound
+                .get_mut(&key)
+                .expect("acknowledged outbound transfer remains present");
+            transfer.attempts.remove(&source);
+            if transfer.attempts.is_empty() {
+                self.outbound.remove(&key);
+            }
+        } else {
+            let attempt = self
+                .outbound
+                .get_mut(&key)
+                .expect("acknowledged outbound transfer remains present")
+                .attempts
+                .get_mut(&source)
+                .expect("acknowledged source attempt remains present");
+            if !attempt.queued {
+                attempt.queued = true;
+                self.outbound_order.push_back((key, source));
+            }
+        }
+        Ok(true)
     }
 
     /// Remove deferred carriers that the actor no longer retains as pending.
@@ -1266,12 +2400,6 @@ impl MergeSidecarTransport {
             }
         }
         posts
-    }
-
-    /// Rotate stalled holders and emit the legacy actor's bounded batch.
-    #[cfg(test)]
-    pub(crate) fn tick(&mut self, requester: &PeerId, now: Instant) -> Vec<MergeSidecarPost> {
-        self.tick_bounded(requester, now, MAX_INBOUND_SESSIONS + 8)
     }
 
     #[cfg(test)]
@@ -1902,6 +3030,55 @@ mod tests {
             .collect()
     }
 
+    fn reply_chunk_admission(post: &MergeSidecarPost) -> CertifiedMergeSidecarChunkAdmission {
+        let route = post
+            .reply_route
+            .as_ref()
+            .expect("response chunk must retain its authenticated reply route");
+        let CertifiedMergeSidecarMessage::Chunk(_) = &post.message else {
+            panic!("expected a certified merge-sidecar response chunk")
+        };
+        let canonical_post = Post {
+            data: crate::NetworkMessage::CertifiedMergeSidecar(Box::new(post.message.clone())),
+            peer_id: post.peer.clone(),
+            priority: Priority::High,
+        };
+        let (mut flush_control, flush_ack) =
+            NetworkReplyFlushAckTestFixture::for_reply(&canonical_post, route);
+        assert!(flush_control.flush(), "publish exact test writer flush");
+        CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
+            &canonical_post,
+            route,
+            0,
+            1,
+            flush_ack.identity(),
+        )
+        .expect("bind exact admitted response chunk")
+    }
+
+    fn acknowledge_reply_chunk(
+        server: &mut MergeSidecarTransport,
+        post: &MergeSidecarPost,
+        now: Instant,
+    ) -> bool {
+        server
+            .acknowledge_outbound_chunk(&reply_chunk_admission(post), now)
+            .expect("acknowledge exact admitted response chunk")
+    }
+
+    fn routed_server_request(
+        base: &CertifiedMergeSidecarRequestV1,
+        requester: PeerId,
+        request_label: &[u8],
+        encoded_len: usize,
+    ) -> CertifiedMergeSidecarRequestV1 {
+        let mut request = base.clone();
+        request.requester = requester;
+        request.request_id = Hash::new(request_label);
+        request.encoded_len = encoded_len as u64;
+        request
+    }
+
     #[test]
     fn holder_derivation_rejects_noncanonical_qc_rosters_and_bitmaps() {
         let canonical = reference(1, 3);
@@ -2175,25 +3352,31 @@ mod tests {
         let len = MAX_MERGE_LEDGER_ENTRY_BYTES;
         let (_, requester, _, request, started_at) = start_session(len, 3);
         let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"progressive response hub"));
+        let route = routes.mint(requester.clone());
         let mut server = MergeSidecarTransport::new();
         server
-            .admit_server_request(&requester, &request, &local_peer, started_at)
+            .admit_server_request(&requester, &request, Some(&route), &local_peer, started_at)
             .expect("admit exact authenticated request");
         server
-            .enqueue_response(request, vec![0x5A; len], started_at)
+            .enqueue_response(request, Some(route.clone()), vec![0x5A; len], started_at)
             .expect("queue protocol-sized response");
 
         let expected_chunks = len.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
         let mut seen = 0usize;
-        for tick in 0_u64..64 {
-            let now = started_at + Duration::from_secs(tick * 2);
-            for post in server.drain_outbound_chunks(8, now) {
-                let CertifiedMergeSidecarMessage::Chunk(chunk) = post.message else {
-                    panic!("outbound response emitted a request")
-                };
-                assert_eq!(usize::try_from(chunk.chunk_index).unwrap(), seen);
-                seen += 1;
-            }
+        for tick in 0..expected_chunks {
+            let elapsed_secs = u64::try_from(tick).expect("chunk count fits u64") * 2;
+            let now = started_at + Duration::from_secs(elapsed_secs);
+            let post = server
+                .drain_outbound_chunks(8, now)
+                .pop()
+                .expect("one source owns one in-flight response chunk");
+            let CertifiedMergeSidecarMessage::Chunk(chunk) = &post.message else {
+                panic!("outbound response emitted a request")
+            };
+            assert_eq!(usize::try_from(chunk.chunk_index).unwrap(), seen);
+            assert!(acknowledge_reply_chunk(&mut server, &post, now));
+            seen += 1;
             if seen == expected_chunks {
                 assert!(now.duration_since(started_at) > Duration::from_secs(30));
                 break;
@@ -2203,20 +3386,1808 @@ mod tests {
     }
 
     #[test]
+    fn exact_active_delivery_retry_preserves_decreasing_chunk_rank() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub = peer(b"exact retry hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub);
+        let route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("admit first exact request")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route.clone()), vec![0xA5; len], now)
+            .expect("queue bounded response");
+        let first = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("emit first chunk");
+        assert!(matches!(
+            &first.message,
+            CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
+        ));
+
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("deduplicate the exact active delivery")
+        );
+        assert!(
+            server.drain_outbound_chunks(1, now).is_empty(),
+            "an exact duplicate must neither reset nor requeue the in-flight chunk"
+        );
+        assert!(acknowledge_reply_chunk(&mut server, &first, now));
+        let continued = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("continue the response from its next fixed boundary");
+        assert!(matches!(
+            &continued,
+            MergeSidecarPost {
+                reply_route: Some(emitted),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if emitted.same_delivery(&route) && chunk.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &continued, now));
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn alternate_source_progress_and_reconnect_preserve_independent_cursors() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"independent cursor hub a");
+        let hub_b = peer(b"independent cursor hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit request through source A")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0xA5; len], now)
+            .expect("queue bounded response");
+        let first_a = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("source A starts at chunk zero");
+        assert!(matches!(
+            &first_a,
+            MergeSidecarPost {
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first_a, now));
+
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("attach independent source B to shared bytes")
+        );
+        assert_eq!(
+            server.outbound[&(requester.clone(), request.request_id)]
+                .attempts
+                .len(),
+            2
+        );
+
+        assert!(routes.retire(&route_a));
+        let first_b = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("source B starts independently at chunk zero");
+        assert!(matches!(
+            &first_b,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&route_b) && chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first_b, now));
+
+        let reconnected_a = routes.mint_via(requester.clone(), hub_a);
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&reconnected_a), &local_peer, now,)
+                .expect("reattach source A at its retained source cursor")
+        );
+        let continued = server.drain_outbound_chunks(2, now);
+        assert!(matches!(
+            continued.as_slice(),
+            [
+                MergeSidecarPost {
+                    reply_route: Some(route_b_post),
+                    message: CertifiedMergeSidecarMessage::Chunk(chunk_b),
+                    ..
+                },
+                MergeSidecarPost {
+                    reply_route: Some(route_a_post),
+                    message: CertifiedMergeSidecarMessage::Chunk(chunk_a),
+                    ..
+                }
+            ] if route_b_post.same_delivery(&route_b)
+                && route_a_post.same_delivery(&reconnected_a)
+                && chunk_b.chunk_index == 1
+                && chunk_a.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &continued[0], now));
+        assert!(acknowledge_reply_chunk(&mut server, &continued[1], now));
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn sidecar_flush_refinement_advances_only_exact_source_chunk() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"flush refinement hub a");
+        let hub_b = peer(b"flush refinement hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let key = (requester.clone(), request.request_id);
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("source A starts exact shared materialization")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(route_a.clone()),
+                vec![0xA6; len],
+                now,
+            )
+            .expect("materialize one shared two-chunk response");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("source B attaches its independent cursor to shared bytes")
+        );
+        let first = server.drain_outbound_chunks(2, now);
+        let first_a = first
+            .iter()
+            .find(|post| {
+                post.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&route_a))
+            })
+            .expect("source A receives chunk zero");
+        let first_b = first
+            .iter()
+            .find(|post| {
+                post.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&route_b))
+            })
+            .expect("source B receives chunk zero");
+        let admission_a = reply_chunk_admission(first_a);
+        let admission_b = reply_chunk_admission(first_b);
+        assert_eq!(server.outbound[&key].bytes.len(), len);
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 0);
+        assert_eq!(server.outbound[&key].attempts[&source_b].next_chunk, 0);
+
+        let mut source_mismatch = admission_a.clone();
+        source_mismatch.projection.authenticated_source =
+            admission_b.projection.authenticated_source.clone();
+        source_mismatch.source_key = admission_b.source_key.clone();
+        let mut tenure_mismatch = admission_a.clone();
+        tenure_mismatch.projection.connection_tenure_ordinal = tenure_mismatch
+            .projection
+            .connection_tenure_ordinal
+            .saturating_add(1);
+        let mut delivery_mismatch = admission_a.clone();
+        delivery_mismatch.projection.delivery_ordinal = delivery_mismatch
+            .projection
+            .delivery_ordinal
+            .saturating_add(1);
+        let mut ticket_mismatch = admission_a.clone();
+        ticket_mismatch.projection.ticket_id =
+            ticket_mismatch.projection.ticket_id.saturating_add(1);
+        let mut ticket_rank_mismatch = admission_a.clone();
+        ticket_rank_mismatch.projection.ticket_rank = ticket_rank_mismatch
+            .projection
+            .ticket_rank
+            .saturating_add(1);
+        let mut ticket_topic_mismatch = admission_a.clone();
+        ticket_topic_mismatch.projection.ticket_topic = Topic::Consensus;
+        let mut ticket_digest_mismatch = admission_a.clone();
+        ticket_digest_mismatch.projection.canonical_request_digest =
+            Hash::new(b"mutated actor request digest");
+        let mut stream_charge_mismatch = admission_a.clone();
+        stream_charge_mismatch.projection.stream_wire_bytes = stream_charge_mismatch
+            .projection
+            .stream_wire_bytes
+            .saturating_add(1);
+        let mut payload_mismatch = admission_a.clone();
+        payload_mismatch.projection.payload_digest = Hash::new(b"mutated sidecar payload");
+        let mut request_mismatch = admission_a.clone();
+        request_mismatch.projection.request_id = Hash::new(b"mutated sidecar request");
+        let mut chunk_mismatch = admission_a.clone();
+        chunk_mismatch.projection.chunk_index = 1;
+        let mut cursor_mismatch = admission_a.clone();
+        cursor_mismatch.projection.chunk_cursor_after = 2;
+        let mut message_cursor_mismatch = admission_a.clone();
+        message_cursor_mismatch.projection.message_cursor_after = 2;
+
+        for (label, mismatched) in [
+            ("source", source_mismatch),
+            ("tenure", tenure_mismatch),
+            ("delivery", delivery_mismatch),
+            ("ticket", ticket_mismatch),
+            ("ticket rank", ticket_rank_mismatch),
+            ("ticket topic", ticket_topic_mismatch),
+            ("ticket digest", ticket_digest_mismatch),
+            ("stream charge", stream_charge_mismatch),
+            ("payload", payload_mismatch),
+            ("request", request_mismatch),
+            ("chunk", chunk_mismatch),
+            ("chunk cursor", cursor_mismatch),
+            ("message cursor", message_cursor_mismatch),
+        ] {
+            assert_ne!(
+                server.acknowledge_outbound_chunk(&mismatched, now),
+                Ok(true),
+                "{label} substitution must not advance any source"
+            );
+            assert_eq!(
+                server.outbound[&key].attempts[&source_a].next_chunk, 0,
+                "{label} substitution changed source A"
+            );
+            assert_eq!(
+                server.outbound[&key].attempts[&source_b].next_chunk, 0,
+                "{label} substitution changed source B"
+            );
+        }
+
+        assert!(
+            server
+                .acknowledge_outbound_chunk(&admission_a, now)
+                .expect("exact source A acknowledgement")
+        );
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
+        assert_eq!(server.outbound[&key].attempts[&source_b].next_chunk, 0);
+        assert_eq!(
+            server.outbound[&key].attempts[&source_b].in_flight_chunk,
+            Some(0),
+            "source A completion must not erase source B's current chunk"
+        );
+        assert!(
+            server
+                .acknowledge_outbound_chunk(&admission_b, now)
+                .expect("exact source B acknowledgement")
+        );
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
+        assert_eq!(server.outbound[&key].attempts[&source_b].next_chunk, 1);
+    }
+
+    #[test]
+    fn equal_ordinal_different_tenure_alternate_source_is_rejected_atomically() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"ordinal collision hub a");
+        let hub_b = peer(b"ordinal collision hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit the original authenticated source")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0xA6; len], now)
+            .expect("queue immutable response bytes");
+        let in_flight = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand source A its current chunk");
+        assert!(matches!(
+            &in_flight.message,
+            CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
+        ));
+
+        let forged = routes
+            .forge_equal_ordinal_different_tenure(&route_a, requester.clone(), hub_b)
+            .expect("forge an actor-global ordinal collision for the adversarial test");
+        assert!(route_a.equal_ordinal_different_tenure(&forged));
+        let forged_source = ServerRequestSource::Authenticated(forged.source_key());
+        assert_ne!(source_a, forged_source);
+
+        let key = (requester.clone(), request.request_id);
+        let gate_attempts_before = server.server_gate_attempt_count();
+        let outbound_attempts_before = server.outbound_attempt_count();
+        let outbound_bytes_before = server.global_outbound_bytes();
+        let outbound_order_before = server.outbound_order.len();
+        assert!(matches!(
+            server.admit_server_request(&requester, &request, Some(&forged), &local_peer, now,),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+
+        assert_eq!(server.server_gate_attempt_count(), gate_attempts_before);
+        assert_eq!(server.outbound_attempt_count(), outbound_attempts_before);
+        assert_eq!(server.global_outbound_bytes(), outbound_bytes_before);
+        assert_eq!(server.outbound_order.len(), outbound_order_before);
+        let gate = &server.server_request_gates[&key];
+        assert_eq!(gate.attempts.len(), 1);
+        assert!(!gate.attempts.contains_key(&forged_source));
+        let gate_attempt = &gate.attempts[&source_a];
+        assert!(
+            gate_attempt
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_a))
+        );
+        assert_eq!(gate_attempt.cursor, ServerResponseCursor::Pending(0));
+        let transfer = &server.outbound[&key];
+        assert_eq!(transfer.attempts.len(), 1);
+        assert!(!transfer.attempts.contains_key(&forged_source));
+        let attempt = &transfer.attempts[&source_a];
+        assert!(
+            attempt
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_a))
+        );
+        assert_eq!(attempt.next_chunk, 0);
+        assert_eq!(attempt.in_flight_chunk, Some(0));
+        assert!(!attempt.queued);
+
+        assert!(acknowledge_reply_chunk(&mut server, &in_flight, now));
+        let continued = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("rejected alternate source cannot disturb source A progress");
+        assert!(matches!(
+            &continued,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&route_a) && chunk.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &continued, now));
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub = peer(b"source teardown hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub);
+        let route = routes.mint(requester.clone());
+        let source = ServerRequestSource::Authenticated(route.source_key());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("admit initial source")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route.clone()), vec![0xA4; len], now)
+            .expect("queue initial response");
+        let first = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand chunk zero to exact output");
+        assert!(matches!(
+            &first.message,
+            CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first, now));
+        assert_eq!(server.source_outbound_count(&source), 1);
+        assert_eq!(server.source_outbound_bytes(&source), len);
+
+        assert!(routes.retire(&route));
+        assert!(server.tick_bounded(&local_peer, now, 0).is_empty());
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+        assert_eq!(server.source_outbound_count(&source), 0);
+        assert_eq!(server.source_outbound_bytes(&source), 0);
+
+        let reconnect_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
+        let reconnected = routes.mint(requester.clone());
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&reconnected),
+                    &local_peer,
+                    reconnect_at,
+                )
+                .expect("delayed reconnect rematerializes bytes at the retained cursor")
+        );
+        server
+            .enqueue_response(
+                request,
+                Some(reconnected.clone()),
+                vec![0xA4; len],
+                reconnect_at,
+            )
+            .expect("queue rematerialized response at the retained cursor");
+        let continued = server
+            .drain_outbound_chunks(1, reconnect_at)
+            .pop()
+            .expect("reconnect resumes after acknowledged source progress");
+        assert!(matches!(
+            &continued,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&reconnected) && chunk.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(
+            &mut server,
+            &continued,
+            reconnect_at
+        ));
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn later_delivery_preserves_the_current_source_cursor() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"later delivery hub"));
+        let first_route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&first_route), &local_peer, now)
+                .expect("admit first delivery")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(first_route.clone()),
+                vec![0x5A; len],
+                now,
+            )
+            .expect("queue response bytes");
+        let first = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand the current chunk to exact output");
+        assert!(matches!(
+            &first,
+            MergeSidecarPost {
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if chunk.chunk_index == 0
+        ));
+
+        let later_route = routes
+            .redeliver(&first_route)
+            .expect("mint later delivery on the retained tenure");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&later_route), &local_peer, now)
+                .expect("update only this source delivery")
+        );
+        assert!(
+            acknowledge_reply_chunk(&mut server, &first, now),
+            "an actor receipt from an earlier delivery remains valid on the same tenure"
+        );
+        let continued = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("admission advances to the next fixed chunk");
+        assert!(matches!(
+            &continued,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&later_route) && chunk.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &continued, now));
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn late_old_tenure_receipt_cannot_advance_reconnected_attempt() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"receipt tenure hub"));
+        let old_route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&old_route), &local_peer, now)
+                .expect("admit old tenure")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(old_route.clone()),
+                vec![0xC7; len],
+                now,
+            )
+            .expect("queue old-tenure response");
+        let old_zero = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("emit old-tenure chunk zero");
+        assert!(acknowledge_reply_chunk(&mut server, &old_zero, now));
+        let old_one = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand old-tenure chunk one to exact output");
+        let late_old_receipt = reply_chunk_admission(&old_one);
+
+        assert!(routes.retire(&old_route));
+        let reconnected = routes.mint(requester.clone());
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&reconnected), &local_peer, now)
+                .expect("reauthorize materialization at the retained cursor")
+        );
+        server
+            .enqueue_response(request, Some(reconnected.clone()), vec![0xC7; len], now)
+            .expect("queue rematerialized bytes for the new tenure");
+        let new_one = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("new tenure retries the retained current chunk");
+        assert!(matches!(
+            &new_one,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_tenure(&reconnected) && chunk.chunk_index == 1
+        ));
+        assert!(
+            !server
+                .acknowledge_outbound_chunk(&late_old_receipt, now)
+                .expect("late old-tenure receipt is a harmless no-op")
+        );
+        assert!(
+            server.drain_outbound_chunks(1, now).is_empty(),
+            "the retained current chunk remains in flight after the stale receipt"
+        );
+        assert!(acknowledge_reply_chunk(&mut server, &new_one, now));
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn later_delivery_updates_pending_work_without_losing_materialized_output() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"pending delivery hub"));
+        let admitted_route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&admitted_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("start one semantic materialization")
+        );
+
+        let later_route = routes
+            .redeliver(&admitted_route)
+            .expect("mint later delivery while local work is pending");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&later_route), &local_peer, now)
+                .expect("coalesce the later delivery into pending work")
+        );
+        server
+            .enqueue_response(request, Some(admitted_route), vec![0x7A], now)
+            .expect("the original work authorization remains consumable");
+        let post = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("materialized output keeps the later same-source delivery route");
+        assert!(matches!(
+            &post,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&later_route)
+                && chunk.chunk_index == 0
+                && chunk.bytes.as_slice() == [0x7A]
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &post, now));
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"materialization reconnect hub"));
+        let admitted_route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&admitted_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("authorize one immutable materialization")
+        );
+        assert!(routes.retire(&admitted_route));
+        let reconnected = routes.mint(requester.clone());
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&reconnected), &local_peer, now)
+                .expect("new tenure reuses the already-running materialization")
+        );
+        let key = (requester.clone(), request.request_id);
+        let source = ServerRequestSource::Authenticated(reconnected.source_key());
+        let attempt = &server.server_request_gates[&key].attempts[&source];
+        assert_eq!(attempt.cursor, ServerResponseCursor::Pending(0));
+        assert!(attempt.materialization_authorized);
+        assert!(
+            attempt
+                .authorized_materialization_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&admitted_route))
+        );
+        assert!(
+            attempt
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&reconnected))
+        );
+        server
+            .enqueue_response(request, Some(admitted_route), vec![0x6C], now)
+            .expect("the original authorization may finish without a second Kura lookup");
+        let post = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("finished bytes emit only on the reconnected tenure");
+        assert!(matches!(
+            &post,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_tenure(&reconnected)
+                && chunk.chunk_index == 0
+                && chunk.bytes.as_slice() == [0x6C]
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &post, now));
+    }
+
+    #[test]
+    fn conflicting_server_request_id_reuse_is_rejected_before_materialization() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &local_peer, now)
+                .expect("admit first exact request")
+        );
+        let mut conflicting = request;
+        conflicting.reference_digest = Hash::new(b"conflicting sidecar reference");
+        assert!(matches!(
+            server.admit_server_request(&requester, &conflicting, None, &local_peer, now,),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert_eq!(server.server_request_gates.len(), 1);
+    }
+
+    #[test]
+    fn failed_materialization_releases_rate_gate_for_exact_retry() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &local_peer, now)
+                .expect("reserve the request before durable lookup")
+        );
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        let parked = server
+            .server_request_gates
+            .values()
+            .next()
+            .and_then(|gate| gate.attempts.values().next())
+            .expect("failed lookup retains one bounded retryable attempt");
+        assert!(!parked.materialization_authorized);
+        assert!(parked.materialization_retryable);
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &local_peer, now)
+                .expect("the same occurrence remains admissible after failed lookup")
+        );
+    }
+
+    #[test]
+    fn response_materialization_requires_and_consumes_its_exact_admission_gate() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"materialization gate hub"));
+        let route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(matches!(
+            server.enqueue_response(request.clone(), Some(route.clone()), vec![0x11], now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("authorize exact response materialization")
+        );
+        let mut changed = request.clone();
+        changed.reference_digest = Hash::new(b"changed after admission");
+        assert!(matches!(
+            server.enqueue_response(changed, Some(route.clone()), vec![0x11], now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+
+        server
+            .enqueue_response(request.clone(), Some(route.clone()), vec![0x11], now)
+            .expect("consume exact response authorization");
+        let post = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand exact response to worker output");
+        assert!(acknowledge_reply_chunk(&mut server, &post, now));
+        assert!(server.outbound.is_empty());
+        assert!(matches!(
+            server.enqueue_response(request.clone(), Some(route), vec![0x11], now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        assert_eq!(
+            server.server_request_gates.len(),
+            1,
+            "a consumed gate remains bounded semantic-delivery history"
+        );
+    }
+
+    #[test]
+    fn inactive_reply_route_is_rejected_before_server_gate_admission() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester.clone());
+        assert!(routes.retire(&route));
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(matches!(
+            server.admit_server_request(&requester, &request, Some(&route), &local_peer, now,),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert!(server.server_request_gates.is_empty());
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn route_retirement_between_admission_and_enqueue_releases_all_response_reservations() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"retired materialization hub a");
+        let hub_b = peer(b"retired materialization hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit source A before materialization")
+        );
+        assert!(routes.retire(&route_a));
+        assert!(matches!(
+            server.enqueue_response(request.clone(), Some(route_a), vec![0x91], now,),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        let parked_attempt = server
+            .server_request_gates
+            .values()
+            .next()
+            .and_then(|gate| gate.attempts.get(&source_a))
+            .expect("retired source keeps bounded route and cursor history");
+        assert!(!parked_attempt.materialization_authorized);
+        assert!(parked_attempt.authorized_materialization_route.is_none());
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+        assert_eq!(server.outbound_attempt_count(), 0);
+        assert_eq!(server.global_outbound_bytes(), 0);
+        assert_eq!(server.source_outbound_count(&source_a), 0);
+        assert_eq!(server.source_outbound_bytes(&source_a), 0);
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("independent authenticated source remains admissible")
+        );
+        server
+            .enqueue_response(request, Some(route_b.clone()), vec![0x92], now)
+            .expect("independent source materializes exact response bytes");
+        assert_eq!(server.source_outbound_count(&source_b), 1);
+        assert_eq!(server.source_outbound_bytes(&source_b), 1);
+        let post = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("independent source progresses after source A teardown");
+        assert!(matches!(
+            &post,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            } if route.same_delivery(&route_b) && chunk.bytes.as_slice() == [0x92]
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &post, now));
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+        assert_eq!(server.outbound_attempt_count(), 0);
+        assert_eq!(server.global_outbound_bytes(), 0);
+        assert_eq!(server.source_outbound_count(&source_b), 0);
+        assert_eq!(server.source_outbound_bytes(&source_b), 0);
+    }
+
+    #[test]
+    fn completed_source_later_and_reconnect_stay_terminal_while_sibling_progresses() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        let hub_a = peer(b"completed terminal source hub a");
+        let hub_b = peer(b"completed terminal source hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let prior_route = routes.mint_via(requester.clone(), hub_a.clone());
+        let sibling_route = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(prior_route.source_key());
+        let source_b = ServerRequestSource::Authenticated(sibling_route.source_key());
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&prior_route), &local_peer, now,)
+                .expect("admit first exact request")
+        );
+        server
+            .enqueue_response(request.clone(), Some(prior_route.clone()), vec![0x11], now)
+            .expect("queue singleton response");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&sibling_route), &local_peer, now,)
+                .expect("attach an independent sibling to the materialized response")
+        );
+        let first = server.drain_outbound_chunks(1, now);
+        assert!(matches!(
+            first.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(route),
+                ..
+            }] if route.same_delivery(&prior_route)
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
+        let key = (requester.clone(), request.request_id);
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Complete
+        );
+        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+        assert!(server.outbound[&key].attempts.contains_key(&source_b));
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&prior_route), &local_peer, now,)
+                .expect("an exact completed-source duplicate remains terminal")
+        );
+        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+
+        let later_route = routes
+            .redeliver(&prior_route)
+            .expect("mint later delivery for the same source");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&later_route), &local_peer, now,)
+                .expect("later delivery preserves the terminal cursor")
+        );
+        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Complete
+        );
+        assert!(routes.retire(&later_route));
+        let reconnected_route = routes.mint_via(requester.clone(), hub_a.clone());
+        assert!(
+            !server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&reconnected_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("reconnect preserves the completed source cursor")
+        );
+        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Complete
+        );
+
+        let sibling_only = server.drain_outbound_chunks(usize::MAX, now);
+        assert!(matches!(
+            sibling_only.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(sibling),
+                message: CertifiedMergeSidecarMessage::Chunk(sibling_chunk),
+                ..
+            }] if sibling.same_delivery(&sibling_route) && sibling_chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &sibling_only[0], now));
+        assert!(server.outbound.is_empty());
+
+        assert!(routes.retire(&reconnected_route));
+        let rematerialized_route = routes.mint_via(requester.clone(), hub_a);
+        assert!(
+            !server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&rematerialized_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("completed reconnect without shared bytes remains terminal")
+        );
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Complete
+        );
+        assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn exact_delivery_retry_rematerializes_after_rate_gate_expiry() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("admit first exact request")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route.clone()), vec![0x11], now)
+            .expect("queue first response");
+        let first = server.drain_outbound_chunks(usize::MAX, now);
+        assert_eq!(first.len(), 1);
+        assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
+
+        let retry_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, retry_at,)
+                .expect("expired delivery dedup admits exact durable rematerialization")
+        );
+        server
+            .enqueue_response(request, Some(route.clone()), vec![0x11], retry_at)
+            .expect("same live delivery rematerializes from durable source");
+        let retry = server.drain_outbound_chunks(usize::MAX, retry_at);
+        assert!(matches!(
+            retry.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(emitted),
+                ..
+            }] if emitted.same_delivery(&route)
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &retry[0], retry_at));
+    }
+
+    #[test]
+    fn completed_source_does_not_block_a_new_alternate_source() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"completed source hub a");
+        let hub_b = peer(b"completed source hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit request through source A")
+        );
+        server
+            .enqueue_response(request.clone(), Some(route_a), vec![0x11], now)
+            .expect("queue first response");
+        let first = server.drain_outbound_chunks(usize::MAX, now);
+        assert_eq!(first.len(), 1);
+        assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("new alternate source authorizes rematerialization")
+        );
+        server
+            .enqueue_response(request, Some(route_b.clone()), vec![0x11], now)
+            .expect("materialize response for the alternate source");
+        let alternate = server.drain_outbound_chunks(usize::MAX, now);
+        assert!(matches!(
+            alternate.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(route),
+                ..
+            }] if route.same_delivery(&route_b)
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &alternate[0], now));
+    }
+
+    #[test]
+    fn configured_route_source_capacity_bounds_semantic_attempts() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"configured source capacity hub a");
+        let hub_b = peer(b"configured source capacity hub b");
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let mut server = MergeSidecarTransport::with_reply_source_capacity(1)
+            .expect("one-source response geometry");
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("reserve the configured single source")
+        );
+        assert!(matches!(
+            server.admit_server_request(&requester, &request, Some(&route_b), &local_peer, now),
+            Err(MergeSidecarError::Capacity("server request rate gate"))
+        ));
+    }
+
+    #[test]
+    fn configured_source_geometry_reserves_more_than_eight_independent_attempts() {
+        assert!(matches!(
+            MergeSidecarTransport::with_reply_source_capacity(usize::MAX),
+            Err(MergeSidecarError::Capacity(
+                "outbound response session geometry"
+            ))
+        ));
+
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        let source_capacity = 9;
+        let first_hub = peer(b"configured geometry hub 0");
+        let mut routes =
+            NetworkReplyRouteTestFixture::with_source_capacity(first_hub.clone(), source_capacity);
+        let first_route = routes.mint_via(requester.clone(), first_hub);
+        let mut server = MergeSidecarTransport::with_reply_source_capacity(source_capacity)
+            .expect("nine-source response geometry");
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&first_route), &local_peer, now,)
+                .expect("admit first configured source")
+        );
+        server
+            .enqueue_response(request.clone(), Some(first_route), vec![0xA9], now)
+            .expect("materialize shared response bytes");
+        for index in 1..source_capacity {
+            let hub = peer(format!("configured geometry hub {index}").as_bytes());
+            let route = routes.mint_via(requester.clone(), hub);
+            assert!(
+                !server
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("attach configured alternate source")
+            );
+        }
+        assert_eq!(server.outbound_attempt_count(), source_capacity);
+        let posts = server.drain_outbound_chunks(source_capacity, now);
+        assert_eq!(posts.len(), source_capacity);
+        for post in &posts {
+            assert!(acknowledge_reply_chunk(&mut server, post, now));
+        }
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let hub_a = peer(b"gate cap hub a");
+        let hub_b = peer(b"gate cap hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let mut server = MergeSidecarTransport::new();
+
+        for index in 0..MAX_SERVER_REQUEST_GATES_PER_SOURCE {
+            let requester = peer(format!("gate cap origin {index}").as_bytes());
+            let request = routed_server_request(
+                &base,
+                requester.clone(),
+                format!("gate cap request {index}").as_bytes(),
+                1,
+            );
+            let route = routes.mint_via(requester.clone(), hub_a.clone());
+            assert!(
+                server
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("reserve one bounded gate for hub A")
+            );
+        }
+
+        let rejected_requester = peer(b"gate cap rejected origin");
+        let rejected = routed_server_request(
+            &base,
+            rejected_requester.clone(),
+            b"gate cap rejected request",
+            1,
+        );
+        let rejected_route = routes.mint_via(rejected_requester.clone(), hub_a);
+        assert!(matches!(
+            server.admit_server_request(
+                &rejected_requester,
+                &rejected,
+                Some(&rejected_route),
+                &local_peer,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity("server request rate gate"))
+        ));
+
+        let independent_requester = peer(b"gate cap independent origin");
+        let independent = routed_server_request(
+            &base,
+            independent_requester.clone(),
+            b"gate cap independent request",
+            1,
+        );
+        let independent_route = routes.mint_via(independent_requester.clone(), hub_b);
+        assert!(
+            server
+                .admit_server_request(
+                    &independent_requester,
+                    &independent,
+                    Some(&independent_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("independent hub retains its own gate reservation")
+        );
+        server
+            .enqueue_response(
+                independent,
+                Some(independent_route.clone()),
+                vec![0x11],
+                now,
+            )
+            .expect("independent hub materializes its response");
+        assert!(matches!(
+            server.drain_outbound_chunks(1, now).as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(route),
+                ..
+            }] if route.same_delivery(&independent_route)
+        ));
+    }
+
+    #[test]
+    fn saturated_materializer_does_not_erase_same_request_alternate_session() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let requester = peer(b"shared session materialization origin");
+        let request = routed_server_request(
+            &base,
+            requester.clone(),
+            b"shared session materialization request",
+            1,
+        );
+        let hub_a = peer(b"shared session materialization hub a");
+        let hub_b = peer(b"shared session materialization hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("source A starts the shared materialization")
+        );
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("source B joins the same semantic materialization")
+        );
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+            let filler_requester = peer(format!("session saturation origin {index}").as_bytes());
+            let filler = routed_server_request(
+                &base,
+                filler_requester.clone(),
+                format!("session saturation request {index}").as_bytes(),
+                1,
+            );
+            let filler_route = routes.mint_via(filler_requester.clone(), hub_a.clone());
+            assert!(
+                server
+                    .admit_server_request(
+                        &filler_requester,
+                        &filler,
+                        Some(&filler_route),
+                        &local_peer,
+                        now,
+                    )
+                    .expect("reserve source A's bounded response session")
+            );
+            server
+                .enqueue_response(filler, Some(filler_route), vec![0x81], now)
+                .expect("fill source A's bounded response session");
+        }
+
+        server
+            .enqueue_response(request.clone(), Some(route_a), vec![0x82], now)
+            .expect("source B remains eligible for the shared materialized bytes");
+
+        let key = (requester, request.request_id);
+        let transfer = &server.outbound[&key];
+        assert_eq!(transfer.bytes.as_ref(), &[0x82]);
+        assert_eq!(transfer.attempts.len(), 1);
+        assert!(!transfer.attempts.contains_key(&source_a));
+        assert!(transfer.attempts.contains_key(&source_b));
+        let gate = &server.server_request_gates[&key];
+        assert!(gate.attempts.contains_key(&source_a));
+        assert!(gate.attempts.contains_key(&source_b));
+        assert!(!gate.attempts[&source_a].materialization_authorized);
+        assert_eq!(
+            server.source_outbound_count(&source_a),
+            MAX_OUTBOUND_SESSIONS_PER_SOURCE
+        );
+        assert_eq!(server.source_outbound_count(&source_b), 1);
+        assert!(server.drain_outbound_chunks(3, now).iter().any(|post| {
+            matches!(
+                post,
+                MergeSidecarPost {
+                    reply_route: Some(route),
+                    message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                    ..
+                } if route.same_delivery(&route_b) && chunk.request_id == request.request_id
+            )
+        }));
+    }
+
+    #[test]
+    fn saturated_materializer_does_not_erase_same_request_alternate_bytes() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let requester = peer(b"shared byte materialization origin");
+        let request = routed_server_request(
+            &base,
+            requester.clone(),
+            b"shared byte materialization request",
+            1,
+        );
+        let hub_a = peer(b"shared byte materialization hub a");
+        let hub_b = peer(b"shared byte materialization hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("source A starts the shared materialization")
+        );
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("source B joins the same semantic materialization")
+        );
+        let filler_requester = peer(b"byte saturation origin");
+        let filler = routed_server_request(
+            &base,
+            filler_requester.clone(),
+            b"byte saturation request",
+            MAX_OUTBOUND_BYTES_PER_SOURCE,
+        );
+        let filler_route = routes.mint_via(filler_requester.clone(), hub_a);
+        assert!(
+            server
+                .admit_server_request(
+                    &filler_requester,
+                    &filler,
+                    Some(&filler_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("reserve source A's exact byte corridor")
+        );
+        server
+            .enqueue_response(
+                filler,
+                Some(filler_route),
+                vec![0x91; MAX_OUTBOUND_BYTES_PER_SOURCE],
+                now,
+            )
+            .expect("fill source A's exact byte corridor");
+
+        server
+            .enqueue_response(request.clone(), Some(route_a), vec![0x92], now)
+            .expect("source B retains the shared materialized bytes");
+
+        let key = (requester, request.request_id);
+        let transfer = &server.outbound[&key];
+        assert_eq!(transfer.bytes.as_ref(), &[0x92]);
+        assert_eq!(transfer.attempts.len(), 1);
+        assert!(!transfer.attempts.contains_key(&source_a));
+        assert!(transfer.attempts.contains_key(&source_b));
+        let gate = &server.server_request_gates[&key];
+        assert!(gate.attempts.contains_key(&source_a));
+        assert!(gate.attempts.contains_key(&source_b));
+        assert!(!gate.attempts[&source_a].materialization_authorized);
+        assert_eq!(
+            server.source_outbound_bytes(&source_a),
+            MAX_OUTBOUND_BYTES_PER_SOURCE
+        );
+        assert_eq!(server.source_outbound_bytes(&source_b), 1);
+        assert_eq!(
+            server.global_outbound_bytes(),
+            MAX_OUTBOUND_BYTES_PER_SOURCE + 1
+        );
+        assert!(server.drain_outbound_chunks(2, now).iter().any(|post| {
+            matches!(
+                post,
+                MergeSidecarPost {
+                    reply_route: Some(route),
+                    message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                    ..
+                } if route.same_delivery(&route_b) && chunk.request_id == request.request_id
+            )
+        }));
+    }
+
+    #[test]
+    fn partitioned_materialization_preserves_rejected_source_resume_cursor() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let requester = peer(b"partitioned resume origin");
+        let response_len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let request = routed_server_request(
+            &base,
+            requester.clone(),
+            b"partitioned resume request",
+            response_len,
+        );
+        let response_bytes = vec![0xA5; response_len];
+        let hub_a = peer(b"partitioned resume hub a");
+        let hub_b = peer(b"partitioned resume hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("source A starts the original response")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(route_a.clone()),
+                response_bytes.clone(),
+                now,
+            )
+            .expect("queue the original two-chunk response");
+        let first = server.drain_outbound_chunks(1, now);
+        assert!(matches!(
+            first.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            }] if route.same_delivery(&route_a) && chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
+        assert_eq!(
+            server.outbound[&(requester.clone(), request.request_id)].attempts[&source_a]
+                .next_chunk,
+            1
+        );
+        assert!(routes.retire(&route_a));
+
+        let mut filler_ids = BTreeSet::new();
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+            let filler_requester = peer(format!("partitioned resume filler {index}").as_bytes());
+            let filler = routed_server_request(
+                &base,
+                filler_requester.clone(),
+                format!("partitioned resume filler request {index}").as_bytes(),
+                1,
+            );
+            filler_ids.insert(filler.request_id);
+            let filler_route = routes.mint_via(filler_requester.clone(), hub_a.clone());
+            assert!(
+                server
+                    .admit_server_request(
+                        &filler_requester,
+                        &filler,
+                        Some(&filler_route),
+                        &local_peer,
+                        now,
+                    )
+                    .expect("fill source A's independent response sessions")
+            );
+            server
+                .enqueue_response(filler, Some(filler_route), vec![0xB6], now)
+                .expect("queue one source A filler session");
+        }
+        assert_eq!(
+            server.server_request_gates[&(requester.clone(), request.request_id)].attempts
+                [&source_a]
+                .cursor,
+            ServerResponseCursor::Pending(1)
+        );
+
+        let route_a_reconnected = routes.mint_via(requester.clone(), hub_a);
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&route_a_reconnected),
+                    &local_peer,
+                    now,
+                )
+                .expect("source A reconnect authorizes rematerialization at its retained cursor")
+        );
+        assert!(matches!(
+            server.enqueue_response(
+                request.clone(),
+                Some(route_a_reconnected.clone()),
+                response_bytes.clone(),
+                now,
+            ),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        let key = (requester.clone(), request.request_id);
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Pending(1)
+        );
+        assert!(!server.server_request_gates[&key].attempts[&source_a].materialization_authorized);
+
+        let route_a_partitioned = routes
+            .redeliver(&route_a_reconnected)
+            .expect("later source A delivery retries the parked materialization");
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&route_a_partitioned),
+                    &local_peer,
+                    now,
+                )
+                .expect("source A reauthorizes after the production cancel path")
+        );
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Pending(1),
+            "durable lookup failure cannot erase the reconnect cursor"
+        );
+        assert!(server.server_request_gates[&key].attempts[&source_a].materialization_retryable);
+        assert!(
+            server
+                .admit_server_request(
+                    &requester,
+                    &request,
+                    Some(&route_a_partitioned),
+                    &local_peer,
+                    now,
+                )
+                .expect("the exact delivery retries failed terminating local work")
+        );
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("source B joins source A's semantic materialization")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(route_a_partitioned.clone()),
+                response_bytes,
+                now,
+            )
+            .expect("source B acquires shared bytes while source A is saturated");
+        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
+            ServerResponseCursor::Pending(1)
+        );
+        assert!(!server.server_request_gates[&key].attempts[&source_a].materialization_authorized);
+
+        let posts = server.drain_outbound_chunks(usize::MAX, now);
+        let mut released_fillers = 0usize;
+        for post in &posts {
+            let CertifiedMergeSidecarMessage::Chunk(chunk) = &post.message else {
+                continue;
+            };
+            if filler_ids.contains(&chunk.request_id) {
+                assert!(acknowledge_reply_chunk(&mut server, post, now));
+                released_fillers += 1;
+            }
+        }
+        assert_eq!(released_fillers, MAX_OUTBOUND_SESSIONS_PER_SOURCE);
+        assert_eq!(server.source_outbound_count(&source_a), 0);
+
+        let exact_a = route_a_partitioned.clone();
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&exact_a), &local_peer, now)
+                .expect("exact source delivery reattaches to the materialized response")
+        );
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
+        assert_eq!(
+            server.outbound[&key].attempts[&source_a].in_flight_chunk,
+            None
+        );
+        let resumed = server.drain_outbound_chunks(usize::MAX, now);
+        assert!(matches!(
+            resumed.as_slice(),
+            [MergeSidecarPost {
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            }] if route.same_delivery(&exact_a) && chunk.chunk_index == 1
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &resumed[0], now));
+        assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
+    }
+
+    #[test]
+    fn third_session_from_one_hub_is_rejected_while_another_hub_progresses() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let hub_a = peer(b"session cap hub a");
+        let hub_b = peer(b"session cap hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let mut server = MergeSidecarTransport::new();
+
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+            let requester = peer(format!("session cap origin {index}").as_bytes());
+            let request = routed_server_request(
+                &base,
+                requester.clone(),
+                format!("session cap request {index}").as_bytes(),
+                1,
+            );
+            let route = routes.mint_via(requester.clone(), hub_a.clone());
+            assert!(
+                server
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("admit bounded hub A session")
+            );
+            server
+                .enqueue_response(request, Some(route), vec![0x22], now)
+                .expect("queue bounded hub A session");
+        }
+
+        let rejected_requester = peer(b"session cap rejected origin");
+        let rejected = routed_server_request(
+            &base,
+            rejected_requester.clone(),
+            b"session cap rejected request",
+            1,
+        );
+        let rejected_route = routes.mint_via(rejected_requester.clone(), hub_a);
+        assert!(
+            server
+                .admit_server_request(
+                    &rejected_requester,
+                    &rejected,
+                    Some(&rejected_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("the cheap gate remains independently bounded")
+        );
+        assert!(matches!(
+            server.enqueue_response(rejected, Some(rejected_route), vec![0x33], now),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+
+        let independent_requester = peer(b"session cap independent origin");
+        let independent = routed_server_request(
+            &base,
+            independent_requester.clone(),
+            b"session cap independent request",
+            1,
+        );
+        let independent_route = routes.mint_via(independent_requester.clone(), hub_b);
+        assert!(
+            server
+                .admit_server_request(
+                    &independent_requester,
+                    &independent,
+                    Some(&independent_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("independent hub retains its own session reservation")
+        );
+        server
+            .enqueue_response(
+                independent,
+                Some(independent_route.clone()),
+                vec![0x44],
+                now,
+            )
+            .expect("independent hub queues a response");
+        assert!(server.drain_outbound_chunks(3, now).iter().any(|post| {
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&independent_route))
+        }));
+    }
+
+    #[test]
+    fn source_byte_overflow_is_rejected_while_another_hub_progresses() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let hub_a = peer(b"byte cap hub a");
+        let hub_b = peer(b"byte cap hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let mut server = MergeSidecarTransport::new();
+
+        let full_requester = peer(b"byte cap full origin");
+        let full = routed_server_request(
+            &base,
+            full_requester.clone(),
+            b"byte cap full request",
+            MAX_OUTBOUND_BYTES_PER_SOURCE,
+        );
+        let full_route = routes.mint_via(full_requester.clone(), hub_a.clone());
+        assert!(
+            server
+                .admit_server_request(&full_requester, &full, Some(&full_route), &local_peer, now,)
+                .expect("admit the exact per-source byte bound")
+        );
+        server
+            .enqueue_response(
+                full,
+                Some(full_route),
+                vec![0x55; MAX_OUTBOUND_BYTES_PER_SOURCE],
+                now,
+            )
+            .expect("reserve the exact per-source byte bound");
+
+        let overflow_requester = peer(b"byte cap overflow origin");
+        let overflow = routed_server_request(
+            &base,
+            overflow_requester.clone(),
+            b"byte cap overflow request",
+            1,
+        );
+        let overflow_route = routes.mint_via(overflow_requester.clone(), hub_a);
+        assert!(
+            server
+                .admit_server_request(
+                    &overflow_requester,
+                    &overflow,
+                    Some(&overflow_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("admit bounded lookup before exact byte accounting")
+        );
+        assert!(matches!(
+            server.enqueue_response(overflow, Some(overflow_route), vec![0x66], now),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+
+        let independent_requester = peer(b"byte cap independent origin");
+        let independent = routed_server_request(
+            &base,
+            independent_requester.clone(),
+            b"byte cap independent request",
+            1,
+        );
+        let independent_route = routes.mint_via(independent_requester.clone(), hub_b);
+        assert!(
+            server
+                .admit_server_request(
+                    &independent_requester,
+                    &independent,
+                    Some(&independent_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("independent hub retains its own byte reservation")
+        );
+        server
+            .enqueue_response(
+                independent,
+                Some(independent_route.clone()),
+                vec![0x77],
+                now,
+            )
+            .expect("independent hub queues a response");
+        assert!(server.drain_outbound_chunks(2, now).iter().any(|post| {
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&independent_route))
+        }));
+    }
+
+    #[test]
     fn outbound_chunk_drain_is_fair_across_bounded_sessions() {
         let (_, _, _, first, now) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
         let (_, _, _, mut second, _) = start_session(1, 3);
         second.request_id = Hash::new(b"second fair outbound request");
         let mut server = MergeSidecarTransport::new();
+        for request in [&first, &second] {
+            assert!(
+                server
+                    .admit_server_request(
+                        &request.requester,
+                        request,
+                        None,
+                        &request.responder,
+                        now,
+                    )
+                    .expect("admit fair outbound response")
+            );
+        }
         server
             .enqueue_response(
                 first.clone(),
+                None,
                 vec![0x11; MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3],
                 now,
             )
             .expect("queue first response");
         server
-            .enqueue_response(second.clone(), vec![0x22], now)
+            .enqueue_response(second.clone(), None, vec![0x22], now)
             .expect("queue second response");
 
         let posts = server.drain_outbound_chunks(2, now);
@@ -2232,6 +5203,81 @@ mod tests {
             request_ids,
             BTreeSet::from([first.request_id, second.request_id])
         );
+    }
+
+    #[test]
+    fn completed_short_session_replacement_cannot_starve_an_older_long_session() {
+        let (_, _, _, mut short, now) = start_session(1, 3);
+        let (_, _, _, mut long, _) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
+        short.request_id = Hash::prehashed([0; Hash::LENGTH]);
+        long.request_id = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"replacement fairness hub"));
+        let short_route = routes.mint(short.requester.clone());
+        let long_route = routes.mint(long.requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        for (request, route) in [(&short, &short_route), (&long, &long_route)] {
+            assert!(
+                server
+                    .admit_server_request(
+                        &request.requester,
+                        request,
+                        Some(route),
+                        &request.responder,
+                        now,
+                    )
+                    .expect("admit initial response")
+            );
+        }
+        server
+            .enqueue_response(short.clone(), Some(short_route.clone()), vec![0x11], now)
+            .expect("queue first short response");
+        server
+            .enqueue_response(
+                long.clone(),
+                Some(long_route),
+                vec![0x22; MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3],
+                now,
+            )
+            .expect("queue long response");
+
+        let first = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("short response is the first FIFO owner");
+        assert!(matches!(
+            &first.message,
+            CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.request_id == short.request_id
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &first, now));
+
+        let mut replacement = short;
+        replacement.request_id = Hash::prehashed([1; Hash::LENGTH]);
+        let replacement_route = routes.mint(replacement.requester.clone());
+        assert!(
+            server
+                .admit_server_request(
+                    &replacement.requester,
+                    &replacement,
+                    Some(&replacement_route),
+                    &replacement.responder,
+                    now,
+                )
+                .expect("admit adversarial short replacement")
+        );
+        server
+            .enqueue_response(replacement, Some(replacement_route), vec![0x33], now)
+            .expect("queue adversarial short replacement");
+
+        let next = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("older long session must receive the next rank");
+        assert!(matches!(
+            &next.message,
+            CertifiedMergeSidecarMessage::Chunk(chunk)
+                if chunk.request_id == long.request_id && chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &next, now));
     }
 
     #[test]
@@ -2255,22 +5301,43 @@ mod tests {
         }
 
         let (_, _, _, response_request, _) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"fair tick response hub"));
+        let response_route = routes.mint(response_request.requester.clone());
+        assert!(
+            transport
+                .admit_server_request(
+                    &response_request.requester,
+                    &response_request,
+                    Some(&response_route),
+                    &response_request.responder,
+                    now,
+                )
+                .expect("admit bounded response")
+        );
         transport
             .enqueue_response(
                 response_request,
+                Some(response_route),
                 vec![0xC3; MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3],
                 now,
             )
             .expect("queue a multi-chunk response behind saturated fetches");
 
         let timed_out_at = now + REQUEST_TIMEOUT;
-        let kinds = (0..6)
-            .map(|_| {
-                let posts = transport.tick_bounded(&requester, timed_out_at, 1);
-                assert_eq!(posts.len(), 1, "bounded tick must use its one slot");
-                matches!(posts[0].message, CertifiedMergeSidecarMessage::Chunk(_))
-            })
-            .collect::<Vec<_>>();
+        let mut kinds = Vec::new();
+        for _ in 0..6 {
+            let posts = transport.tick_bounded(&requester, timed_out_at, 1);
+            assert_eq!(posts.len(), 1, "bounded tick must use its one slot");
+            let is_chunk = matches!(&posts[0].message, CertifiedMergeSidecarMessage::Chunk(_));
+            if is_chunk {
+                assert!(acknowledge_reply_chunk(
+                    &mut transport,
+                    &posts[0],
+                    timed_out_at
+                ));
+            }
+            kinds.push(is_chunk);
+        }
         assert_eq!(
             kinds,
             vec![true, false, true, false, true, false],

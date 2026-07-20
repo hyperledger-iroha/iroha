@@ -958,6 +958,8 @@ _BASE_EXPORTS = [
 ]
 
 _CRYPTO_EXPORTS: List[str] = [
+    "ContractCall",
+    "TransactionExecutableEntry",
     "TransactionConfig",
     "TransactionDraft",
     "authority_fee_payment",
@@ -1124,8 +1126,10 @@ _CRYPTO_EXPORTS: List[str] = [
 
 try:
     from .tx import (
+        ContractCall,
         TransactionConfig,
         TransactionDraft,
+        TransactionExecutableEntry,
         authority_fee_payment,
         sponsor_fee_payment,
     )

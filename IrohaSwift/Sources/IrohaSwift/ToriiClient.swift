@@ -464,6 +464,22 @@ fileprivate struct ToriiAnyCodingKey: CodingKey {
     }
 }
 
+fileprivate func rejectUnknownJSONFields(
+    from decoder: Decoder,
+    allowed: Set<String>,
+    debugName: String
+) throws {
+    let container = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+    guard container.allKeys.allSatisfy({ allowed.contains($0.stringValue) }) else {
+        throw DecodingError.dataCorrupted(
+            .init(
+                codingPath: decoder.codingPath,
+                debugDescription: "\(debugName) contains an unknown or retired field"
+            )
+        )
+    }
+}
+
 fileprivate func decodeOptionalStringValue(
     from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
     keys: [String]
@@ -498,74 +514,6 @@ fileprivate func decodeOptionalStringArrayValue(
         }
         if !normalized.isEmpty {
             return normalized
-        }
-    }
-    return []
-}
-
-fileprivate func decodeOptionalExactStringValue(
-    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
-    keys: [String],
-    debugName: String
-) throws -> String? {
-    for key in keys {
-        let codingKey = ToriiAnyCodingKey(key)
-        guard container.contains(codingKey) else {
-            continue
-        }
-        guard let value = try container.decodeIfPresent(String.self, forKey: codingKey) else {
-            continue
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw DecodingError.dataCorruptedError(
-                forKey: codingKey,
-                in: container,
-                debugDescription: "\(debugName) must not be empty."
-            )
-        }
-        guard trimmed == value else {
-            throw DecodingError.dataCorruptedError(
-                forKey: codingKey,
-                in: container,
-                debugDescription: "\(debugName) must not contain surrounding whitespace."
-            )
-        }
-        return value
-    }
-    return nil
-}
-
-fileprivate func decodeOptionalExactStringArrayValue(
-    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
-    keys: [String],
-    debugName: String
-) throws -> [String] {
-    for key in keys {
-        let codingKey = ToriiAnyCodingKey(key)
-        guard container.contains(codingKey) else {
-            continue
-        }
-        let values = try container.decodeIfPresent([String].self, forKey: codingKey) ?? []
-        for value in values {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: codingKey,
-                    in: container,
-                    debugDescription: "\(debugName) must not contain empty values."
-                )
-            }
-            guard trimmed == value else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: codingKey,
-                    in: container,
-                    debugDescription: "\(debugName) must not contain surrounding whitespace."
-                )
-            }
-        }
-        if !values.isEmpty {
-            return values
         }
     }
     return []
@@ -712,7 +660,6 @@ public struct ToriiAssetDefinitionAliasBinding: Decodable, Sendable {
 public struct ToriiAccountAliasResolution: Decodable, Sendable {
     public let alias: String
     public let accountId: String
-    public let accountIds: [String]
     public let index: UInt64?
     public let source: String?
 
@@ -725,7 +672,11 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["alias", "account_id", "index", "source"],
+            debugName: "account alias resolution"
+        )
         let decodedAlias = try ToriiIdentifierReceiptWireValue.exactString(
             from: container,
             forKey: .alias,
@@ -739,42 +690,24 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
             )
         }
         alias = decodedAlias
-        let scalarAccountId = try decodeOptionalExactStringValue(
-            from: anyContainer,
-            keys: ["account_id", "accountId"],
+        let decodedAccountId = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .accountId,
             debugName: "account alias resolution.account_id"
         )
-        let arrayAccountIds = try decodeOptionalExactStringArrayValue(
-            from: anyContainer,
-            keys: ["account_ids", "accountIds"],
-            debugName: "account alias resolution.account_ids"
-        )
-        let resolvedAccountIds = ([scalarAccountId].compactMap { $0 } + arrayAccountIds)
-            .reduce(into: [String]()) { values, value in
-                guard !values.contains(value) else { return }
-                values.append(value)
-            }
-        guard resolvedAccountIds.allSatisfy({ accountId in
-            !accountId.contains("@") &&
-                (try? normalizeToriiAccountIdQueryValue(accountId, field: "account_id")) == accountId
-        }) else {
+        guard !decodedAccountId.contains("@"),
+              (try? normalizeToriiAccountIdQueryValue(
+                  decodedAccountId,
+                  field: "account_id"
+              )) == decodedAccountId else {
             throw DecodingError.dataCorruptedError(
                 forKey: .accountId,
                 in: container,
-                debugDescription: "account alias resolution account ids must be canonical and domainless"
+                debugDescription:
+                    "account alias resolution.account_id must be canonical and domainless"
             )
         }
-        guard let primaryAccountId = resolvedAccountIds.first else {
-            throw DecodingError.keyNotFound(
-                ToriiAnyCodingKey("account_id"),
-                DecodingError.Context(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "account alias resolution must include account_id or account_ids."
-                )
-            )
-        }
-        accountId = primaryAccountId
-        accountIds = resolvedAccountIds
+        accountId = decodedAccountId
         index = try container.decodeIfPresent(UInt64.self, forKey: .index)
         source = try ToriiIdentifierReceiptWireValue.exactOptionalString(
             from: container,
@@ -3740,6 +3673,11 @@ public struct ToriiAliasIndexResolution: Decodable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["index", "alias", "account_id", "source"],
+            debugName: "alias index response"
+        )
         index = try container.decode(UInt64.self, forKey: .index)
         let alias = try container.decode(String.self, forKey: .alias)
         guard (try? AccountAliasName(parsing: alias).canonicalText) == alias else {
@@ -3831,6 +3769,11 @@ public struct ToriiAliasByAccountItem: Decodable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["alias", "dataspace", "domain", "is_primary"],
+            debugName: "reverse-alias row"
+        )
         let alias = try container.decode(String.self, forKey: .alias)
         let parsed = try AccountAliasName(parsing: alias)
         let dataspace = try container.decode(String.self, forKey: .dataspace)
@@ -3865,6 +3808,11 @@ public struct ToriiAliasesByAccountResponse: Decodable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["account_id", "total", "items", "source"],
+            debugName: "reverse-alias response"
+        )
         let accountId = try container.decode(String.self, forKey: .accountId)
         guard !accountId.contains("@"),
               (try? normalizeToriiAccountIdQueryValue(accountId, field: "account_id")) == accountId else {
@@ -9527,7 +9475,7 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-    public static let expectedDataModelVersion = 2
+    public static let expectedDataModelVersion = 3
     /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
     public static let expectedSignedTransactionSchemaHashHex = "7ab5ff9c572efb316deac478f19209c5"
     public let abiVersion: Int
@@ -24204,6 +24152,49 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiAssetAliasResolution.self, from: data)
     }
 
+    private func decodeAccountAliasResolution(
+        from data: Data,
+        expectedAlias: String
+    ) throws -> ToriiAccountAliasResolution {
+        let result = try decodeJSON(ToriiAccountAliasResolution.self, from: data)
+        guard result.alias == expectedAlias else {
+            throw ToriiClientError.invalidPayload(
+                "account-alias response does not match the exact request"
+            )
+        }
+        return result
+    }
+
+    private func decodeAliasIndexResolution(
+        from data: Data,
+        expectedIndex: UInt64
+    ) throws -> ToriiAliasIndexResolution {
+        let result = try decodeJSON(ToriiAliasIndexResolution.self, from: data)
+        guard result.index == expectedIndex else {
+            throw ToriiClientError.invalidPayload(
+                "alias-index response does not match the exact request"
+            )
+        }
+        return result
+    }
+
+    private func decodeAliasesByAccountResponse(
+        from data: Data,
+        expectedLookup: ToriiAliasesByAccountRequest
+    ) throws -> ToriiAliasesByAccountResponse {
+        let result = try decodeJSON(ToriiAliasesByAccountResponse.self, from: data)
+        guard result.accountId == expectedLookup.accountId,
+              result.items.allSatisfy({ item in
+                  (expectedLookup.dataspace == nil || item.dataspace == expectedLookup.dataspace)
+                    && (expectedLookup.domain == nil || item.domain == expectedLookup.domain)
+              }) else {
+            throw ToriiClientError.invalidPayload(
+                "reverse-alias response does not match the exact account and scope request"
+            )
+        }
+        return result
+    }
+
     public func resolveAccountAlias(_ alias: String) async throws -> ToriiAccountAliasResolution? {
         let normalizedAlias = try AccountAliasName(parsing: alias).canonicalText
         let body = try JSONEncoder().encode(ToriiAccountAliasResolveRequest(alias: normalizedAlias))
@@ -24221,7 +24212,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             return nil
         }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        return try decodeJSON(ToriiAccountAliasResolution.self, from: data)
+        return try decodeAccountAliasResolution(from: data, expectedAlias: normalizedAlias)
     }
 
     /// Resolve a restricted alias with canonical account/signature/timestamp/nonce headers.
@@ -24242,7 +24233,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             return nil
         }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        return try decodeJSON(ToriiAccountAliasResolution.self, from: data)
+        return try decodeAccountAliasResolution(from: data, expectedAlias: normalizedAlias)
     }
 
     public func resolveAccountAliasIndex(_ index: UInt64) async throws -> ToriiAliasIndexResolution? {
@@ -24256,7 +24247,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        return try decodeJSON(ToriiAliasIndexResolution.self, from: data)
+        return try decodeAliasIndexResolution(from: data, expectedIndex: index)
     }
 
     public func resolveAccountAliasIndex(
@@ -24273,7 +24264,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        return try decodeJSON(ToriiAliasIndexResolution.self, from: data)
+        return try decodeAliasIndexResolution(from: data, expectedIndex: index)
     }
 
     public func aliasesByAccount(
@@ -24289,13 +24280,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        let result = try decodeJSON(ToriiAliasesByAccountResponse.self, from: data)
-        guard result.accountId == lookup.accountId else {
-            throw ToriiClientError.invalidPayload(
-                "reverse-alias response account does not match the exact request"
-            )
-        }
-        return result
+        return try decodeAliasesByAccountResponse(from: data, expectedLookup: lookup)
     }
 
     public func aliasesByAccount(
@@ -24312,13 +24297,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        let result = try decodeJSON(ToriiAliasesByAccountResponse.self, from: data)
-        guard result.accountId == lookup.accountId else {
-            throw ToriiClientError.invalidPayload(
-                "reverse-alias response account does not match the exact request"
-            )
-        }
-        return result
+        return try decodeAliasesByAccountResponse(from: data, expectedLookup: lookup)
     }
 
     /// Plans the exact `EnsureAlias` vector without mutating world state.

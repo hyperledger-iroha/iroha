@@ -2265,7 +2265,7 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             {
               "alias":"alice@universal",
-              "accountId":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "index":7,
               "source":"world_state"
             }
@@ -2276,7 +2276,6 @@ final class ToriiClientTests: XCTestCase {
         let resolved = try await makeClient().resolveAccountAlias("alice@universal")
         XCTAssertEqual(resolved?.alias, "alice@universal")
         XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-        XCTAssertEqual(resolved?.accountIds, ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"])
         XCTAssertEqual(resolved?.index, 7)
         XCTAssertEqual(resolved?.source, "world_state")
     }
@@ -2578,40 +2577,140 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testResolveAccountAliasParsesAccountIdsArray() async throws {
+    func testTypedAliasReadsRejectSubstitutedResponseSelectors() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "alice@universal")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "alias":"alice@universal",
-              "account_ids":[
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB"
-              ],
-              "source":"world_state"
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("""
+                {"alias":"other@paynet","account_id":"\(self.authority)","source":"active_sns"}
+                """.utf8)
+            )
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().resolveAccountAlias("merchant@paynet")
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
             }
-            """.data(using: .utf8)!
-            return (response, body)
+            XCTAssertTrue(reason.contains("exact request"))
         }
 
-        let resolved = try await makeClient().resolveAccountAlias("alice@universal")
-        XCTAssertEqual(resolved?.alias, "alice@universal")
-        XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-        XCTAssertEqual(
-            resolved?.accountIds,
-            [
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB",
-            ]
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("""
+                {"index":8,"alias":"merchant@paynet","account_id":"\(self.authority)","source":"active_sns"}
+                """.utf8)
+            )
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().resolveAccountAliasIndex(7)
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("exact request"))
+        }
+
+        let lookup = try ToriiAliasesByAccountRequest(
+            accountId: authority,
+            dataspace: "paynet",
+            domain: "banka"
         )
-        XCTAssertEqual(resolved?.source, "world_state")
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("""
+                {"account_id":"\(self.authority)","total":1,"items":[{"alias":"merchant@other.paynet","dataspace":"paynet","domain":"other","is_primary":true}],"source":"fanout"}
+                """.utf8)
+            )
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().aliasesByAccount(
+                lookup,
+                canonicalAuth: canonicalReadAuth
+            )
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("exact account and scope"))
+        }
+    }
+
+    func testTypedAliasReadsRejectUnknownResponseFields() {
+        let accountId = authority
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiAliasIndexResolution.self,
+                from: Data("""
+                {"index":7,"alias":"merchant@paynet","account_id":"\(accountId)","legacy":true}
+                """.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiAliasesByAccountResponse.self,
+                from: Data("""
+                {"account_id":"\(accountId)","total":0,"items":[],"legacy":true}
+                """.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiAliasesByAccountResponse.self,
+                from: Data("""
+                {"account_id":"\(accountId)","total":1,"items":[{"alias":"merchant@paynet","dataspace":"paynet","is_primary":true,"legacy":true}]}
+                """.utf8)
+            )
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAccountAliasRejectsRetiredAndUnknownResponseFields() async throws {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        for retiredField in [
+            "\"accountId\":\"\(accountId)\"",
+            "\"account_ids\":[\"\(accountId)\"]",
+            "\"accountIds\":[\"\(accountId)\"]",
+            "\"unexpected\":true",
+        ] {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let body = """
+                {"alias":"alice@universal","account_id":"\(accountId)",\(retiredField)}
+                """.data(using: .utf8)!
+                return (response, body)
+            }
+
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().resolveAccountAlias("alice@universal")
+            )
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2621,7 +2720,6 @@ final class ToriiClientTests: XCTestCase {
         {
           "alias":"alice@universal",
           "account_id":"\(accountId)",
-          "account_ids":["\(accountId)"],
           "index":7,
           "source":"world_state"
         }
@@ -2636,11 +2734,6 @@ final class ToriiClientTests: XCTestCase {
                 "account alias resolution.account_id",
                 "\"account_id\":\"\(accountId)\"",
                 "\"account_id\":\" \(accountId)\""
-            ),
-            (
-                "account alias resolution.account_ids",
-                "\"account_ids\":[\"\(accountId)\"]",
-                "\"account_ids\":[\"\(accountId) \"]"
             ),
             (
                 "account alias resolution.source",

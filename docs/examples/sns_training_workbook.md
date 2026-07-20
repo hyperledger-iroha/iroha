@@ -29,8 +29,7 @@ Diagnostic notes: `________________________________________________________`
    ```bash
    python3 scripts/sns_bulk_onboard.py setup.json \
      --config client.toml \
-     --plan-file setup.plan.json \
-     --plan-only
+     --plan-file setup.plan.json
    ```
 
 3. Record the authority, chain/anchor, ordered resource dispositions, exact
@@ -57,7 +56,15 @@ Conflict code and remediation: `___________________________________________`
 
 ## Lab 4 — Atomic apply and evidence
 
-1. Apply the exact verified plan with the alias CLI/SDK's setup `apply` command.
+1. Apply the exact verified plan only with an explicit mutation flag:
+
+   ```bash
+   python3 scripts/sns_bulk_onboard.py setup.json \
+     --config client.toml \
+     --plan-file setup.plan.json \
+     --apply
+   ```
+
    It must locally sign one normal transaction and submit through the existing
    transaction endpoint.
 2. Record the transaction hash and committed/rejected result.

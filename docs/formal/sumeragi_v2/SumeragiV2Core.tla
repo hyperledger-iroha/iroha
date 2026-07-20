@@ -372,7 +372,12 @@ ReceivedQcValues == {entry.qc: entry \in receivedQCs}
 \* A certificate's global authenticity ghost is not local reducer knowledge.
 \* The node which forms a PrepareQC installs its own receipt below; every
 \* other node must receive the certificate through authenticated ingress.
-LockCommitQcValues == ReceivedQcValues
+\* The one exception is the exact PrepareQC selected by an installed TC:
+\* production persists that full QC as `durable.locked()`, while this Core
+\* abstraction stores its rank/subject plus installed-TC provenance.  The
+\* BeginLockCommit guard below narrows the global PrepareQC carrier back to
+\* that exact abstract durable lock before authorizing historical Commit.
+LockCommitQcValues == ReceivedQcValues \cup prepareQCs
 ReceivedTcValues == {entry.tc: entry \in receivedTCs}
 DecisionQcValues == {decision.qc: decision \in decisions}
 
@@ -558,20 +563,67 @@ NoHigherConflictingPrepareKnown(node, qc) ==
   /\ ~(highestRank[node] > qc.view
         /\ highestSubject[node] # qc.subject)
 
-HistoricalTcLockedPrepareForCommit(node, qc) ==
+HistoricalLockedPrepareRecoveryProvenance(node, qc) ==
+  \/ InstalledTcSelectsPrepareFor(node, qc)
+  \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
+
+HistoricalLockedPrepareSource(node, qc) ==
   /\ qc \in prepareQCs
+  /\ qc.context = context
+  /\ qc.phase = "Prepare"
   /\ qc.view < nodeView[node]
   /\ qc.view = lockRank[node]
   /\ qc.subject = lockSubject[node]
-  /\ InstalledTcSelectsPrepareFor(node, qc)
+  /\ HistoricalLockedPrepareRecoveryProvenance(node, qc)
+  /\ NoDecisionForNode(node)
+
+HistoricalLockedPrepareForCommit(node, qc) ==
+  /\ HistoricalLockedPrepareSource(node, qc)
+  /\ ExactLockedCommitIntents(node, qc.view, qc.subject) = {}
   /\ NoHigherConflictingPrepareKnown(node, qc)
+
+\* Compatibility aliases for proof modules whose theorem names predate the
+\* ordinary LockAndCommit -> no-high-TC recovery source.  New statements use
+\* the source-neutral names above.
+HistoricalTcLockedPrepareSource(node, qc) ==
+  HistoricalLockedPrepareSource(node, qc)
+
+HistoricalTcLockedPrepareForCommit(node, qc) ==
+  HistoricalLockedPrepareForCommit(node, qc)
+
+(***************************************************************************
+The certified-body wire protocol accepts either the local durable Commit
+Decision or the current durable locked PrepareQC.  A locked Prepare has one of
+two durable origins: an installed TC selected it, or an earlier LockAndCommit
+already recorded its exact local Commit intent before a later no-high TC
+carried the lock forward.  Both origins authorize Fetch/Validate/retransmit;
+only the installed-TC origin with no existing intent can authorize a fresh
+historical BeginLockCommit.  Recovery intentionally excludes the
+higher-conflict signing fence: Rust still fetches and validates that locked
+body, then returns IrrelevantView instead of creating a late Commit when
+conflicting higher Prepare evidence exists.
+
+The current TC abstraction carries only the authenticated high rank/subject,
+not the full selected QC bytes.  Exact signer-set identity therefore remains
+a separate production-refinement debt; recovery candidates retain one exact
+matching QcRecord as their evidence inside this abstraction.
+***************************************************************************)
+
+DecisionCertifiedBodyRecoveryAuthority(node, qc) ==
+  /\ [node |-> node, qc |-> qc] \in decisions
+  /\ qc.context = context
+  /\ qc.phase = "Commit"
+
+CertifiedBodyRecoveryAuthority(node, qc) ==
+  \/ DecisionCertifiedBodyRecoveryAuthority(node, qc)
+  \/ HistoricalLockedPrepareSource(node, qc)
 
 (***************************************************************************
 TC acknowledgement clears the installing node's volatile vote pool.  If the
 resulting lock still has the node's exact durable Commit intent, production
 queues that intent for re-signing.  A newly promoted lock without such an
 intent does not sign immediately: its exact body must first become durable and
-validate, after which HistoricalTcLockedPrepareForCommit authorizes the normal
+validate, after which HistoricalLockedPrepareForCommit authorizes the normal
 persistence-before-sign pipeline for that one historical round and subject.
 ***************************************************************************)
 ActiveLockedCommitSignRequestsAfterInstall(node, tc) ==
@@ -1167,6 +1219,38 @@ ValidateDecidedBody(node, qc) ==
                     voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
                     decisions, applied>>
 
+(***************************************************************************
+TC-installed locked-body recovery has certificate authority but need not have
+a leader Proposal receipt.  Validation therefore mirrors Decision recovery:
+it records only the exact current-generation validation marker.  The ordinary
+ValidateBody causal successor subsequently attempts BeginLockCommit, whose
+HistoricalLockedPrepareForCommit guard applies the higher-conflict fence.
+***************************************************************************)
+
+ValidateLockedBody(node, qc) ==
+  LET validation == ValidationRecord(node, context, qc.view,
+                                      generation[node], qc.subject)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ HistoricalLockedPrepareSource(node, qc)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ qc.subject \in ValidSubjects
+     /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
+     /\ validatedBodies' = validatedBodies \cup {validation}
+     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, invalidBodies,
+                    seenProposals, receivedVotes, receivedQCs,
+                    receivedTimeoutVotes, receivedTCs, proposalIntents,
+                    prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    highestRank, highestSubject, pendingProposal,
+                    pendingPrepare, pendingObservePrepare, pendingLockCommit,
+                    pendingTimeout, pendingInstallTC, pendingDecision,
+                    signProposals, signVotes, signTimeouts, proposalNetwork,
+                    voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
+                    decisions, applied>>
+
 RejectBody(node, proposal) ==
   LET body == BodyRecord(node, context, proposal.view, proposal.subject)
   IN /\ ProposalAt(node, proposal) \in seenProposals
@@ -1428,7 +1512,7 @@ BeginLockCommit(node, qc) ==
      /\ qc.context = context
      /\ qc.phase = "Prepare"
      /\ \/ CurrentOpenPrepareForCommit(node, qc)
-        \/ HistoricalTcLockedPrepareForCommit(node, qc)
+        \/ HistoricalLockedPrepareForCommit(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
                         generation[node], qc.subject)
@@ -1789,11 +1873,7 @@ PersistInstallTC(request) ==
 
 FetchCertifiedBody(node, qc) ==
   LET body == BodyRecord(node, context, qc.view, qc.subject)
-  IN /\ \E decision \in decisions:
-           /\ decision.node = node
-           /\ decision.qc = qc
-     /\ qc.phase = "Commit"
-     /\ qc.context = context
+  IN /\ CertifiedBodyRecoveryAuthority(node, qc)
      /\ ~BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ body \in BodyRecordSet
      /\ availableBodies' = availableBodies \cup {body}
@@ -2014,6 +2094,8 @@ Next ==
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ValidateDecidedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       ValidateLockedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -2050,7 +2132,8 @@ Next ==
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
   \/ \E request \in pendingInstallTC: PersistInstallTC(request)
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)

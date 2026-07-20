@@ -12,9 +12,8 @@ import org.hyperledger.iroha.android.address.AccountIdLiteral;
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
- * <p>The structure mirrors the Rust data model sufficiently for encoding and signing. Instruction
- * handling currently focuses on the IVM bytecode variant; support for general instruction lists will
- * be added alongside dedicated builders.
+ * <p>The structure mirrors the Rust data model for encoding and signing native instructions,
+ * deployed-contract calls, flat mixed batches, and IVM bytecode.
  */
 public final class TransactionPayload {
 
@@ -129,6 +128,14 @@ public final class TransactionPayload {
       return setExecutable(Executable.instructions(instructions));
     }
 
+    public Builder setContractCall(final ContractInvocation invocation) {
+      return setExecutable(Executable.contractCall(invocation));
+    }
+
+    public Builder setBatch(final List<? extends ExecutableBatchItem> items) {
+      return setExecutable(Executable.batch(items));
+    }
+
     public Builder setTimeToLiveMs(final Long ttlMs) {
       if (ttlMs == null) {
         this.timeToLiveMs = Optional.empty();
@@ -196,8 +203,23 @@ public final class TransactionPayload {
     }
 
     public TransactionPayload build() {
+      return build(true);
+    }
+
+    /** Internal codec hook that preserves decoding of historical, non-admissible payloads. */
+    public TransactionPayload buildDecodedForCodec() {
+      return build(false);
+    }
+
+    private TransactionPayload build(final boolean validateExecutableGas) {
       if (feePayment == null) {
         throw new IllegalStateException("feePayment must be set explicitly");
+      }
+      if (validateExecutableGas
+          && executable.requiresTransactionGasLimit()
+          && feePayment.gasLimit() == null) {
+        throw new IllegalStateException(
+            "feePayment.gasLimit is required for IVM and contract-call executables");
       }
       return new TransactionPayload(this);
     }

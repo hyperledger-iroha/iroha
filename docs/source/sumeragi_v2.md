@@ -700,12 +700,12 @@ it, and advances its local certified prefix; no global all-node application barr
 FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
 including a valid empty heartbeat, not transaction-inclusion fairness or censorship resistance.
 
-Eight arbitrary-context Core wrappers are TLAPS-proved. Historical TC-lock Commit authorization
-and the dependent direct-or-installed-authorization timeout wrapper remain
-`specified_unproved`; only the narrower grouped-timeout kernel for Commit intents already present
-at timeout is proved. The
-liveness claim must therefore remain a conditional paper argument while the proof ledger reports
-`machine_checked_completion: false`.
+Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
+Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
+narrower grouped-timeout kernel for Commit intents already present at timeout. The remaining
+asynchronous ownership/fairness and multi-height liveness composition obligations are still
+`specified_unproved`; the liveness claim must therefore remain a conditional paper argument while
+the proof ledger reports `machine_checked_completion: false`.
 
 The executable reducer and persistence-effect ordering are the source-verification boundary.
 Cryptographic implementations, canonical Norito encoding, deterministic execution, OS fsync

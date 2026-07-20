@@ -149,7 +149,7 @@ BY IsaT(60)
        PersistProposal, CompleteProposalSignature,
        ByzantineBroadcastProposal, DeliverProposal,
        FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, RejectBody, ValidateDecidedBody
+       ValidateBody, RejectBody, ValidateDecidedBody, ValidateLockedBody
 
 THEOREM VoteStableSuppliesCoreAuthorizationFrame ==
   TimeoutViewFrontierVoteStableStep => CoreAuthorizationFrame
@@ -371,7 +371,7 @@ BY IsaT(60)
        PersistProposal, CompleteProposalSignature,
        ByzantineBroadcastProposal, DeliverProposal,
        FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, RejectBody, ValidateDecidedBody
+       ValidateBody, RejectBody, ValidateDecidedBody, ValidateLockedBody
 
 THEOREM VoteStableStepLeavesTimeoutWireSets ==
   TimeoutViewFrontierVoteStableStep
@@ -560,4 +560,3 @@ PROOF
   <1> QED BY <1>1
 
 =============================================================================
-

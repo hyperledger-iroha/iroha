@@ -30,12 +30,13 @@ use iroha_data_model::{
 use thiserror::Error;
 
 use super::{
-    FairV2Ingress, FairV2IngressCapacityError, GenesisWithPubKey, InboundBlockMessage,
-    SumeragiWorker,
+    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
+    InboundBlockMessage, SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{
-        AdapterEffect, AdapterFingerprints, LocalProposalDirective, SignRequest, SumeragiV2Adapter,
+        AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
+        SignRequest, SumeragiV2Adapter,
     },
     v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
     v2_block_sync::{
@@ -61,7 +62,10 @@ use super::{
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{ProductionV2Services, V2CleanupSupervisor},
 };
-use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
+use crate::{
+    block::BlockBuilder, kura::Kura, merge_sidecar::CertifiedMergeSidecarMessage,
+    native_amx::NativeAmxMessage, queue::Queue, state::State,
+};
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
@@ -589,6 +593,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         PendingSuccessorActivation::recovered(parent, verified_context.context().id())
     });
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
+    let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -623,7 +628,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
         let runtime_queue = runtime_queue_config(&shared_config)?;
         let effect_queue = effect_queue_config(&shared_config)?;
-        let lane_work_limits = lane_work_limits(&shared_config)?;
+        let lane_work_limits =
+            lane_work_limits(&shared_config, network.reply_route_source_capacity())?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
         let new_block_sync_server = block_sync_server
@@ -663,6 +669,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 Generation::new(context.height),
                 consensus_key_hash,
                 fingerprints,
+                deferred_admission_ordinals.clone(),
             )
         } else {
             SumeragiV2Adapter::open(
@@ -672,6 +679,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 Generation::new(context.height),
                 consensus_key_hash,
                 fingerprints,
+                deferred_admission_ordinals.clone(),
             )
         };
         let (adapter, startup_effects) = adapter?;
@@ -712,7 +720,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 .begin_fail_stop_operation()
                 .ok_or(V2RunnerError::RestartRequired)?;
             let replayed_genesis_nexus_amx_context =
-                executor.verify_pending_kura_apply_replay(pending)?;
+                executor.verify_pending_kura_apply_replay(pending, &startup_effects)?;
             pending_replay_verification.complete();
             if recovered_applied_height.is_none()
                 && let Some(replayed) = replayed_genesis_nexus_amx_context
@@ -838,13 +846,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // reducer and completion sources while one target is unavailable.
             // Each producer either transfers its complete fanout into the
             // corridor or retains the durable/reconstructible semantic source.
-            let _ = services
-                .retry_pending_exact_output()
-                .map_err(V2RunnerError::Service)?;
+            let _ = retry_exact_output_and_apply_sidecar_admissions(
+                &mut lane_work,
+                &services,
+                control_queue_capacity,
+            )?;
             services.drain_completions(&mut executor)?;
-            let _ = services
-                .retry_pending_exact_output()
-                .map_err(V2RunnerError::Service)?;
+            let _ = retry_exact_output_and_apply_sidecar_admissions(
+                &mut lane_work,
+                &services,
+                control_queue_capacity,
+            )?;
             if !recovering_interrupted_tip {
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
@@ -909,9 +921,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut block_sync_request,
                     body_queue_capacity,
                 )?;
-                let _ = services
-                    .retry_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?;
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    &mut lane_work,
+                    &services,
+                    control_queue_capacity,
+                )?;
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
                 lane_work.retain_merge_sidecars_for_global_view(
@@ -932,9 +946,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-                let _ = services
-                    .retry_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?;
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    &mut lane_work,
+                    &services,
+                    control_queue_capacity,
+                )?;
             }
 
             if recovering_interrupted_tip {
@@ -945,9 +961,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
             } else {
                 advance_executor(&mut executor, &mut services, control_queue_capacity)?;
-                let _ = services
-                    .retry_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?;
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    &mut lane_work,
+                    &services,
+                    control_queue_capacity,
+                )?;
                 let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
                 local_proposal_state.reconcile(LocalProposalOwner::from(directive));
                 lane_work.retain_merge_sidecars_for_global_view(
@@ -987,9 +1005,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
 
             if executor.ready_to_finish() {
-                let _ = services
-                    .retry_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?;
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    &mut lane_work,
+                    &services,
+                    control_queue_capacity,
+                )?;
                 let _ = lane_work.service_next_historical_recovery()?;
                 if lane_work.has_pending_historical_recovery() {
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
@@ -1019,9 +1039,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 if !recovering_interrupted_tip {
                     dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 }
-                let _ = services
-                    .retry_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?;
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    &mut lane_work,
+                    &services,
+                    control_queue_capacity,
+                )?;
                 services
                     .handoff_applied_height_output_to_durable_reconstruction(
                         &durable_receipt,
@@ -1516,21 +1538,35 @@ fn drain_v2_ingress(
             advance_executor(executor, services, 1)?;
             continue;
         }
-        let Some(inbound) =
+        let Some(mut inbound) =
             receiver.try_recv_if(|inbound| v2_ingress_head_can_drain(inbound, executor, services))
         else {
             break;
         };
         if inbound.message().is_lane_local() {
-            let _ = lane_work.accept_lane_message(
-                inbound,
-                executor.current_tag().view(),
-            );
+            let _ = lane_work
+                .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
             let _ = lane_work.service_next_historical_recovery()?;
             continue;
         }
-        let (message, sender, reply_route) =
-            inbound.into_message_sender_and_reply_route();
+        let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+            V2RunnerError::Service(
+                "global Sumeragi v2 ingress lost its fair ownership carrier".to_owned(),
+            )
+        })?;
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(inbound.message())
+        {
+            return Err(V2RunnerError::Service(
+                "global Sumeragi v2 ingress carried altered fair ownership".to_owned(),
+            ));
+        }
+        let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+        if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
+            return Err(V2RunnerError::Service(
+                "global Sumeragi v2 ingress changed its authenticated reply routes".to_owned(),
+            ));
+        }
         let BlockMessage::V2(message) = message else {
             iroha_logger::debug!("rejected legacy global message on v2-only consensus ingress");
             continue;
@@ -1546,29 +1582,35 @@ fn drain_v2_ingress(
                     wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
                         proposal,
                     )),
+                    ingress_ownership,
                 )?;
             }
             wire::ConsensusMessageV2Payload::Vote(vote) => enqueue_control(
                 executor,
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+                ingress_ownership,
             )?,
             wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => enqueue_control(
                 executor,
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
                     certificate,
                 )),
+                ingress_ownership,
             )?,
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => enqueue_control(
                 executor,
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote)),
+                ingress_ownership,
             )?,
             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => enqueue_control(
                 executor,
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                     certificate,
                 )),
+                ingress_ownership,
             )?,
             wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
+                drop(ingress_ownership);
                 if let Err(error) = manifest.validate(executor.context()) {
                     iroha_logger::debug!(%error, "rejected standalone Sumeragi v2 manifest");
                 }
@@ -1578,20 +1620,27 @@ fn drain_v2_ingress(
                     continue;
                 };
                 services
-                    .route_payload_chunk(executor, sender, chunk)
+                    .route_payload_chunk(executor, sender, chunk, ingress_ownership)
                     .map_err(V2RunnerError::Service)?;
             }
             wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
                 let Some(sender) = sender else {
                     continue;
                 };
-                let Some(reply_route) = reply_route else {
+                let Some(reply_routes) = reply_routes else {
                     iroha_logger::debug!(
                         %sender,
                         "rejected certified body request without authenticated reply route"
                     );
                     continue;
                 };
+                if reply_routes.semantic_target() != &sender {
+                    iroha_logger::debug!(
+                        %sender,
+                        "rejected certified body request with mismatched reply target"
+                    );
+                    continue;
+                }
                 if request.round.height < executor.context().height {
                     let response_peer = sender.clone();
                     match serve_block_sync_while_guarded(
@@ -1606,9 +1655,10 @@ fn drain_v2_ingress(
                             )
                         },
                         |response, permit| {
-                            services.post_durable_history_response_on_reply_route_with_permit(
+                            services.post_durable_history_response_on_reply_routes_with_permit(
                                 response_peer,
-                                reply_route,
+                                reply_routes,
+                                ingress_ownership,
                                 response,
                                 permit,
                             )
@@ -1624,7 +1674,11 @@ fn drain_v2_ingress(
                     match executor.authenticate_certified_body_request(request, &sender) {
                         Ok(request) => {
                             services
-                                .serve_certified_request_on_route(request, reply_route)
+                                .serve_certified_request_on_routes(
+                                    request,
+                                    reply_routes,
+                                    ingress_ownership,
+                                )
                                 .map_err(V2RunnerError::Service)?;
                         }
                         Err(error) => {
@@ -1643,6 +1697,7 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
+                drop(ingress_ownership);
                 match executor.accept_certified_body_response(response, &sender, services) {
                     Ok(_) => {}
                     Err(EffectTransportError::FailClosed(reason)) => {
@@ -1657,21 +1712,29 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
-                let Some(reply_route) = reply_route else {
+                let Some(reply_routes) = reply_routes else {
                     iroha_logger::debug!(
                         %sender,
                         "rejected CommitQC request without authenticated reply route"
                     );
                     continue;
                 };
+                if reply_routes.semantic_target() != &sender {
+                    iroha_logger::debug!(
+                        %sender,
+                        "rejected CommitQC request with mismatched reply target"
+                    );
+                    continue;
+                }
                 let response_peer = sender.clone();
                 match serve_block_sync_while_guarded(
                     output_guard,
                     || block_sync_server.serve(kura, request, &sender, local_key),
                     |response, permit| {
-                        services.post_durable_history_response_on_reply_route_with_permit(
+                        services.post_durable_history_response_on_reply_routes_with_permit(
                             response_peer,
-                            reply_route,
+                            reply_routes,
+                            ingress_ownership,
                             response,
                             permit,
                         )
@@ -1696,7 +1759,9 @@ fn drain_v2_ingress(
                     }
                 };
                 let admission = block_sync.enqueue_and_complete(discovered, |message| {
-                    executor.enqueue_network(message).map(|_| ())
+                    executor
+                        .enqueue_network_with_ingress_ownership(message, ingress_ownership)
+                        .map(|_| ())
                 });
                 if commit_certificate_admission_completed(admission)? {
                     *block_sync_request = None;
@@ -1786,8 +1851,9 @@ fn serve_block_sync_while_guarded<Response>(
 fn enqueue_control(
     executor: &mut V2EffectExecutor,
     message: wire::ConsensusMessageV2,
+    ingress_ownership: FairV2IngressOwnershipEvidence,
 ) -> Result<(), V2RunnerError> {
-    match executor.enqueue_network(message) {
+    match executor.enqueue_network_with_ingress_ownership(message, ingress_ownership) {
         Ok(_) => Ok(()),
         Err(NetworkIngressError::FailClosed) => Err(V2RunnerError::RuntimeFailClosed),
         Err(NetworkIngressError::Authentication(error)) => {
@@ -1935,7 +2001,10 @@ fn effect_queue_config(config: &SumeragiV2Config) -> Result<EffectQueueConfig, V
     ))
 }
 
-fn lane_work_limits(config: &SumeragiV2Config) -> Result<V2LaneWorkLimits, V2RunnerError> {
+fn lane_work_limits(
+    config: &SumeragiV2Config,
+    reply_source_capacity: usize,
+) -> Result<V2LaneWorkLimits, V2RunnerError> {
     let non_zero = |value: u64| {
         usize::try_from(value)
             .ok()
@@ -1949,6 +2018,7 @@ fn lane_work_limits(config: &SumeragiV2Config) -> Result<V2LaneWorkLimits, V2Run
         non_zero(config.limits.chunk_queue_capacity)?,
         non_zero(config.limits.certified_request_capacity)?,
         non_zero(config.limits.control_queue_capacity)?,
+        NonZeroUsize::new(reply_source_capacity).ok_or(V2RunnerError::InvalidLimits)?,
     ))
 }
 
@@ -2055,37 +2125,218 @@ impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
     }
 }
 
+fn apply_bounded_sidecar_admissions<T, Error>(
+    limit: usize,
+    mut next: impl FnMut() -> Result<Option<T>, Error>,
+    mut apply: impl FnMut(T) -> Result<(), Error>,
+) -> Result<usize, Error> {
+    let mut applied = 0usize;
+    for _ in 0..limit.max(1) {
+        let Some(admission) = next()? else {
+            break;
+        };
+        apply(admission)?;
+        applied = applied.saturating_add(1);
+    }
+    Ok(applied)
+}
+
+fn apply_certified_merge_sidecar_chunk_admissions(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<(), V2RunnerError> {
+    apply_bounded_sidecar_admissions(
+        limit,
+        || {
+            let mut admissions = services
+                .drain_certified_merge_sidecar_chunk_admissions(1)
+                .map_err(V2RunnerError::Service)?;
+            Ok(admissions.pop())
+        },
+        |admission| {
+            lane_work
+                .acknowledge_certified_merge_sidecar_chunk_admission(&admission, Instant::now())
+                .map_err(V2RunnerError::LaneWork)
+        },
+    )?;
+    Ok(())
+}
+
+fn retry_exact_output_and_apply_sidecar_admissions(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<bool, V2RunnerError> {
+    let pending = services
+        .retry_pending_exact_output()
+        .map_err(V2RunnerError::Service)?;
+    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    Ok(pending)
+}
+
 fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    for _ in 0..limit.max(1) {
+    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    let scan_limit = lane_work.effect_count();
+    let mut dispatched = 0usize;
+    for _ in 0..scan_limit {
+        if dispatched >= limit.max(1) {
+            break;
+        }
+        let Some(mut next_effect) = lane_work.next_effect() else {
+            break;
+        };
+        if !retain_active_owned_reply_routes(&mut next_effect) {
+            let _ = lane_work
+                .drain_effects(1)
+                .pop()
+                .expect("peeked lane-work effect must remain queued");
+            continue;
+        }
         if !services
-            .can_retain_exact_fanout()
+            .can_retain_lane_work_effect(&next_effect)
             .map_err(V2RunnerError::Service)?
         {
-            break;
+            let effect = lane_work
+                .drain_effects(1)
+                .pop()
+                .expect("peeked lane-work effect must remain queued");
+            drop(effect);
+            if !lane_work.requeue_effect(next_effect) {
+                return Err(V2RunnerError::Service(
+                    "lane-work scheduler could not restore a reserved effect".to_owned(),
+                ));
+            }
+            continue;
         }
         let Some(effect) = lane_work.drain_effects(1).pop() else {
             break;
         };
-        match effect {
-            V2LaneWorkEffect::PostLaneBlock { peer, message } => services
-                .post_lane_block(peer, message)
-                .map_err(V2RunnerError::Service)?,
-            V2LaneWorkEffect::PostDurableLaneCertificate { peer, certificate } => services
-                .post_durable_lane_certificate(peer, certificate)
-                .map_err(V2RunnerError::Service)?,
-            V2LaneWorkEffect::PostNativeAmx { peer, message } => {
-                services.post_native_amx(peer, message);
+        drop(effect);
+        dispatched = dispatched.saturating_add(1);
+        dispatch_lane_work_effect(services, next_effect)?;
+        apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    }
+    Ok(())
+}
+
+/// Remove retired source occurrences from semantic work already owned by the
+/// lane adapter. A malformed effect which never carried its required route is
+/// left intact so normal strict validation rejects it.
+fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
+    if let V2LaneWorkEffect::PostDurableLaneCertificate {
+        reply_routes,
+        ingress_ownership,
+        ..
+    } = effect
+    {
+        let Some(routes) = reply_routes.as_mut() else {
+            return false;
+        };
+        let Some(ownership) = ingress_ownership.as_mut() else {
+            return false;
+        };
+        let retained_routes = routes.retain_active();
+        let retained_ownership = ownership.retain_active_reply_routes();
+        return retained_routes != 0
+            && retained_routes == retained_ownership
+            && ownership.validate_exact()
+            && ownership.matches_reply_routes(Some(routes));
+    }
+    let reply_routes = match effect {
+        V2LaneWorkEffect::PostNativeAmx {
+            reply_routes,
+            message: NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_),
+            ..
+        } => reply_routes,
+        V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            reply_routes,
+            message: CertifiedMergeSidecarMessage::Chunk(_),
+            ..
+        } => reply_routes,
+        V2LaneWorkEffect::PostLaneBlock { .. }
+        | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
+        | V2LaneWorkEffect::PostNativeAmx { .. }
+        | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
+    };
+    reply_routes
+        .as_mut()
+        .is_none_or(|routes| routes.retain_active() != 0)
+}
+
+fn dispatch_lane_work_effect(
+    services: &ProductionV2Services,
+    effect: V2LaneWorkEffect,
+) -> Result<(), V2RunnerError> {
+    match effect {
+        V2LaneWorkEffect::PostLaneBlock { peer, message } => services
+            .post_lane_block(peer, message)
+            .map_err(V2RunnerError::Service)?,
+        V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer,
+            reply_routes,
+            ingress_ownership,
+            certificate,
+        } => {
+            let reply_routes = reply_routes.ok_or_else(|| {
+                V2RunnerError::Service(
+                    "durable lane-certificate response lost its authenticated reply routes"
+                        .to_owned(),
+                )
+            })?;
+            let ingress_ownership = ingress_ownership.ok_or_else(|| {
+                V2RunnerError::Service(
+                    "durable lane-certificate response lost its fair-ingress ownership".to_owned(),
+                )
+            })?;
+            if !ingress_ownership.validate_exact()
+                || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+            {
+                return Err(V2RunnerError::Service(
+                    "durable lane-certificate response carried altered ingress ownership"
+                        .to_owned(),
+                ));
             }
-            V2LaneWorkEffect::BroadcastMerge(signature) => {
-                services.broadcast_merge_to_voters(signature);
+            services
+                .post_durable_lane_certificate_on_reply_routes(
+                    peer,
+                    reply_routes,
+                    ingress_ownership,
+                    certificate,
+                )
+                .map_err(V2RunnerError::Service)?;
+        }
+        V2LaneWorkEffect::PostNativeAmx {
+            peer,
+            reply_routes,
+            message,
+        } => {
+            services.post_native_amx_with_reply_routes(peer, reply_routes, message);
+        }
+        V2LaneWorkEffect::BroadcastMerge(signature) => {
+            services.broadcast_merge_to_voters(signature);
+        }
+        V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer,
+            reply_routes,
+            message,
+        } => {
+            let route_shape_is_valid = match &message {
+                CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+                CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
+            };
+            if !route_shape_is_valid {
+                return Err(V2RunnerError::Service(
+                    "certified merge-sidecar effect lost its exact reply-route ownership"
+                        .to_owned(),
+                ));
             }
-            V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
-                services.post_certified_merge_sidecar(peer, message);
-            }
+            services.post_certified_merge_sidecar_with_reply_routes(peer, reply_routes, message);
         }
     }
     Ok(())
@@ -2302,7 +2553,7 @@ pub(super) enum V2RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{cell::Cell, collections::VecDeque, sync::Mutex};
 
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
     use iroha_crypto::{Algorithm, KeyPair};
@@ -2316,9 +2567,47 @@ mod tests {
         trigger::DataTriggerSequence,
     };
     use iroha_logger::Level;
+    use iroha_p2p::network::{
+        NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
+        NetworkReplyRoutes,
+    };
     use tempfile::TempDir;
 
+    use super::super::FairV2IngressPushError;
     use super::*;
+    use crate::{
+        NetworkMessage,
+        merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarMessage,
+        },
+    };
+
+    #[test]
+    fn bounded_sidecar_admission_turn_applies_only_its_budget() {
+        let mut queued = VecDeque::from([1_u8, 2, 3]);
+        let mut applied = Vec::new();
+        let count = apply_bounded_sidecar_admissions(
+            1,
+            || Ok::<_, ()>(queued.pop_front()),
+            |item| {
+                applied.push(item);
+                Ok::<_, ()>(())
+            },
+        )
+        .expect("bounded admission turn");
+        assert_eq!(count, 1);
+        assert_eq!(applied, vec![1]);
+        assert_eq!(queued, VecDeque::from([2, 3]));
+
+        let result = apply_bounded_sidecar_admissions(
+            2,
+            || Ok::<_, &'static str>(queued.pop_front()),
+            |_item| Err("fail-stop acknowledgement"),
+        );
+        assert_eq!(result, Err("fail-stop acknowledgement"));
+        assert_eq!(queued, VecDeque::from([3]));
+    }
 
     fn context() -> (wire::HeightContext, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
@@ -2361,6 +2650,16 @@ mod tests {
             },
             keys,
         )
+    }
+
+    fn valid_ingress_probe() -> BlockMessage {
+        let validator = PeerId::new(
+            KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)
+                .expect("deterministic ingress probe key")
+                .public_key()
+                .clone(),
+        );
+        super::super::v2_worker::tests::lane_commit_qc_block_message(validator)
     }
 
     fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
@@ -2413,6 +2712,681 @@ mod tests {
             age_ms: 0,
         });
         super::super::status::set_v2_status(status);
+    }
+
+    fn labelled_lane_qc_message(peer: PeerId, label: &[u8]) -> BlockMessage {
+        let mut message = super::super::v2_worker::tests::lane_commit_qc_block_message(peer);
+        let BlockMessage::LaneBlockQc(qc) = &mut message else {
+            unreachable!("lane-QC fixture must return a lane CommitQC")
+        };
+        qc.body.proposal_hash = Hash::new(label);
+        message
+    }
+
+    fn lane_qc_label(message: &NetworkMessage) -> Hash {
+        let NetworkMessage::SumeragiBlock(wire) = message else {
+            panic!("runner scheduler fixture emitted a non-block network message")
+        };
+        let BlockMessage::LaneBlockQc(qc) = wire.as_message() else {
+            panic!("runner scheduler fixture emitted a non-lane-QC block message")
+        };
+        qc.body.proposal_hash.clone()
+    }
+
+    fn runner_sidecar_chunk(
+        local: PeerId,
+        requester: PeerId,
+        label: &[u8],
+    ) -> CertifiedMergeSidecarChunkV1 {
+        CertifiedMergeSidecarChunkV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(label),
+            entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"runner sidecar entry")),
+            encoded_len: 4,
+            epoch_id: 7,
+            reference_digest: Hash::new(b"runner sidecar reference"),
+            requester,
+            responder: local,
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![1, 2, 3, 4],
+        }
+    }
+
+    #[test]
+    fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
+        let (mut services, keys) = super::super::v2_worker::tests::fixture();
+        services
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install one shared slot plus frozen-validator reservations");
+        let blocked = PeerId::new(keys[1].public_key().clone());
+        let responsive = PeerId::new(keys[2].public_key().clone());
+        let keep_blocked = Arc::new(AtomicBool::new(true));
+        let keep_blocked_for_hook = Arc::clone(&keep_blocked);
+        let blocked_for_hook = blocked.clone();
+        let admitted = Arc::new(Mutex::new(Vec::new()));
+        let admitted_for_hook = Arc::clone(&admitted);
+        services.set_exact_output_admission_hook(move |post, ticket| {
+            if post.peer_id == blocked_for_hook && keep_blocked_for_hook.load(Ordering::Acquire) {
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 13,
+                });
+            }
+            admitted_for_hook
+                .lock()
+                .expect("record admitted lane output")
+                .push((post.peer_id.clone(), lane_qc_label(&post.data)));
+            Ok(())
+        });
+
+        let reserved_filler = Hash::new(b"runner reserved filler");
+        let shared_filler = Hash::new(b"runner shared filler");
+        for (label, expected) in [
+            (
+                b"runner reserved filler".as_slice(),
+                reserved_filler.clone(),
+            ),
+            (b"runner shared filler".as_slice(), shared_filler.clone()),
+        ] {
+            services
+                .post_lane_block(
+                    blocked.clone(),
+                    labelled_lane_qc_message(blocked.clone(), label),
+                )
+                .expect("blocked validator output remains exactly owned");
+            assert!(
+                services
+                    .has_pending_exact_output()
+                    .expect("inspect blocked exact output")
+            );
+            assert!(
+                admitted
+                    .lock()
+                    .expect("inspect admitted output")
+                    .iter()
+                    .all(|(_, actual)| actual != &expected)
+            );
+        }
+
+        let blocked_label = Hash::new(b"runner blocked effect A");
+        let responsive_label = Hash::new(b"runner reserved effect B");
+        let blocked_effect = V2LaneWorkEffect::PostLaneBlock {
+            peer: blocked.clone(),
+            message: labelled_lane_qc_message(blocked.clone(), b"runner blocked effect A"),
+        };
+        let responsive_effect = V2LaneWorkEffect::PostLaneBlock {
+            peer: responsive.clone(),
+            message: labelled_lane_qc_message(responsive.clone(), b"runner reserved effect B"),
+        };
+        let (mut lane_work, _) =
+            super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+        assert!(lane_work.requeue_effect(blocked_effect));
+        assert!(lane_work.requeue_effect(responsive_effect));
+
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("reserved work bypasses the unserviceable head");
+        assert_eq!(lane_work.effect_count(), 1);
+        match lane_work.next_effect() {
+            Some(V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: BlockMessage::LaneBlockQc(qc),
+            }) => {
+                assert_eq!(peer, blocked);
+                assert_eq!(qc.body.proposal_hash, blocked_label);
+            }
+            other => panic!("blocked effect A must remain the exact queued owner: {other:?}"),
+        }
+        {
+            let admitted = admitted.lock().expect("inspect admitted output");
+            assert_eq!(
+                admitted
+                    .iter()
+                    .filter(|(peer, label)| peer == &responsive && label == &responsive_label)
+                    .count(),
+                1
+            );
+            assert!(admitted.iter().all(|(_, label)| label != &blocked_label));
+        }
+
+        keep_blocked.store(false, Ordering::Release);
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("responsive retry drains both retained fillers")
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("the retained head dispatches after capacity reopens");
+        assert_eq!(lane_work.effect_count(), 0);
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("all exact lane output is admitted")
+        );
+        let admitted = admitted.lock().expect("inspect final admitted output");
+        for (peer, label) in [
+            (&blocked, &reserved_filler),
+            (&blocked, &shared_filler),
+            (&blocked, &blocked_label),
+            (&responsive, &responsive_label),
+        ] {
+            assert_eq!(
+                admitted
+                    .iter()
+                    .filter(|(actual_peer, actual_label)| {
+                        actual_peer == peer && actual_label == label
+                    })
+                    .count(),
+                1,
+                "each semantic output must be admitted exactly once"
+            );
+        }
+        assert_eq!(admitted.len(), 4);
+    }
+
+    #[test]
+    fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
+        let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
+        let requester = history
+            .certificate
+            .commit_qc
+            .validator_set
+            .iter()
+            .find(|peer| peer.public_key() != history.validators[0].public_key())
+            .cloned()
+            .expect("durable lane fixture has a remote requester");
+        let mut services = super::super::v2_worker::tests::service_for_history_context(
+            Arc::clone(&history.kura),
+            history.context,
+            &history.validators,
+        );
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub.clone());
+        let route = route_fixture.mint(requester.clone());
+        let reply_routes =
+            NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set");
+        let mut admitted = super::super::fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
+                requester.clone(),
+                hub,
+                route.clone(),
+            )
+            .expect("durable request route binds its fair-ingress occurrence"),
+        );
+        let ingress_ownership = admitted
+            .take_ingress_ownership()
+            .expect("fair ingress supplies exact durable-request ownership");
+
+        dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer: requester,
+                reply_routes: Some(reply_routes),
+                ingress_ownership: Some(ingress_ownership),
+                certificate: history.certificate,
+            },
+        )
+        .expect("runner hands the Kura-backed certificate to exact output");
+        assert!(
+            services
+                .retains_reply_route_for_test(&route)
+                .expect("inspect retained durable certificate route")
+        );
+    }
+
+    #[test]
+    fn runner_dispatch_preserves_certified_sidecar_chunk_reply_routes() {
+        let (mut services, keys) = super::super::v2_worker::tests::fixture();
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
+        let route = route_fixture.mint(requester.clone());
+        let reply_routes =
+            NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set");
+        let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner sidecar request");
+
+        dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: requester,
+                reply_routes: Some(reply_routes),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+            },
+        )
+        .expect("runner hands the certified chunk to exact output");
+        assert!(
+            services
+                .retains_reply_route_for_test(&route)
+                .expect("inspect retained sidecar route")
+        );
+    }
+
+    #[test]
+    fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
+        let (mut services, keys) = super::super::v2_worker::tests::fixture();
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 7,
+            })
+        });
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = route_fixture.mint_via(requester.clone(), hub_a);
+        let route_b = route_fixture.mint_via(requester.clone(), hub_b);
+        let mut reply_routes = NetworkReplyRoutes::try_from_route(route_a.clone())
+            .expect("first sidecar response source");
+        reply_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_b.clone())
+                    .expect("second sidecar response source"),
+            )
+            .expect("attach independent sidecar response source");
+        let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: requester.clone(),
+            reply_routes: Some(reply_routes),
+            message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+                local,
+                requester,
+                b"runner prune retired source",
+            )),
+        };
+        let (mut lane_work, _) =
+            super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+        assert!(lane_work.requeue_effect(effect));
+        assert!(route_fixture.retire(&route_a));
+
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("a retired owned route cannot poison its live sibling");
+        assert_eq!(lane_work.effect_count(), 0);
+        assert!(
+            !services
+                .retains_reply_route_for_test(&route_a)
+                .expect("inspect retired route ownership")
+        );
+        assert!(
+            services
+                .retains_reply_route_for_test(&route_b)
+                .expect("inspect live sibling ownership")
+        );
+    }
+
+    #[test]
+    fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
+        let (mut services, keys) = super::super::v2_worker::tests::fixture();
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
+        let route = route_fixture.mint(requester.clone());
+        let route_for_hook = route.clone();
+        let flush_control = Arc::new(Mutex::new(None));
+        let flush_control_for_hook = Arc::clone(&flush_control);
+        services.set_exact_output_flush_admission_hook(move |post, _| {
+            let (control, flush_ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &route_for_hook);
+            assert!(
+                flush_control_for_hook
+                    .lock()
+                    .expect("lock exact test writer-flush control")
+                    .replace(control)
+                    .is_none(),
+                "one sidecar occurrence owns one exact writer-flush control"
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(flush_ack))
+        });
+        let reply_routes = NetworkReplyRoutes::try_from_route(route).expect("live reply route set");
+        let chunk =
+            runner_sidecar_chunk(local, requester.clone(), b"runner admitted sidecar request");
+
+        dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: requester,
+                reply_routes: Some(reply_routes),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+            },
+        )
+        .expect("runner hands the certified chunk to exact output");
+        assert!(
+            services
+                .has_pending_exact_output()
+                .expect("receipt remains process-locally owned")
+        );
+        assert!(
+            services
+                .retry_pending_exact_output()
+                .expect("pending writer completion remains visible to retry callers")
+        );
+        assert!(
+            services
+                .drain_certified_merge_sidecar_chunk_admissions(2)
+                .expect("poll pending sidecar writer completion")
+                .is_empty(),
+            "actor admission alone must not advance the source cursor"
+        );
+        assert!(
+            flush_control
+                .lock()
+                .expect("lock exact test writer-flush control")
+                .as_mut()
+                .expect("runner admission minted the exact writer-flush control")
+                .flush()
+        );
+        assert!(
+            services
+                .retry_pending_exact_output()
+                .expect("writer-flushed receipt remains owned until lane application")
+        );
+        assert_eq!(
+            services
+                .drain_certified_merge_sidecar_chunk_admissions(2)
+                .expect("drain writer-flushed sidecar receipt")
+                .len(),
+            1
+        );
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("receipt ownership is released after drain")
+        );
+
+        let (mut closed_services, keys) = super::super::v2_worker::tests::fixture();
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
+        let route = route_fixture.mint(requester.clone());
+        let route_for_hook = route.clone();
+        let close_control = Arc::new(Mutex::new(None));
+        let close_control_for_hook = Arc::clone(&close_control);
+        closed_services.set_exact_output_flush_admission_hook(move |post, _| {
+            let (control, close_ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &route_for_hook);
+            assert!(
+                close_control_for_hook
+                    .lock()
+                    .expect("lock exact test closed control")
+                    .replace(control)
+                    .is_none(),
+                "one closed occurrence owns one exact writer-flush control"
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(close_ack))
+        });
+        let reply_routes =
+            NetworkReplyRoutes::try_from_route(route).expect("live closed-path reply route set");
+        dispatch_lane_work_effect(
+            &closed_services,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: requester.clone(),
+                reply_routes: Some(reply_routes),
+                message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+                    local,
+                    requester,
+                    b"runner closed sidecar request",
+                )),
+            },
+        )
+        .expect("runner retains a second sidecar completion");
+        assert!(
+            close_control
+                .lock()
+                .expect("lock exact test closed control")
+                .as_mut()
+                .expect("runner admission minted the exact closed control")
+                .close()
+        );
+        assert!(
+            closed_services
+                .drain_certified_merge_sidecar_chunk_admissions(2)
+                .expect("closed writer completion is harmless")
+                .is_empty(),
+            "closed writer ownership must never produce a cursor receipt"
+        );
+        assert!(
+            !closed_services
+                .has_pending_exact_output()
+                .expect("closed completion releases local worker ownership")
+        );
+    }
+
+    #[test]
+    fn runner_dispatch_retired_admission_race_emits_no_sidecar_receipt() {
+        let (mut services, keys) = super::super::v2_worker::tests::fixture();
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
+        let route = route_fixture.mint(requester.clone());
+        let route_for_hook = route.clone();
+        services.set_exact_output_flush_admission_hook(move |_, _| {
+            assert!(route_fixture.retire(&route_for_hook));
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::Retired)
+        });
+        let reply_routes =
+            NetworkReplyRoutes::try_from_route(route).expect("initially live reply route set");
+
+        dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: requester.clone(),
+                reply_routes: Some(reply_routes),
+                message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+                    local,
+                    requester,
+                    b"runner retired admission race",
+                )),
+            },
+        )
+        .expect("tenure cancellation retires only the exact occurrence");
+        assert!(
+            services
+                .drain_certified_merge_sidecar_chunk_admissions(1)
+                .expect("retired occurrence owns no receipt")
+                .is_empty()
+        );
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("retired occurrence releases worker ownership")
+        );
+    }
+
+    #[test]
+    fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once() {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut lane_work = fixture.adapter;
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                fixture.kura,
+                fixture.context,
+                &fixture.validators,
+                fixture.local_validator,
+            );
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(hub);
+        let first_route = routes.mint(fixture.requester.clone());
+        assert_eq!(
+            lane_work
+                .accept_certified_merge_sidecar_for_test(
+                    fixture.requester.clone(),
+                    first_route.clone(),
+                    fixture.request.clone(),
+                )
+                .expect("materialize the first Kura-backed chunk"),
+            V2LaneIngressOutcome::Inserted
+        );
+        let first_chunk = match lane_work.next_effect() {
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            }) => chunk,
+            other => panic!("expected first Kura-backed sidecar chunk, got {other:?}"),
+        };
+
+        let first_route_for_hook = first_route.clone();
+        let close_control = Arc::new(Mutex::new(None));
+        let close_control_for_hook = Arc::clone(&close_control);
+        services.set_exact_output_flush_admission_hook(move |post, _| {
+            let (control, close_ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &first_route_for_hook);
+            assert!(
+                close_control_for_hook
+                    .lock()
+                    .expect("lock first exact sidecar control")
+                    .replace(control)
+                    .is_none(),
+                "first chunk owns one exact writer-flush control"
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(close_ack))
+        });
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("dispatch first chunk without advancing its cursor");
+        assert!(routes.retire(&first_route));
+        assert!(
+            close_control
+                .lock()
+                .expect("lock first exact sidecar control")
+                .as_mut()
+                .expect("first chunk admission minted its exact closed control")
+                .close()
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("closed writer completion emits no cursor receipt");
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("closed completion releases worker ownership")
+        );
+
+        let reconnected_route = routes.mint(fixture.requester.clone());
+        assert_eq!(
+            lane_work
+                .accept_certified_merge_sidecar_for_test(
+                    fixture.requester.clone(),
+                    reconnected_route.clone(),
+                    fixture.request,
+                )
+                .expect("reconnect rematerializes the retained current chunk"),
+            V2LaneIngressOutcome::Inserted
+        );
+        match lane_work.next_effect() {
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                ..
+            }) => {
+                assert_eq!(chunk, first_chunk);
+                assert!(
+                    reply_routes
+                        .iter()
+                        .any(|route| route.same_delivery(&reconnected_route))
+                );
+            }
+            other => panic!("expected reconnected current sidecar chunk, got {other:?}"),
+        }
+
+        let reconnected_route_for_hook = reconnected_route.clone();
+        let flush_control = Arc::new(Mutex::new(None));
+        let flush_control_for_hook = Arc::clone(&flush_control);
+        services.set_exact_output_flush_admission_hook(move |post, _| {
+            let (control, flush_ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &reconnected_route_for_hook);
+            assert!(
+                flush_control_for_hook
+                    .lock()
+                    .expect("lock reconnected exact sidecar control")
+                    .replace(control)
+                    .is_none(),
+                "reconnected chunk owns one exact writer-flush control"
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(flush_ack))
+        });
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("dispatch the reconnected current chunk");
+        assert!(
+            flush_control
+                .lock()
+                .expect("lock reconnected exact sidecar control")
+                .as_mut()
+                .expect("reconnected admission minted its exact flush control")
+                .flush()
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("writer flush advances exactly the reconnected source cursor");
+        assert_eq!(lane_work.effect_count(), 0);
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("writer-flushed receipt is fully applied")
+        );
+    }
+
+    #[test]
+    fn runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route() {
+        let (services, keys) = super::super::v2_worker::tests::fixture();
+        let local = PeerId::new(keys[0].public_key().clone());
+        let requester = PeerId::new(keys[1].public_key().clone());
+        let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner missing sidecar route");
+
+        let error = dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: requester,
+                reply_routes: None,
+                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+            },
+        )
+        .expect_err("runner must reject a sidecar response without local reply authority");
+        assert!(error.to_string().contains("reply-route ownership"));
+    }
+
+    #[test]
+    fn runner_dispatch_rejects_durable_response_without_reply_routes() {
+        let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
+        let requester = history.certificate.commit_qc.validator_set[1].clone();
+        let services = super::super::v2_worker::tests::service_for_history_context(
+            history.kura,
+            history.context,
+            &history.validators,
+        );
+        let error = dispatch_lane_work_effect(
+            &services,
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer: requester,
+                reply_routes: None,
+                ingress_ownership: None,
+                certificate: history.certificate,
+            },
+        )
+        .expect_err("runner must reject a durable response without local reply authority");
+        assert!(
+            error
+                .to_string()
+                .contains("lost its authenticated reply routes")
+        );
     }
 
     #[test]
@@ -2855,14 +3829,10 @@ mod tests {
         ingress.open().expect("open test ingress");
         close_ingress_for_rollover(&ready, &ingress);
         assert!(!ready.load(Ordering::Acquire));
-        assert!(
-            ingress
-                .try_push(InboundBlockMessage::new(
-                    BlockMessage::invalid_wire_sentinel(),
-                    None,
-                ))
-                .is_err()
-        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            Err(FairV2IngressPushError::Closed(_))
+        ));
     }
 
     #[test]
@@ -2953,12 +3923,10 @@ mod tests {
         );
         assert!(!ready.load(Ordering::Acquire));
         assert!(
-            ingress
-                .try_push(InboundBlockMessage::new(
-                    BlockMessage::invalid_wire_sentinel(),
-                    None,
-                ))
-                .is_err(),
+            matches!(
+                ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+                Err(FairV2IngressPushError::Closed(_))
+            ),
             "closed ingress must precede activation publication"
         );
 
@@ -2989,10 +3957,7 @@ mod tests {
 
         assert!(ready.load(Ordering::Acquire));
         ingress
-            .try_push(InboundBlockMessage::new(
-                BlockMessage::invalid_wire_sentinel(),
-                None,
-            ))
+            .try_push(InboundBlockMessage::new(valid_ingress_probe(), None))
             .expect("activation publication follows open ingress");
         let active = super::super::status::v2_status().expect("active successor status");
         assert_eq!(active.height, successor.height);
@@ -3035,12 +4000,10 @@ mod tests {
         );
         assert!(!rejected_ready.load(Ordering::Acquire));
         assert!(
-            rejected_ingress
-                .try_push(InboundBlockMessage::new(
-                    BlockMessage::invalid_wire_sentinel(),
-                    None,
-                ))
-                .is_err(),
+            matches!(
+                rejected_ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+                Err(FairV2IngressPushError::Closed(_))
+            ),
             "foreign-context rejection must close ingress again"
         );
         let predecessor = super::super::status::v2_status()
@@ -3177,6 +4140,7 @@ mod tests {
                 build: Hash::new(b"failed constructor build"),
                 config: Hash::new(b"failed constructor config"),
             },
+            DeferredAdmissionOrdinalSource::new(0),
         );
         assert!(
             constructor.is_err(),
@@ -3187,14 +4151,10 @@ mod tests {
 
         assert!(output_guard.restart_required());
         assert!(!ready.load(Ordering::Acquire));
-        assert!(
-            ingress
-                .try_push(InboundBlockMessage::new(
-                    BlockMessage::invalid_wire_sentinel(),
-                    None,
-                ))
-                .is_err()
-        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            Err(FairV2IngressPushError::Closed(_))
+        ));
         let stalled = super::super::status::v2_status().expect("stalled predecessor status");
         assert_eq!(stalled.height, context.height);
         assert_eq!(
@@ -3246,16 +4206,16 @@ mod tests {
 
         let count_error = FairV2Ingress::new(8, 3 * 1024, 1024, 0, 0)
             .configure_roster(validators.clone())
-            .expect_err("two validators require nine protected message slots");
+            .expect_err("two validators require ten protected message slots");
         assert!(matches!(
             ingress_capacity_error(count_error),
             V2RunnerError::IngressCapacity {
                 configured: 8,
-                required: 9,
+                required: 10,
             }
         ));
 
-        let byte_error = FairV2Ingress::new(9, 2 * 1024, 1024, 0, 0)
+        let byte_error = FairV2Ingress::new(10, 2 * 1024, 1024, 0, 0)
             .configure_roster(validators)
             .expect_err("two validators and untrusted traffic require three byte partitions");
         assert!(matches!(
@@ -3287,14 +4247,10 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert!(!ready.load(Ordering::Acquire));
-        assert!(
-            ingress
-                .try_push(InboundBlockMessage::new(
-                    BlockMessage::invalid_wire_sentinel(),
-                    None,
-                ))
-                .is_err()
-        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
+            Err(FairV2IngressPushError::Closed(_))
+        ));
     }
 
     #[test]

@@ -134,6 +134,7 @@ def test_wrapper_plans_by_default_and_apply_is_explicit(tmp_path: Path) -> None:
     calls = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
     onboarding_calls = [call for call in calls if call[0].endswith("sns_bulk_onboard.py")]
     assert len(onboarding_calls) == 2
-    assert "--plan-only" in onboarding_calls[0]
-    assert "--plan-only" not in onboarding_calls[1]
+    assert "--apply" not in onboarding_calls[0]
+    assert "--apply" in onboarding_calls[1]
+    assert all("--plan-only" not in call for call in onboarding_calls)
     assert all("token" not in " ".join(call).lower() for call in calls)

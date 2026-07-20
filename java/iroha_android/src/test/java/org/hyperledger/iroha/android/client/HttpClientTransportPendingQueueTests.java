@@ -122,7 +122,7 @@ public final class HttpClientTransportPendingQueueTests {
   private static SignedTransaction fakeTransaction(final String marker) {
     final int nonce = Math.floorMod(marker.hashCode(), 1000) + 1;
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
             .setChainId(String.format("%08x", nonce))
             .setAuthority(TestAccountIds.ed25519Authority(0x24))
             .setCreationTimeMs(1_700_000_000_000L + nonce)

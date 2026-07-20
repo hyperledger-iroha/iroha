@@ -144,7 +144,10 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-    smart_contract::manifest::{ContractManifest, ManifestProvenance},
+    smart_contract::{
+        ContractAddress,
+        manifest::{ContractManifest, ManifestProvenance},
+    },
     soracloud::{
         SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
@@ -152,10 +155,11 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, FeePaymentIntent, IvmProved, PrivateCreateKaigi, PrivateEndKaigi,
-        PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-        PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
+        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
         TransactionSubmissionReceipt,
+        executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
@@ -7232,6 +7236,175 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     Ok(instructions)
 }
 
+fn parse_executable_batch_payloads(
+    payloads: Vec<String>,
+) -> napi::Result<Vec<ExecutableBatchItem>> {
+    if payloads.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "executable batch entries must be a non-empty array",
+        ));
+    }
+
+    let mut entries = Vec::with_capacity(payloads.len());
+    for (index, payload) in payloads.into_iter().enumerate() {
+        let value: json::Value = json::from_json(&payload).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid executable batch entry {index} JSON: {err}"),
+            )
+        })?;
+        let json::Value::Object(mut fields) = value else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} must be an object"),
+            ));
+        };
+        let kind = fields.remove("kind").ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} is missing kind"),
+            )
+        })?;
+        let json::Value::String(kind) = kind else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} kind must be a string"),
+            ));
+        };
+
+        let entry = match kind.as_str() {
+            "instruction" => {
+                let instruction = fields.remove("instruction").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch entry {index} is missing instruction"),
+                    )
+                })?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch instruction entry {index} has unknown fields"),
+                    ));
+                }
+                let instruction = match instruction {
+                    json::Value::String(payload) => instruction_from_json(&payload)?,
+                    value => value_to_instruction(value)?,
+                };
+                ExecutableBatchItem::Instruction(instruction)
+            }
+            "contractCall" => {
+                let contract_address = fields.remove("contractAddress").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} is missing contractAddress"
+                        ),
+                    )
+                })?;
+                let json::Value::String(contract_address) = contract_address else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} contractAddress must be a string"
+                        ),
+                    ));
+                };
+                if contract_address.trim() != contract_address {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} contractAddress must be exact"
+                        ),
+                    ));
+                }
+                let contract_address: ContractAddress =
+                    contract_address.parse().map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid executable batch contractAddress at entry {index}: {err}"
+                            ),
+                        )
+                    })?;
+
+                let expected_code_hash = fields.remove("expectedCodeHash").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} is missing expectedCodeHash"
+                        ),
+                    )
+                })?;
+                let expected_code_hash = parse_hash_value(
+                    expected_code_hash,
+                    &format!("executable batch contract call {index} expectedCodeHash"),
+                )?;
+
+                let entrypoint = fields.remove("entrypoint").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch contract call {index} is missing entrypoint"),
+                    )
+                })?;
+                let json::Value::String(entrypoint) = entrypoint else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} entrypoint must be a string"
+                        ),
+                    ));
+                };
+                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} entrypoint must be a non-empty exact string"
+                        ),
+                    ));
+                }
+
+                let arguments = match fields.remove("arguments") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => {
+                        let bytes: Vec<u8> = json::from_value(value).map_err(|err| {
+                            napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!("invalid executable batch contract call {index} arguments: {err}"),
+                            )
+                        })?;
+                        Some(ContractArgumentRecord::try_new(bytes).map_err(|err| {
+                            napi::Error::new(napi::Status::InvalidArg, err.to_string())
+                        })?)
+                    }
+                };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch contract call entry {index} has unknown fields"),
+                    ));
+                }
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address,
+                    expected_code_hash,
+                    entrypoint,
+                    arguments,
+                })
+            }
+            _ => {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "executable batch entry {index} kind must be instruction or contractCall"
+                    ),
+                ));
+            }
+        };
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
         .map(|bytes| STANDARD.encode(bytes))
@@ -10367,6 +10540,26 @@ fn assemble_transaction(
         secret,
         algorithm,
     )
+}
+
+fn checked_batch_executable(
+    entries: Vec<ExecutableBatchItem>,
+    fee_payment: &FeePaymentIntent,
+) -> napi::Result<Executable> {
+    if entries.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "executable batch entries must be a non-empty array",
+        ));
+    }
+    let executable = Executable::Batch(entries.into());
+    if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "fee payment gas limit is required when an executable batch contains a contract call",
+        ));
+    }
+    Ok(executable)
 }
 
 /// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
@@ -14077,6 +14270,44 @@ fn build_transaction_payload_from_instructions_json(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_transaction_payload_from_batch_json(
+    chain_id: ChainId,
+    authority: AccountId,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let entries = parse_executable_batch_payloads(entries_json)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let executable = checked_batch_executable(entries, &fee_payment)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
+}
+
 /// Build, but do not sign, the exact arbitrary-instruction payload sent to fee quoting.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -14099,6 +14330,36 @@ pub fn build_transaction_payload(
         chain_id,
         authority,
         instructions_json,
+        fee_payment_json,
+        metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )
+}
+
+/// Build, but do not sign, an exact ordered mixed executable-batch payload.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_executable_batch_transaction_payload(
+    chain_id: String,
+    authority: String,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    build_transaction_payload_from_batch_json(
+        chain_id,
+        authority,
+        entries_json,
         fee_payment_json,
         metadata_json,
         creation_time_ms,
@@ -14172,6 +14433,45 @@ pub fn build_transaction(
         instructions_json,
         fee_payment_json,
         metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+        secret.as_ref(),
+        private_key_algorithm,
+    )
+}
+
+/// Build and sign a transaction from ordered instruction and contract-call entries.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_executable_batch_transaction(
+    chain_id: String,
+    authority: String,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let entries = parse_executable_batch_payloads(entries_json)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let executable = checked_batch_executable(entries, &fee_payment)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    assemble_executable_transaction(
+        chain_id,
+        authority,
+        executable,
+        fee_payment,
+        metadata,
+        None,
         creation_time_ms,
         ttl_ms,
         nonce,
@@ -22294,6 +22594,87 @@ seiyaku Privacy {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn build_executable_batch_transaction_preserves_mixed_order_and_tag() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let contract_address = ContractAddress::derive(0, &authority, 9, DataSpaceId::UNIVERSAL)
+            .expect("contract address");
+        let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
+        let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
+            DomainId::try_new("mixed-batch", "universal").expect("domain id"),
+        ))
+        .into();
+        let instruction_value =
+            instruction_to_json_value(&instruction).expect("instruction JSON value");
+        let instruction_entry = json::to_json(&norito_json!({
+            "kind": "instruction",
+            "instruction": instruction_value
+        }))
+        .expect("instruction entry JSON");
+        let call_entry = json::to_json(&norito_json!({
+            "kind": "contractCall",
+            "contractAddress": contract_address.to_string(),
+            "expectedCodeHash": hex::encode_upper(expected_code_hash.as_ref()),
+            "entrypoint": "run",
+            "arguments": vec![0x4b_u8, 0x4f, 0x54, 0x4f]
+        }))
+        .expect("contract-call entry JSON");
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        let result = build_executable_batch_transaction(
+            "mixed-batch-chain".to_owned(),
+            account_json_literal(&authority),
+            vec![instruction_entry.clone(), call_entry, instruction_entry],
+            authority_fee_payment_json_with_gas(10_000),
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+            Uint8Array::from(secret),
+            Some("ed25519".to_owned()),
+        )
+        .expect("mixed batch transaction");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(&tx.instructions().encode()[..4], &4_u32.to_le_bytes());
+        let Executable::Batch(entries) = tx.instructions() else {
+            panic!("expected batch executable")
+        };
+        assert_eq!(entries.len(), 3);
+        assert!(matches!(entries[0], ExecutableBatchItem::Instruction(_)));
+        let ExecutableBatchItem::ContractCall(invocation) = &entries[1] else {
+            panic!("expected contract call in the middle")
+        };
+        assert_eq!(invocation.contract_address, contract_address);
+        assert_eq!(invocation.expected_code_hash, expected_code_hash);
+        assert_eq!(invocation.entrypoint, "run");
+        assert_eq!(
+            invocation.arguments.as_deref(),
+            Some(&[0x4b, 0x4f, 0x54, 0x4f][..])
+        );
+        assert!(matches!(entries[2], ExecutableBatchItem::Instruction(_)));
+    }
+
+    #[test]
+    fn executable_batch_parser_requires_gas_for_contract_calls() {
+        let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+        let error = checked_batch_executable(
+            vec![ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                expected_code_hash: Hash::new(b"js-host-missing-gas"),
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            })],
+            &fee_payment,
+        )
+        .expect_err("contract call requires gas");
+        assert!(error.reason.contains("gas limit is required"));
     }
 
     #[test]

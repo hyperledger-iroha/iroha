@@ -78,6 +78,35 @@ export interface BrowserInstructionTransactionInput {
   chainDiscriminant?: BrowserTransactionUnsigned;
 }
 
+export type BrowserExecutableBatchEntry =
+  | {
+      kind: "instruction";
+      instruction: object;
+    }
+  | {
+      kind: "contractCall";
+      contractAddress: string;
+      /** Exact marked 32-byte Iroha code hash. */
+      expectedCodeHash: BrowserTransactionBytes | string;
+      entrypoint: string;
+      /** Canonical schema-bound argument-record bytes; maximum 1 MiB. */
+      arguments?: BrowserTransactionBytes | null;
+    };
+
+export interface BrowserExecutableBatchInput {
+  chainId: string;
+  authority: string;
+  entries: readonly BrowserExecutableBatchEntry[];
+  /** Must include `gasLimit` when any entry is a contract call. */
+  feePayment: BrowserFeePayment;
+  metadata?: string | { readonly [key: string]: BrowserTransactionMetadataValue } | null;
+  creationTimeMs?: BrowserTransactionUnsigned;
+  ttlMs?: BrowserTransactionUnsigned | null;
+  nonce?: BrowserTransactionUnsigned | null;
+  networkPrefix?: BrowserTransactionUnsigned;
+  chainDiscriminant?: BrowserTransactionUnsigned;
+}
+
 export interface BrowserTransactionSignable {
   payloadBytes: BrowserTransactionBytes;
   payloadHashHex?: string;
@@ -127,6 +156,10 @@ export function buildBrowserInstructionTransactionPayload(
   input: BrowserInstructionTransactionInput,
 ): Uint8Array;
 
+export function buildBrowserExecutableBatchPayload(
+  input: BrowserExecutableBatchInput,
+): Uint8Array;
+
 export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
 ): string;
@@ -137,6 +170,11 @@ export function validateBrowserTransferSignable(
 ): Readonly<ValidatedBrowserTransactionSignable>;
 
 export function validateBrowserInstructionTransactionSignable(
+  signable: BrowserTransactionSignable,
+  constraints?: BrowserTransactionSignableConstraints,
+): Readonly<ValidatedBrowserTransactionSignable>;
+
+export function validateBrowserExecutableBatchSignable(
   signable: BrowserTransactionSignable,
   constraints?: BrowserTransactionSignableConstraints,
 ): Readonly<ValidatedBrowserTransactionSignable>;
@@ -153,6 +191,12 @@ export function finalizeBrowserInstructionTransaction(
   signingPublicKey: BrowserTransactionBytes | string,
 ): BrowserFinalizedSignedTransaction;
 
+export function finalizeBrowserExecutableBatchTransaction(
+  signable: BrowserTransactionSignable,
+  signature: BrowserTransactionSignature,
+  signingPublicKey: BrowserTransactionBytes | string,
+): BrowserFinalizedSignedTransaction;
+
 export function browserSignedTransactionHashHex(
   signedTransaction: BrowserTransactionBytes,
 ): string;
@@ -160,9 +204,12 @@ export function browserSignedTransactionHashHex(
 export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly<{
   buildTransferPayload: typeof buildBrowserTransferPayload;
   buildInstructionPayload: typeof buildBrowserInstructionTransactionPayload;
+  buildExecutableBatchPayload: typeof buildBrowserExecutableBatchPayload;
   payloadHashHex: typeof browserTransactionPayloadHashHex;
   finalizeSignedTransaction: typeof finalizeBrowserSignedTransaction;
   finalizeInstructionTransaction: typeof finalizeBrowserInstructionTransaction;
+  finalizeExecutableBatchTransaction: typeof finalizeBrowserExecutableBatchTransaction;
   validateSignable: typeof validateBrowserTransferSignable;
   validateInstructionSignable: typeof validateBrowserInstructionTransactionSignable;
+  validateExecutableBatchSignable: typeof validateBrowserExecutableBatchSignable;
 }>;

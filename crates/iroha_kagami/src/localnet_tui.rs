@@ -1,5 +1,5 @@
 use std::{
-    fmt,
+    fmt, fs,
     io::{BufWriter, Write},
     num::NonZeroU16,
     path::PathBuf,
@@ -66,6 +66,15 @@ struct ConsensusModePrompt {
     choices: Vec<ConsensusModeChoice>,
     default_index: usize,
     locked: bool,
+}
+
+fn default_localnet_output_directory() -> String {
+    let temp_dir = std::env::temp_dir();
+    let temp_dir = fs::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    temp_dir
+        .join("iroha-localnet")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn consensus_mode_prompt(
@@ -154,8 +163,9 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
         let base_p2p: u16 = CustomType::new("Base P2P port?")
             .with_default(1337u16)
             .prompt()?;
+        let default_out_dir = default_localnet_output_directory();
         let out_dir = Text::new("Output directory?")
-            .with_default("/tmp/iroha-localnet")
+            .with_default(&default_out_dir)
             .prompt()?;
 
         let extra_accounts: u16 = CustomType::new("Extra accounts (in wonderland)?")
@@ -254,5 +264,15 @@ mod tests {
             vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos]
         );
         assert_eq!(prompt.default_index, 0);
+    }
+
+    #[test]
+    fn default_output_directory_uses_the_canonical_os_temp_directory() {
+        let expected_temp_dir = std::env::temp_dir();
+        let expected_temp_dir = fs::canonicalize(&expected_temp_dir).unwrap_or(expected_temp_dir);
+        let default = PathBuf::from(default_localnet_output_directory());
+
+        assert_eq!(default, expected_temp_dir.join("iroha-localnet"));
+        assert!(default.is_absolute());
     }
 }

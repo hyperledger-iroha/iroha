@@ -22,6 +22,7 @@ use color_eyre::eyre::{Result, eyre};
 ))]
 mod unix {
     use std::{
+        collections::BTreeSet,
         ffi::{OsStr, OsString},
         fs::{self, DirBuilder, File, OpenOptions},
         io::{Read, Write},
@@ -39,6 +40,7 @@ mod unix {
 
     const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
     const PRIVATE_FILE_MODE: u32 = 0o600;
+    const PRIVATE_EXECUTABLE_FILE_MODE: u32 = 0o700;
     const MAX_PRIVATE_FILE_BYTES: u64 = 1024 * 1024;
     const MAX_PRIVATE_ROOT_COMPONENTS: usize = 64;
     const MAX_PRIVATE_TREE_DEPTH: usize = 64;
@@ -353,20 +355,28 @@ mod unix {
         }
     }
 
-    fn verify_hardened_file(metadata: &fs::Metadata, identity: PrivateFileIdentity) -> bool {
+    fn verify_hardened_file(
+        metadata: &fs::Metadata,
+        identity: PrivateFileIdentity,
+        expected_mode: u32,
+    ) -> bool {
         metadata.is_file()
             && PrivateFileIdentity::from_metadata(metadata) == identity
             && metadata.uid() == current_uid()
             && metadata.nlink() == 1
-            && metadata.mode() & 0o777 == PRIVATE_FILE_MODE
+            && metadata.mode() & 0o777 == expected_mode
     }
 
-    fn verify_hardened_file_stat(stat: &rustix::fs::Stat, identity: PrivateFileIdentity) -> bool {
+    fn verify_hardened_file_stat(
+        stat: &rustix::fs::Stat,
+        identity: PrivateFileIdentity,
+        expected_mode: u32,
+    ) -> bool {
         RustixFileType::from_raw_mode(stat.st_mode) == RustixFileType::RegularFile
             && PrivateFileIdentity::from_stat(stat) == identity
             && stat.st_uid == current_uid()
             && stat.st_nlink == 1
-            && stat.st_mode as u32 & 0o777 == PRIVATE_FILE_MODE
+            && stat.st_mode as u32 & 0o777 == expected_mode
     }
 
     fn verify_hardened_directory(metadata: &fs::Metadata, identity: PrivateFileIdentity) -> bool {
@@ -412,6 +422,8 @@ mod unix {
         display_path: &Path,
         depth: usize,
         entries_seen: &mut usize,
+        owner_executable_files: &BTreeSet<PathBuf>,
+        seen_owner_executable_files: &mut BTreeSet<PathBuf>,
     ) -> Result<()> {
         if depth > MAX_PRIVATE_TREE_DEPTH {
             return Err(eyre!(
@@ -504,6 +516,8 @@ mod unix {
                         &child_path,
                         depth + 1,
                         entries_seen,
+                        owner_executable_files,
+                        seen_owner_executable_files,
                     )?;
                     let parent_entry = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
                         .map_err(std::io::Error::from)
@@ -518,6 +532,11 @@ mod unix {
                     }
                 }
                 RustixFileType::RegularFile if before.st_nlink == 1 => {
+                    let expected_mode = if owner_executable_files.contains(&child_path) {
+                        PRIVATE_EXECUTABLE_FILE_MODE
+                    } else {
+                        PRIVATE_FILE_MODE
+                    };
                     let child = File::from(
                         openat(
                             directory,
@@ -541,7 +560,7 @@ mod unix {
                             child_path.display()
                         ));
                     }
-                    fchmod(&child, Mode::from_raw_mode(PRIVATE_FILE_MODE as _))
+                    fchmod(&child, Mode::from_raw_mode(expected_mode as _))
                         .map_err(std::io::Error::from)
                         .wrap_err_with(|| {
                             format!("harden private file {}", child_path.display())
@@ -554,13 +573,16 @@ mod unix {
                         .wrap_err_with(|| {
                             format!("reinspect private file {}", child_path.display())
                         })?;
-                    if !verify_hardened_file(&hardened, identity)
-                        || !verify_hardened_file_stat(&parent_entry, identity)
+                    if !verify_hardened_file(&hardened, identity, expected_mode)
+                        || !verify_hardened_file_stat(&parent_entry, identity, expected_mode)
                     {
                         return Err(eyre!(
                             "private file changed while hardening: {}",
                             child_path.display()
                         ));
+                    }
+                    if expected_mode == PRIVATE_EXECUTABLE_FILE_MODE {
+                        seen_owner_executable_files.insert(child_path);
                     }
                 }
                 _ => {
@@ -587,12 +609,32 @@ mod unix {
         Ok(())
     }
 
-    pub(crate) fn harden_private_tree(path: &Path) -> Result<()> {
+    fn harden_private_tree_inner(
+        path: &Path,
+        owner_executable_files: &BTreeSet<PathBuf>,
+    ) -> Result<()> {
         let opened_root = open_private_tree_root(path)?;
         #[cfg(test)]
         replace_private_tree_ancestor_for_test(path);
         let mut entries_seen = 0;
-        harden_private_directory_contents(&opened_root.root, path, 0, &mut entries_seen)?;
+        let mut seen_owner_executable_files = BTreeSet::new();
+        harden_private_directory_contents(
+            &opened_root.root,
+            path,
+            0,
+            &mut entries_seen,
+            owner_executable_files,
+            &mut seen_owner_executable_files,
+        )?;
+        if let Some(missing) = owner_executable_files
+            .difference(&seen_owner_executable_files)
+            .next()
+        {
+            return Err(eyre!(
+                "private executable was not found as a regular file in the hardened tree: {}",
+                missing.display()
+            ));
+        }
         let opened_after = opened_root
             .root
             .metadata()
@@ -605,6 +647,43 @@ mod unix {
         }
         opened_root.verify_ancestry(path)?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn harden_private_tree(path: &Path) -> Result<()> {
+        harden_private_tree_inner(path, &BTreeSet::new())
+    }
+
+    pub(crate) fn harden_private_tree_with_owner_executables(
+        path: &Path,
+        owner_executable_files: &[&Path],
+    ) -> Result<()> {
+        let mut validated = BTreeSet::new();
+        for candidate in owner_executable_files {
+            let relative = candidate.strip_prefix(path).map_err(|_| {
+                eyre!(
+                    "private executable must be inside the hardened tree: {}",
+                    candidate.display()
+                )
+            })?;
+            if relative.as_os_str().is_empty()
+                || relative
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(eyre!(
+                    "private executable path contains an unsafe component: {}",
+                    candidate.display()
+                ));
+            }
+            if !validated.insert((*candidate).to_path_buf()) {
+                return Err(eyre!(
+                    "duplicate private executable path: {}",
+                    candidate.display()
+                ));
+            }
+        }
+        harden_private_tree_inner(path, &validated)
     }
 
     fn random_temporary_path(parent: &Path, target_name: &str) -> Result<PathBuf> {
@@ -760,6 +839,86 @@ mod unix {
         }
 
         #[test]
+        fn harden_private_tree_preserves_only_explicit_owner_executables() {
+            let (_root_guard, root) = private_root();
+            let executable = root.join("start.sh");
+            let regular = root.join("client.toml");
+            fs::write(&executable, b"#!/usr/bin/env bash\nexit 0\n").expect("write script");
+            fs::write(&regular, b"private_key = 'secret'\n").expect("write config");
+            set_mode(&executable, 0o755);
+            set_mode(&regular, 0o644);
+
+            harden_private_tree_with_owner_executables(&root, &[&executable])
+                .expect("harden private tree with an owner-executable script");
+
+            assert_eq!(mode(&root), PRIVATE_DIRECTORY_MODE);
+            assert_eq!(mode(&executable), PRIVATE_EXECUTABLE_FILE_MODE);
+            assert_eq!(mode(&regular), PRIVATE_FILE_MODE);
+        }
+
+        #[test]
+        fn harden_private_tree_rejects_an_executable_outside_the_private_root() {
+            let (_root_guard, root) = private_root();
+            let outside = tempfile::NamedTempFile::new().expect("create outside executable");
+
+            let error = harden_private_tree_with_owner_executables(&root, &[outside.path()])
+                .expect_err("outside executable must fail closed");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("private executable must be inside the hardened tree")
+            );
+        }
+
+        #[test]
+        fn harden_private_tree_rejects_a_missing_allowlisted_executable() {
+            let (_root_guard, root) = private_root();
+            let missing = root.join("missing-start.sh");
+
+            let error = harden_private_tree_with_owner_executables(&root, &[&missing])
+                .expect_err("missing executable must fail closed");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("private executable was not found as a regular file")
+            );
+        }
+
+        #[test]
+        fn harden_private_tree_rejects_duplicate_executable_paths() {
+            let (_root_guard, root) = private_root();
+            let executable = root.join("start.sh");
+            fs::write(&executable, b"#!/usr/bin/env bash\nexit 0\n").expect("write script");
+
+            let error =
+                harden_private_tree_with_owner_executables(&root, &[&executable, &executable])
+                    .expect_err("duplicate executable must fail closed");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("duplicate private executable path")
+            );
+        }
+
+        #[test]
+        fn harden_private_tree_rejects_unsafe_executable_path_components() {
+            let (_root_guard, root) = private_root();
+            let ambiguous = root.join("nested").join("..").join("start.sh");
+
+            let error = harden_private_tree_with_owner_executables(&root, &[&ambiguous])
+                .expect_err("ambiguous executable path must fail closed");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("private executable path contains an unsafe component")
+            );
+        }
+
+        #[test]
         fn harden_private_tree_rejects_symlinks_without_changing_their_target() {
             let (_root_guard, root) = private_root();
             let outside = tempfile::NamedTempFile::new().expect("create outside file");
@@ -887,7 +1046,7 @@ mod unix {
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 pub(crate) use unix::{
-    harden_private_tree, prepare_empty_private_directory, read_private_file,
+    harden_private_tree_with_owner_executables, prepare_empty_private_directory, read_private_file,
     write_private_file_atomic,
 };
 
@@ -929,7 +1088,10 @@ pub(crate) fn prepare_empty_private_directory(_path: &Path) -> Result<()> {
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub(crate) fn harden_private_tree(_path: &Path) -> Result<()> {
+pub(crate) fn harden_private_tree_with_owner_executables(
+    _path: &Path,
+    _owner_executable_files: &[&Path],
+) -> Result<()> {
     unsupported()
 }
 

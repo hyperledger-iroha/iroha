@@ -7,6 +7,9 @@ ordinary transaction, and submits it.  This script never constructs payment
 proofs, handles private key material, or splits a setup into per-resource
 requests.
 
+Planning is the default.  Transaction signing and submission occur only when
+the operator passes ``--apply`` explicitly.
+
 The input is secret-free JSON with dependency-ordered resource groups::
 
     {
@@ -79,8 +82,12 @@ FORBIDDEN_INTENT_KEYS = {
     "token",
 }
 FORBIDDEN_PLAN_KEYS = {
+    "dispositions",
+    "framedinstructions",
+    "instructionframes",
     "privatekey",
     "privatekeyfile",
+    "resourcedispositions",
     "secretkey",
     "rawtoken",
     "token",
@@ -401,17 +408,15 @@ def _disposition_is_conflict(value: Any) -> bool:
 
 def _require_sequence_field(
     plan: Mapping[str, Any],
-    names: Sequence[str],
+    name: str,
     *,
     label: str,
 ) -> list[Any]:
-    present = [name for name in names if name in plan]
-    if len(present) != 1:
-        expected = " or ".join(names)
-        raise BulkOnboardError(f"plan must contain exactly one {label} field ({expected})")
-    value = plan[present[0]]
+    if name not in plan:
+        raise BulkOnboardError(f"plan must contain the canonical {label} field ({name})")
+    value = plan[name]
     if not isinstance(value, list):
-        raise BulkOnboardError(f"plan {present[0]} must be an array")
+        raise BulkOnboardError(f"plan {name} must be an array")
     return value
 
 
@@ -420,37 +425,31 @@ def validate_plan_response(response: Any, expected_resources: int) -> ValidatedP
 
     if expected_resources <= 0:
         raise BulkOnboardError("expected resource count must be positive")
-    envelope = _require_object(response, "planner response")
-    nested = envelope.get("plan")
-    if "plan" in envelope:
-        if nested is None:
-            raise BulkOnboardError("planner returned no executable plan")
-        plan = _require_object(nested, "planner response plan")
-    else:
-        plan = envelope
+    plan = _require_object(response, "planner response")
+    if "plan" in plan:
+        raise BulkOnboardError(
+            "planner response must be a canonical AliasTransactionPlanV1, not an envelope"
+        )
 
     body = _require_object(plan.get("body"), "planner response plan body")
 
     if (
-        _status_is_blocked(envelope.get("status"))
-        or _status_is_blocked(plan.get("status"))
+        _status_is_blocked(plan.get("status"))
         or _status_is_blocked(body.get("status"))
     ):
         raise PlanConflictError("planner classified alias setup as blocked or conflicting")
 
-    blockers = _collect_blockers(envelope, plan)
+    blockers = _collect_blockers(plan, body)
     body_blockers = body.get("blockers", [])
-    if body_blockers is not None:
-        if not isinstance(body_blockers, list):
-            raise BulkOnboardError("plan body blockers must be an array")
-        blockers.extend(body_blockers)
+    if body_blockers is not None and not isinstance(body_blockers, list):
+        raise BulkOnboardError("plan body blockers must be an array")
     if blockers:
         codes = _safe_blocker_codes(blockers)
         detail = f": {', '.join(codes)}" if codes else ""
         raise BulkOnboardError(f"planner returned blocker(s){detail}")
 
     for key in ("partial", "partial_plan", "is_partial"):
-        if envelope.get(key) is True or plan.get(key) is True:
+        if plan.get(key) is True:
             raise BulkOnboardError("planner returned a partial plan")
 
     schema_version = body.get("version")
@@ -465,7 +464,7 @@ def validate_plan_response(response: Any, expected_resources: int) -> ValidatedP
 
     resources = _require_sequence_field(
         body,
-        ("resources", "resource_dispositions", "dispositions"),
+        "resources",
         label="resource disposition",
     )
     if len(resources) != expected_resources:
@@ -477,7 +476,7 @@ def validate_plan_response(response: Any, expected_resources: int) -> ValidatedP
 
     frames = _require_sequence_field(
         body,
-        ("framed_instructions", "instruction_frames", "instructions"),
+        "instructions",
         label="framed instruction",
     )
     if len(frames) != expected_resources:
@@ -703,7 +702,7 @@ def _reject_raw_secret_options(argv: Sequence[str]) -> None:
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(
         description=(
-            "Plan a typed alias setup against live state and optionally apply the "
+            "Plan a typed alias setup against live state. Pass --apply to submit the "
             "complete plan as one locally signed transaction."
         )
     )
@@ -714,9 +713,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Destination for the secret-free AliasTransactionPlanV1 JSON.",
     )
     parser.add_argument(
-        "--plan-only",
+        "--apply",
         action="store_true",
-        help="Persist a verified plan without invoking the signing/submission CLI.",
+        help="Verify, locally sign, and atomically submit the complete plan.",
     )
     parser.add_argument(
         "--iroha-cli",
@@ -761,14 +760,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             validated = validate_plan_response(response, resource_count)
             write_plan_file(plan_path, validated.body)
 
-        if not args.plan_only:
+        if args.apply:
             apply_plan(
                 args.iroha_cli,
                 plan_path,
                 config_file=config_file,
             )
 
-        action = "Planned" if args.plan_only else "Applied"
+        action = "Applied" if args.apply else "Planned"
         print(
             f"{action} {validated.resource_count} alias resource(s) atomically "
             f"with plan {validated.plan_hash}"

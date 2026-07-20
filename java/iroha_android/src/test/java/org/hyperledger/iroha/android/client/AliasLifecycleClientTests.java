@@ -271,6 +271,88 @@ public final class AliasLifecycleClientTests {
     assertEquals(0, readinessExecutor.lastRequest.body().length);
   }
 
+  /** Apply responses remain bound to the receipt, semantic status, hash, and HTTP status. */
+  @Test
+  public void sponsoredOnboardingApplyBindsReceiptStatusHashAndDisposition()
+      throws Exception {
+    final OnboardingFixture fixture =
+        onboardingFixture(AliasSetupModels.AliasPlanDispositionV1.CREATE);
+    final String hash = "ab".repeat(32);
+    final String queuedBody =
+        onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasSetupModels.AliasPlanDispositionV1.CREATE);
+    final AccountOnboardingResponseV1 applied =
+        transport(new CapturingExecutor(202, queuedBody))
+            .applySponsoredAccountOnboarding(
+                fixture.receipt, ONBOARDING_TOKEN, fixture.authority)
+            .join();
+    assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status());
+    assertEquals(hash, applied.transactionHashHex());
+
+    final String unchangedBody =
+        onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    expectOnboardingApplyFailure(fixture, 200, queuedBody);
+    expectOnboardingApplyFailure(fixture, 201, queuedBody);
+    expectOnboardingApplyFailure(fixture, 202, unchangedBody);
+    expectOnboardingApplyFailure(
+        fixture,
+        200,
+        onboardingApplyResponse(
+            TestAccountIds.ed25519Authority(0x43),
+            fixture.alias,
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP));
+    expectOnboardingApplyFailure(
+        fixture,
+        200,
+        onboardingApplyResponse(
+            fixture.accountId,
+            "substituted@paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP));
+    expectOnboardingApplyFailure(
+        fixture,
+        202,
+        onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasSetupModels.AliasPlanDispositionV1.REPAIR));
+    expectOnboardingApplyFailure(
+        fixture,
+        202,
+        onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            null,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasSetupModels.AliasPlanDispositionV1.CREATE));
+
+    final OnboardingFixture noOpFixture =
+        onboardingFixture(AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    expectOnboardingApplyFailure(
+        noOpFixture,
+        202,
+        onboardingApplyResponse(
+            noOpFixture.accountId,
+            noOpFixture.alias,
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasSetupModels.AliasPlanDispositionV1.CREATE));
+  }
+
   private static HttpClientTransport transport(final CapturingExecutor executor) {
     return HttpClientTransport.withExecutor(
         executor,
@@ -302,6 +384,93 @@ public final class AliasLifecycleClientTests {
         body, hex(hash), hex(signer.generateSignature()));
   }
 
+  private static OnboardingFixture onboardingFixture(
+      final AliasSetupModels.AliasPlanDispositionV1 disposition) throws Exception {
+    final byte[] seed = new byte[32];
+    Arrays.fill(seed, (byte) 0x53);
+    final Ed25519PrivateKeyParameters signer =
+        new Ed25519PrivateKeyParameters(seed, 0);
+    final String authority =
+        AccountAddress.fromAccount(signer.generatePublicKey().getEncoded(), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final String accountId = TestAccountIds.ed25519Authority(0x42);
+    final ResolvedAccountAliasV1 alias =
+        new ResolvedAccountAliasV1(
+            AccountAliasName.parse("merchant@banka.paynet"), 7L);
+    final AliasSetupModels.AccountAliasIntent intent =
+        new AliasSetupModels.AccountAliasIntent(
+            new AliasSetupModels.AliasAccountIntentV1(
+                alias,
+                accountId,
+                AliasSetupModels.AccountProvisionV1.CREATE,
+                AliasSetupModels.AccountAliasRoleV1.PRIMARY));
+    final AliasQuoteGuardV1 guard =
+        new AliasQuoteGuardV1(
+            3, TestAssetDefinitionIds.PRIMARY, "5", 1_700_000_100_000L);
+    final AccountOnboardingPlanBodyV1 body =
+        new AccountOnboardingPlanBodyV1(
+            1,
+            new AccountOnboardingPlanRequestV1(
+                alias.canonicalName().canonicalText(),
+                accountId,
+                Collections.emptyList()),
+            authority,
+            "test-chain",
+            new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
+            new AliasSetupModels.AliasPlanResourceV1(
+                intent,
+                disposition,
+                null,
+                disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP
+                    ? null
+                    : 0L),
+            new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
+            guard,
+            disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP
+                ? Collections.emptyList()
+                : Collections.singletonList(
+                    new AliasSetupModels.AliasFramedInstructionV1(
+                        EnsureAlias.WIRE_ID, new byte[] {4, 5, 6})),
+            null,
+            guard.validUntilMs());
+    return new OnboardingFixture(
+        signedOnboardingReceipt(body, signer),
+        authority,
+        accountId,
+        alias.canonicalName().canonicalText());
+  }
+
+  private static String onboardingApplyResponse(
+      final String accountId,
+      final String alias,
+      final String transactionHashHex,
+      final AccountOnboardingStatusV1 status,
+      final AliasSetupModels.AliasPlanDispositionV1 disposition) {
+    return "{\"account_id\":\""
+        + accountId
+        + "\",\"alias\":\""
+        + alias
+        + "\""
+        + (transactionHashHex == null
+            ? ""
+            : ",\"tx_hash_hex\":\"" + transactionHashHex + "\"")
+        + ",\"status\":\""
+        + status.wireValue()
+        + "\",\"disposition\":{\"kind\":\""
+        + disposition.wireValue()
+        + "\",\"value\":null}}";
+  }
+
+  private static void expectOnboardingApplyFailure(
+      final OnboardingFixture fixture, final int status, final String body) {
+    expectCompletionFailure(
+        () ->
+            transport(new CapturingExecutor(status, body))
+                .applySponsoredAccountOnboarding(
+                    fixture.receipt, ONBOARDING_TOKEN, fixture.authority)
+                .join());
+  }
+
   private static String hex(final byte[] bytes) {
     final StringBuilder result = new StringBuilder(bytes.length * 2);
     for (final byte value : bytes) result.append(String.format("%02x", value & 0xff));
@@ -328,6 +497,24 @@ public final class AliasLifecycleClientTests {
       throw new AssertionError("response substitution must complete exceptionally");
     } catch (final CompletionException expected) {
       // Expected.
+    }
+  }
+
+  private static final class OnboardingFixture {
+    private final AccountOnboardingPlanReceiptV1 receipt;
+    private final String authority;
+    private final String accountId;
+    private final String alias;
+
+    private OnboardingFixture(
+        final AccountOnboardingPlanReceiptV1 receipt,
+        final String authority,
+        final String accountId,
+        final String alias) {
+      this.receipt = receipt;
+      this.authority = authority;
+      this.accountId = accountId;
+      this.alias = alias;
     }
   }
 

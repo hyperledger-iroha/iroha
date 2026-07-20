@@ -82,6 +82,27 @@ require a positive gas bound in the intent.
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. Sponsor rejection never falls back to the authority.
 
+## Atomic mixed executable batches
+
+`Executable.batch(...)` preserves an exact interleaving of native instructions
+and deployed-contract calls:
+
+```java
+Executable executable =
+    Executable.batch(
+        Arrays.asList(
+            ExecutableBatchItem.instruction(registerInstruction),
+            ExecutableBatchItem.contractCall(
+                new ContractInvocation(
+                    contractAddress, expectedCodeHash, "apply", argumentRecord)),
+            ExecutableBatchItem.instruction(transferInstruction)));
+```
+
+The node applies the batch atomically. Empty batches are rejected. Contract
+addresses must be canonical lowercase V1 Bech32m literals, and any batch that
+contains a contract call must provide one positive signature-bound gas limit in
+the `FeePaymentIntent`; these constraints are checked before signing.
+
 ## Account addresses
 
 ```java
@@ -427,9 +448,10 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
   `ToriiEventStreamClient.builder()` (without `setTransportExecutor(...)`),
   `SorafsGatewayClient.builder()`, and `HttpSafetyDetectService.createDefault(...)` all pick the
   platform executor so Android apps land on the shared OkHttp client without extra wiring.
-- WebSockets use a strict runtime split: Android loads `OkHttpWebSocketConnectorFactory`, while JVM
-  builds load `JdkWebSocketConnectorFactory`. Inject `setTransportExecutor`/`setWebSocketConnector`
-  in client builders when you want a custom transport.
+- WebSocket clients require an explicit connector. Android callers should inject
+  `OkHttpWebSocketConnectorFactory.createDefault()`, while JVM callers should inject
+  `JdkWebSocketConnectorFactory.createDefault()`. This keeps platform selection deterministic and
+  avoids reflective discovery; `AndroidClientFactory` performs the injection for its clients.
 - Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
   `transport-guard` job that assembles the release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
@@ -759,10 +781,11 @@ mutating the primary listener.
 
 ### Torii streaming (WebSocket)
 
-The WebSocket surface now rides on the transport abstractions
-(`TransportRequest`/`TransportWebSocket`) so JVM and Android can inject platform
-connectors. The default connector uses the JDK client; Android apps should pass
-the OkHttp connector to keep `java.net.http` out of the AAR:
+The WebSocket surface rides on the transport abstractions
+(`TransportRequest`/`TransportWebSocket`) so JVM and Android inject their platform
+connectors explicitly. Android apps should pass the OkHttp connector to keep
+`java.net.http` out of the AAR; JVM apps can instead inject
+`JdkWebSocketConnectorFactory.createDefault()`:
 
 ```java
 import okhttp3.OkHttpClient;

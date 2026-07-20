@@ -23,7 +23,7 @@ mod model {
 
     use super::*;
 
-    /// Either ISI or IVM smart contract bytecode
+    /// An executable transaction or trigger payload.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -47,6 +47,23 @@ mod model {
         /// Nodes verify the proof and may deterministically replay the IVM execution as an
         /// additional safety check depending on pipeline policy.
         IvmProved(IvmProved),
+        /// Ordered, atomic mix of native instructions and deployed-contract calls.
+        ///
+        /// Raw IVM bytecode and nested batches are intentionally excluded from
+        /// [`ExecutableBatchItem`], keeping the mixed form explicit and bounded.
+        Batch(ConstVec<ExecutableBatchItem>),
+    }
+
+    /// One ordered item in [`Executable::Batch`].
+    #[derive(
+        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub enum ExecutableBatchItem {
+        /// Execute one native Iroha Special Instruction.
+        Instruction(InstructionBox),
+        /// Invoke one deployed contract instance by reference.
+        ContractCall(ContractInvocation),
     }
 
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
@@ -116,6 +133,12 @@ mod model {
         /// JSON is converted by Torii/CLI/SDK tooling before the invocation is
         /// signed; validators and the VM never interpret JSON as argument transport.
         pub arguments: Option<ContractArgumentRecord>,
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for ExecutableBatchItem {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 
@@ -390,6 +413,18 @@ impl From<ContractInvocation> for Executable {
     }
 }
 
+impl From<InstructionBox> for ExecutableBatchItem {
+    fn from(source: InstructionBox) -> Self {
+        Self::Instruction(source)
+    }
+}
+
+impl From<ContractInvocation> for ExecutableBatchItem {
+    fn from(source: ContractInvocation) -> Self {
+        Self::ContractCall(source)
+    }
+}
+
 /// Errors raised while requiring a signature-bound transaction gas limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionGasLimitError {
@@ -452,7 +487,86 @@ impl IvmBytecode {
 impl Executable {
     /// Returns `true` if the executable kind requires a signature-bound gas limit.
     pub fn requires_transaction_gas_limit(&self) -> bool {
-        !matches!(self, Self::Instructions(_))
+        match self {
+            Self::Instructions(_) => false,
+            Self::Batch(items) => items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
+            Self::ContractCall(_) | Self::Ivm(_) | Self::IvmProved(_) => true,
+        }
+    }
+
+    /// Return the ordered mixed-batch items, if this is a batch executable.
+    #[must_use]
+    pub fn batch_items(&self) -> Option<&ConstVec<ExecutableBatchItem>> {
+        match self {
+            Self::Batch(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Iterate native instructions explicitly supplied by the transaction author.
+    ///
+    /// This includes the legacy instruction executable and instruction items in
+    /// a mixed batch. Contract calls, raw IVM bytecode, and proved-VM overlays
+    /// are excluded because their native effects are not direct batch items.
+    pub fn explicit_instructions(&self) -> impl Iterator<Item = &InstructionBox> {
+        let instructions = match self {
+            Self::Instructions(instructions) => Some(instructions.as_ref()),
+            _ => None,
+        };
+        let batch = match self {
+            Self::Batch(items) => Some(items.as_ref()),
+            _ => None,
+        };
+
+        instructions
+            .into_iter()
+            .flatten()
+            .chain(batch.into_iter().flatten().filter_map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ExecutableBatchItem {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.consume_char(b'{')?;
+        parser.skip_ws();
+        let key = parser.parse_key()?;
+        let item = match key.as_str() {
+            "Instruction" => Self::Instruction(InstructionBox::json_deserialize(parser)?),
+            "ContractCall" => Self::ContractCall(ContractInvocation::json_deserialize(parser)?),
+            other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+        };
+        parser.skip_ws();
+        parser.consume_char(b'}')?;
+        Ok(item)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ExecutableBatchItem {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        match self {
+            Self::Instruction(instruction) => {
+                norito::json::write_json_string("Instruction", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(instruction, out);
+            }
+            Self::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(invocation, out);
+            }
+        }
+        out.push('}');
     }
 }
 
@@ -562,12 +676,19 @@ impl norito::json::JsonDeserialize for IvmProved {
 }
 
 impl Executable {
-    /// Number of instructions if this executable is an ISI batch; `0` for IVM bytecode.
+    /// Number of explicit native instructions carried by this executable.
+    ///
+    /// Contract calls and raw IVM bytecode contribute zero; proved overlays and
+    /// native items inside a mixed batch are counted.
     pub fn instruction_count(&self) -> u64 {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
             Executable::ContractCall(_) | Executable::Ivm(_) => 0,
             Executable::IvmProved(proved) => proved.overlay.len() as u64,
+            Executable::Batch(items) => items
+                .iter()
+                .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
+                .count() as u64,
         }
     }
 
@@ -575,7 +696,7 @@ impl Executable {
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
-            Executable::ContractCall(_) | Executable::Instructions(_) => 0,
+            Executable::ContractCall(_) | Executable::Instructions(_) | Executable::Batch(_) => 0,
             Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
     }
@@ -601,6 +722,9 @@ impl norito::json::JsonDeserialize for Executable {
             "ContractCall" => {
                 Executable::ContractCall(ContractInvocation::json_deserialize(parser)?)
             }
+            "Batch" => Executable::Batch(iroha_primitives::const_vec::ConstVec::<
+                ExecutableBatchItem,
+            >::json_deserialize(parser)?),
             "Ivm" => Executable::Ivm(IvmBytecode::json_deserialize(parser)?),
             "IvmProved" => {
                 parser.skip_ws();
@@ -710,6 +834,11 @@ impl norito::json::FastJsonWrite for Executable {
                 norito::json::JsonSerialize::json_serialize(&proved.gas_policy_commitment, out);
                 out.push('}');
             }
+            Executable::Batch(items) => {
+                norito::json::write_json_string("Batch", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(items, out);
+            }
         }
         out.push('}');
     }
@@ -772,6 +901,68 @@ mod tests {
             })
             .requires_transaction_gas_limit()
         );
+
+        let instruction_only_batch = Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(
+                crate::isi::Log::new(crate::Level::INFO, "batched log".into()).into(),
+            )]
+            .into(),
+        );
+        assert!(!instruction_only_batch.requires_transaction_gas_limit());
+
+        let mixed_batch = Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                expected_code_hash: iroha_crypto::Hash::new(b"batch-contract-code"),
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            })]
+            .into(),
+        );
+        assert!(mixed_batch.requires_transaction_gas_limit());
+    }
+
+    #[test]
+    fn executable_batch_preserves_wire_tags_and_order() {
+        let first: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "first".into()).into();
+        let last: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "last".into()).into();
+        let invocation = ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"ordered-batch-contract"),
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let batch = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(first),
+                ExecutableBatchItem::ContractCall(invocation),
+                ExecutableBatchItem::Instruction(last),
+            ]
+            .into(),
+        );
+
+        let encoded = batch.encode();
+        assert_eq!(&encoded[..4], &4_u32.to_le_bytes());
+        let mut input = encoded.as_slice();
+        let decoded = Executable::decode(&mut input).expect("decode mixed executable batch");
+        assert_eq!(decoded, batch);
+        assert!(input.is_empty());
+        assert_eq!(decoded.instruction_count(), 2);
+
+        let Executable::Batch(items) = decoded else {
+            panic!("expected mixed executable batch");
+        };
+        assert!(matches!(items[0], ExecutableBatchItem::Instruction(_)));
+        assert!(matches!(items[1], ExecutableBatchItem::ContractCall(_)));
+        assert!(matches!(items[2], ExecutableBatchItem::Instruction(_)));
+        assert_eq!(&items[0].encode()[..4], &0_u32.to_le_bytes());
+        assert_eq!(&items[1].encode()[..4], &1_u32.to_le_bytes());
+        assert_eq!(&items[2].encode()[..4], &0_u32.to_le_bytes());
+        assert_eq!(batch.explicit_instructions().count(), 2);
     }
 
     #[test]
@@ -940,7 +1131,7 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn executable_json_roundtrip_for_instructions_and_ivm() {
+    fn executable_json_roundtrip_for_all_variants() {
         let instruction: InstructionBox =
             crate::isi::Log::new(crate::Level::INFO, "json executable".into()).into();
         let executable = Executable::from_iter([instruction]);
@@ -990,5 +1181,29 @@ mod tests {
         let json = norito::json::to_json(&proved_executable).expect("serialize proved");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize proved");
         assert_eq!(proved_executable, deserialized);
+
+        let batch_executable = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(
+                    crate::isi::Log::new(crate::Level::INFO, "before".into()).into(),
+                ),
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address:
+                        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                            .parse()
+                            .expect("contract address"),
+                    expected_code_hash: iroha_crypto::Hash::new(b"json-batch-contract"),
+                    entrypoint: "run".to_owned(),
+                    arguments: None,
+                }),
+            ]
+            .into(),
+        );
+        let json = norito::json::to_json(&batch_executable).expect("serialize batch");
+        assert!(json.contains("\"Batch\""));
+        assert!(json.contains("\"Instruction\""));
+        assert!(json.contains("\"ContractCall\""));
+        let deserialized: Executable = norito::json::from_str(&json).expect("deserialize batch");
+        assert_eq!(batch_executable, deserialized);
     }
 }

@@ -54,7 +54,7 @@ use iroha_data_model::{
     },
     permission::Permission,
     smart_contract::ContractAddress,
-    transaction::{Executable, signed::TransactionPayload},
+    transaction::{Executable, ExecutableBatchItem, signed::TransactionPayload},
 };
 use iroha_executor_data_model::isi::multisig::{
     MultisigApprove, MultisigInstructionBox, MultisigProposalState, MultisigPropose,
@@ -110,6 +110,15 @@ pub trait TransactionRoutingView {
     fn routing_hash(&self) -> Hash;
 }
 
+fn executable_any_matching_instruction(
+    executable: &Executable,
+    predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
+) -> bool {
+    executable
+        .explicit_instructions()
+        .any(|instruction| predicate(&**instruction))
+}
+
 impl TransactionRoutingView for AcceptedTransaction<'_> {
     fn authority_opt(&self) -> Option<&AccountId> {
         AcceptedTransaction::authority_opt(self)
@@ -139,17 +148,13 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
     ) -> bool {
         match self.entrypoint() {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
-                let Executable::Instructions(batch) = signed.instructions() else {
-                    return false;
-                };
-                batch.iter().any(|instruction| predicate(&**instruction))
+                executable_any_matching_instruction(signed.instructions(), predicate)
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-                let Executable::Instructions(batch) = reveal.signed_transaction().instructions()
-                else {
-                    return false;
-                };
-                batch.iter().any(|instruction| predicate(&**instruction))
+                executable_any_matching_instruction(
+                    reveal.signed_transaction().instructions(),
+                    predicate,
+                )
             }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
                 crate::smartcontracts::isi::kaigi::private_instruction_box(private)
@@ -185,10 +190,7 @@ impl TransactionRoutingView for TransactionPayload {
         &self,
         predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
     ) -> bool {
-        let Executable::Instructions(batch) = &self.instructions else {
-            return false;
-        };
-        batch.iter().any(|instruction| predicate(&**instruction))
+        executable_any_matching_instruction(&self.instructions, predicate)
     }
 
     fn routing_hash(&self) -> Hash {
@@ -949,6 +951,32 @@ fn dataspace_scoped_permission_routing_decision(
                 NativeDataspaceConflict::Transaction,
             )?;
         }
+        Executable::Batch(items) => {
+            // A mixed native/contract batch must be routed from the complete target set below.
+            // Returning the contract target from this permission shortcut would discard ordinary
+            // native targets and collapse a cross-dataspace batch onto the contract lane.
+            if items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            {
+                return Ok(None);
+            }
+            for item in items {
+                let ExecutableBatchItem::Instruction(instruction) = item else {
+                    unreachable!("contract-call batches return before the permission shortcut");
+                };
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
+            }
+        }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
@@ -1014,6 +1042,33 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
                 reject_cross_dataspace,
                 NativeDataspaceConflict::Transaction,
             )?;
+        }
+        Executable::Batch(items) => {
+            // A mixed native/contract batch must be routed from the complete target set below.
+            // Returning the contract target from this permission shortcut would discard ordinary
+            // native targets and collapse a cross-dataspace batch onto the contract lane.
+            if items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            {
+                return Ok(None);
+            }
+            for item in items {
+                let ExecutableBatchItem::Instruction(instruction) = item else {
+                    unreachable!("contract-call batches return before the permission shortcut");
+                };
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
+            }
         }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
@@ -1236,6 +1291,20 @@ fn trigger_executable_transaction_dataspace_target(
                 )
             }))
         }
+        Executable::Batch(items) => {
+            merge_instruction_dataspace_targets(items.iter().map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => {
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }
+                ExecutableBatchItem::ContractCall(call) => {
+                    contract_address_dataspace_target(&call.contract_address)
+                }
+            }))
+        }
         Executable::Ivm(_) => None,
         Executable::IvmProved(proved) => {
             merge_instruction_dataspace_targets(proved.overlay.iter().map(|instruction| {
@@ -1265,6 +1334,21 @@ fn trigger_executable_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     world,
                     ledger_time_ms,
                 )
+            }))
+        }
+        Executable::Batch(items) => {
+            merge_instruction_dataspace_targets(items.iter().map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => {
+                    instruction_transaction_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }
+                ExecutableBatchItem::ContractCall(call) => {
+                    contract_address_dataspace_target(&call.contract_address)
+                }
             }))
         }
         Executable::Ivm(_) => None,
@@ -1439,6 +1523,20 @@ fn settlement_transaction_dataspace_target(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                if let ExecutableBatchItem::Instruction(instruction) = item {
+                    merge_settlement_target_dataspace(
+                        &mut target_dataspace,
+                        instruction_settlement_dataspace_target(
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        )?,
+                    );
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 merge_settlement_target_dataspace(
@@ -1482,6 +1580,21 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                if let ExecutableBatchItem::Instruction(instruction) = item {
+                    merge_settlement_target_dataspace(
+                        &mut target_dataspace,
+                        instruction_settlement_dataspace_target_with_world(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                        )?,
+                    );
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 merge_settlement_target_dataspace(
@@ -1702,6 +1815,10 @@ fn transaction_contains_fx_corridor_settlement(tx: &dyn TransactionRoutingView) 
     match executable {
         Executable::Instructions(instructions) => instructions.iter().any(contains),
         Executable::IvmProved(proved) => proved.overlay.iter().any(contains),
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => contains(instruction),
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
     }
 }
@@ -1951,6 +2068,51 @@ fn transaction_dataspace_routing_target_info(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                let item_target = match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        let instruction_target = instruction_transaction_dataspace_target(
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        );
+                        merge_transaction_concrete_or_collapsed_dataspaces(
+                            &mut target,
+                            deferred_instruction_concrete_dataspace_targets(
+                                &**instruction,
+                                dataspace_catalog,
+                                state_view,
+                            ),
+                            instruction_target,
+                            reject_cross_dataspace,
+                        )?;
+                        if instruction_target == Some(DataSpaceId::UNIVERSAL)
+                            && instruction_transaction_target_requires_universal_coordinator(
+                                &**instruction,
+                                dataspace_catalog,
+                                state_view,
+                            )
+                        {
+                            target.coordinator_route = true;
+                        }
+                        continue;
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_address_dataspace_target(&call.contract_address)
+                    }
+                };
+                merge_transaction_concrete_or_collapsed_dataspaces(
+                    &mut target,
+                    item_target.map(|dataspace| BTreeSet::from([dataspace])),
+                    item_target,
+                    reject_cross_dataspace,
+                )?;
+                if item_target == Some(DataSpaceId::UNIVERSAL) {
+                    target.coordinator_route = true;
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 let instruction_target = instruction_transaction_dataspace_target(
@@ -2057,6 +2219,55 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                let item_target = match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        let instruction_target =
+                            instruction_transaction_dataspace_target_with_world(
+                                &**instruction,
+                                dataspace_catalog,
+                                world,
+                                ledger_time_ms,
+                            );
+                        merge_transaction_concrete_or_collapsed_dataspaces(
+                            &mut target,
+                            deferred_instruction_concrete_dataspace_targets_with_world(
+                                &**instruction,
+                                dataspace_catalog,
+                                world,
+                                ledger_time_ms,
+                            ),
+                            instruction_target,
+                            reject_cross_dataspace,
+                        )?;
+                        if instruction_target == Some(DataSpaceId::UNIVERSAL)
+                            && instruction_transaction_target_requires_universal_coordinator_with_world(
+                                &**instruction,
+                                dataspace_catalog,
+                                world,
+                                ledger_time_ms,
+                            )
+                        {
+                            target.coordinator_route = true;
+                        }
+                        continue;
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_address_dataspace_target(&call.contract_address)
+                    }
+                };
+                merge_transaction_concrete_or_collapsed_dataspaces(
+                    &mut target,
+                    item_target.map(|dataspace| BTreeSet::from([dataspace])),
+                    item_target,
+                    reject_cross_dataspace,
+                )?;
+                if item_target == Some(DataSpaceId::UNIVERSAL) {
+                    target.coordinator_route = true;
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 let instruction_target = instruction_transaction_dataspace_target_with_world(
@@ -2155,6 +2366,27 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
                 contract_address_dataspace_target(&call.contract_address),
             );
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        collect_instruction_native_amx_participants(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                            &mut dataspaces,
+                        )?;
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        insert_native_amx_participant(
+                            &mut dataspaces,
+                            contract_address_dataspace_target(&call.contract_address),
+                        );
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
@@ -2247,6 +2479,27 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
                 )?;
             }
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        collect_instruction_native_amx_participants(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                            dataspaces,
+                        )?;
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        insert_native_amx_participant(
+                            dataspaces,
+                            contract_address_dataspace_target(&call.contract_address),
+                        );
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
@@ -2281,6 +2534,23 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     );
 
     let any = instruction.as_any();
+    if let Some(primary) =
+        any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
+    {
+        let alias_dataspaces = compare_and_set_primary_account_alias_dataspace_targets(primary);
+        if alias_dataspaces.is_empty() {
+            insert_native_amx_participant(
+                dataspaces,
+                account_dataspace_target(Some(world), &primary.account, ledger_time_ms),
+            );
+        } else {
+            for dataspace in alias_dataspaces {
+                insert_native_amx_participant(dataspaces, Some(dataspace));
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         let (account, instructions) = match multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2531,6 +2801,12 @@ fn account_permission_holder_routing_target<'tx>(
         Executable::IvmProved(proved) => account_permission_holder_from_instructions(
             proved.overlay.iter().map(|instruction| &**instruction),
         ),
+        Executable::Batch(items) => account_permission_holder_from_instructions(
+            items.iter().filter_map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(&**instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }),
+        ),
     }
 }
 
@@ -2600,6 +2876,27 @@ fn instruction_account_permission_holder(
     AccountPermissionHolderTarget::Abort
 }
 
+fn compare_and_set_primary_account_alias_dataspace_targets(
+    primary: &iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
+) -> BTreeSet<DataSpaceId> {
+    primary
+        .expected_alias
+        .iter()
+        .chain(primary.new_alias.iter())
+        .map(|alias| alias.dataspace_id)
+        .collect()
+}
+
+fn compare_and_set_primary_account_alias_dataspace_target(
+    primary: &iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
+) -> Option<DataSpaceId> {
+    merge_instruction_dataspace_targets(
+        compare_and_set_primary_account_alias_dataspace_targets(primary)
+            .into_iter()
+            .map(Some),
+    )
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -2626,18 +2923,13 @@ fn instruction_transaction_dataspace_target(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return primary
-            .new_alias
-            .as_ref()
-            .or(primary.expected_alias.as_ref())
-            .map(|alias| alias.dataspace_id)
-            .or_else(|| {
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &primary.account,
-                    state_view.map(state_view_ledger_time_ms),
-                )
-            });
+        return compare_and_set_primary_account_alias_dataspace_target(primary).or_else(|| {
+            account_dataspace_target(
+                state_view.map(StateView::world),
+                &primary.account,
+                state_view.map(state_view_ledger_time_ms),
+            )
+        });
     }
 
     if let Some(multisig) = multisig_instruction(instruction) {
@@ -3106,11 +3398,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return primary
-            .new_alias
-            .as_ref()
-            .or(primary.expected_alias.as_ref())
-            .map(|alias| alias.dataspace_id)
+        return compare_and_set_primary_account_alias_dataspace_target(primary)
             .or_else(|| account_dataspace_target(Some(world), &primary.account, ledger_time_ms));
     }
 
@@ -3684,6 +3972,27 @@ fn trigger_executable_concrete_dataspace_targets(
                 );
             }
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        extend_instruction_concrete_dataspace_targets(
+                            &mut targets,
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        );
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        if let Some(target) =
+                            contract_address_dataspace_target(&call.contract_address)
+                        {
+                            targets.insert(target);
+                        }
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
@@ -3704,6 +4013,15 @@ fn deferred_instruction_concrete_dataspace_targets(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<BTreeSet<DataSpaceId>> {
+    if let Some(primary) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>(
+    ) {
+        return Some(compare_and_set_primary_account_alias_dataspace_targets(
+            primary,
+        ));
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -3805,6 +4123,28 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
                 );
             }
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        extend_instruction_concrete_dataspace_targets_with_world(
+                            &mut targets,
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                        );
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        if let Some(target) =
+                            contract_address_dataspace_target(&call.contract_address)
+                        {
+                            targets.insert(target);
+                        }
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
@@ -3827,6 +4167,15 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Option<BTreeSet<DataSpaceId>> {
+    if let Some(primary) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>(
+    ) {
+        return Some(compare_and_set_primary_account_alias_dataspace_targets(
+            primary,
+        ));
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match &multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions.clone()),
@@ -4123,6 +4472,24 @@ fn trigger_executable_requires_universal_coordinator(
                     )
                 })
         }
+        Executable::Batch(items) => {
+            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
+                .len()
+                > 1
+                || items.iter().any(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        instruction_transaction_target_requires_universal_coordinator(
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        )
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_address_dataspace_target(&call.contract_address)
+                            == Some(DataSpaceId::UNIVERSAL)
+                    }
+                })
+        }
         Executable::Ivm(_) => false,
         Executable::IvmProved(proved) => {
             trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
@@ -4166,6 +4533,30 @@ fn trigger_executable_requires_universal_coordinator_with_world<W: WorldReadOnly
                         world,
                         ledger_time_ms,
                     )
+                })
+        }
+        Executable::Batch(items) => {
+            trigger_executable_concrete_dataspace_targets_with_world(
+                executable,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+            .len()
+                > 1
+                || items.iter().any(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        instruction_transaction_target_requires_universal_coordinator_with_world(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                        )
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_address_dataspace_target(&call.contract_address)
+                            == Some(DataSpaceId::UNIVERSAL)
+                    }
                 })
         }
         Executable::Ivm(_) => false,
@@ -4864,6 +5255,12 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
             instruction_transaction_dataspace_target_needs_state(&**instruction)
         }),
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => {
+                instruction_transaction_dataspace_target_needs_state(&**instruction)
+            }
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         Executable::IvmProved(proved) => proved.overlay.iter().any(|instruction| {
             instruction_transaction_dataspace_target_needs_state(&**instruction)
         }),
@@ -5812,6 +6209,12 @@ fn dataspace_scoped_permission_routing_requires_state(tx: &dyn TransactionRoutin
             instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
         }),
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => {
+                instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
+            }
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         Executable::IvmProved(proved) => proved.overlay.iter().any(|instruction| {
             instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
         }),
@@ -7673,6 +8076,12 @@ fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) ->
             instruction_transaction_dataspace_target_needs_state(&**instruction)
         }),
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => {
+                instruction_transaction_dataspace_target_needs_state(&**instruction)
+            }
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         Executable::IvmProved(proved) => proved.overlay.iter().any(|instruction| {
             instruction_transaction_dataspace_target_needs_state(&**instruction)
         }),
@@ -7688,11 +8097,13 @@ mod tests {
     use iroha_data_model::{
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
+        alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
         asset::{
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
         confidential::ConfidentialEncryptedPayload,
         isi::{
+            alias_setup::CompareAndSetPrimaryAccountAlias,
             prelude::{Mint, Register, Transfer},
             settlement::{
                 DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
@@ -7742,6 +8153,15 @@ mod tests {
         instructions: Vec<InstructionBox>,
     ) -> AcceptedTransaction<'static> {
         sample_transaction_with_metadata(authority, signer, instructions, Metadata::default())
+    }
+
+    fn resolved_account_alias(alias: &str, dataspace_id: DataSpaceId) -> ResolvedAccountAliasV1 {
+        ResolvedAccountAliasV1::new(
+            alias
+                .parse::<AccountAliasName>()
+                .expect("canonical account alias"),
+            dataspace_id,
+        )
     }
 
     fn sample_transaction_with_metadata(
@@ -16381,6 +16801,272 @@ mod tests {
                     RouteLegRole::Participant,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn mixed_native_and_contract_batch_preserves_all_dataspace_targets() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let native_dataspace = DataSpaceId::new(7);
+        let contract_dataspace = DataSpaceId::new(9);
+        let (policy, catalog, lane_catalog, router) = three_dataspace_contract_router();
+        let executable = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Register::domain(
+                    Domain::new(DomainId::try_new("merchant", "signer").expect("native domain id")),
+                ))),
+                ExecutableBatchItem::ContractCall(sample_contract_invocation(
+                    &authority_id,
+                    contract_dataspace,
+                    77,
+                )),
+            ]
+            .into(),
+        );
+        let tx = sample_executable_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            executable.clone(),
+        );
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(2), native_dataspace),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), native_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(4), contract_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            router
+                .try_route_plan(&tx)
+                .expect("mixed batch must retain native and contract targets"),
+            expected
+        );
+
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let state_view = state.view();
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                state_view.world(),
+            )
+            .expect("world-backed mixed-batch routing must retain every target"),
+            expected
+        );
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_executable_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            executable,
+            metadata,
+        );
+        assert_eq!(
+            router.try_route_plan(&strict_tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: native_dataspace,
+                    second_dataspace_id: contract_dataspace,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn primary_alias_compare_and_set_across_dataspaces_builds_native_amx_plan() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let expected = resolved_account_alias("merchant@acme", first_dataspace);
+        let replacement = resolved_account_alias("merchant@bank", second_dataspace);
+        let instruction = CompareAndSetPrimaryAccountAlias::new(
+            authority_id.clone(),
+            Some(expected.clone()),
+            Some(replacement.clone()),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(instruction.clone())],
+        );
+
+        let expected_plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(2), first_dataspace),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), first_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(3), second_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+        assert_eq!(
+            router
+                .try_route_plan(&tx)
+                .expect("cross-dataspace primary alias change must route through native AMX"),
+            expected_plan
+        );
+
+        let reversed = CompareAndSetPrimaryAccountAlias::new(
+            authority_id.clone(),
+            Some(replacement),
+            Some(expected),
+        );
+        let reversed_tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(reversed)],
+        );
+        assert_eq!(
+            router
+                .try_route_plan(&reversed_tx)
+                .expect("alias ordering must not change the native AMX route"),
+            expected_plan
+        );
+
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("world-aware routing must preserve both alias dataspaces"),
+            expected_plan
+        );
+
+        let proved_tx = sample_executable_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            sample_proved_executable(vec![InstructionBox::from(instruction)]),
+        );
+        assert_eq!(
+            router
+                .try_route_plan(&proved_tx)
+                .expect("proved overlays must preserve both alias dataspaces"),
+            expected_plan
+        );
+    }
+
+    #[test]
+    fn primary_alias_compare_and_set_same_dataspace_stays_single_route() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let dataspace = DataSpaceId::new(7);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace, "acme")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), dataspace),
+            ]),
+        );
+        let instruction = CompareAndSetPrimaryAccountAlias::new(
+            authority_id.clone(),
+            Some(resolved_account_alias("old@acme", dataspace)),
+            Some(resolved_account_alias("new@acme", dataspace)),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+
+        assert_eq!(
+            router
+                .try_route_plan(&tx)
+                .expect("same-dataspace alias change must remain local"),
+            RoutingPlan::single(RoutingDecision::new(LaneId::new(2), dataspace))
+        );
+
+        let empty = CompareAndSetPrimaryAccountAlias::new(authority_id.clone(), None, None);
+        let empty_tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(empty)],
+        );
+        assert_eq!(
+            router
+                .try_route_plan(&empty_tx)
+                .expect("empty compare-and-set must keep account fallback routing"),
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL,))
+        );
+    }
+
+    #[test]
+    fn strict_amx_policy_rejects_cross_dataspace_primary_alias_compare_and_set() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let instruction = CompareAndSetPrimaryAccountAlias::new(
+            authority_id.clone(),
+            Some(resolved_account_alias("merchant@acme", first_dataspace)),
+            Some(resolved_account_alias("merchant@bank", second_dataspace)),
+        );
+        let tx = sample_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+            metadata,
+        );
+
+        assert_eq!(
+            router.try_route_plan(&tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: first_dataspace,
+                    second_dataspace_id: second_dataspace,
+                }
+            )
         );
     }
 

@@ -1321,6 +1321,7 @@ fn executable_label(executable: &Executable) -> &'static str {
         Executable::ContractCall(_) => "ContractCall",
         Executable::Ivm(_) => "Ivm",
         Executable::IvmProved(_) => "IvmProved",
+        Executable::Batch(_) => "Batch",
     }
 }
 
@@ -1366,6 +1367,39 @@ fn executable_payload(executable: &Executable) -> Value {
             map.insert(
                 "gas_policy_commitment".to_string(),
                 Value::String(proved.gas_policy_commitment.to_string()),
+            );
+            Value::Object(map)
+        }
+        Executable::Batch(items) => {
+            let mut map = Map::new();
+            map.insert("item_count".to_string(), usize_to_value(items.len()));
+            map.insert(
+                "instruction_count".to_string(),
+                usize_to_value(
+                    items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                                item,
+                                iroha_data_model::transaction::ExecutableBatchItem::Instruction(_)
+                            )
+                        })
+                        .count(),
+                ),
+            );
+            map.insert(
+                "contract_call_count".to_string(),
+                usize_to_value(
+                    items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                                item,
+                                iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
+                            )
+                        })
+                        .count(),
+                ),
             );
             Value::Object(map)
         }

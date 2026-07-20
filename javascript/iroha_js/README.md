@@ -284,6 +284,49 @@ sponsor rejection never falls back to the authority.
 In standalone encoding examples below, `feePayment` denotes an already quoted
 ergonomic intent with canonical charge limits.
 
+### Mixed instruction and contract-call batches
+
+Use `buildExecutableBatchTransaction` when one atomic transaction must
+interleave native ISIs and deployed-contract calls. Entries execute in the
+exact array order, and any contract call requires a positive signature-bound
+`feePayment.gasLimit`. Empty batches and noncanonical contract addresses are
+rejected before native or browser signing; addresses must use lowercase V1
+Bech32m.
+
+```js
+import {
+  buildExecutableBatchTransaction,
+  buildTransferAssetInstruction,
+} from "@iroha/iroha-js";
+
+const mixed = buildExecutableBatchTransaction({
+  chainId,
+  authority,
+  entries: [
+    {
+      kind: "instruction",
+      instruction: buildTransferAssetInstruction(transferInput),
+    },
+    {
+      kind: "contractCall",
+      contractAddress,
+      expectedCodeHash, // exact marked 32-byte hash (bytes or 64 hex digits)
+      entrypoint: "settle",
+      arguments: canonicalArgumentRecord, // optional, at most 1 MiB
+    },
+  ],
+  feePayment: { ...quotedFeePayment, gasLimit: 100_000 },
+  privateKey,
+});
+```
+
+For external browser signing, pass the same ordered `entries` shape to
+`buildBrowserExecutableBatchPayload`, then use
+`validateBrowserExecutableBatchSignable` and
+`finalizeBrowserExecutableBatchTransaction`. Keep using `buildTransaction` or
+`buildBrowserInstructionTransactionPayload` for instruction-only transactions;
+those APIs retain the legacy `Executable::Instructions` wire tag.
+
 The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
 it uses the browser codec and strict browser Ed25519 verifier by default and
 contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives

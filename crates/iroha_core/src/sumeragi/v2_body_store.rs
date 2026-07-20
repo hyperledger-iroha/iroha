@@ -267,6 +267,15 @@ impl DurableBodyReceipt {
         self.manifest_hash
     }
 
+    /// Hash of the complete checksummed body-store frame.
+    ///
+    /// This is the lossless 256-bit identity of the bytes acknowledged by the
+    /// receipt. Comparisons mediated by this value rely on the repository's
+    /// reviewed collision-resistance contract for [`Hash`].
+    pub(crate) const fn frame_hash(&self) -> Hash {
+        self.frame_hash
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         context_id: wire::HeightContextId,

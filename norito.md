@@ -159,6 +159,35 @@ encodings of this field and are rejected by transaction construction and
 admission. SDK encoders and fixture exporters must use this eight-field layout;
 the former seven-field payload is not a supported compatibility format.
 
+The `instructions` field contains the `Executable` enum. Its canonical variant
+tags are stable and append-only:
+
+```text
+0  Instructions(ConstVec<InstructionBox>)
+1  ContractCall(ContractInvocation)
+2  Ivm(IvmBytecode)
+3  IvmProved(IvmProved)
+4  Batch(ConstVec<ExecutableBatchItem>)
+```
+
+`Batch` is the flat ordered form for atomically interleaving native ISIs and
+deployed-contract calls. Each `ExecutableBatchItem` uses tag `0` for
+`Instruction(InstructionBox)` and tag `1` for
+`ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are not
+batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
+before signing. Existing instruction-only transactions continue to use
+`Executable` tag `0`, so adding the mixed form does not rewrite their canonical
+bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+
+Admission schedules a mixed batch as one global live-state barrier. Items run
+in canonical input order against the same transaction view, and failure of any
+item rolls back every staged state change. A signed transaction containing a
+contract-call item binds one gas limit in `fee_payment`; explicit native-ISI gas
+and contract-call gas consume that shared limit, and fee settlement happens
+once for the transaction rather than once per item. Trigger actions may store
+the same `Batch` form. One trigger invocation executes the items atomically and
+shares its deterministic trigger gas budget across the complete sequence.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

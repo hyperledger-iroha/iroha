@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.alias.AccountAliasName;
@@ -39,6 +40,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
@@ -989,7 +991,11 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(
         buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
         AccountOnboardingJsonParser::parseResponse,
-        "sponsored account onboarding apply");
+        "sponsored account onboarding apply",
+        null,
+        (response, statusCode) ->
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                receipt, response, statusCode.intValue()));
   }
 
   @Override
@@ -2004,7 +2010,7 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
-    return fetchJson(request, parser, errorContext, null);
+    return fetchJson(request, parser, errorContext, null, null);
   }
 
   private <T> CompletableFuture<T> fetchJson(
@@ -2012,6 +2018,15 @@ public final class HttpClientTransport implements IrohaClient {
       final Function<byte[], T> parser,
       final String errorContext,
       final Integer acceptedStatus) {
+    return fetchJson(request, parser, errorContext, acceptedStatus, null);
+  }
+
+  private <T> CompletableFuture<T> fetchJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus,
+      final BiFunction<T, Integer, T> responseValidator) {
     notifyRequest(request);
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor
@@ -2048,8 +2063,12 @@ public final class HttpClientTransport implements IrohaClient {
               }
               try {
                 final T parsed = parser.apply(response.body());
+                final T validated =
+                    responseValidator == null
+                        ? parsed
+                        : responseValidator.apply(parsed, response.statusCode());
                 notifyResponse(request, clientResponse);
-                future.complete(parsed);
+                future.complete(validated);
               } catch (final RuntimeException ex) {
                 notifyFailure(request, ex);
                 future.completeExceptionally(ex);

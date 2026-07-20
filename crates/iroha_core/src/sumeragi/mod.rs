@@ -37,9 +37,11 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
-use iroha_p2p::network::NetworkReplyRoute;
+use iroha_p2p::network::{
+    NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
+};
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode as _;
+use norito::codec::{Decode as _, Encode as _};
 use parking_lot::Mutex;
 
 use crate::{
@@ -732,7 +734,9 @@ pub struct InboundBlockMessage {
     /// Authenticated transport hop used exclusively for resource isolation.
     via: Option<PeerId>,
     /// Exact authenticated route which may carry a response to this occurrence.
-    reply_route: Option<NetworkReplyRoute>,
+    reply_routes: Option<NetworkReplyRoutes>,
+    /// Process-local exact ownership evidence retained across fair admission.
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
 
 impl InboundBlockMessage {
@@ -745,7 +749,8 @@ impl InboundBlockMessage {
             message: message.normalize(),
             via: sender.clone(),
             sender,
-            reply_route: None,
+            reply_routes: None,
+            ingress_ownership: None,
         }
     }
 
@@ -754,34 +759,67 @@ impl InboundBlockMessage {
     /// `sender` remains visible to consensus validation and response routing;
     /// `via` is the authenticated hop charged for every bounded ingress owner.
     pub fn from_transport(message: BlockMessage, sender: PeerId, via: PeerId) -> Self {
-        Self::from_transport_with_reply_route(message, sender, via, None)
-    }
-
-    /// Normalize one transport message and retain its exact authenticated return route.
-    pub fn from_transport_with_reply_route(
-        message: BlockMessage,
-        sender: PeerId,
-        via: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
-    ) -> Self {
         Self {
             message: message.normalize(),
             sender: Some(sender),
             via: Some(via),
-            reply_route,
+            reply_routes: None,
+            ingress_ownership: None,
         }
     }
 
+    /// Normalize one transport message and retain its exact authenticated return route.
+    ///
+    /// # Errors
+    ///
+    /// Returns the precise route-capability error when the route is inactive,
+    /// addresses another semantic sender, belongs to another authenticated
+    /// delivery peer, or cannot form a bounded route set.
+    pub fn try_from_transport_with_reply_route(
+        message: BlockMessage,
+        sender: PeerId,
+        via: PeerId,
+        reply_route: NetworkReplyRoute,
+    ) -> Result<Self, NetworkReplyRouteError> {
+        if reply_route.semantic_target() != &sender {
+            return Err(NetworkReplyRouteError::Retargeted);
+        }
+        if !reply_route.is_authenticated_via(&via) {
+            return Err(NetworkReplyRouteError::DifferentSource);
+        }
+        let reply_routes = NetworkReplyRoutes::try_from_route(reply_route)?;
+        Ok(Self {
+            message: message.normalize(),
+            sender: Some(sender),
+            via: Some(via),
+            reply_routes: Some(reply_routes),
+            ingress_ownership: None,
+        })
+    }
+
     /// Consume the envelope and return the normalized message and semantic origin.
+    #[cfg(test)]
     pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
         (self.message, self.sender)
     }
 
     /// Consume the envelope without losing its local-only authenticated reply authority.
-    pub(crate) fn into_message_sender_and_reply_route(
+    pub(crate) fn into_message_sender_and_reply_routes(
         self,
-    ) -> (BlockMessage, Option<PeerId>, Option<NetworkReplyRoute>) {
-        (self.message, self.sender, self.reply_route)
+    ) -> (BlockMessage, Option<PeerId>, Option<NetworkReplyRoutes>) {
+        (self.message, self.sender, self.reply_routes)
+    }
+
+    /// Borrow the bounded fair-ingress ownership carrier attached at
+    /// `FairV2Ingress::try_push_at`.
+    pub(crate) const fn ingress_ownership(&self) -> Option<&FairV2IngressOwnershipEvidence> {
+        self.ingress_ownership.as_ref()
+    }
+
+    /// Move the exact fair-ingress ownership carrier into the downstream
+    /// runtime-admission bridge without exposing or serializing capabilities.
+    pub(crate) fn take_ingress_ownership(&mut self) -> Option<FairV2IngressOwnershipEvidence> {
+        self.ingress_ownership.take()
     }
 
     /// Borrow the normalized message without removing it from its ingress lane.
@@ -838,6 +876,8 @@ enum FairV2IngressSource {
 struct FairV2IngressState {
     roster: BTreeSet<PeerId>,
     lanes: BTreeMap<FairV2IngressSource, FairV2IngressLane>,
+    /// Canonical semantic request identity mapped to its first owning source lane.
+    pending_wire_owners: BTreeMap<FairV2IngressWireKey, FairV2IngressSource>,
     ready: VecDeque<FairV2IngressSource>,
     len: usize,
     bytes: usize,
@@ -869,6 +909,7 @@ struct FairV2IngressEntry {
     enqueued_at: Instant,
     class: FairV2IngressClass,
     wire_key: Option<FairV2IngressWireKey>,
+    encoded_bytes: Arc<[u8]>,
     encoded_len: usize,
 }
 
@@ -885,10 +926,667 @@ enum FairV2IngressClass {
     TransportCompletion,
 }
 
+/// Exact action applied to one canonical fair-ingress semantic owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FairV2IngressOwnershipAction {
+    /// A new semantic request acquired its first bounded queue owner.
+    New,
+    /// The exact same authenticated delivery was observed again.
+    ExactDuplicate,
+    /// The same source delivered a later occurrence on the retained tenure.
+    SameSourceLaterDelivery,
+    /// The same source delivered a later occurrence on a new live tenure.
+    Reconnect,
+    /// A previously unseen authenticated source attached an independent route.
+    NewAlternateSource,
+}
+
+impl FairV2IngressOwnershipAction {
+    const COUNT: usize = 5;
+
+    const fn index(self) -> usize {
+        match self {
+            Self::New => 0,
+            Self::ExactDuplicate => 1,
+            Self::SameSourceLaterDelivery => 2,
+            Self::Reconnect => 3,
+            Self::NewAlternateSource => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressMessageKind {
+    V2Proposal,
+    V2Vote,
+    V2QuorumCertificate,
+    V2TimeoutVote,
+    V2TimeoutCertificate,
+    V2PayloadManifest,
+    V2PayloadChunk,
+    V2CertifiedBodyRequest,
+    V2CertifiedBodyResponse,
+    V2CommitCertificateRequest,
+    V2CommitCertificateResponse,
+    LaneBlockProposal,
+    LaneExecutablePayload,
+    LaneExecutablePayloadHandoff,
+    LaneBlockNewViewVote,
+    LaneBlockNewViewCertificate,
+    LaneBlockVote,
+    LaneBlockQc,
+    LaneBlockCertificate,
+}
+
+impl FairV2IngressMessageKind {
+    fn classify(message: &BlockMessage) -> Option<Self> {
+        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+        match message {
+            BlockMessage::V2(message) => Some(match &message.payload {
+                ConsensusMessageV2Payload::Proposal(_) => Self::V2Proposal,
+                ConsensusMessageV2Payload::Vote(_) => Self::V2Vote,
+                ConsensusMessageV2Payload::QuorumCertificate(_) => Self::V2QuorumCertificate,
+                ConsensusMessageV2Payload::TimeoutVote(_) => Self::V2TimeoutVote,
+                ConsensusMessageV2Payload::TimeoutCertificate(_) => Self::V2TimeoutCertificate,
+                ConsensusMessageV2Payload::PayloadManifest(_) => Self::V2PayloadManifest,
+                ConsensusMessageV2Payload::PayloadChunk(_) => Self::V2PayloadChunk,
+                ConsensusMessageV2Payload::CertifiedBodyRequest(_) => Self::V2CertifiedBodyRequest,
+                ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                    Self::V2CertifiedBodyResponse
+                }
+                ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
+                    Self::V2CommitCertificateRequest
+                }
+                ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+                    Self::V2CommitCertificateResponse
+                }
+            }),
+            BlockMessage::LaneBlockProposal(_) => Some(Self::LaneBlockProposal),
+            BlockMessage::LaneExecutablePayload(_) => Some(Self::LaneExecutablePayload),
+            BlockMessage::LaneExecutablePayloadHandoff(_) => {
+                Some(Self::LaneExecutablePayloadHandoff)
+            }
+            BlockMessage::LaneBlockNewViewVote(_) => Some(Self::LaneBlockNewViewVote),
+            BlockMessage::LaneBlockNewViewCertificate(_) => Some(Self::LaneBlockNewViewCertificate),
+            BlockMessage::LaneBlockVote(_) => Some(Self::LaneBlockVote),
+            BlockMessage::LaneBlockQc(_) => Some(Self::LaneBlockQc),
+            BlockMessage::LaneBlockCertificate(_) => Some(Self::LaneBlockCertificate),
+            _ => None,
+        }
+    }
+
+    const fn is_v2(self) -> bool {
+        matches!(
+            self,
+            Self::V2Proposal
+                | Self::V2Vote
+                | Self::V2QuorumCertificate
+                | Self::V2TimeoutVote
+                | Self::V2TimeoutCertificate
+                | Self::V2PayloadManifest
+                | Self::V2PayloadChunk
+                | Self::V2CertifiedBodyRequest
+                | Self::V2CertifiedBodyResponse
+                | Self::V2CommitCertificateRequest
+                | Self::V2CommitCertificateResponse
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FairV2IngressResourceSnapshot {
+    source_len: usize,
+    source_progress_len: usize,
+    source_timeout_vote_len: usize,
+    source_transport_completion_len: usize,
+    source_bytes: usize,
+    source_timeout_vote_bytes: usize,
+    source_transport_completion_bytes: usize,
+    global_len: usize,
+    global_bytes: usize,
+    protected_slots: usize,
+    message_capacity: usize,
+    global_byte_capacity: usize,
+    source_byte_capacity: usize,
+    timeout_vote_byte_reserve: usize,
+    transport_completion_byte_reserve: usize,
+}
+
+#[derive(Clone, Debug)]
+struct FairV2IngressReplyAttempt {
+    route: NetworkReplyRoute,
+    message_cursor: u64,
+    chunk_cursor: u64,
+}
+
+#[derive(Clone, Debug)]
+struct FairV2IngressOwnershipOccurrence {
+    action: FairV2IngressOwnershipAction,
+    wire_key: FairV2IngressWireKey,
+    semantic_origin: Option<PeerId>,
+    authenticated_via: Option<PeerId>,
+    authenticated_via_is_validator: bool,
+    authenticated_source: FairV2IngressSource,
+    semantic_owner_source: FairV2IngressSource,
+    message_kind: FairV2IngressMessageKind,
+    class: FairV2IngressClass,
+    encoded_bytes: Arc<[u8]>,
+    encoded_len: usize,
+    resource_before: FairV2IngressResourceSnapshot,
+    resource_after: FairV2IngressResourceSnapshot,
+    routes_before: Option<NetworkReplyRoutes>,
+    routes_candidate: Option<NetworkReplyRoutes>,
+    routes_after: Option<NetworkReplyRoutes>,
+    route_capacity: Option<usize>,
+    attempts_before: Vec<FairV2IngressReplyAttempt>,
+    attempts_before_hash: CryptoHash,
+    attempts_after: Vec<FairV2IngressReplyAttempt>,
+    attempts_after_hash: CryptoHash,
+}
+
+/// Bounded, process-local proof carrier for one queued semantic request.
+///
+/// The first and latest occurrences are retained exactly, while fixed-width
+/// counters preserve the complete action history without letting duplicate
+/// traffic allocate an unbounded vector. Opaque capabilities and cursors stay
+/// local and are never serialized.
+#[derive(Clone, Debug)]
+pub(crate) struct FairV2IngressOwnershipEvidence {
+    first: FairV2IngressOwnershipOccurrence,
+    latest: FairV2IngressOwnershipOccurrence,
+    admission_count: u128,
+    occurrence_count: u128,
+    action_counts: [u128; FairV2IngressOwnershipAction::COUNT],
+    current_routes: Option<NetworkReplyRoutes>,
+    attempts: Vec<FairV2IngressReplyAttempt>,
+    attempts_hash: CryptoHash,
+}
+
+impl FairV2IngressOwnershipEvidence {
+    fn new(occurrence: FairV2IngressOwnershipOccurrence) -> Self {
+        let mut action_counts = [0; FairV2IngressOwnershipAction::COUNT];
+        action_counts[occurrence.action.index()] = 1;
+        Self {
+            current_routes: occurrence.routes_after.clone(),
+            attempts: occurrence.attempts_after.clone(),
+            attempts_hash: occurrence.attempts_after_hash,
+            first: occurrence.clone(),
+            latest: occurrence,
+            admission_count: 1,
+            occurrence_count: 1,
+            action_counts,
+        }
+    }
+
+    fn merged(&self, occurrence: FairV2IngressOwnershipOccurrence) -> Option<Self> {
+        let occurrence_count = self.occurrence_count.checked_add(1)?;
+        let mut action_counts = self.action_counts;
+        let count = action_counts.get_mut(occurrence.action.index())?;
+        *count = count.checked_add(1)?;
+        Some(Self {
+            first: self.first.clone(),
+            admission_count: self.admission_count,
+            current_routes: occurrence.routes_after.clone(),
+            attempts: occurrence.attempts_after.clone(),
+            attempts_hash: occurrence.attempts_after_hash,
+            latest: occurrence,
+            occurrence_count,
+            action_counts,
+        })
+    }
+
+    /// Merge a later fair-ingress admission into one already-owned downstream
+    /// semantic request without discarding either admission's bounded history.
+    ///
+    /// Route capabilities remain opaque. The merge delegates authority,
+    /// tenure, target, source-capacity, staleness, and ordinal checks to the
+    /// route set, while per-source cursors advance to the greatest progress
+    /// already observed by either exact carrier.
+    pub(crate) fn merge_downstream(&mut self, candidate: Self) -> bool {
+        if !self.validate_exact()
+            || !candidate.validate_exact()
+            || self.first.wire_key != candidate.first.wire_key
+            || self.first.message_kind != candidate.first.message_kind
+            || self.first.class != candidate.first.class
+            || self.first.encoded_bytes.as_ref() != candidate.first.encoded_bytes.as_ref()
+        {
+            return false;
+        }
+        let mut current_routes = self.current_routes.clone();
+        match (&mut current_routes, &candidate.current_routes) {
+            (Some(retained), Some(observed)) => {
+                if retained.merge_observed(observed).is_err() {
+                    return false;
+                }
+            }
+            (slot @ None, Some(observed)) => *slot = Some(observed.clone()),
+            (Some(_), None) | (None, None) => {}
+        }
+        let admission_count = match self.admission_count.checked_add(candidate.admission_count) {
+            Some(count) => count,
+            None => return false,
+        };
+        let occurrence_count = match self
+            .occurrence_count
+            .checked_add(candidate.occurrence_count)
+        {
+            Some(count) => count,
+            None => return false,
+        };
+        let mut action_counts = self.action_counts;
+        for (retained, observed) in action_counts.iter_mut().zip(candidate.action_counts) {
+            let Some(merged) = retained.checked_add(observed) else {
+                return false;
+            };
+            *retained = merged;
+        }
+        let attempts = fair_v2_ingress_merge_attempt_cursors(
+            &self.attempts,
+            &candidate.attempts,
+            current_routes.as_ref(),
+        );
+        let attempts_hash = fair_v2_ingress_attempt_cursor_hash(&attempts);
+        let merged = Self {
+            first: self.first.clone(),
+            latest: candidate.latest,
+            admission_count,
+            occurrence_count,
+            action_counts,
+            current_routes,
+            attempts,
+            attempts_hash,
+        };
+        if !merged.validate_exact() {
+            return false;
+        }
+        *self = merged;
+        true
+    }
+
+    /// Whether this carrier was derived from the exact normalized message now
+    /// crossing a downstream ownership seam.
+    pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
+        let encoded = match message {
+            BlockMessage::V2(message) => message.encode(),
+            message if message.is_lane_local() => message.encode(),
+            _ => return false,
+        };
+        self.first.encoded_bytes.as_ref() == encoded.as_slice()
+            && Some(self.first.message_kind) == FairV2IngressMessageKind::classify(message)
+    }
+
+    /// Whether an authenticated runtime command retained the exact canonical
+    /// v2 bytes admitted by this fair-ingress owner.
+    pub(crate) fn matches_runtime_v2_bytes(&self, canonical_bytes: &[u8]) -> bool {
+        self.first.message_kind.is_v2() && self.first.encoded_bytes.as_ref() == canonical_bytes
+    }
+
+    /// Decode the exact canonical v2 envelope retained by this ownership
+    /// carrier. The full carrier is validated before any projection is
+    /// returned, so downstream code cannot use decoded bytes to bypass route,
+    /// resource, or source-history checks.
+    pub(crate) fn canonical_v2_message(
+        &self,
+    ) -> Option<iroha_data_model::block::consensus_v2::ConsensusMessageV2> {
+        if !self.validate_exact() || !self.first.message_kind.is_v2() {
+            return None;
+        }
+        let mut cursor = self.first.encoded_bytes.as_ref();
+        let message =
+            iroha_data_model::block::consensus_v2::ConsensusMessageV2::decode(&mut cursor).ok()?;
+        cursor.is_empty().then_some(message)
+    }
+
+    /// Process-local integrity projection for carrying this exact ownership
+    /// history through the serialized runtime. Pointer-derived source keys are
+    /// intentionally included: this hash is never serialized or used by
+    /// consensus, and two independent network actors must not alias merely
+    /// because their wire bytes and counters match.
+    pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
+        use std::hash::{Hash as _, Hasher as _};
+
+        let mut projection = Vec::new();
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v1");
+        projection.extend_from_slice(&self.admission_count.to_le_bytes());
+        projection.extend_from_slice(&self.occurrence_count.to_le_bytes());
+        for count in self.action_counts {
+            projection.extend_from_slice(&count.to_le_bytes());
+        }
+        projection.extend_from_slice(self.attempts_hash.as_ref());
+        projection.extend_from_slice(&self.first.encoded_bytes);
+        projection.push(u8::try_from(self.latest.action.index()).unwrap_or(u8::MAX));
+        match &self.current_routes {
+            None => projection.push(0),
+            Some(routes) => {
+                projection.push(1);
+                projection.extend_from_slice(
+                    &u64::try_from(routes.source_capacity())
+                        .expect("bounded reply-route source capacity fits u64")
+                        .to_le_bytes(),
+                );
+                projection.extend_from_slice(
+                    &u64::try_from(routes.len())
+                        .expect("bounded reply-route count fits u64")
+                        .to_le_bytes(),
+                );
+                projection.extend_from_slice(&routes.semantic_target().encode());
+                for route in routes.iter() {
+                    let mut source = std::collections::hash_map::DefaultHasher::new();
+                    route.source_key().hash(&mut source);
+                    projection.extend_from_slice(&source.finish().to_le_bytes());
+                    projection.extend_from_slice(&route.semantic_target().encode());
+                    projection.push(u8::from(route.is_active()));
+                }
+            }
+        }
+        for attempt in &self.attempts {
+            let mut source = std::collections::hash_map::DefaultHasher::new();
+            attempt.route.source_key().hash(&mut source);
+            projection.extend_from_slice(&source.finish().to_le_bytes());
+            projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
+            projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+        }
+        CryptoHash::new(projection)
+    }
+
+    /// Whether the independently carried response routes are exactly the
+    /// carrier's current opaque per-source route set.
+    pub(crate) fn matches_reply_routes(&self, routes: Option<&NetworkReplyRoutes>) -> bool {
+        fair_v2_ingress_route_sets_same_deliveries(self.current_routes.as_ref(), routes)
+    }
+
+    /// Current bounded route set after every admitted downstream merge.
+    pub(crate) const fn current_reply_routes(&self) -> Option<&NetworkReplyRoutes> {
+        self.current_routes.as_ref()
+    }
+
+    /// Prune retired response capabilities and their cursor attempts together.
+    ///
+    /// This maintenance never substitutes another route and therefore cannot
+    /// reset a still-live source's downstream progress.
+    pub(crate) fn retain_active_reply_routes(&mut self) -> usize {
+        let Some(routes) = self.current_routes.as_mut() else {
+            return 0;
+        };
+        let retained = routes.retain_active();
+        self.attempts = fair_v2_ingress_attempts_for_routes(&self.attempts, Some(routes));
+        self.attempts_hash = fair_v2_ingress_attempt_cursor_hash(&self.attempts);
+        retained
+    }
+
+    /// Most recent ownership action retained by this queued semantic owner.
+    pub(crate) const fn latest_action(&self) -> FairV2IngressOwnershipAction {
+        self.latest.action
+    }
+
+    /// Advance one retained source's downstream cursors without allowing
+    /// either message or chunk progress to regress.
+    pub(crate) fn advance_reply_cursors(
+        &mut self,
+        route: &NetworkReplyRoute,
+        message_cursor: u64,
+        chunk_cursor: u64,
+    ) -> bool {
+        let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.route.same_source(route))
+        else {
+            return false;
+        };
+        if message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor {
+            return false;
+        }
+        attempt.message_cursor = message_cursor;
+        attempt.chunk_cursor = chunk_cursor;
+        self.attempts_hash = fair_v2_ingress_attempt_cursor_hash(&self.attempts);
+        true
+    }
+
+    /// Validate the exact semantic bytes, bounded accounting, route ownership,
+    /// and non-regressing per-source cursor relation.
+    pub(crate) fn validate_exact(&self) -> bool {
+        self.first.action == FairV2IngressOwnershipAction::New
+            && self.admission_count != 0
+            && self.action_counts[FairV2IngressOwnershipAction::New.index()] == self.admission_count
+            && self
+                .action_counts
+                .iter()
+                .copied()
+                .try_fold(0u128, |total, count| total.checked_add(count))
+                == Some(self.occurrence_count)
+            && self.action_counts[self.latest.action.index()] != 0
+            && self.first.wire_key == self.latest.wire_key
+            && self.first.semantic_origin == self.latest.semantic_origin
+            && self.first.authenticated_source == self.first.semantic_owner_source
+            && (self.admission_count != 1
+                || self.first.semantic_owner_source == self.latest.semantic_owner_source)
+            && self.first.message_kind == self.latest.message_kind
+            && self.first.class == self.latest.class
+            && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
+            && self.first.encoded_len == self.latest.encoded_len
+            && self.first.validate_exact()
+            && self.latest.validate_exact()
+            && self.attempts_hash == fair_v2_ingress_attempt_cursor_hash(&self.attempts)
+            && fair_v2_ingress_attempts_do_not_regress(&self.latest.attempts_after, &self.attempts)
+            && fair_v2_ingress_attempts_match_routes(&self.attempts, self.current_routes.as_ref())
+    }
+}
+
+impl FairV2IngressOwnershipOccurrence {
+    fn validate_exact(&self) -> bool {
+        let mut cursor = self.encoded_bytes.as_ref();
+        let decoded = if self.message_kind.is_v2() {
+            let Ok(message) =
+                iroha_data_model::block::consensus_v2::ConsensusMessageV2::decode(&mut cursor)
+            else {
+                return false;
+            };
+            BlockMessage::V2(message)
+        } else {
+            let Ok(message) = BlockMessage::decode(&mut cursor) else {
+                return false;
+            };
+            message
+        };
+        let decoded_class = FairV2IngressClass::classify_message(&decoded);
+        let decoded_kind = FairV2IngressMessageKind::classify(&decoded);
+        let is_timeout_vote = fair_v2_ingress_message_is_timeout_vote(&decoded);
+        let is_transport_completion = self.class == FairV2IngressClass::TransportCompletion;
+        let semantic_exact = self.wire_key.origin == self.semantic_origin
+            && self.wire_key.hash == CryptoHash::new(self.encoded_bytes.as_ref())
+            && self.encoded_len == self.encoded_bytes.len()
+            && cursor.is_empty()
+            && decoded_class == self.class
+            && decoded_kind == Some(self.message_kind);
+        let source_exact = match (&self.authenticated_source, &self.authenticated_via) {
+            (FairV2IngressSource::Validator(source), Some(via)) => {
+                self.authenticated_via_is_validator && source == via
+            }
+            (FairV2IngressSource::Untrusted, _) => !self.authenticated_via_is_validator,
+            (FairV2IngressSource::Validator(_), None) => false,
+        };
+        let capacities_exact = self.resource_before.message_capacity
+            == self.resource_after.message_capacity
+            && self.resource_before.global_byte_capacity
+                == self.resource_after.global_byte_capacity
+            && self.resource_before.source_byte_capacity
+                == self.resource_after.source_byte_capacity
+            && self.resource_before.timeout_vote_byte_reserve
+                == self.resource_after.timeout_vote_byte_reserve
+            && self.resource_before.transport_completion_byte_reserve
+                == self.resource_after.transport_completion_byte_reserve
+            && self.resource_before.global_len <= self.resource_before.message_capacity
+            && self.resource_before.global_bytes <= self.resource_before.global_byte_capacity
+            && self.resource_before.source_bytes <= self.resource_before.source_byte_capacity
+            && self.resource_before.source_progress_len <= self.resource_before.source_len
+            && self.resource_before.source_timeout_vote_len
+                <= self.resource_before.source_progress_len
+            && self.resource_before.source_transport_completion_len
+                <= self.resource_before.source_len
+            && self.resource_after.global_len <= self.resource_after.message_capacity
+            && self.resource_after.global_bytes <= self.resource_after.global_byte_capacity
+            && self.resource_after.source_bytes <= self.resource_after.source_byte_capacity
+            && self.resource_after.source_progress_len <= self.resource_after.source_len
+            && self.resource_after.source_timeout_vote_len
+                <= self.resource_after.source_progress_len
+            && self.resource_after.source_transport_completion_len
+                <= self.resource_after.source_len
+            && self.resource_before.source_timeout_vote_bytes
+                <= self.resource_before.timeout_vote_byte_reserve
+            && self.resource_after.source_timeout_vote_bytes
+                <= self.resource_after.timeout_vote_byte_reserve
+            && self.resource_before.source_transport_completion_bytes
+                <= self.resource_before.transport_completion_byte_reserve
+            && self.resource_after.source_transport_completion_bytes
+                <= self.resource_after.transport_completion_byte_reserve
+            && self.resource_before.source_timeout_vote_bytes <= self.resource_before.source_bytes
+            && self.resource_after.source_timeout_vote_bytes <= self.resource_after.source_bytes
+            && self.resource_before.source_transport_completion_bytes
+                <= self.resource_before.source_bytes
+            && self.resource_after.source_transport_completion_bytes
+                <= self.resource_after.source_bytes
+            && self
+                .resource_before
+                .global_len
+                .checked_add(self.resource_before.protected_slots)
+                .is_some_and(|owned| owned <= self.resource_before.message_capacity)
+            && self
+                .resource_after
+                .global_len
+                .checked_add(self.resource_after.protected_slots)
+                .is_some_and(|owned| owned <= self.resource_after.message_capacity);
+        let exact_add = |before: usize, increment: usize, after: usize| {
+            before.checked_add(increment) == Some(after)
+        };
+        let resource_exact = capacities_exact
+            && match self.action {
+                FairV2IngressOwnershipAction::New => {
+                    exact_add(
+                        self.resource_before.global_len,
+                        1,
+                        self.resource_after.global_len,
+                    ) && exact_add(
+                        self.resource_before.global_bytes,
+                        self.encoded_len,
+                        self.resource_after.global_bytes,
+                    ) && exact_add(
+                        self.resource_before.source_len,
+                        1,
+                        self.resource_after.source_len,
+                    ) && exact_add(
+                        self.resource_before.source_bytes,
+                        self.encoded_len,
+                        self.resource_after.source_bytes,
+                    ) && exact_add(
+                        self.resource_before.source_progress_len,
+                        usize::from(self.class == FairV2IngressClass::Progress),
+                        self.resource_after.source_progress_len,
+                    ) && exact_add(
+                        self.resource_before.source_timeout_vote_len,
+                        usize::from(is_timeout_vote),
+                        self.resource_after.source_timeout_vote_len,
+                    ) && exact_add(
+                        self.resource_before.source_transport_completion_len,
+                        usize::from(is_transport_completion),
+                        self.resource_after.source_transport_completion_len,
+                    ) && exact_add(
+                        self.resource_before.source_timeout_vote_bytes,
+                        if is_timeout_vote
+                            && matches!(
+                                &self.authenticated_source,
+                                FairV2IngressSource::Validator(_)
+                            )
+                        {
+                            self.encoded_len
+                        } else {
+                            0
+                        },
+                        self.resource_after.source_timeout_vote_bytes,
+                    ) && exact_add(
+                        self.resource_before.source_transport_completion_bytes,
+                        if is_transport_completion {
+                            self.encoded_len
+                        } else {
+                            0
+                        },
+                        self.resource_after.source_transport_completion_bytes,
+                    ) && self.authenticated_source == self.semantic_owner_source
+                }
+                _ => self.resource_before == self.resource_after,
+            };
+        let routes_bind_semantic_origin = self.semantic_origin.as_ref().is_none_or(|origin| {
+            self.routes_before
+                .iter()
+                .chain(self.routes_candidate.iter())
+                .chain(self.routes_after.iter())
+                .all(|routes| routes.semantic_target() == origin)
+        });
+        let candidate_binds_authenticated_via = self.authenticated_via.as_ref().map_or_else(
+            || self.routes_candidate.is_none(),
+            |via| {
+                self.routes_candidate
+                    .iter()
+                    .flat_map(|routes| routes.iter())
+                    .all(|route| route.is_authenticated_via(via))
+            },
+        );
+        let candidate_is_retained = self.routes_candidate.iter().all(|candidate| {
+            candidate.iter().all(|route| {
+                self.routes_after
+                    .iter()
+                    .flat_map(|routes| routes.iter())
+                    .any(|retained| route.same_delivery(retained))
+            })
+        });
+        let route_exact = fair_v2_ingress_route_capacity(
+            self.routes_before.as_ref(),
+            self.routes_candidate.as_ref(),
+            self.routes_after.as_ref(),
+        ) == Some(self.route_capacity)
+            && self.route_capacity.is_none_or(|capacity| {
+                self.routes_after
+                    .as_ref()
+                    .is_none_or(|routes| routes.len() <= capacity)
+            })
+            && routes_bind_semantic_origin
+            && candidate_binds_authenticated_via
+            && candidate_is_retained
+            && fair_v2_ingress_action_is_structurally_exact(
+                self.action,
+                self.routes_before.as_ref(),
+                self.routes_candidate.as_ref(),
+                self.routes_after.as_ref(),
+            )
+            && fair_v2_ingress_attempts_preserve_cursors(
+                &self.attempts_before,
+                &self.attempts_after,
+            )
+            && self.attempts_before_hash
+                == fair_v2_ingress_attempt_cursor_hash(&self.attempts_before)
+            && self.attempts_after_hash
+                == fair_v2_ingress_attempt_cursor_hash(&self.attempts_after)
+            && fair_v2_ingress_attempts_match_routes(
+                &self.attempts_before,
+                self.routes_before.as_ref(),
+            )
+            && fair_v2_ingress_attempts_match_routes(
+                &self.attempts_after,
+                self.routes_after.as_ref(),
+            );
+        semantic_exact && source_exact && resource_exact && route_exact
+    }
+}
+
 impl FairV2IngressClass {
     fn classify(inbound: &InboundBlockMessage) -> Self {
-        let BlockMessage::V2(message) = inbound.message() else {
-            return match inbound.message() {
+        Self::classify_message(inbound.message())
+    }
+
+    fn classify_message(message: &BlockMessage) -> Self {
+        let BlockMessage::V2(message) = message else {
+            return match message {
                 BlockMessage::LaneExecutablePayload(_)
                 | BlockMessage::LaneExecutablePayloadHandoff(_) => Self::TransportCompletion,
                 message if message.is_lane_local() => Self::Progress,
@@ -918,9 +1616,277 @@ impl FairV2IngressClass {
     }
 }
 
+fn fair_v2_ingress_route_action(
+    retained: Option<&NetworkReplyRoutes>,
+    candidate: Option<&NetworkReplyRoutes>,
+) -> Result<FairV2IngressOwnershipAction, NetworkReplyRouteError> {
+    let Some(candidate) = candidate else {
+        return Ok(FairV2IngressOwnershipAction::ExactDuplicate);
+    };
+    let mut action = FairV2IngressOwnershipAction::ExactDuplicate;
+    for route in candidate.iter() {
+        let prior = retained
+            .into_iter()
+            .flat_map(|routes| routes.iter())
+            .find(|prior| route.same_source(prior));
+        let Some(prior) = prior else {
+            action = FairV2IngressOwnershipAction::NewAlternateSource;
+            continue;
+        };
+        let update = route.source_update_from(prior)?;
+        action = match (action, update) {
+            (FairV2IngressOwnershipAction::NewAlternateSource, _) => action,
+            (_, NetworkReplyRouteSourceUpdate::Reconnected) => {
+                FairV2IngressOwnershipAction::Reconnect
+            }
+            (
+                FairV2IngressOwnershipAction::ExactDuplicate
+                | FairV2IngressOwnershipAction::SameSourceLaterDelivery,
+                NetworkReplyRouteSourceUpdate::LaterDelivery,
+            ) => FairV2IngressOwnershipAction::SameSourceLaterDelivery,
+            (_, NetworkReplyRouteSourceUpdate::Exact) => action,
+            (FairV2IngressOwnershipAction::Reconnect, _) => action,
+            (FairV2IngressOwnershipAction::New, _) => action,
+        };
+    }
+    Ok(action)
+}
+
+fn fair_v2_ingress_route_capacity(
+    before: Option<&NetworkReplyRoutes>,
+    candidate: Option<&NetworkReplyRoutes>,
+    after: Option<&NetworkReplyRoutes>,
+) -> Option<Option<usize>> {
+    let mut capacities = before
+        .into_iter()
+        .chain(candidate)
+        .chain(after)
+        .map(NetworkReplyRoutes::source_capacity);
+    let Some(first) = capacities.next() else {
+        return Some(None);
+    };
+    capacities
+        .all(|capacity| capacity == first)
+        .then_some(Some(first))
+}
+
+fn fair_v2_ingress_route_sets_same_deliveries(
+    left: Option<&NetworkReplyRoutes>,
+    right: Option<&NetworkReplyRoutes>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.source_capacity() == right.source_capacity()
+                && left.semantic_target() == right.semantic_target()
+                && left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|route| right.iter().any(|other| route.same_delivery(other)))
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
+fn fair_v2_ingress_action_is_structurally_exact(
+    action: FairV2IngressOwnershipAction,
+    before: Option<&NetworkReplyRoutes>,
+    candidate: Option<&NetworkReplyRoutes>,
+    after: Option<&NetworkReplyRoutes>,
+) -> bool {
+    match action {
+        FairV2IngressOwnershipAction::New => {
+            before.is_none() && fair_v2_ingress_route_sets_same_deliveries(candidate, after)
+        }
+        FairV2IngressOwnershipAction::ExactDuplicate => candidate.is_none_or(|candidate| {
+            candidate.iter().all(|route| {
+                before
+                    .into_iter()
+                    .flat_map(|routes| routes.iter())
+                    .any(|prior| route.same_delivery(prior))
+            })
+        }),
+        FairV2IngressOwnershipAction::SameSourceLaterDelivery => {
+            candidate.is_some_and(|candidate| {
+                candidate.iter().any(|route| {
+                    before
+                        .into_iter()
+                        .flat_map(|routes| routes.iter())
+                        .any(|prior| {
+                            route.same_source(prior)
+                                && route.same_tenure(prior)
+                                && !route.same_delivery(prior)
+                        })
+                })
+            })
+        }
+        FairV2IngressOwnershipAction::Reconnect => candidate.is_some_and(|candidate| {
+            candidate.iter().any(|route| {
+                before
+                    .into_iter()
+                    .flat_map(|routes| routes.iter())
+                    .any(|prior| route.same_source(prior) && !route.same_tenure(prior))
+            })
+        }),
+        FairV2IngressOwnershipAction::NewAlternateSource => candidate.is_some_and(|candidate| {
+            candidate.iter().any(|route| {
+                !before
+                    .into_iter()
+                    .flat_map(|routes| routes.iter())
+                    .any(|prior| route.same_source(prior))
+            })
+        }),
+    }
+}
+
+fn fair_v2_ingress_attempts_for_routes(
+    before: &[FairV2IngressReplyAttempt],
+    routes: Option<&NetworkReplyRoutes>,
+) -> Vec<FairV2IngressReplyAttempt> {
+    routes
+        .into_iter()
+        .flat_map(|routes| routes.iter())
+        .map(|route| {
+            before
+                .iter()
+                .find(|attempt| attempt.route.same_source(route))
+                .map_or_else(
+                    || FairV2IngressReplyAttempt {
+                        route: route.clone(),
+                        message_cursor: 0,
+                        chunk_cursor: 0,
+                    },
+                    |attempt| FairV2IngressReplyAttempt {
+                        route: route.clone(),
+                        message_cursor: attempt.message_cursor,
+                        chunk_cursor: attempt.chunk_cursor,
+                    },
+                )
+        })
+        .collect()
+}
+
+fn fair_v2_ingress_attempts_preserve_cursors(
+    before: &[FairV2IngressReplyAttempt],
+    after: &[FairV2IngressReplyAttempt],
+) -> bool {
+    before.iter().all(|prior| {
+        after
+            .iter()
+            .find(|attempt| attempt.route.same_source(&prior.route))
+            .is_none_or(|attempt| {
+                attempt.message_cursor == prior.message_cursor
+                    && attempt.chunk_cursor == prior.chunk_cursor
+            })
+    }) && after.iter().all(|attempt| {
+        before
+            .iter()
+            .any(|prior| prior.route.same_source(&attempt.route))
+            || (attempt.message_cursor == 0 && attempt.chunk_cursor == 0)
+    })
+}
+
+fn fair_v2_ingress_attempts_do_not_regress(
+    before: &[FairV2IngressReplyAttempt],
+    after: &[FairV2IngressReplyAttempt],
+) -> bool {
+    before.iter().all(|prior| {
+        after
+            .iter()
+            .find(|attempt| attempt.route.same_source(&prior.route))
+            .is_none_or(|attempt| {
+                attempt.message_cursor >= prior.message_cursor
+                    && attempt.chunk_cursor >= prior.chunk_cursor
+            })
+    })
+}
+
+fn fair_v2_ingress_merge_attempt_cursors(
+    retained: &[FairV2IngressReplyAttempt],
+    candidate: &[FairV2IngressReplyAttempt],
+    routes: Option<&NetworkReplyRoutes>,
+) -> Vec<FairV2IngressReplyAttempt> {
+    routes
+        .into_iter()
+        .flat_map(|routes| routes.iter())
+        .map(|route| {
+            let retained = retained
+                .iter()
+                .find(|attempt| attempt.route.same_source(route));
+            let candidate = candidate
+                .iter()
+                .find(|attempt| attempt.route.same_source(route));
+            FairV2IngressReplyAttempt {
+                route: route.clone(),
+                message_cursor: retained
+                    .map_or(0, |attempt| attempt.message_cursor)
+                    .max(candidate.map_or(0, |attempt| attempt.message_cursor)),
+                chunk_cursor: retained
+                    .map_or(0, |attempt| attempt.chunk_cursor)
+                    .max(candidate.map_or(0, |attempt| attempt.chunk_cursor)),
+            }
+        })
+        .collect()
+}
+
+fn fair_v2_ingress_attempt_cursor_hash(attempts: &[FairV2IngressReplyAttempt]) -> CryptoHash {
+    let mut projection = Vec::with_capacity(24usize.saturating_mul(attempts.len()));
+    projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-cursors:v1");
+    let count = u64::try_from(attempts.len())
+        .expect("bounded fair-ingress route count is representable as u64");
+    projection.extend_from_slice(&count.to_le_bytes());
+    for attempt in attempts {
+        projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
+        projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+    }
+    CryptoHash::new(projection)
+}
+
+fn fair_v2_ingress_attempts_match_routes(
+    attempts: &[FairV2IngressReplyAttempt],
+    routes: Option<&NetworkReplyRoutes>,
+) -> bool {
+    match routes {
+        None => attempts.is_empty(),
+        Some(routes) => {
+            attempts.len() == routes.len()
+                && attempts.iter().zip(routes.iter()).enumerate().all(
+                    |(index, (attempt, route))| {
+                        !attempts[index + 1..]
+                            .iter()
+                            .any(|other| attempt.route.same_source(&other.route))
+                            && attempt.route.same_delivery(route)
+                    },
+                )
+        }
+    }
+}
+
+fn fair_v2_ingress_current_protected_slots(state: &FairV2IngressState) -> usize {
+    state
+        .lanes
+        .iter()
+        .map(|(source, lane)| {
+            let is_validator = matches!(source, FairV2IngressSource::Validator(_));
+            fair_v2_ingress_lane_protected_slots(
+                is_validator,
+                !state.roster.is_empty(),
+                lane.entries.len(),
+                lane.progress_len.saturating_sub(lane.timeout_vote_len) != 0,
+                lane.timeout_vote_len != 0,
+                lane.transport_completion_len != 0,
+            )
+        })
+        .sum()
+}
+
 fn fair_v2_ingress_is_timeout_vote(inbound: &InboundBlockMessage) -> bool {
+    fair_v2_ingress_message_is_timeout_vote(inbound.message())
+}
+
+fn fair_v2_ingress_message_is_timeout_vote(message: &BlockMessage) -> bool {
     matches!(
-        inbound.message(),
+        message,
         BlockMessage::V2(message)
             if matches!(
                 &message.payload,
@@ -1446,6 +2412,7 @@ impl FairV2Ingress {
             state: Mutex::new(FairV2IngressState {
                 roster: BTreeSet::new(),
                 lanes,
+                pending_wire_owners: BTreeMap::new(),
                 ready: VecDeque::new(),
                 len: 0,
                 bytes: 0,
@@ -1491,8 +2458,28 @@ impl FairV2Ingress {
                 .collect::<BTreeSet<_>>();
             debug_assert_eq!(ready, nonempty);
 
+            let indexed_owners = state
+                .lanes
+                .iter()
+                .flat_map(|(source, lane)| {
+                    lane.pending_wire
+                        .iter()
+                        .cloned()
+                        .map(|key| (key, source.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            debug_assert_eq!(state.pending_wire_owners, indexed_owners);
+
             for (source, lane) in &state.lanes {
                 debug_assert!(lane.bytes <= self.source_byte_capacity);
+                debug_assert!(lane.entries.iter().all(|entry| {
+                    entry.encoded_len == entry.encoded_bytes.len()
+                        && entry
+                            .inbound
+                            .ingress_ownership
+                            .as_ref()
+                            .is_some_and(FairV2IngressOwnershipEvidence::validate_exact)
+                }));
                 debug_assert_eq!(
                     lane.progress_len,
                     lane.entries
@@ -1640,6 +2627,34 @@ impl FairV2Ingress {
         }
     }
 
+    fn ownership_resource_snapshot(
+        &self,
+        state: &FairV2IngressState,
+        source: &FairV2IngressSource,
+    ) -> FairV2IngressResourceSnapshot {
+        let lane = state
+            .lanes
+            .get(source)
+            .expect("configured fair ingress retains every classified source lane");
+        FairV2IngressResourceSnapshot {
+            source_len: lane.entries.len(),
+            source_progress_len: lane.progress_len,
+            source_timeout_vote_len: lane.timeout_vote_len,
+            source_transport_completion_len: lane.transport_completion_len,
+            source_bytes: lane.bytes,
+            source_timeout_vote_bytes: lane.timeout_vote_bytes,
+            source_transport_completion_bytes: lane.transport_completion_bytes,
+            global_len: state.len,
+            global_bytes: state.bytes,
+            protected_slots: fair_v2_ingress_current_protected_slots(state),
+            message_capacity: self.capacity,
+            global_byte_capacity: self.byte_capacity,
+            source_byte_capacity: self.source_byte_capacity,
+            timeout_vote_byte_reserve: self.timeout_vote_byte_reserve,
+            transport_completion_byte_reserve: self.transport_completion_byte_reserve,
+        }
+    }
+
     /// Close admission and atomically install the next height's frozen roster.
     ///
     /// Queued messages belong to the preceding immutable height and are
@@ -1735,6 +2750,7 @@ impl FairV2Ingress {
         state.open = false;
         state.roster = roster;
         state.lanes = lanes;
+        state.pending_wire_owners.clear();
         state.ready.clear();
         state.len = 0;
         state.bytes = 0;
@@ -1966,20 +2982,19 @@ impl FairV2Ingress {
 
     fn try_push_at(
         &self,
-        inbound: InboundBlockMessage,
+        mut inbound: InboundBlockMessage,
         enqueued_at: Instant,
     ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
         let class = FairV2IngressClass::classify(&inbound);
+        let Some(message_kind) = FairV2IngressMessageKind::classify(inbound.message()) else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
         let is_timeout_vote = fair_v2_ingress_is_timeout_vote(&inbound);
         let is_transport_completion = class == FairV2IngressClass::TransportCompletion;
-        let (wire_hash, encoded_len) = match inbound.message() {
-            BlockMessage::V2(message) => {
-                let encoded = message.encode();
-                let encoded_len = encoded.len();
-                (Some(CryptoHash::new(encoded)), encoded_len)
-            }
+        let encoded = match inbound.message() {
+            BlockMessage::V2(message) => Arc::<[u8]>::from(message.encode()),
             message if message.is_lane_local() => {
-                let encoded = message.encode();
+                let encoded = Arc::<[u8]>::from(message.encode());
                 let encoded_len = encoded.len();
                 let lane_limit = if class == FairV2IngressClass::TransportCompletion {
                     MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES
@@ -1989,17 +3004,19 @@ impl FairV2Ingress {
                 if encoded_len > lane_limit {
                     return Err(FairV2IngressPushError::Rejected(inbound));
                 }
-                (Some(CryptoHash::new(encoded)), encoded_len)
+                encoded
             }
             _ => return Err(FairV2IngressPushError::Rejected(inbound)),
         };
+        let encoded_len = encoded.len();
+        let wire_hash = CryptoHash::new(encoded.as_ref());
         // Delivery deduplication remains scoped to the semantic origin: two
         // requesters behind one trusted relay can require distinct responses.
         // Count, byte, and fair-service ownership below is instead charged to
         // the authenticated hop so origin churn cannot multiply resources.
-        let wire_key = wire_hash.map(|hash| FairV2IngressWireKey {
+        let wire_key = Some(FairV2IngressWireKey {
             origin: inbound.sender.clone(),
-            hash,
+            hash: wire_hash,
         });
         let mut state = self.state.lock();
         if !state.open {
@@ -2013,16 +3030,116 @@ impl FairV2Ingress {
                 FairV2IngressSource::Untrusted,
                 FairV2IngressSource::Validator,
             );
+        let authenticated_via_is_validator = matches!(&source, FairV2IngressSource::Validator(_));
+        if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
+            state
+                .pending_wire_owners
+                .get(key)
+                .cloned()
+                .map(|owner| (key, owner))
+        }) {
+            let resource = self.ownership_resource_snapshot(&state, &source);
+            let lane = state
+                .lanes
+                .get(&owner_source)
+                .expect("globally indexed fair-ingress owner lane remains present");
+            let queued = lane
+                .entries
+                .iter()
+                .find(|entry| entry.wire_key.as_ref() == Some(key))
+                .expect("global pending wire key has one queued owner");
+            if queued.encoded_bytes.as_ref() != encoded.as_ref()
+                || queued.class != class
+                || queued
+                    .inbound
+                    .ingress_ownership
+                    .as_ref()
+                    .is_none_or(|evidence| !evidence.validate_exact())
+            {
+                return Err(FairV2IngressPushError::Rejected(inbound));
+            }
+            let routes_before = queued.inbound.reply_routes.clone();
+            let routes_candidate = inbound.reply_routes.clone();
+            let action = match fair_v2_ingress_route_action(
+                routes_before.as_ref(),
+                routes_candidate.as_ref(),
+            ) {
+                Ok(action) => action,
+                Err(_) => return Err(FairV2IngressPushError::Rejected(inbound)),
+            };
+            let mut routes_after = routes_before.clone();
+            match (&mut routes_after, &routes_candidate) {
+                (Some(retained), Some(candidate)) => {
+                    if retained.merge(candidate).is_err() {
+                        return Err(FairV2IngressPushError::Rejected(inbound));
+                    }
+                }
+                (slot @ None, Some(candidate)) => *slot = Some(candidate.clone()),
+                (Some(_), None) | (None, None) => {}
+            }
+            let Some(route_capacity) = fair_v2_ingress_route_capacity(
+                routes_before.as_ref(),
+                routes_candidate.as_ref(),
+                routes_after.as_ref(),
+            ) else {
+                return Err(FairV2IngressPushError::Rejected(inbound));
+            };
+            let prior_evidence = queued
+                .inbound
+                .ingress_ownership
+                .as_ref()
+                .expect("every queued semantic owner retains ingress evidence");
+            let attempts_before = prior_evidence.attempts.clone();
+            let attempts_after =
+                fair_v2_ingress_attempts_for_routes(&attempts_before, routes_after.as_ref());
+            let attempts_before_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_before);
+            let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
+            let occurrence = FairV2IngressOwnershipOccurrence {
+                action,
+                wire_key: key.clone(),
+                semantic_origin: inbound.sender.clone(),
+                authenticated_via: inbound.via.clone(),
+                authenticated_via_is_validator,
+                authenticated_source: source,
+                semantic_owner_source: owner_source.clone(),
+                message_kind,
+                class,
+                encoded_bytes: Arc::clone(&queued.encoded_bytes),
+                encoded_len,
+                resource_before: resource.clone(),
+                resource_after: resource,
+                routes_before,
+                routes_candidate,
+                routes_after: routes_after.clone(),
+                route_capacity,
+                attempts_before,
+                attempts_before_hash,
+                attempts_after,
+                attempts_after_hash,
+            };
+            if !occurrence.validate_exact() {
+                return Err(FairV2IngressPushError::Rejected(inbound));
+            }
+            let Some(evidence) = prior_evidence.merged(occurrence) else {
+                return Err(FairV2IngressPushError::Rejected(inbound));
+            };
+            let lane = state
+                .lanes
+                .get_mut(&owner_source)
+                .expect("globally indexed fair-ingress owner lane remains present");
+            let queued = lane
+                .entries
+                .iter_mut()
+                .find(|entry| entry.wire_key.as_ref() == Some(key))
+                .expect("global pending wire key has one queued owner");
+            queued.inbound.reply_routes = routes_after;
+            queued.inbound.ingress_ownership = Some(evidence);
+            return Ok(FairV2IngressPushDisposition::Coalesced);
+        }
         let lane = state
             .lanes
             .get(&source)
             .expect("configured fair ingress always contains the classified source lane");
-        if wire_key
-            .as_ref()
-            .is_some_and(|key| lane.pending_wire.contains(key))
-        {
-            return Ok(FairV2IngressPushDisposition::Coalesced);
-        }
         let is_validator_source = matches!(source, FairV2IngressSource::Validator(_));
         let is_validator_origin = inbound
             .sender()
@@ -2131,7 +3248,104 @@ impl FairV2Ingress {
         if state.len >= usable_capacity {
             return Err(FairV2IngressPushError::Full(inbound));
         }
+        let resource_before = self.ownership_resource_snapshot(&state, &source);
+        let mut resource_after = resource_before.clone();
+        let Some(source_len_after) = resource_after.source_len.checked_add(1) else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
+        let Some(source_bytes_after) = resource_after.source_bytes.checked_add(encoded_len) else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
+        let Some(global_len_after) = resource_after.global_len.checked_add(1) else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
+        let Some(global_bytes_after) = resource_after.global_bytes.checked_add(encoded_len) else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
+        resource_after.source_len = source_len_after;
+        resource_after.source_bytes = source_bytes_after;
+        resource_after.global_len = global_len_after;
+        resource_after.global_bytes = global_bytes_after;
+        resource_after.protected_slots = protected_slots_after_admission;
+        if class == FairV2IngressClass::Progress {
+            resource_after.source_progress_len = resource_after
+                .source_progress_len
+                .checked_add(1)
+                .expect("bounded Progress owner count cannot overflow");
+        }
+        if is_timeout_vote {
+            resource_after.source_timeout_vote_len = resource_after
+                .source_timeout_vote_len
+                .checked_add(1)
+                .expect("bounded TimeoutVote owner count cannot overflow");
+            if is_validator_source {
+                resource_after.source_timeout_vote_bytes = resource_after
+                    .source_timeout_vote_bytes
+                    .checked_add(encoded_len)
+                    .expect("validated TimeoutVote byte reserve prevents overflow");
+            }
+        }
+        if is_transport_completion {
+            resource_after.source_transport_completion_len = resource_after
+                .source_transport_completion_len
+                .checked_add(1)
+                .expect("bounded transport-completion owner count cannot overflow");
+            resource_after.source_transport_completion_bytes = resource_after
+                .source_transport_completion_bytes
+                .checked_add(encoded_len)
+                .expect("validated transport-completion byte reserve prevents overflow");
+        }
+        let routes_candidate = inbound.reply_routes.clone();
+        let routes_after = routes_candidate.clone();
+        let Some(route_capacity) =
+            fair_v2_ingress_route_capacity(None, routes_candidate.as_ref(), routes_after.as_ref())
+        else {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        };
+        let attempts_after = fair_v2_ingress_attempts_for_routes(&[], routes_after.as_ref());
+        let attempts_before = Vec::new();
+        let attempts_before_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_before);
+        let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
+        let occurrence = FairV2IngressOwnershipOccurrence {
+            action: FairV2IngressOwnershipAction::New,
+            wire_key: wire_key
+                .as_ref()
+                .expect("every admitted fair-ingress message has a canonical wire key")
+                .clone(),
+            semantic_origin: inbound.sender.clone(),
+            authenticated_via: inbound.via.clone(),
+            authenticated_via_is_validator,
+            authenticated_source: source.clone(),
+            semantic_owner_source: source.clone(),
+            message_kind,
+            class,
+            encoded_bytes: Arc::clone(&encoded),
+            encoded_len,
+            resource_before,
+            resource_after,
+            routes_before: None,
+            routes_candidate,
+            routes_after,
+            route_capacity,
+            attempts_before,
+            attempts_before_hash,
+            attempts_after,
+            attempts_after_hash,
+        };
+        if !occurrence.validate_exact() {
+            return Err(FairV2IngressPushError::Rejected(inbound));
+        }
+        inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(occurrence));
         let queue_was_empty = state.len == 0;
+        if let Some(key) = &wire_key {
+            assert!(
+                state
+                    .pending_wire_owners
+                    .insert(key.clone(), source.clone())
+                    .is_none(),
+                "global coalescing key was checked absent while holding the ingress lock"
+            );
+        }
         let lane = state
             .lanes
             .get_mut(&source)
@@ -2171,6 +3385,7 @@ impl FairV2Ingress {
             enqueued_at,
             class,
             wire_key,
+            encoded_bytes: encoded,
             encoded_len,
         });
         state.len += 1;
@@ -2281,6 +3496,13 @@ impl FairV2Ingress {
                 );
             }
             let remains_ready = !lane.entries.is_empty();
+            if let Some(key) = &entry.wire_key {
+                assert_eq!(
+                    state.pending_wire_owners.remove(key),
+                    Some(source.clone()),
+                    "global wire owner must remain indexed until service"
+                );
+            }
             state.len -= 1;
             state.bytes = state
                 .bytes
@@ -2326,6 +3548,30 @@ impl FairV2Ingress {
     fn len(&self) -> usize {
         self.state.lock().len
     }
+}
+
+/// Admit one test envelope through the real fair-ingress ownership seam.
+#[cfg(test)]
+pub(crate) fn fair_v2_ingress_admit_for_test(inbound: InboundBlockMessage) -> InboundBlockMessage {
+    let roster = inbound.via().cloned().into_iter().collect::<Vec<_>>();
+    let ingress = FairV2Ingress::new(
+        64,
+        128 * 1024 * 1024,
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+    );
+    ingress
+        .configure_roster(roster)
+        .expect("test fair-ingress geometry fits one exact envelope");
+    ingress.open().expect("open test fair ingress");
+    assert!(matches!(
+        ingress.try_push(inbound),
+        Ok(FairV2IngressPushDisposition::Enqueued)
+    ));
+    ingress
+        .try_recv()
+        .expect("test fair ingress returns its admitted owner")
 }
 
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
@@ -2560,7 +3806,7 @@ impl SumeragiHandle {
             reply_route: None,
             message,
         })
-            .accepted_or_coalesced()
+        .accepted_or_coalesced()
     }
 
     /// Return whether a fatal consensus failure requires process restart.
@@ -2854,8 +4100,7 @@ struct SumeragiWorker {
 #[cfg(test)]
 mod authoritative_runtime_gate_tests {
     use std::{
-        collections::BTreeSet,
-        sync::atomic::Ordering,
+        sync::{Arc, atomic::Ordering},
         time::{Duration, Instant},
     };
 
@@ -2874,9 +4119,14 @@ mod authoritative_runtime_gate_tests {
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
     };
+    use iroha_p2p::network::{
+        NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture,
+    };
     use norito::codec::Encode as _;
 
-    use super::{BlockMessage, FairV2IngressClass, InboundBlockMessage, test_sumeragi_handle};
+    use super::{
+        BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, test_sumeragi_handle,
+    };
 
     fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
         BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -4080,36 +5330,335 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
-    fn fair_v2_ingress_coalesces_only_a_pending_exact_source_retransmission() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(6);
-        let validator = validator_peers(1).pop().expect("validator fixture");
+    fn transport_reply_route_construction_is_fallible_and_target_bound() {
+        let semantic_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let other_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let authenticated_via = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via.clone());
+        let live = routes.mint_via(semantic_origin.clone(), authenticated_via.clone());
+        let message = v2_auxiliary_prepare(0);
+
+        let inbound = InboundBlockMessage::try_from_transport_with_reply_route(
+            message.clone(),
+            semantic_origin.clone(),
+            authenticated_via.clone(),
+            live,
+        )
+        .expect("live target-bound route must be retained");
+        let (_, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+        assert_eq!(sender, Some(semantic_origin.clone()));
+        assert_eq!(reply_routes.expect("live reply route set").len(), 1);
+
+        let inactive = routes.mint_via(semantic_origin.clone(), authenticated_via.clone());
+        assert!(routes.retire(&inactive));
+        assert!(matches!(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                message.clone(),
+                semantic_origin.clone(),
+                authenticated_via.clone(),
+                inactive,
+            ),
+            Err(NetworkReplyRouteError::Inactive)
+        ));
+
+        let retargeted = routes.mint_via(other_origin, authenticated_via.clone());
+        assert!(matches!(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                message.clone(),
+                semantic_origin.clone(),
+                authenticated_via.clone(),
+                retargeted,
+            ),
+            Err(NetworkReplyRouteError::Retargeted)
+        ));
+
+        let wrong_via = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatched_delivery = routes.mint_via(semantic_origin.clone(), wrong_via);
+        assert!(matches!(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                message.clone(),
+                semantic_origin.clone(),
+                authenticated_via.clone(),
+                mismatched_delivery,
+            ),
+            Err(NetworkReplyRouteError::DifferentSource)
+        ));
+
+        let direct =
+            InboundBlockMessage::from_transport(message, semantic_origin, authenticated_via);
+        assert!(direct.into_message_sender_and_reply_routes().2.is_none());
+    }
+
+    #[test]
+    fn fair_v2_ingress_coalesces_semantic_request_and_attaches_independent_routes() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let mut sources = validator_peers(2);
+        let source_b = sources.pop().expect("second authenticated source");
+        let source_a = sources.pop().expect("first authenticated source");
+        let semantic_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(source_a.clone());
+        let route_a = routes.mint_via(semantic_origin.clone(), source_a.clone());
+        let route_b = routes.mint_via(semantic_origin.clone(), source_b.clone());
         ingress.close();
         ingress
-            .configure_roster([validator.clone()])
-            .expect("validator plus untrusted lane fit");
+            .configure_roster([source_a.clone(), source_b.clone()])
+            .expect("two authenticated lanes plus untrusted reserve fit");
         ingress.open().expect("open configured roster");
         let request = v2_auxiliary_prepare(0);
 
-        assert!(handle.try_incoming_block_message_from(validator.clone(), request.clone()));
-        assert!(
-            handle.try_incoming_block_message_from(validator.clone(), request.clone()),
-            "a retransmitter keeps ownership through the queued exact occurrence"
-        );
-        assert_eq!(ingress.len(), 1, "the exact pending wire value coalesces");
-        assert!(
-            !handle.try_incoming_block_message_from(validator.clone(), v2_auxiliary_prepare(1),),
-            "a different auxiliary request cannot consume the progress reservation"
+        for (via, route) in [
+            (source_a.clone(), route_a.clone()),
+            (source_b, route_b.clone()),
+        ] {
+            assert!(matches!(
+                ingress.try_push(
+                    InboundBlockMessage::try_from_transport_with_reply_route(
+                        request.clone(),
+                        semantic_origin.clone(),
+                        via,
+                        route,
+                    )
+                    .expect("live route matches its semantic request target")
+                ),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+                    | Ok(super::FairV2IngressPushDisposition::Coalesced)
+            ));
+        }
+        let later_a = routes
+            .redeliver(&route_a)
+            .expect("same-source later delivery capability");
+        assert!(matches!(
+            ingress.try_push(
+                InboundBlockMessage::try_from_transport_with_reply_route(
+                    request.clone(),
+                    semantic_origin.clone(),
+                    source_a.clone(),
+                    later_a.clone(),
+                )
+                .expect("later delivery remains a live route")
+            ),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert_eq!(
+            ingress.len(),
+            1,
+            "one semantic request owns all authenticated return routes"
         );
 
         let delivered = ingress.try_recv().expect("deliver the queued occurrence");
-        assert_eq!(delivered.sender(), Some(&validator));
+        assert_eq!(delivered.sender(), Some(&semantic_origin));
+        let (_, _, delivered_routes) = delivered.into_message_sender_and_reply_routes();
+        let delivered_routes = delivered_routes.expect("authenticated routes survive dequeue");
+        assert_eq!(delivered_routes.len(), 2);
+        assert!(
+            delivered_routes
+                .iter()
+                .any(|route| route.same_delivery(&later_a))
+        );
+        assert!(
+            delivered_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_b))
+        );
         assert_eq!(ingress.len(), 0);
-        assert!(handle.try_incoming_block_message_from(validator, request));
+        let next_a = routes
+            .redeliver(&later_a)
+            .expect("new queue-scoped delivery capability");
+        assert!(matches!(
+            ingress.try_push(
+                InboundBlockMessage::try_from_transport_with_reply_route(
+                    request,
+                    semantic_origin,
+                    source_a,
+                    next_a,
+                )
+                .expect("next delivery remains a live route")
+            ),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
         assert_eq!(
             ingress.len(),
             1,
             "coalescing is queue-scoped and ends when the consumer takes ownership"
         );
+    }
+
+    #[test]
+    fn fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let mut sources = validator_peers(2);
+        let source_b = sources.pop().expect("second authenticated source");
+        let source_a = sources.pop().expect("first authenticated source");
+        let semantic_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(source_a.clone());
+        let route_a = routes.mint_via(semantic_origin.clone(), source_a.clone());
+        let request = v2_auxiliary_prepare(0);
+        ingress.close();
+        ingress
+            .configure_roster([source_a.clone(), source_b.clone()])
+            .expect("two authenticated lanes plus untrusted reserve fit");
+        ingress.open().expect("open configured roster");
+
+        let inbound = |via: PeerId, route: NetworkReplyRoute| {
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                request.clone(),
+                semantic_origin.clone(),
+                via,
+                route,
+            )
+            .expect("test route binds the semantic request and authenticated source")
+        };
+        assert!(matches!(
+            ingress.try_push(inbound(source_a.clone(), route_a.clone())),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(inbound(source_a.clone(), route_a.clone())),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+
+        {
+            let mut state = ingress.state.lock();
+            let entry = state
+                .lanes
+                .get_mut(&super::FairV2IngressSource::Validator(source_a.clone()))
+                .and_then(|lane| lane.entries.front_mut())
+                .expect("source A owns the queued semantic request");
+            let evidence = entry
+                .inbound
+                .ingress_ownership
+                .as_mut()
+                .expect("fair admission attached exact ownership evidence");
+            assert!(evidence.advance_reply_cursors(&route_a, 7, 11));
+            assert!(!evidence.advance_reply_cursors(&route_a, 6, 11));
+            assert!(evidence.validate_exact());
+        }
+
+        let later_a = routes
+            .redeliver(&route_a)
+            .expect("same-tenure later delivery");
+        assert!(matches!(
+            ingress.try_push(inbound(source_a.clone(), later_a.clone())),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        let reconnect_a = routes.mint_via(semantic_origin.clone(), source_a.clone());
+        assert!(matches!(
+            ingress.try_push(inbound(source_a.clone(), reconnect_a.clone())),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        let route_b = routes.mint_via(semantic_origin.clone(), source_b.clone());
+        assert!(matches!(
+            ingress.try_push(inbound(source_b, route_b.clone())),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+
+        let mut delivered = ingress.try_recv().expect("deliver the semantic owner");
+        let evidence = delivered
+            .ingress_ownership()
+            .expect("ownership carrier survives fair dequeue")
+            .clone();
+        assert!(evidence.validate_exact());
+        assert_eq!(evidence.occurrence_count, 5);
+        assert_eq!(evidence.action_counts, [1, 1, 1, 1, 1]);
+        assert!(Arc::ptr_eq(
+            &evidence.first.encoded_bytes,
+            &evidence.latest.encoded_bytes
+        ));
+        assert_eq!(
+            evidence.latest_action(),
+            super::FairV2IngressOwnershipAction::NewAlternateSource
+        );
+        let source_a_attempt = evidence
+            .attempts
+            .iter()
+            .find(|attempt| attempt.route.same_source(&reconnect_a))
+            .expect("source A attempt survives reconnect");
+        assert!(source_a_attempt.route.same_delivery(&reconnect_a));
+        assert_eq!(source_a_attempt.message_cursor, 7);
+        assert_eq!(source_a_attempt.chunk_cursor, 11);
+        let source_b_attempt = evidence
+            .attempts
+            .iter()
+            .find(|attempt| attempt.route.same_source(&route_b))
+            .expect("new alternate source starts an independent attempt");
+        assert_eq!(source_b_attempt.message_cursor, 0);
+        assert_eq!(source_b_attempt.chunk_cursor, 0);
+
+        let rejected = |mutated: super::FairV2IngressOwnershipEvidence| {
+            assert!(!mutated.validate_exact());
+        };
+
+        let mut mutated = evidence.clone();
+        mutated.latest.wire_key.hash = CryptoHash::new(b"mutated semantic hash");
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.semantic_origin = None;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.authenticated_via = None;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.authenticated_source = super::FairV2IngressSource::Untrusted;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.message_kind = super::FairV2IngressMessageKind::V2Vote;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.class = super::FairV2IngressClass::Progress;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.encoded_bytes = Arc::<[u8]>::from(vec![0xFF]);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.resource_after.global_len =
+            mutated.latest.resource_after.global_len.saturating_add(1);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.resource_after.source_bytes =
+            mutated.latest.resource_after.source_bytes.saturating_add(1);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.resource_after.timeout_vote_byte_reserve = mutated
+            .latest
+            .resource_after
+            .timeout_vote_byte_reserve
+            .saturating_add(1);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.resource_after.message_capacity = mutated
+            .latest
+            .resource_after
+            .message_capacity
+            .saturating_add(1);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.latest.route_capacity = mutated
+            .latest
+            .route_capacity
+            .and_then(|capacity| capacity.checked_add(1));
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.action_counts[super::FairV2IngressOwnershipAction::ExactDuplicate.index()] += 1;
+        rejected(mutated);
+
+        let mut mutated = evidence;
+        mutated.attempts[0].message_cursor = mutated.attempts[0].message_cursor.saturating_add(1);
+        rejected(mutated);
+
+        assert!(delivered.take_ingress_ownership().is_some());
+        assert!(delivered.ingress_ownership().is_none());
     }
 
     #[test]

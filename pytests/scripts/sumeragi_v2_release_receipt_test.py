@@ -159,6 +159,10 @@ def fixture_writer(tmp_path: Path) -> Path:
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         scripts / "run_sumeragi_v2_release_gates.sh",
     )
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "sumeragi_v2_localnet_manifest.py",
+        scripts / "sumeragi_v2_localnet_manifest.py",
+    )
     fixture_cargo = project / ".cargo"
     fixture_cargo.mkdir()
     shutil.copy2(ROOT_DIR / ".cargo" / "config.toml", fixture_cargo / "config.toml")
@@ -242,7 +246,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "540f91f9cfe1f3e55797ead639d61380121b0f7091e07c555b8ff6d5611794ed"
+        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -1098,6 +1102,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             )
         elif kind == "pytest":
             log_lines = ["." * required_count, f"{required_count} passed in 0.01s"]
+        elif kind == "command":
+            log_lines = [f"{leg_id} completed successfully"]
         else:
             log_lines = [
                 *(
@@ -1192,7 +1198,22 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_log = formal_dir / "formal-gate.log"
     formal_log.write_text(f"formal work\n{FINAL_MARKER}\n", encoding="utf-8")
     formal_ledger = formal_dir / "proof_coverage.json"
-    formal_ledger.write_text('{"machine_checked_completion":true}\n', encoding="utf-8")
+    formal_ledger.write_text(
+        json.dumps(
+            {
+                "machine_checked_completion": True,
+                "obligations": [
+                    {
+                        "id": "effective-lock-body-acquisition-production-refinement",
+                        "status": "cross_tool_proved",
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     formal_evidence = formal_dir / "proof_evidence.json"
     formal_evidence.write_text('{"backend_verification":true}\n', encoding="utf-8")
     formal_verus_evidence = formal_dir / "verus_evidence.json"
@@ -1202,6 +1223,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_verus_log = formal_dir / "verus.log"
     formal_verus_log.write_text(
         "fixture production Verus verification passed\n", encoding="utf-8"
+    )
+    formal_cross_tool_evidence = formal_dir / "cross_tool_evidence.json"
+    formal_cross_tool_evidence.write_text(
+        '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
     )
     formal_harness_lock = formal_dir / "harness-Cargo.lock"
     shutil.copy2(
@@ -1231,6 +1256,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "proof_evidence_sha256": sha256(formal_evidence),
             "verus_evidence_sha256": sha256(formal_verus_evidence),
             "verus_log_sha256": sha256(formal_verus_log),
+            "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
         },
@@ -1238,8 +1264,18 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
 
     seed_dir = tmp_path / "seed"
     runs_dir = seed_dir / "runs"
+    localnets_dir = seed_dir / "localnets"
+    localnet_manifests_dir = seed_dir / "localnet-manifests"
     runs_dir.mkdir(parents=True)
+    localnets_dir.mkdir()
+    localnet_manifests_dir.mkdir()
     seed_logs = []
+    seed_localnets = []
+    seed_localnet_files = []
+    seed_localnet_manifests = []
+    localnet_manifest_index_lines = [
+        "run_index\tlocalnet\tmanifest\tmanifest_sha256"
+    ]
     summary_lines = ["\t".join(SUMMARY_FIELDS)]
     seed_run_count = len(SCENARIOS) * 32
     for index in range(seed_run_count):
@@ -1264,6 +1300,33 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             encoding="utf-8",
         )
         seed_logs.append(run_log)
+        localnet = localnets_dir / f"run-{index:03d}"
+        validator = localnet / "mock-validator"
+        validator.mkdir(parents=True)
+        retained_log = validator / "run-1-stdout.log"
+        retained_log.write_text(
+            f"sumeragi_v2_runner::{scenario}\nseed={seed}\n", encoding="utf-8"
+        )
+        seed_localnets.append(localnet)
+        seed_localnet_files.append(retained_log)
+        localnet_manifest = localnet_manifests_dir / f"run-{index:03d}.tsv"
+        relative_file = "mock-validator/run-1-stdout.log"
+        localnet_manifest.write_text(
+            "path\tsize_bytes\tsha256\n"
+            f"{relative_file}\t{retained_log.stat().st_size}\t{sha256(retained_log)}\n",
+            encoding="utf-8",
+        )
+        seed_localnet_manifests.append(localnet_manifest)
+        localnet_manifest_index_lines.append(
+            "\t".join(
+                (
+                    str(index),
+                    f"localnets/run-{index:03d}",
+                    f"localnet-manifests/run-{index:03d}.tsv",
+                    sha256(localnet_manifest),
+                )
+            )
+        )
         summary_lines.append(
             "\t".join(
                 (
@@ -1283,20 +1346,35 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         )
     seed_summary = seed_dir / "summary.tsv"
     seed_summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    seed_localnet_manifest_index = seed_dir / "localnet-manifests.tsv"
+    seed_localnet_manifest_index.write_text(
+        "\n".join(localnet_manifest_index_lines) + "\n", encoding="utf-8"
+    )
     seed_completion = seed_dir / "COMPLETED.tsv"
+    seed_completion_fields = {
+        "schema_version": "2",
+        "profile": "release",
+        "head_commit": head,
+        "head_tree": tree,
+        "source_manifest_sha256": sealed_manifest,
+        "cargo_lock_sha256": lock,
+        "completed_runs": str(seed_run_count),
+        "expected_runs": str(seed_run_count),
+        "summary_sha256": sha256(seed_summary),
+        "localnet_manifest_count": str(seed_run_count),
+        "localnet_manifests_path": "localnet-manifests.tsv",
+        "localnet_manifests_sha256": sha256(seed_localnet_manifest_index),
+    }
+    for index, manifest in enumerate(seed_localnet_manifests):
+        seed_completion_fields[f"localnet_manifest_{index:03d}_path"] = (
+            f"localnet-manifests/run-{index:03d}.tsv"
+        )
+        seed_completion_fields[f"localnet_manifest_{index:03d}_sha256"] = sha256(
+            manifest
+        )
     write_tsv(
         seed_completion,
-        {
-            "schema_version": "1",
-            "profile": "release",
-            "head_commit": head,
-            "head_tree": tree,
-            "source_manifest_sha256": sealed_manifest,
-            "cargo_lock_sha256": lock,
-            "completed_runs": str(seed_run_count),
-            "expected_runs": str(seed_run_count),
-            "summary_sha256": sha256(seed_summary),
-        },
+        seed_completion_fields,
     )
 
     chaos_dir = tmp_path / "chaos"
@@ -1393,6 +1471,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_evidence": formal_evidence,
         "formal_verus_evidence": formal_verus_evidence,
         "formal_verus_log": formal_verus_log,
+        "formal_cross_tool_evidence": formal_cross_tool_evidence,
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
         "formal_verus_tool": tool_paths["verus"],
@@ -1402,6 +1481,12 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "seed_summary": seed_summary,
         "seed_logs": seed_logs,
         "seed_log": seed_logs[17],
+        "seed_localnets": seed_localnets,
+        "seed_localnet": seed_localnets[17],
+        "seed_localnet_file": seed_localnet_files[17],
+        "seed_localnet_manifest_index": seed_localnet_manifest_index,
+        "seed_localnet_manifests": seed_localnet_manifests,
+        "seed_localnet_manifest": seed_localnet_manifests[17],
         "chaos_completion": chaos_completion,
         "chaos_log": chaos_log,
         "taira_completion": taira_completion,
@@ -1413,46 +1498,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "tree": tree,
         "lock": lock,
     }
-
-
-def enable_cross_tool_evidence(
-    evidence: dict[str, Path | str | list[Path]],
-) -> Path:
-    """Promote the fixture ledger and bind one canonical cross-tool document."""
-
-    ledger = evidence["formal_ledger"]
-    completion = evidence["formal_completion"]
-    assert isinstance(ledger, Path)
-    assert isinstance(completion, Path)
-    ledger.write_text(
-        json.dumps(
-            {
-                "machine_checked_completion": True,
-                "obligations": [
-                    {
-                        "id": "effective-lock-body-acquisition-production-refinement",
-                        "status": "cross_tool_proved",
-                    }
-                ],
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    cross_tool = completion.with_name("cross_tool_evidence.json")
-    cross_tool.write_text(
-        '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
-    )
-    completion_fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    completion_fields["proof_coverage_sha256"] = sha256(ledger)
-    completion_fields["cross_tool_evidence_sha256"] = sha256(cross_tool)
-    write_tsv(completion, completion_fields)
-    evidence["formal_cross_tool_evidence"] = cross_tool
-    return cross_tool
 
 
 def run_writer(
@@ -1716,7 +1761,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "540f91f9cfe1f3e55797ead639d61380121b0f7091e07c555b8ff6d5611794ed"
+        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -1757,10 +1802,12 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "formal_proof_evidence": "formal_evidence",
         "formal_verus_evidence": "formal_verus_evidence",
         "formal_verus_log": "formal_verus_log",
+        "formal_cross_tool_evidence": "formal_cross_tool_evidence",
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
         "seed_matrix_completion": "seed_completion",
         "seed_matrix_summary": "seed_summary",
+        "seed_matrix_localnet_manifest_index": "seed_localnet_manifest_index",
         "chaos_completion": "chaos_completion",
         "chaos_log": "chaos_log",
         "taira_completion": "taira_completion",
@@ -1774,11 +1821,16 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             "path": str(fixture_path.resolve()),
             "sha256": sha256(fixture_path),
         }
-    assert "formal_cross_tool_evidence" not in receipt["evidence"]
     seed_logs = evidence["seed_logs"]
     assert isinstance(seed_logs, list)
     assert receipt["evidence"]["seed_matrix_run_logs"] == [
         {"path": str(path.resolve()), "sha256": sha256(path)} for path in seed_logs
+    ]
+    seed_localnet_manifests = evidence["seed_localnet_manifests"]
+    assert isinstance(seed_localnet_manifests, list)
+    assert receipt["evidence"]["seed_matrix_localnet_manifests"] == [
+        {"path": str(path.resolve()), "sha256": sha256(path)}
+        for path in seed_localnet_manifests
     ]
     corridor_logs = evidence["corridor_logs"]
     assert isinstance(corridor_logs, list)
@@ -1796,7 +1848,8 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
     evidence = make_evidence(tmp_path)
-    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool = evidence["formal_cross_tool_evidence"]
+    assert isinstance(cross_tool, Path)
     writer = fixture_writer(tmp_path)
     output = terminal_output_path(evidence)
 
@@ -1814,7 +1867,8 @@ def test_receipt_rejects_missing_required_cross_tool_evidence(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
-    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool = evidence["formal_cross_tool_evidence"]
+    assert isinstance(cross_tool, Path)
     cross_tool.unlink()
     writer = fixture_writer(tmp_path)
 
@@ -1826,7 +1880,8 @@ def test_receipt_rejects_missing_required_cross_tool_evidence(
 
 def test_receipt_rejects_stale_cross_tool_evidence(tmp_path: Path) -> None:
     evidence = make_evidence(tmp_path)
-    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool = evidence["formal_cross_tool_evidence"]
+    assert isinstance(cross_tool, Path)
     cross_tool.write_text('{"stale":true}\n', encoding="utf-8")
     writer = fixture_writer(tmp_path)
 
@@ -1840,7 +1895,8 @@ def test_receipt_rejects_substituted_cross_tool_evidence(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
-    cross_tool = enable_cross_tool_evidence(evidence)
+    cross_tool = evidence["formal_cross_tool_evidence"]
+    assert isinstance(cross_tool, Path)
     cross_tool.write_text(
         '{"backend_verification":true,"canonical":false}\n', encoding="utf-8"
     )
@@ -1860,21 +1916,29 @@ def test_receipt_rejects_substituted_cross_tool_evidence(
     assert "archived formal ledger/evidence failed release validation" in result.stderr
 
 
-def test_receipt_rejects_cross_tool_evidence_while_dormant(
+def test_receipt_rejects_formal_release_ledger_without_cross_tool_obligations(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
+    formal_ledger = evidence["formal_ledger"]
     formal_completion = evidence["formal_completion"]
+    assert isinstance(formal_ledger, Path)
     assert isinstance(formal_completion, Path)
-    formal_completion.with_name("cross_tool_evidence.json").write_text(
-        '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
+    formal_ledger.write_text(
+        '{"machine_checked_completion":true}\n', encoding="utf-8"
     )
+    fields = dict(
+        line.split("\t", 1)
+        for line in formal_completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["proof_coverage_sha256"] = sha256(formal_ledger)
+    write_tsv(formal_completion, fields)
     writer = fixture_writer(tmp_path)
 
     result = run_writer(evidence, terminal_output_path(evidence), writer)
 
     assert result.returncode == 1
-    assert "forbidden dormant cross-tool evidence" in result.stderr
+    assert "formal release ledger does not require cross-tool evidence" in result.stderr
 
 
 def test_verify_existing_rebuilds_and_durably_accepts_the_exact_receipt(
@@ -2529,6 +2593,15 @@ def test_receipt_rejects_cross_source_completion(
         ("corridor_cargo_tool", "corridor cargo tool digest mismatch"),
         ("seed_summary", "summary digest mismatch"),
         ("seed_log", "seed run log 17 digest mismatch"),
+        (
+            "seed_localnet_manifest_index",
+            "seed localnet manifest index digest mismatch",
+        ),
+        ("seed_localnet_manifest", "seed localnet manifest 17 digest mismatch"),
+        (
+            "seed_localnet_file",
+            "seed localnet manifest 17 does not match retained content",
+        ),
         ("chaos_log", "log digest mismatch"),
         ("taira_evidence", "evidence digest mismatch"),
     ],
@@ -2616,6 +2689,98 @@ def test_receipt_rejects_stale_four_scenario_seed_count(
 
     assert result.returncode == 1
     assert "exact release matrix" in result.stderr
+
+
+def test_receipt_rejects_legacy_seed_completion_without_localnet_manifests(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    completion = evidence["seed_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields = {
+        name: value
+        for name, value in fields.items()
+        if not name.startswith("localnet_manifest")
+    }
+    fields["schema_version"] = "1"
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "seed completion fields do not match its completion schema" in result.stderr
+
+
+def test_receipt_rejects_seed_localnet_manifest_path_escape(
+    tmp_path: Path,
+) -> None:
+    for mutation, expected_error in (
+        ("completion", "seed localnet manifest index row 17 is not canonical"),
+        ("symlink-parent", "seed localnet manifest 0 escaped its archive"),
+    ):
+        case_root = tmp_path / mutation
+        case_root.mkdir()
+        evidence = make_evidence(case_root)
+        writer = fixture_writer(case_root)
+        completion = evidence["seed_completion"]
+        assert isinstance(completion, Path)
+        if mutation == "completion":
+            fields = dict(
+                line.split("\t", 1)
+                for line in completion.read_text(encoding="utf-8").splitlines()
+            )
+            fields["localnet_manifest_017_path"] = "../escaped-localnet.tsv"
+            write_tsv(completion, fields)
+        else:
+            manifest = evidence["seed_localnet_manifest"]
+            assert isinstance(manifest, Path)
+            manifest_directory = manifest.parent
+            escaped_directory = case_root / "escaped-localnet-manifests"
+            manifest_directory.rename(escaped_directory)
+            manifest_directory.symlink_to(escaped_directory, target_is_directory=True)
+
+        result = run_writer(evidence, case_root / "receipt.json", writer)
+
+        assert result.returncode == 1
+        assert expected_error in result.stderr
+
+
+def test_receipt_rejects_symlink_in_retained_seed_localnet(tmp_path: Path) -> None:
+    for mutation, expected_error in (
+        ("entry", "contains a symlink"),
+        ("parent", "root must be a resolved real directory"),
+    ):
+        case_root = tmp_path / mutation
+        case_root.mkdir()
+        evidence = make_evidence(case_root)
+        writer = fixture_writer(case_root)
+        localnet = evidence["seed_localnet"]
+        assert isinstance(localnet, Path)
+        if mutation == "entry":
+            outside = case_root / "outside-localnet"
+            outside.write_text("outside\n", encoding="utf-8")
+            (localnet / "escape").symlink_to(outside)
+            expected_index = 17
+        else:
+            localnets_directory = localnet.parent
+            escaped_directory = case_root / "escaped-localnets"
+            localnets_directory.rename(escaped_directory)
+            localnets_directory.symlink_to(escaped_directory, target_is_directory=True)
+            expected_index = 0
+
+        result = run_writer(evidence, case_root / "receipt.json", writer)
+
+        assert result.returncode == 1
+        assert (
+            f"seed retained localnet {expected_index} is unsafe or unstable"
+            in result.stderr
+        )
+        assert expected_error in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -2710,6 +2875,47 @@ def test_receipt_rejects_rehashed_missing_corridor_leg(tmp_path: Path) -> None:
     assert "must contain every exact release leg" in result.stderr
 
 
+def test_receipt_rejects_missing_or_altered_source_sealed_full_suite_leg(
+    tmp_path: Path,
+) -> None:
+    for mutation in ("missing", "altered-command"):
+        case_root = tmp_path / mutation
+        case_root.mkdir()
+        evidence = make_evidence(case_root)
+        writer = fixture_writer(case_root)
+        summary = evidence["corridor_summary"]
+        completion = evidence["corridor_completion"]
+        assert isinstance(summary, Path)
+        assert isinstance(completion, Path)
+        lines = summary.read_text(encoding="utf-8").splitlines()
+        row_index = next(
+            index
+            for index, line in enumerate(lines[1:], 1)
+            if "\tsource-sealed-workspace-tests\t" in line
+        )
+        if mutation == "missing":
+            del lines[row_index]
+        else:
+            row = lines[row_index].split("\t")
+            row[9] = "cargo test --workspace"
+            lines[row_index] = "\t".join(row)
+        summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        fields = dict(
+            line.split("\t", 1)
+            for line in completion.read_text(encoding="utf-8").splitlines()
+        )
+        fields["summary_sha256"] = sha256(summary)
+        write_tsv(completion, fields)
+
+        result = run_writer(evidence, case_root / "receipt.json", writer)
+
+        assert result.returncode == 1
+        assert (
+            "must contain every exact release leg" in result.stderr
+            or "is not the exact release leg" in result.stderr
+        )
+
+
 def test_receipt_rejects_rehashed_malformed_corridor_log(
     tmp_path: Path,
 ) -> None:
@@ -2740,7 +2946,7 @@ def test_receipt_rejects_rehashed_malformed_corridor_log(
     assert "ambiguous Cargo transcript" in result.stderr
 
 
-def test_hand_invoked_writer_rejects_fake_machine_completion_json(
+def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
@@ -2749,7 +2955,7 @@ def test_hand_invoked_writer_rejects_fake_machine_completion_json(
     result = run_writer(evidence, output, SCRIPT)
 
     assert result.returncode == 1
-    assert "archived formal ledger/evidence failed release validation" in result.stderr
+    assert "archived formal Verus evidence failed validation" in result.stderr
     assert not output.exists()
 
 

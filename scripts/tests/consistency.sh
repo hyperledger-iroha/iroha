@@ -33,6 +33,17 @@ do_check() {
     fi
 }
 
+do_render_check() {
+    local cmd="$1"
+    if ! eval "$cmd" > /dev/null; then
+        echo "[FAIL] unable to render live CLI help"
+        echo "  $cmd"
+        exit_code=1
+    else
+        echo "[OK] live CLI help renders successfully"
+    fi
+}
+
 do_check_swarm() {
     local peers="$1"
     local image="$2"
@@ -45,7 +56,7 @@ do_check_swarm() {
 cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 cmd_schema="${bin_kagami[@]} schema"
 cmd_iroha_help="${bin_iroha[@]} tools markdown-help"
-cmd_kagami_help="${bin_kagami[@]} markdown-help"
+cmd_kagami_help="${bin_kagami[@]} advanced markdown-help"
 
 tasks=()
 
@@ -71,7 +82,7 @@ for task in "${tasks[@]}"; do
             do_check "$cmd_schema" "docs/source/references/schema.json"
             ;;
         "cli-help")
-            do_check "$cmd_iroha_help" "crates/iroha_cli/CommandLineHelp.md"
+            do_render_check "$cmd_iroha_help"
             do_check "$cmd_kagami_help" "crates/iroha_kagami/CommandLineHelp.md"
             ;;
         "docker-compose")

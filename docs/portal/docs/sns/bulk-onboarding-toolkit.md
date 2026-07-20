@@ -20,14 +20,21 @@ Groups are flattened in that dependency order into one
 python3 scripts/sns_bulk_onboard.py setup.json \
   --config client.toml \
   --iroha-cli ./target/release/iroha \
-  --plan-file setup.plan.json \
-  --plan-only
+  --plan-file setup.plan.json
 ```
 
-Omit `--plan-only` to locally verify, sign, and submit the exact framed vector
-in one ordinary transaction. A conflict returns no plan; no partial transaction
-is ever submitted. Exact replays are free no-ops and repairs carry no lease
-charge.
+Planning is read-only by default. Add `--apply` explicitly to locally verify,
+sign, and submit the exact framed vector in one ordinary transaction. A conflict
+returns no plan; no partial transaction is ever submitted. Exact replays are
+free no-ops and repairs carry no lease charge.
+
+```bash
+python3 scripts/sns_bulk_onboard.py setup.json \
+  --config client.toml \
+  --iroha-cli ./target/release/iroha \
+  --plan-file setup.plan.json \
+  --apply
+```
 
 Intent and plan files are secret-free. Signing material remains in the client
 configuration's runtime-only key source. Sponsored-onboarding tokens belong in

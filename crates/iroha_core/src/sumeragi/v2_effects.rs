@@ -70,9 +70,21 @@ use std::{
 };
 
 use super::v2_core::{
-    EquivocationKind, EventTag, ExactBodyOwnerProjection, ExactBodyRetirementAccounting,
-    MAX_EFFECTS_PER_STEP, TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
+    CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_OWNER, EFFECTIVE_LOCK_TRACE_RETIRE,
+    EffectiveLockTraceProjection, EquivocationKind, EventTag, ExactBodyOwnerProjection,
+    ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
+    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
+    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
+    ProductionDurableBodyIdentityProjection, ProductionQuorumCertificateIdentityProjection,
+    TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
     plan_exact_body_owner_rebind, plan_exact_body_retirement_accounting,
+    production_body_capacity_retirement_preserves_effective_lock_kernel,
+    production_body_ownership_preserves_effective_lock_kernel,
+    production_decision_trace_refines_recovery_witness_kernel,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
@@ -136,6 +148,448 @@ impl VerifiedPendingGenesisNexusAmxContext {
     /// Return the exact projection bound into the replayed height-context id.
     pub(crate) const fn hash(self) -> Hash {
         self.hash
+    }
+}
+
+/// Exact closed-ingress stage of an interrupted canonical-tip recovery.
+///
+/// Each variant names the sole reducer effect which may be dispatched next.
+/// `ApplicationDispatched` and `Completed` are terminal with respect to
+/// reducer effects: only the matching typed Kura completion may cross the
+/// former boundary, and no height-local work may cross the latter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum PendingKuraApplyRecoveryStage {
+    /// The authenticated replay must dispatch its certified body fetch.
+    CertifiedFetch,
+    /// The recovered exact body must cross the reducer's durable-store stage.
+    DurableStore,
+    /// The durable validation marker must cross deterministic validation.
+    DeterministicValidation,
+    /// The exact replayed CommitQC must dispatch application.
+    Apply,
+    /// The unique matching Apply is owned by the durable I/O worker.
+    ApplicationDispatched,
+    /// Kura returned and the executor accepted the exact finality completion.
+    Completed,
+}
+
+fn canonical_typed_identity<T>(
+    domain: u8,
+    kind: u8,
+    hash: HashOf<T>,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn canonical_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn recovery_decision_projection(
+    certificate: &wire::QuorumCertificate,
+) -> ProductionDecisionIdentityProjection {
+    ProductionDecisionIdentityProjection {
+        context_id: canonical_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            certificate.round.context_id.0,
+        ),
+        height: certificate.round.height,
+        view: certificate.round.view,
+        phase: certificate.phase as u8,
+        subject: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&certificate.subject),
+        ),
+        block_hash: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            certificate.subject.block_hash,
+        ),
+        payload_hash: canonical_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            certificate.subject.payload_hash,
+        ),
+        execution_commitment: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTION_COMMITMENT,
+            HashOf::new(&certificate.execution_commitment),
+        ),
+        executed_block_wire_hash: canonical_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+            certificate.execution_commitment.executed_block_wire_hash,
+        ),
+    }
+}
+
+fn recovery_certificate_projection(
+    certificate: &wire::QuorumCertificate,
+) -> Option<ProductionQuorumCertificateIdentityProjection> {
+    Some(ProductionQuorumCertificateIdentityProjection {
+        decision: recovery_decision_projection(certificate),
+        certificate: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_QUORUM_CERTIFICATE,
+            HashOf::new(certificate),
+        ),
+        signer_count: u64::try_from(certificate.signers.len()).ok()?,
+        aggregate_signature_len: u64::try_from(certificate.aggregate_signature.len()).ok()?,
+    })
+}
+
+fn recovery_body_projection(
+    durable: &DurableBodyReceipt,
+) -> ProductionDurableBodyIdentityProjection {
+    let subject = durable.subject();
+    ProductionDurableBodyIdentityProjection {
+        context_id: canonical_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            durable.context_id().0,
+        ),
+        height: durable.round().height,
+        view: durable.round().view,
+        subject: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&subject),
+        ),
+        block_hash: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            subject.block_hash,
+        ),
+        payload_hash: canonical_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            subject.payload_hash,
+        ),
+        manifest: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_PAYLOAD_MANIFEST,
+            durable.manifest_hash(),
+        ),
+        frame: canonical_hash_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_DURABLE_BODY_FRAME,
+            durable.frame_hash(),
+        ),
+    }
+}
+
+/// Lossless native evidence binding one interrupted Kura tip to replay.
+///
+/// This process-local type is deliberately not serializable. It retains the
+/// complete wire certificate (including canonical signer order and aggregate
+/// signature), complete manifest, and both typed body receipts. Hash-mediated
+/// links retain the repository's native 256-bit values unchanged and rely on
+/// the reviewed collision-resistance contract rather than truncation or a
+/// synthetic numeric projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) struct PendingKuraApplyRecoveryEvidence {
+    expected: PendingKuraApply,
+    frozen_context_id: wire::HeightContextId,
+    frozen_height: wire::Height,
+    replay_tag: EventTag,
+    replay_generation: u64,
+    commit_qc: wire::QuorumCertificate,
+    manifest: wire::PayloadManifest,
+    manifest_hash: HashOf<wire::PayloadManifest>,
+    durable_receipt: DurableBodyReceipt,
+    durable_frame_hash: Hash,
+    validated_receipt: ValidatedBodyReceipt,
+    stage: PendingKuraApplyRecoveryStage,
+}
+
+impl PendingKuraApplyRecoveryEvidence {
+    /// Canonical Kura tip selected by startup recovery.
+    pub(crate) const fn expected(&self) -> PendingKuraApply {
+        self.expected
+    }
+
+    /// Frozen height-context identifier independently reconstructed at startup.
+    pub(crate) const fn frozen_context_id(&self) -> wire::HeightContextId {
+        self.frozen_context_id
+    }
+
+    /// Frozen consensus height independently reconstructed at startup.
+    pub(crate) const fn frozen_height(&self) -> wire::Height {
+        self.frozen_height
+    }
+
+    /// Reducer incarnation which owns every recovery effect.
+    pub(crate) const fn replay_tag(&self) -> EventTag {
+        self.replay_tag
+    }
+
+    /// Actor-local replay generation, kept separate from consensus view.
+    pub(crate) const fn replay_generation(&self) -> u64 {
+        self.replay_generation
+    }
+
+    /// Complete authenticated CommitQC, including signers and aggregate evidence.
+    pub(crate) const fn commit_qc(&self) -> &wire::QuorumCertificate {
+        &self.commit_qc
+    }
+
+    /// Exact round certified by the CommitQC.
+    pub(crate) const fn commit_round(&self) -> wire::ConsensusRound {
+        self.commit_qc.round
+    }
+
+    /// Exact phase certified by the CommitQC.
+    pub(crate) const fn commit_phase(&self) -> wire::GlobalPhase {
+        self.commit_qc.phase
+    }
+
+    /// Exact subject certified by the CommitQC.
+    pub(crate) const fn commit_subject(&self) -> wire::BlockSubject {
+        self.commit_qc.subject
+    }
+
+    /// Exact deterministic execution result certified by the CommitQC.
+    pub(crate) const fn execution_commitment(&self) -> wire::ExecutionCommitment {
+        self.commit_qc.execution_commitment
+    }
+
+    /// Canonically ordered validator indices carried by the CommitQC.
+    pub(crate) fn commit_signers(&self) -> &[wire::ValidatorIndex] {
+        &self.commit_qc.signers
+    }
+
+    /// Complete aggregate-signature evidence carried by the CommitQC.
+    pub(crate) fn commit_aggregate_signature(&self) -> &[u8] {
+        &self.commit_qc.aggregate_signature
+    }
+
+    /// Complete canonical manifest recovered beside the decided body.
+    pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
+        &self.manifest
+    }
+
+    /// Native typed hash of the complete canonical manifest.
+    pub(crate) const fn manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.manifest_hash
+    }
+
+    /// Receipt for the complete checksummed body frame.
+    pub(crate) const fn durable_receipt(&self) -> &DurableBodyReceipt {
+        &self.durable_receipt
+    }
+
+    /// Frozen context carried by the durable body receipt.
+    pub(crate) const fn durable_context_id(&self) -> wire::HeightContextId {
+        self.durable_receipt.context_id()
+    }
+
+    /// Exact proposal round carried by the durable body receipt.
+    pub(crate) const fn durable_round(&self) -> wire::ConsensusRound {
+        self.durable_receipt.round()
+    }
+
+    /// Exact proposal subject carried by the durable body receipt.
+    pub(crate) const fn durable_subject(&self) -> wire::BlockSubject {
+        self.durable_receipt.subject()
+    }
+
+    /// Manifest identity carried by the durable body receipt.
+    pub(crate) const fn durable_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.durable_receipt.manifest_hash()
+    }
+
+    /// Complete checksummed frame identity carried by the durable body receipt.
+    pub(crate) const fn durable_frame_hash(&self) -> Hash {
+        self.durable_frame_hash
+    }
+
+    /// Receipt binding deterministic validation to the same exact body frame.
+    pub(crate) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        &self.validated_receipt
+    }
+
+    /// Deterministic execution result carried by the validation marker.
+    pub(crate) const fn validated_execution_commitment(&self) -> wire::ExecutionCommitment {
+        self.validated_receipt.execution_commitment()
+    }
+
+    /// Sole closed-ingress recovery stage currently authorized.
+    pub(crate) const fn stage(&self) -> PendingKuraApplyRecoveryStage {
+        self.stage
+    }
+
+    /// Project every independently retained recovery identity into the pure
+    /// shared production/Verus kernel without truncating canonical digests.
+    pub(crate) fn recovery_refinement_projection(
+        &self,
+    ) -> Option<ProductionDecisionRecoveryTraceProjection> {
+        let manifest_subject = self.manifest.subject;
+        Some(ProductionDecisionRecoveryTraceProjection {
+            state_height: self.expected().state_height(),
+            expected_context_id: canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                self.expected().context_id().0,
+            ),
+            expected_height: self.expected().height(),
+            expected_block_hash: canonical_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                self.expected().block_hash(),
+            ),
+            frozen_context_id: canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                self.frozen_context_id().0,
+            ),
+            frozen_height: self.frozen_height(),
+            replay_tag: TagProjection {
+                height: self.replay_tag().height(),
+                view: self.replay_tag().view(),
+                generation: self.replay_tag().generation().get(),
+            },
+            replay_generation: self.replay_generation(),
+            commit_qc: recovery_certificate_projection(self.commit_qc())?,
+            manifest_round: TagProjection {
+                height: self.manifest.round.height,
+                view: self.manifest.round.view,
+                generation: 0,
+            },
+            manifest_subject: canonical_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                HashOf::new(&manifest_subject),
+            ),
+            manifest: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST,
+                self.manifest_hash(),
+            ),
+            durable_body: recovery_body_projection(self.durable_receipt()),
+            validated_body: recovery_body_projection(self.validated_receipt().durable()),
+            validated_execution_commitment: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTION_COMMITMENT,
+                HashOf::new(&self.validated_execution_commitment()),
+            ),
+            stage: match self.stage() {
+                PendingKuraApplyRecoveryStage::CertifiedFetch => 1,
+                PendingKuraApplyRecoveryStage::DurableStore => 2,
+                PendingKuraApplyRecoveryStage::DeterministicValidation => 3,
+                PendingKuraApplyRecoveryStage::Apply => 4,
+                PendingKuraApplyRecoveryStage::ApplicationDispatched => 5,
+                PendingKuraApplyRecoveryStage::Completed => 6,
+            },
+        })
+    }
+
+    /// Check every redundant native identity link against the frozen context.
+    pub(crate) fn is_exact(&self, context: &wire::HeightContext) -> bool {
+        context.id() == self.frozen_context_id()
+            && context.height == self.frozen_height()
+            && self.expected().context_id() == self.frozen_context_id()
+            && self.expected().height() == self.frozen_height()
+            && self.expected().state_height() <= self.frozen_height()
+            && self
+                .frozen_height()
+                .saturating_sub(self.expected().state_height())
+                <= 1
+            && self.expected().block_hash() == self.commit_subject().block_hash
+            && self.replay_tag().height() == self.frozen_height()
+            && self.replay_tag().view() == self.commit_round().view
+            && self.replay_tag().generation().get() == self.replay_generation()
+            && self.commit_phase() == wire::GlobalPhase::Commit
+            && self.commit_qc().validate(context).is_ok()
+            && !self.commit_signers().is_empty()
+            && !self.commit_aggregate_signature().is_empty()
+            && self.commit_round().context_id == self.frozen_context_id()
+            && self.commit_round().height == self.frozen_height()
+            && self.execution_commitment() == self.validated_execution_commitment()
+            && self.manifest().validate(context).is_ok()
+            && self.manifest().round == self.commit_round()
+            && self.manifest().subject == self.commit_subject()
+            && HashOf::new(self.manifest()) == self.manifest_hash()
+            && self.manifest_hash() == self.durable_manifest_hash()
+            && self.durable_context_id() == self.frozen_context_id()
+            && self.durable_round() == self.commit_round()
+            && self.durable_subject() == self.commit_subject()
+            && self.durable_receipt().frame_hash() == self.durable_frame_hash()
+            && self.validated_receipt().durable() == self.durable_receipt()
+    }
+
+    fn transition_for_effect(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Result<PendingKuraApplyRecoveryStage, EffectExecutorError> {
+        let exact_tag = |tag: EventTag| tag == self.replay_tag;
+        let exact_key = |round: wire::ConsensusRound, subject: wire::BlockSubject| {
+            round == self.commit_qc.round && subject == self.commit_qc.subject
+        };
+        let next = match (self.stage, effect) {
+            (
+                PendingKuraApplyRecoveryStage::CertifiedFetch,
+                AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    manifest,
+                    certificate: Some(certificate),
+                    ..
+                },
+            ) if exact_tag(*tag)
+                && exact_key(*round, *subject)
+                && manifest
+                    .as_ref()
+                    .is_none_or(|manifest| manifest == &self.manifest)
+                && certificate == &self.commit_qc =>
+            {
+                Some(PendingKuraApplyRecoveryStage::DurableStore)
+            }
+            (
+                PendingKuraApplyRecoveryStage::DurableStore,
+                AdapterEffect::StoreBody {
+                    tag,
+                    round,
+                    subject,
+                },
+            ) if exact_tag(*tag) && exact_key(*round, *subject) => {
+                Some(PendingKuraApplyRecoveryStage::DeterministicValidation)
+            }
+            (
+                PendingKuraApplyRecoveryStage::DeterministicValidation,
+                AdapterEffect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                },
+            ) if exact_tag(*tag) && exact_key(*round, *subject) => {
+                Some(PendingKuraApplyRecoveryStage::Apply)
+            }
+            (
+                PendingKuraApplyRecoveryStage::Apply,
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                },
+            ) if exact_tag(*tag)
+                && *subject == self.commit_qc.subject
+                && certificate == &self.commit_qc =>
+            {
+                Some(PendingKuraApplyRecoveryStage::ApplicationDispatched)
+            }
+            _ => None,
+        };
+        next.ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "interrupted-tip recovery effect does not match its exact authenticated stage"
+                    .to_owned(),
+            )
+        })
     }
 }
 
@@ -529,6 +983,16 @@ impl DurableApplyCompletion {
     /// Work identifier whose queue ownership ends when this completion is consumed.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         self.work_id
+    }
+
+    /// Typed Kura receipt for the exact committed block/finality pair.
+    pub(crate) const fn receipt(&self) -> &KuraV2CommitReceipt {
+        &self.receipt
+    }
+
+    /// Complete canonical finality artifact persisted by Kura.
+    pub(crate) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
+        &self.artifact
     }
 }
 
@@ -1425,6 +1889,9 @@ pub(crate) trait EffectRuntime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     fn step_recovery_effects(&mut self, now: Instant)
     -> Result<RuntimeStep<AdapterEffect>, String>;
+    /// Consume and validate the exact scheduler owner created by the preceding
+    /// successful live or recovery step.
+    fn take_scheduler_ownership(&mut self) -> Result<(), String>;
     /// Return the exact durable Decision currently owned by the reducer.
     fn decided_body(
         &self,
@@ -1551,6 +2018,16 @@ impl EffectRuntime for SerializedV2Runtime {
         now: Instant,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step_recovery(now).map_err(|error| error.to_string())
+    }
+
+    fn take_scheduler_ownership(&mut self) -> Result<(), String> {
+        let evidence =
+            SerializedV2Runtime::take_last_scheduler_ownership(self).ok_or_else(|| {
+                "successful Sumeragi v2 runtime step omitted its exact scheduler owner".to_owned()
+            })?;
+        evidence.validate_exact().map_err(|error| {
+            format!("Sumeragi v2 runtime scheduler ownership was invalid: {error:?}")
+        })
     }
 
     fn decided_body(
@@ -1761,6 +2238,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
     decision_body_drained: bool,
     retained_locked_body: Option<(wire::BlockSubject, Arc<[u8]>)>,
     ready_body_bytes: u64,
@@ -1849,22 +2327,92 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// or absent exact body/validation durability fails closed before the
     /// startup effects can be dispatched. Exact height-one replay returns a
     /// capability binding the frozen Nexus/AMX projection for pre-apply lane
-    /// work; other heights return `None`.
+    /// work; other heights return `None`. The startup batch must contain the
+    /// sole certified `FetchBody` reconstructed from the Decision. Its full
+    /// CommitQC and reducer incarnation seed the closed-ingress
+    /// Fetch → Store → Validate → Apply stage machine.
     pub(crate) fn verify_pending_kura_apply_replay(
-        &self,
+        &mut self,
         expected: PendingKuraApply,
+        startup_effects: &[AdapterEffect],
     ) -> Result<Option<VerifiedPendingGenesisNexusAmxContext>, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_tip_recovery.is_some() {
+            return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
+                "interrupted Kura tip replay was verified more than once".to_owned(),
+            ));
+        }
         let decision = self.runtime.replayed_decision_key().map_err(|error| {
             EffectExecutorError::PendingApplyRecoveryMismatch(error.to_string())
         })?;
-        verify_pending_kura_apply_parts(
+        let [
+            AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                manifest,
+                certified_sources,
+                certificate: Some(certificate),
+            },
+        ] = startup_effects
+        else {
+            return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
+                "replayed Decision must produce exactly one certified FetchBody before ingress"
+                    .to_owned(),
+            ));
+        };
+        if *tag != self.current_tag()
+            || *round != certificate.round
+            || *subject != certificate.subject
+        {
+            return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
+                "replayed certified FetchBody changed its Decision tag, round, or subject"
+                    .to_owned(),
+            ));
+        }
+        let expected_sources = certificate
+            .signers
+            .iter()
+            .map(|signer| {
+                usize::try_from(*signer)
+                    .ok()
+                    .and_then(|index| self.context.roster.get(index))
+                    .map(|entry| entry.validator.clone())
+                    .ok_or_else(|| {
+                        EffectExecutorError::PendingApplyRecoveryMismatch(
+                            "replayed CommitQC signer is outside the frozen roster".to_owned(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if certified_sources != &expected_sources {
+            return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
+                "replayed certified FetchBody changed the canonical CommitQC signer sources"
+                    .to_owned(),
+            ));
+        }
+        self.runtime
+            .verify_certificate(&self.context, certificate)
+            .map_err(EffectExecutorError::PendingApplyRecoveryMismatch)?;
+        let (genesis_context, evidence) = verify_pending_kura_apply_parts(
             &self.context,
             decision,
             &self.recovered_bodies,
             &self.validated_bodies,
             expected,
-        )
+            *tag,
+            certificate.clone(),
+            manifest.as_ref(),
+        )?;
+        self.pending_tip_recovery = Some(evidence);
+        Ok(genesis_context)
+    }
+
+    /// Borrow the complete process-local evidence for interrupted-tip replay.
+    pub(crate) const fn pending_kura_apply_recovery_evidence(
+        &self,
+    ) -> Option<&PendingKuraApplyRecoveryEvidence> {
+        self.pending_tip_recovery.as_ref()
     }
 
     /// Authenticate and enqueue one reducer-directed v2 network message.
@@ -2072,6 +2620,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ready_bodies: BTreeMap::new(),
             protected_lock: None,
             protected_decision: None,
+            pending_tip_recovery: None,
             decision_body_drained: false,
             retained_locked_body: None,
             ready_body_bytes: 0,
@@ -2362,6 +2911,39 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "superseded body byte accounting underflow or leakage".to_owned(),
             )
         })?;
+        let retirement_trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_RETIRE,
+            relation_exact: plan_exact_body_retirement_accounting(
+                self.ready_body_bytes,
+                retained_bytes,
+                ready_bytes,
+                self.pending_store_bytes,
+                retired_store_bytes,
+            ) == Some(accounting),
+            protected_before: 0,
+            protected_after: 0,
+            owner_before: 0,
+            owner_after: 0,
+            owner_reused: false,
+            ready_before: self.ready_body_bytes,
+            retired_retained: retained_bytes,
+            retired_ready: ready_bytes,
+            ready_after: accounting.ready_after,
+            store_before: self.pending_store_bytes,
+            retired_store: retired_store_bytes,
+            store_after: accounting.store_after,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        if !production_body_capacity_retirement_preserves_effective_lock_kernel(retirement_trace) {
+            return Err(EffectExecutorError::Contract(
+                "body retirement did not refine exact effective-lock capacity".to_owned(),
+            ));
+        }
 
         let validations = self
             .pending_validations
@@ -2752,8 +3334,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// and validation marker. It must therefore never sign, broadcast, fetch from peers, enter a
     /// view, or report network-derived evidence. The reducer still replays its ordinary
     /// `FetchBody -> StoreBody -> ValidateBody -> Apply` state transitions, but every step is
-    /// required to resolve from the already reopened local catalogs before its effect is
-    /// dispatched.
+    /// required to resolve from the already reopened local catalogs before its sole exact effect
+    /// is dispatched. A skipped, duplicated, reordered, retagged, or recertified stage fails
+    /// closed.
     pub(crate) fn consume_pending_tip_recovery_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -2766,6 +3349,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "one recovery adapter macro-step emitted {} effects above the adapter bound {MAX_EFFECTS_PER_STEP}",
                     effects.len()
                 )),
+                services,
+            ));
+        }
+        if self.pending_kura_apply_recovery_evidence().is_some() && effects.len() != 1 {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "interrupted-tip recovery must emit exactly one effect for its current stage"
+                        .to_owned(),
+                ),
                 services,
             ));
         }
@@ -2813,6 +3405,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(EffectExecutorError::Runtime(reason), services));
             }
         };
+        if let Err(reason) = self.runtime.take_scheduler_ownership() {
+            drop(wal_step);
+            return Err(self.close(EffectExecutorError::Runtime(reason), services));
+        }
         // Runtime stepping includes the safety-WAL append. Release its permit
         // before invoking any service callback so service operations acquire
         // their own non-nested guard boundary.
@@ -2863,6 +3459,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(EffectExecutorError::Runtime(reason), services));
             }
         };
+        if let Err(reason) = self.runtime.take_scheduler_ownership() {
+            drop(wal_step);
+            return Err(self.close(EffectExecutorError::Runtime(reason), services));
+        }
         wal_step.complete();
         match step {
             RuntimeStep::Idle => {
@@ -3735,17 +4335,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Ok(CompletionDisposition::Stale);
         };
         let task = &pending.task;
-        let valid_artifact = completion.artifact.validate().is_ok()
-            && completion.artifact.height_context == self.context
-            && completion.artifact.subject == task.subject
-            && completion.artifact.commit_qc == task.certificate;
-        let valid_receipt = completion.receipt.height() == self.context.height
-            && completion.receipt.context_id() == self.context.id()
-            && completion.receipt.block_hash() == task.subject.block_hash
-            && completion.receipt.subject() == task.subject
-            && completion.receipt.certificate() == task.certificate.as_ref()
-            && completion.receipt.artifact_hash() == HashOf::new(&completion.artifact);
-        if !valid_artifact || !valid_receipt || self.finality_completion.is_some() {
+        let valid_artifact = completion.artifact().validate().is_ok()
+            && completion.artifact().height_context == self.context
+            && completion.artifact().subject == task.subject
+            && completion.artifact().commit_qc == task.certificate;
+        let valid_receipt = completion.receipt().height() == self.context.height
+            && completion.receipt().context_id() == self.context.id()
+            && completion.receipt().block_hash() == task.subject.block_hash
+            && completion.receipt().subject() == task.subject
+            && completion.receipt().certificate() == task.certificate.as_ref()
+            && completion.receipt().artifact_hash() == HashOf::new(completion.artifact());
+        let valid_recovery_stage = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
+            evidence.is_exact(&self.context)
+                && evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
+                && task.tag == evidence.replay_tag()
+                && task.subject == evidence.commit_subject()
+                && &task.certificate == evidence.commit_qc()
+                && &task.validated_receipt == evidence.validated_receipt()
+        });
+        if !valid_artifact
+            || !valid_receipt
+            || !valid_recovery_stage
+            || self.finality_completion.is_some()
+        {
             return Err(self.close(EffectExecutorError::InvalidApplyCompletion, services));
         }
         let tag = task.tag;
@@ -3755,6 +4367,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         self.pending_applications.remove(&completion.work_id);
         self.deferred_merge_work.remove(&completion.work_id);
+        if let Some(evidence) = self.pending_tip_recovery.as_mut() {
+            evidence.stage = PendingKuraApplyRecoveryStage::Completed;
+        }
         self.finality_completion = Some(FinalityCompletion {
             receipt: completion.receipt,
             artifact: completion.artifact,
@@ -3879,7 +4494,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         effect: AdapterEffect,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
-        match effect {
+        let recovery_transition = self
+            .pending_tip_recovery
+            .as_ref()
+            .map(|evidence| {
+                if !evidence.is_exact(&self.context) {
+                    return Err(EffectExecutorError::Contract(
+                        "interrupted-tip recovery evidence lost its exact native identity"
+                            .to_owned(),
+                    ));
+                }
+                evidence.transition_for_effect(&effect)
+            })
+            .transpose()?;
+        let result = match effect {
             AdapterEffect::Sign { tag, request } => {
                 if let SignRequest::Vote(vote) = &request {
                     let validated = self
@@ -3970,7 +4598,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             } => services
                 .report_invalid_certified_body(subject, certificate)
                 .map_err(service_error),
+        };
+        result?;
+        if let Some(stage) = recovery_transition {
+            self.pending_tip_recovery
+                .as_mut()
+                .expect("recovery transition was derived from this evidence")
+                .stage = stage;
         }
+        Ok(())
     }
 
     fn ensure_pending_tip_recovery_effect_is_local(
@@ -4057,6 +4693,33 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             };
             return Err(EffectExecutorError::Contract(reason.to_owned()));
         };
+        let ownership_trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_OWNER,
+            relation_exact: plan_exact_body_owner_binding(current, incoming) == Some(binding),
+            protected_before: u64::from(current.is_some_and(|owner| owner.manifest_hash.is_some())),
+            protected_after: u64::from(binding.owner.manifest_hash.is_some()),
+            owner_before: u64::from(current.is_some()),
+            owner_after: 1,
+            owner_reused: binding.already_owned,
+            ready_before: 0,
+            retired_retained: 0,
+            retired_ready: 0,
+            ready_after: 0,
+            store_before: 0,
+            retired_store: 0,
+            store_after: 0,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        if !production_body_ownership_preserves_effective_lock_kernel(ownership_trace) {
+            return Err(EffectExecutorError::Contract(
+                "exact body ownership did not refine the effective-lock trace".to_owned(),
+            ));
+        }
         Ok(BodyPipelineOwnerBindingPlan {
             key,
             owner: BodyPipelineOwner {
@@ -5155,6 +5818,39 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "certified-view body cleanup byte accounting underflow or leakage".to_owned(),
             )
         })?;
+        let cleanup_trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_RETIRE,
+            relation_exact: plan_exact_body_retirement_accounting(
+                self.ready_body_bytes,
+                0,
+                retired_ready_bytes,
+                self.pending_store_bytes,
+                retired_store_bytes,
+            ) == Some(accounting),
+            protected_before: 0,
+            protected_after: 0,
+            owner_before: 0,
+            owner_after: 0,
+            owner_reused: false,
+            ready_before: self.ready_body_bytes,
+            retired_retained: 0,
+            retired_ready: retired_ready_bytes,
+            ready_after: accounting.ready_after,
+            store_before: self.pending_store_bytes,
+            retired_store: retired_store_bytes,
+            store_after: accounting.store_after,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        if !production_body_capacity_retirement_preserves_effective_lock_kernel(cleanup_trace) {
+            return Err(EffectExecutorError::Contract(
+                "certified-view cleanup did not refine exact effective-lock capacity".to_owned(),
+            ));
+        }
 
         Ok(CertifiedViewBodyCleanupPlan {
             stale_stores,
@@ -7142,7 +7838,16 @@ fn verify_pending_kura_apply_parts(
     >,
     validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     expected: PendingKuraApply,
-) -> Result<Option<VerifiedPendingGenesisNexusAmxContext>, EffectExecutorError> {
+    replay_tag: EventTag,
+    certificate: wire::QuorumCertificate,
+    advertised_manifest: Option<&wire::PayloadManifest>,
+) -> Result<
+    (
+        Option<VerifiedPendingGenesisNexusAmxContext>,
+        PendingKuraApplyRecoveryEvidence,
+    ),
+    EffectExecutorError,
+> {
     let mismatch =
         |reason: &'static str| EffectExecutorError::PendingApplyRecoveryMismatch(reason.to_owned());
     if expected.context_id() != context.id() || expected.height() != context.height {
@@ -7153,6 +7858,21 @@ fn verify_pending_kura_apply_parts(
     let (round, subject, execution_commitment) = decision.ok_or_else(|| {
         mismatch("canonical Kura tip has no complete durable Decision WAL record")
     })?;
+    if certificate.validate(context).is_err()
+        || certificate.phase != wire::GlobalPhase::Commit
+        || certificate.round != round
+        || certificate.subject != subject
+        || certificate.execution_commitment != execution_commitment
+    {
+        return Err(mismatch(
+            "replayed certified FetchBody does not carry the exact durable CommitQC",
+        ));
+    }
+    if replay_tag.height() != context.height || replay_tag.view() != round.view {
+        return Err(mismatch(
+            "replayed Decision effect does not belong to the frozen reducer incarnation",
+        ));
+    }
     if round.context_id != context.id()
         || round.height != context.height
         || subject.block_hash != expected.block_hash()
@@ -7165,7 +7885,8 @@ fn verify_pending_kura_apply_parts(
     let (manifest, durable) = recovered_bodies.get(&key).ok_or_else(|| {
         mismatch("replayed Decision has no matching checksummed durable body frame")
     })?;
-    if manifest.round != round
+    if advertised_manifest.is_some_and(|advertised| advertised != manifest)
+        || manifest.round != round
         || manifest.subject != subject
         || !store_completion_matches(context, manifest, durable)
     {
@@ -7186,11 +7907,37 @@ fn verify_pending_kura_apply_parts(
             "durable Decision commitment differs from the recovered validation marker",
         ));
     }
-    Ok(
-        (context.height == 1).then_some(VerifiedPendingGenesisNexusAmxContext {
-            hash: context.nexus_amx_context_hash,
-        }),
-    )
+    let genesis_context = (context.height == 1).then_some(VerifiedPendingGenesisNexusAmxContext {
+        hash: context.nexus_amx_context_hash,
+    });
+    let evidence = PendingKuraApplyRecoveryEvidence {
+        expected,
+        frozen_context_id: context.id(),
+        frozen_height: context.height,
+        replay_tag,
+        replay_generation: replay_tag.generation().get(),
+        commit_qc: certificate,
+        manifest: manifest.clone(),
+        manifest_hash: HashOf::new(manifest),
+        durable_frame_hash: durable.frame_hash(),
+        durable_receipt: durable.clone(),
+        validated_receipt: validated.clone(),
+        stage: PendingKuraApplyRecoveryStage::CertifiedFetch,
+    };
+    if !evidence.is_exact(context) {
+        return Err(mismatch(
+            "replayed Decision recovery evidence lost an exact native identity field",
+        ));
+    }
+    let recovery_trace = evidence.recovery_refinement_projection().ok_or_else(|| {
+        mismatch("replayed Decision recovery evidence cannot be represented losslessly")
+    })?;
+    if !production_decision_trace_refines_recovery_witness_kernel(recovery_trace) {
+        return Err(mismatch(
+            "replayed Decision recovery evidence failed the shared exact-identity kernel",
+        ));
+    }
+    Ok((genesis_context, evidence))
 }
 
 #[cfg(test)]
@@ -7199,8 +7946,9 @@ mod tests {
 
     use crate::sumeragi::{
         v2::{
-            AdapterError, AdapterFingerprints, DecisionLocalProposalDisposition, SumeragiV2Adapter,
-            VerifiedHeightContext, classify_decided_local_proposal,
+            AdapterError, AdapterFingerprints, DecisionLocalProposalDisposition,
+            DeferredAdmissionOrdinalSource, SumeragiV2Adapter, VerifiedHeightContext,
+            classify_decided_local_proposal,
         },
         v2_block_sync::{CommitCertificateAdmissionError, V2BlockSyncDiscovery},
         v2_core::Generation,
@@ -7297,6 +8045,9 @@ mod tests {
         fail_enqueue: bool,
         fail_enqueue_hits: usize,
         panic_step: bool,
+        scheduler_ownership_ready: bool,
+        omit_scheduler_ownership: bool,
+        reject_scheduler_ownership: bool,
     }
 
     /// Actual executor/runtime ownership projected without retaining a shadow
@@ -7369,11 +8120,17 @@ mod tests {
     impl EffectRuntime for FakeRuntime {
         fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
             assert!(!self.panic_step, "model safety-WAL step panic");
+            if self.scheduler_ownership_ready {
+                return Err("fake runtime scheduler owner was not consumed".to_owned());
+            }
             let step = self.steps.pop_front().unwrap_or(Ok(RuntimeStep::Idle));
             if matches!(&step, Ok(RuntimeStep::Advanced(_)))
                 && let Some(decision) = self.decision_on_next_step.take()
             {
                 self.decided_body = Some(decision);
+            }
+            if step.is_ok() && !self.omit_scheduler_ownership {
+                self.scheduler_ownership_ready = true;
             }
             step
         }
@@ -7383,6 +8140,17 @@ mod tests {
             now: Instant,
         ) -> Result<RuntimeStep<AdapterEffect>, String> {
             self.step_effects(now)
+        }
+
+        fn take_scheduler_ownership(&mut self) -> Result<(), String> {
+            if self.reject_scheduler_ownership {
+                return Err("fake runtime scheduler owner was invalid".to_owned());
+            }
+            if !self.scheduler_ownership_ready {
+                return Err("fake runtime scheduler owner was missing".to_owned());
+            }
+            self.scheduler_ownership_ready = false;
+            Ok(())
         }
 
         fn decided_body(
@@ -8360,6 +9128,7 @@ mod tests {
                     build: Hash::new(b"production transport build"),
                     config: Hash::new(b"production transport config"),
                 },
+                DeferredAdmissionOrdinalSource::new(0),
             )
             .expect("open production adapter");
             assert!(startup_effects.is_empty());
@@ -9179,6 +9948,7 @@ mod tests {
                 build: Hash::new(b"capacity trace build"),
                 config: Hash::new(b"capacity trace config"),
             },
+            DeferredAdmissionOrdinalSource::new(0),
         )
         .expect("open source-faithful adapter");
         assert!(startup_effects.is_empty());
@@ -16210,20 +16980,182 @@ mod tests {
             fixture.manifest.subject,
             validated.execution_commitment(),
         ));
+        let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
+        certificate.execution_commitment = validated.execution_commitment();
 
-        let authenticated_genesis_context = verify_pending_kura_apply_parts(
+        let (authenticated_genesis_context, evidence) = verify_pending_kura_apply_parts(
             &fixture.context,
             decision,
             &recovered,
             &validations,
             expected,
+            tag(0),
+            certificate.clone(),
+            Some(&fixture.manifest),
         )
-        .expect("exact replay binding")
-        .expect("height-one replay mints a genesis projection capability");
+        .expect("exact replay binding");
+        let authenticated_genesis_context = authenticated_genesis_context
+            .expect("height-one replay mints a genesis projection capability");
         assert_eq!(
             authenticated_genesis_context.hash(),
             fixture.context.nexus_amx_context_hash
         );
+        assert_eq!(evidence.expected(), expected);
+        assert_eq!(evidence.expected().state_height(), 0);
+        assert_eq!(evidence.frozen_context_id(), fixture.context.id());
+        assert_eq!(evidence.frozen_height(), fixture.context.height);
+        assert_eq!(evidence.replay_tag(), tag(0));
+        assert_eq!(evidence.replay_generation(), tag(0).generation().get());
+        assert_eq!(evidence.commit_qc(), &certificate);
+        assert_eq!(evidence.commit_round(), certificate.round);
+        assert_eq!(evidence.commit_phase(), wire::GlobalPhase::Commit);
+        assert_eq!(evidence.commit_subject(), certificate.subject);
+        assert_eq!(
+            evidence.execution_commitment(),
+            certificate.execution_commitment
+        );
+        assert_eq!(evidence.commit_signers(), certificate.signers.as_slice());
+        assert_eq!(
+            evidence.commit_aggregate_signature(),
+            certificate.aggregate_signature.as_slice()
+        );
+        assert_eq!(evidence.manifest(), &fixture.manifest);
+        assert_eq!(evidence.manifest_hash(), HashOf::new(&fixture.manifest));
+        assert_eq!(evidence.durable_receipt(), &durable);
+        assert_eq!(
+            evidence.durable_receipt().frame_hash(),
+            durable.frame_hash()
+        );
+        assert_eq!(evidence.validated_receipt(), &validated);
+        assert_eq!(
+            evidence.stage(),
+            PendingKuraApplyRecoveryStage::CertifiedFetch
+        );
+        let mut altered_generation = evidence.clone();
+        altered_generation.replay_generation = altered_generation
+            .replay_generation
+            .checked_add(1)
+            .expect("fixture generation increment");
+        assert!(!altered_generation.is_exact(&fixture.context));
+        let mut altered_manifest = evidence.clone();
+        altered_manifest.manifest.chunk_root = Hash::new(b"altered recovery manifest root");
+        assert!(!altered_manifest.is_exact(&fixture.context));
+        let mut altered_frame = evidence.clone();
+        altered_frame.durable_receipt = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        assert_ne!(
+            altered_frame.durable_receipt().frame_hash(),
+            altered_frame.durable_frame_hash()
+        );
+        assert!(!altered_frame.is_exact(&fixture.context));
+
+        let apply_effect = AdapterEffect::Apply {
+            tag: tag(0),
+            subject: fixture.manifest.subject,
+            certificate: certificate.clone(),
+        };
+        let certified_sources = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                fixture.context.roster[usize::try_from(*index).expect("signer index")]
+                    .validator
+                    .clone()
+            })
+            .collect();
+        let recovery_sequence = [
+            AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: None,
+                certified_sources,
+                certificate: Some(certificate.clone()),
+            },
+            AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            },
+            apply_effect.clone(),
+        ];
+        let mut staged = evidence.clone();
+        for effect in &recovery_sequence {
+            staged.stage = staged
+                .transition_for_effect(effect)
+                .expect("exact recovery stage transition");
+        }
+        assert_eq!(
+            staged.stage(),
+            PendingKuraApplyRecoveryStage::ApplicationDispatched
+        );
+
+        let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
+        direct_apply_executor.validated_bodies = validations.clone();
+        direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
+        let mut direct_apply_services = fixture.services();
+        assert!(matches!(
+            direct_apply_executor.consume_pending_tip_recovery_effects(
+                vec![apply_effect.clone()],
+                &mut direct_apply_services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("does not match its exact authenticated stage")
+        ));
+
+        let mut apply_stage = evidence.clone();
+        apply_stage.stage = PendingKuraApplyRecoveryStage::Apply;
+        assert_eq!(
+            apply_stage
+                .transition_for_effect(&apply_effect)
+                .expect("exact Apply advances the closed-ingress stage"),
+            PendingKuraApplyRecoveryStage::ApplicationDispatched
+        );
+        let mut altered_signers = certificate.clone();
+        altered_signers.signers.swap(0, 1);
+        assert!(
+            apply_stage
+                .transition_for_effect(&AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: altered_signers,
+                })
+                .is_err(),
+            "recovery must compare the complete canonical signer evidence"
+        );
+        let mut altered_signature = certificate.clone();
+        altered_signature.aggregate_signature.push(0xA5);
+        assert!(
+            apply_stage
+                .transition_for_effect(&AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: altered_signature,
+                })
+                .is_err(),
+            "recovery must compare the complete aggregate-signature evidence"
+        );
+
+        for effects in [Vec::new(), vec![apply_effect.clone(), apply_effect.clone()]] {
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            executor.validated_bodies = validations.clone();
+            executor.pending_tip_recovery = Some(apply_stage.clone());
+            let mut services = fixture.services();
+            assert!(matches!(
+                executor.consume_pending_tip_recovery_effects(effects, &mut services),
+                Err(EffectExecutorError::Contract(reason))
+                    if reason.contains("must emit exactly one effect")
+            ));
+        }
 
         let mut wrong_context = fixture.context.clone();
         wrong_context.nexus_amx_context_hash = Hash::new(b"different frozen Nexus/AMX context");
@@ -16239,6 +17171,9 @@ mod tests {
                 &recovered,
                 &validations,
                 expected,
+                tag(0),
+                certificate.clone(),
+                Some(&fixture.manifest),
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("different frozen height context")
@@ -16250,6 +17185,9 @@ mod tests {
                 &recovered,
                 &validations,
                 expected,
+                tag(0),
+                certificate.clone(),
+                Some(&fixture.manifest),
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("no complete durable Decision")
@@ -16267,6 +17205,9 @@ mod tests {
                 &recovered,
                 &validations,
                 wrong_tip,
+                tag(0),
+                certificate.clone(),
+                Some(&fixture.manifest),
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("does not identify the canonical")
@@ -16279,6 +17220,9 @@ mod tests {
                 &recovered,
                 &BTreeMap::new(),
                 expected,
+                tag(0),
+                certificate.clone(),
+                Some(&fixture.manifest),
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("no matching durable validation marker")
@@ -16290,6 +17234,8 @@ mod tests {
             validated.execution_commitment(),
             "the adversarial Decision fixture must change the consensus-bound execution result"
         );
+        let mut mismatched_certificate = certificate.clone();
+        mismatched_certificate.execution_commitment = mismatched_execution_commitment;
         assert!(matches!(
             verify_pending_kura_apply_parts(
                 &fixture.context,
@@ -16301,6 +17247,9 @@ mod tests {
                 &recovered,
                 &validations,
                 expected,
+                tag(0),
+                mismatched_certificate,
+                Some(&fixture.manifest),
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("Decision commitment differs")
@@ -17404,6 +18353,7 @@ mod tests {
                 build: Hash::new(b"serialized rebind build"),
                 config: Hash::new(b"serialized rebind config"),
             },
+            DeferredAdmissionOrdinalSource::new(0),
         )
         .expect("open observing adapter");
         assert!(startup.is_empty());
@@ -18130,6 +19080,48 @@ mod tests {
         );
         assert_eq!(services.sign_tasks.len(), 1);
         assert_eq!(services.statuses.len(), 2);
+    }
+
+    #[test]
+    fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.omit_scheduler_ownership = true;
+        executor
+            .runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::Broadcast(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote(
+                    &fixture,
+                ))),
+            )])));
+
+        assert!(matches!(
+            executor.step(Instant::now(), &mut services),
+            Err(EffectExecutorError::Runtime(reason))
+                if reason.contains("scheduler owner was missing")
+        ));
+        assert!(services.broadcasts.is_empty());
+        assert!(services.statuses.is_empty());
+        assert!(executor.output_guard.restart_required());
+    }
+
+    #[test]
+    fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.reject_scheduler_ownership = true;
+        executor.runtime.steps.push_back(Ok(RuntimeStep::Idle));
+
+        assert!(matches!(
+            executor.step_pending_tip_recovery(Instant::now(), &mut services),
+            Err(EffectExecutorError::Runtime(reason))
+                if reason.contains("scheduler owner was invalid")
+        ));
+        assert!(services.statuses.is_empty());
+        assert!(executor.output_guard.restart_required());
     }
 
     #[test]

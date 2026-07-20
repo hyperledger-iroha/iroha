@@ -26,6 +26,7 @@ use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
+    alias::AliasIndex,
     alias_setup::{
         AccountAliasName, AliasAssetTotalV1, AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1,
         AliasIntentV1, AliasLeaseAcquisitionV1, AliasLeaseRenewPlanRequestV1,
@@ -1103,6 +1104,418 @@ pub struct AccountOnboardingResponseV1 {
     pub status: AccountOnboardingStatusV1,
     /// Live alias disposition observed immediately before apply.
     pub disposition: AliasPlanDispositionV1,
+}
+
+/// Canonical account-alias resolution returned by Torii.
+///
+/// The fields are private so callers cannot construct a response whose textual
+/// alias or account spelling differs from its typed value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAliasResolutionV1 {
+    alias: AccountAliasName,
+    account_id: AccountId,
+    index: Option<AliasIndex>,
+    source: Option<String>,
+}
+
+impl AccountAliasResolutionV1 {
+    /// Construct one invariant-preserving alias resolution.
+    ///
+    /// # Errors
+    /// Returns an error if the alias or source is not canonical.
+    pub fn try_new(
+        alias: AccountAliasName,
+        account_id: AccountId,
+        index: Option<AliasIndex>,
+        source: Option<String>,
+    ) -> Result<Self> {
+        ensure_typed_account_alias_is_canonical(&alias, "alias")?;
+        let source = canonical_alias_read_source(source, "source")?;
+        Ok(Self {
+            alias,
+            account_id,
+            index,
+            source,
+        })
+    }
+
+    /// Return the resolved canonical alias.
+    #[must_use]
+    pub fn alias(&self) -> &AccountAliasName {
+        &self.alias
+    }
+
+    /// Return the canonical target account.
+    #[must_use]
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    /// Return the stable alias index when Torii supplied one.
+    #[must_use]
+    pub fn index(&self) -> Option<AliasIndex> {
+        self.index
+    }
+
+    /// Return Torii's canonical resolution-source identifier.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+}
+
+impl norito::json::JsonSerialize for AccountAliasResolutionV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let wire = AccountAliasResolutionWireV1 {
+            alias: self.alias.to_string(),
+            account_id: self.account_id.to_string(),
+            index: self.index.map(|index| index.0),
+            source: self.source.clone(),
+        };
+        norito::json::JsonSerialize::json_serialize(&wire, out);
+    }
+}
+
+/// Canonical account-alias binding returned for an exact alias index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAliasIndexResolutionV1 {
+    index: AliasIndex,
+    alias: AccountAliasName,
+    account_id: AccountId,
+    source: Option<String>,
+}
+
+impl AccountAliasIndexResolutionV1 {
+    /// Construct one invariant-preserving index resolution.
+    ///
+    /// # Errors
+    /// Returns an error if the alias or source is not canonical.
+    pub fn try_new(
+        index: AliasIndex,
+        alias: AccountAliasName,
+        account_id: AccountId,
+        source: Option<String>,
+    ) -> Result<Self> {
+        ensure_typed_account_alias_is_canonical(&alias, "alias")?;
+        let source = canonical_alias_read_source(source, "source")?;
+        Ok(Self {
+            index,
+            alias,
+            account_id,
+            source,
+        })
+    }
+
+    /// Return the exact resolved index.
+    #[must_use]
+    pub fn index(&self) -> AliasIndex {
+        self.index
+    }
+
+    /// Return the canonical alias bound to the index.
+    #[must_use]
+    pub fn alias(&self) -> &AccountAliasName {
+        &self.alias
+    }
+
+    /// Return the canonical target account.
+    #[must_use]
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    /// Return Torii's canonical resolution-source identifier.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+}
+
+impl norito::json::JsonSerialize for AccountAliasIndexResolutionV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let wire = AccountAliasIndexResolutionWireV1 {
+            index: self.index.0,
+            alias: self.alias.to_string(),
+            account_id: self.account_id.to_string(),
+            source: self.source.clone(),
+        };
+        norito::json::JsonSerialize::json_serialize(&wire, out);
+    }
+}
+
+/// Canonical selector for listing aliases bound to one account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAliasesByAccountRequestV1 {
+    account_id: AccountId,
+    dataspace: Option<Name>,
+    domain: Option<Name>,
+}
+
+impl AccountAliasesByAccountRequestV1 {
+    /// Construct a selector and normalize textual scope labels with the same
+    /// catalog-free rules as [`AccountAliasName`].
+    ///
+    /// A domain filter is meaningful only together with its parent dataspace.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid scope label or a domain without a
+    /// dataspace.
+    pub fn try_new(
+        account_id: &AccountId,
+        dataspace: Option<&str>,
+        domain: Option<&str>,
+    ) -> Result<Self> {
+        let (dataspace, domain) = match (dataspace, domain) {
+            (None, None) => (None, None),
+            (None, Some(_)) => {
+                return Err(eyre!(
+                    "an account-alias domain filter requires a dataspace filter"
+                ));
+            }
+            (Some(dataspace), domain) => {
+                let probe = AccountAliasName::try_new("lookup", domain, dataspace)
+                    .map_err(|error| eyre!("invalid account-alias list scope: {error}"))?;
+                (Some(probe.dataspace), probe.domain)
+            }
+        };
+        Ok(Self {
+            account_id: account_id.clone(),
+            dataspace,
+            domain,
+        })
+    }
+
+    /// Return the exact target account.
+    #[must_use]
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    /// Return the optional canonical dataspace filter.
+    #[must_use]
+    pub fn dataspace(&self) -> Option<&Name> {
+        self.dataspace.as_ref()
+    }
+
+    /// Return the optional exact alias-domain filter.
+    #[must_use]
+    pub fn domain(&self) -> Option<&Name> {
+        self.domain.as_ref()
+    }
+}
+
+impl norito::json::JsonSerialize for AccountAliasesByAccountRequestV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let wire = AccountAliasesByAccountRequestWireV1 {
+            account_id: self.account_id.to_string(),
+            dataspace: self.dataspace.as_ref().map(ToString::to_string),
+            domain: self.domain.as_ref().map(ToString::to_string),
+        };
+        norito::json::JsonSerialize::json_serialize(&wire, out);
+    }
+}
+
+/// One canonical account-alias row returned by the by-account lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAliasListItemV1 {
+    alias: AccountAliasName,
+    is_primary: bool,
+}
+
+impl AccountAliasListItemV1 {
+    /// Construct one invariant-preserving list row.
+    ///
+    /// # Errors
+    /// Returns an error if the typed alias is not canonical.
+    pub fn try_new(alias: AccountAliasName, is_primary: bool) -> Result<Self> {
+        ensure_typed_account_alias_is_canonical(&alias, "alias")?;
+        Ok(Self { alias, is_primary })
+    }
+
+    /// Return the canonical account alias.
+    #[must_use]
+    pub fn alias(&self) -> &AccountAliasName {
+        &self.alias
+    }
+
+    /// Return the alias's canonical dataspace label.
+    #[must_use]
+    pub fn dataspace(&self) -> &Name {
+        &self.alias.dataspace
+    }
+
+    /// Return the alias's optional exact domain label.
+    #[must_use]
+    pub fn domain(&self) -> Option<&Name> {
+        self.alias.domain.as_ref()
+    }
+
+    /// Return whether this is the account's primary alias.
+    #[must_use]
+    pub fn is_primary(&self) -> bool {
+        self.is_primary
+    }
+}
+
+impl norito::json::JsonSerialize for AccountAliasListItemV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let wire = AccountAliasListItemWireV1 {
+            alias: self.alias.to_string(),
+            dataspace: self.alias.dataspace.to_string(),
+            domain: self.alias.domain.as_ref().map(ToString::to_string),
+            is_primary: self.is_primary,
+        };
+        norito::json::JsonSerialize::json_serialize(&wire, out);
+    }
+}
+
+/// Deterministically ordered aliases bound to one exact account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAliasesByAccountV1 {
+    account_id: AccountId,
+    items: Vec<AccountAliasListItemV1>,
+    source: Option<String>,
+}
+
+impl AccountAliasesByAccountV1 {
+    /// Construct a canonical response, sorting rows by canonical alias text.
+    ///
+    /// # Errors
+    /// Returns an error for duplicate aliases or a non-canonical source.
+    pub fn try_new(
+        account_id: AccountId,
+        mut items: Vec<AccountAliasListItemV1>,
+        source: Option<String>,
+    ) -> Result<Self> {
+        items.sort_by(|left, right| alias_text_cmp(left.alias(), right.alias()));
+        if items
+            .windows(2)
+            .any(|items| items[0].alias() == items[1].alias())
+        {
+            return Err(eyre!(
+                "account-alias list must not contain duplicate aliases"
+            ));
+        }
+        let source = canonical_alias_read_source(source, "source")?;
+        Ok(Self {
+            account_id,
+            items,
+            source,
+        })
+    }
+
+    /// Return the exact target account.
+    #[must_use]
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    /// Return the exact number of visible rows after filtering.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        u64::try_from(self.items.len()).expect("alias list length fits in u64")
+    }
+
+    /// Return the canonical, deterministically ordered rows.
+    #[must_use]
+    pub fn items(&self) -> &[AccountAliasListItemV1] {
+        &self.items
+    }
+
+    /// Return Torii's canonical resolution-source identifier.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+}
+
+impl norito::json::JsonSerialize for AccountAliasesByAccountV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let wire = AccountAliasesByAccountWireV1 {
+            account_id: self.account_id.to_string(),
+            total: self.total(),
+            items: self
+                .items
+                .iter()
+                .map(|item| AccountAliasListItemWireV1 {
+                    alias: item.alias.to_string(),
+                    dataspace: item.alias.dataspace.to_string(),
+                    domain: item.alias.domain.as_ref().map(ToString::to_string),
+                    is_primary: item.is_primary,
+                })
+                .collect(),
+            source: self.source.clone(),
+        };
+        norito::json::JsonSerialize::json_serialize(&wire, out);
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasResolveRequestWireV1 {
+    alias: String,
+}
+
+#[derive(Clone, Copy, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasResolveIndexRequestWireV1 {
+    index: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasResolutionWireV1 {
+    alias: String,
+    account_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    index: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasIndexResolutionWireV1 {
+    index: u64,
+    alias: String,
+    account_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasesByAccountRequestWireV1 {
+    account_id: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    dataspace: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasListItemWireV1 {
+    alias: String,
+    dataspace: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+    is_primary: bool,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AccountAliasesByAccountWireV1 {
+    account_id: String,
+    total: u64,
+    items: Vec<AccountAliasListItemWireV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -3123,14 +3536,220 @@ const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 /// `Result` with [`QueryError`] as an error
 pub type QueryResult<T> = core::result::Result<T, QueryError>;
 
-fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
+fn parse_canonical_i105_account_id(value: &str, field: &str) -> Result<AccountId> {
     let trimmed = value.trim();
     if trimmed != value {
         return Err(eyre!("{field} must not contain surrounding whitespace"));
     }
-    AccountId::parse_encoded(trimmed)
+    let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
+    if parsed.canonical() != value {
+        return Err(eyre!(
+            "{field} must use the canonical domainless I105 representation"
+        ));
+    }
+    Ok(parsed.into_account_id())
+}
+
+fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
+    parse_canonical_i105_account_id(value, field).map(drop)
+}
+
+fn parse_canonical_account_alias(value: &str, field: &str) -> Result<AccountAliasName> {
+    let alias = value
+        .parse::<AccountAliasName>()
+        .map_err(|error| eyre!("invalid {field}: {error}"))?;
+    if alias.to_string() != value {
+        return Err(eyre!(
+            "{field} must use its canonical textual representation"
+        ));
+    }
+    Ok(alias)
+}
+
+fn ensure_typed_account_alias_is_canonical(alias: &AccountAliasName, field: &str) -> Result<()> {
+    if !alias.is_canonical() {
+        return Err(eyre!("{field} must be a canonical account alias"));
+    }
+    let canonical = alias.to_string();
+    let reparsed = parse_canonical_account_alias(&canonical, field)?;
+    if reparsed != *alias {
+        return Err(eyre!("{field} must be a canonical account alias"));
+    }
     Ok(())
+}
+
+fn canonical_alias_read_source(source: Option<String>, field: &str) -> Result<Option<String>> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let bytes = source.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 64
+        || !bytes[0].is_ascii_lowercase()
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+    {
+        return Err(eyre!(
+            "{field} must be a canonical lowercase ASCII identifier"
+        ));
+    }
+    Ok(Some(source))
+}
+
+fn alias_text_cmp(left: &AccountAliasName, right: &AccountAliasName) -> std::cmp::Ordering {
+    left.to_string().cmp(&right.to_string())
+}
+
+fn decode_account_alias_resolution(
+    response: Response<Vec<u8>>,
+    expected_alias: &AccountAliasName,
+) -> Result<Option<AccountAliasResolutionV1>> {
+    match response.status() {
+        StatusCode::NOT_FOUND => Ok(None),
+        StatusCode::OK => {
+            let wire: AccountAliasResolutionWireV1 = norito::json::from_slice(response.body())
+                .wrap_err("decode account-alias resolution response")?;
+            let alias = parse_canonical_account_alias(&wire.alias, "response.alias")?;
+            if &alias != expected_alias {
+                return Err(eyre!(
+                    "account-alias response selector differs from the requested alias"
+                ));
+            }
+            let account_id =
+                parse_canonical_i105_account_id(&wire.account_id, "response.account_id")?;
+            AccountAliasResolutionV1::try_new(
+                alias,
+                account_id,
+                wire.index.map(AliasIndex),
+                wire.source,
+            )
+            .map(Some)
+        }
+        status => Err(eyre!(
+            "account-alias resolution failed with HTTP status {status}"
+        )),
+    }
+}
+
+fn decode_account_alias_index_resolution(
+    response: Response<Vec<u8>>,
+    expected_index: AliasIndex,
+) -> Result<Option<AccountAliasIndexResolutionV1>> {
+    match response.status() {
+        StatusCode::NOT_FOUND => Ok(None),
+        StatusCode::OK => {
+            let wire: AccountAliasIndexResolutionWireV1 = norito::json::from_slice(response.body())
+                .wrap_err("decode account-alias index resolution response")?;
+            if wire.index != expected_index.0 {
+                return Err(eyre!(
+                    "account-alias index response selector differs from the requested index"
+                ));
+            }
+            let alias = parse_canonical_account_alias(&wire.alias, "response.alias")?;
+            let account_id =
+                parse_canonical_i105_account_id(&wire.account_id, "response.account_id")?;
+            AccountAliasIndexResolutionV1::try_new(
+                AliasIndex(wire.index),
+                alias,
+                account_id,
+                wire.source,
+            )
+            .map(Some)
+        }
+        status => Err(eyre!(
+            "account-alias index resolution failed with HTTP status {status}"
+        )),
+    }
+}
+
+fn decode_account_aliases_by_account(
+    response: Response<Vec<u8>>,
+    request: &AccountAliasesByAccountRequestV1,
+) -> Result<Option<AccountAliasesByAccountV1>> {
+    match response.status() {
+        StatusCode::NOT_FOUND => Ok(None),
+        StatusCode::OK => {
+            let wire: AccountAliasesByAccountWireV1 = norito::json::from_slice(response.body())
+                .wrap_err("decode account aliases-by-account response")?;
+            if wire.account_id != request.account_id().to_string() {
+                return Err(eyre!(
+                    "account aliases-by-account response selector differs from the requested account"
+                ));
+            }
+            let account_id =
+                parse_canonical_i105_account_id(&wire.account_id, "response.account_id")?;
+            if &account_id != request.account_id() {
+                return Err(eyre!(
+                    "account aliases-by-account response selector differs from the requested account"
+                ));
+            }
+            if wire.total != u64::try_from(wire.items.len()).unwrap_or(u64::MAX) {
+                return Err(eyre!(
+                    "account aliases-by-account response total differs from its item count"
+                ));
+            }
+
+            let mut previous_alias: Option<String> = None;
+            let mut items = Vec::with_capacity(wire.items.len());
+            for (index, item) in wire.items.into_iter().enumerate() {
+                if previous_alias
+                    .as_ref()
+                    .is_some_and(|previous| previous >= &item.alias)
+                {
+                    return Err(eyre!(
+                        "account aliases-by-account response items are not in strict canonical alias order at index {index}"
+                    ));
+                }
+                previous_alias = Some(item.alias.clone());
+                let alias = parse_canonical_account_alias(
+                    &item.alias,
+                    &format!("response.items[{index}].alias"),
+                )?;
+                if item.dataspace != alias.dataspace.as_ref()
+                    || item.domain.as_deref() != alias.domain.as_ref().map(|domain| domain.as_ref())
+                {
+                    return Err(eyre!(
+                        "account aliases-by-account response item {index} has scope fields that differ from its alias"
+                    ));
+                }
+                if request
+                    .dataspace()
+                    .is_some_and(|expected| expected != &alias.dataspace)
+                    || request
+                        .domain()
+                        .is_some_and(|expected| alias.domain.as_ref() != Some(expected))
+                {
+                    return Err(eyre!(
+                        "account aliases-by-account response item {index} falls outside the requested scope"
+                    ));
+                }
+                items.push(AccountAliasListItemV1::try_new(alias, item.is_primary)?);
+            }
+            let source = canonical_alias_read_source(wire.source, "response.source")?;
+            Ok(Some(AccountAliasesByAccountV1 {
+                account_id,
+                items,
+                source,
+            }))
+        }
+        status => Err(eyre!(
+            "account aliases-by-account lookup failed with HTTP status {status}"
+        )),
+    }
+}
+
+fn onboarding_disposition_transition_allowed(
+    planned: AliasPlanDispositionV1,
+    live: AliasPlanDispositionV1,
+) -> bool {
+    use AliasPlanDispositionV1::{Create, NoOp, Repair};
+
+    matches!(
+        (planned, live),
+        (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
+    )
 }
 
 fn validate_account_onboarding_token(token: &str) -> Result<&str> {
@@ -15148,6 +15767,14 @@ impl Client {
                 "account onboarding response account or alias differs from the receipt"
             ));
         }
+        if !onboarding_disposition_transition_allowed(
+            receipt.body.resource.disposition,
+            result.disposition,
+        ) {
+            return Err(eyre!(
+                "account onboarding response disposition is not an allowed transition from the receipt"
+            ));
+        }
         match result.status {
             AccountOnboardingStatusV1::Unchanged => {
                 if response.status() != StatusCode::OK
@@ -15159,17 +15786,36 @@ impl Client {
                     ));
                 }
             }
-            AccountOnboardingStatusV1::Queued | AccountOnboardingStatusV1::Repaired => {
+            AccountOnboardingStatusV1::Queued => {
                 let tx_hash = result.tx_hash_hex.as_deref().ok_or_else(|| {
                     eyre!("queued account onboarding response is missing tx_hash_hex")
                 })?;
                 if response.status() != StatusCode::ACCEPTED
+                    || result.disposition != AliasPlanDispositionV1::Create
                     || tx_hash.len() != 64
                     || tx_hash != tx_hash.to_ascii_lowercase()
                     || hex::decode(tx_hash).is_err()
                 {
                     return Err(eyre!(
                         "queued account onboarding response has an invalid status or tx_hash_hex"
+                    ));
+                }
+            }
+            AccountOnboardingStatusV1::Repaired => {
+                let tx_hash = result.tx_hash_hex.as_deref().ok_or_else(|| {
+                    eyre!("repaired account onboarding response is missing tx_hash_hex")
+                })?;
+                if response.status() != StatusCode::ACCEPTED
+                    || !matches!(
+                        result.disposition,
+                        AliasPlanDispositionV1::Repair | AliasPlanDispositionV1::NoOp
+                    )
+                    || tx_hash.len() != 64
+                    || tx_hash != tx_hash.to_ascii_lowercase()
+                    || hex::decode(tx_hash).is_err()
+                {
+                    return Err(eyre!(
+                        "repaired account onboarding response has an invalid status, hash, or disposition"
                     ));
                 }
             }
@@ -15206,124 +15852,163 @@ impl Client {
             .wrap_err("decode account onboarding readiness report")
     }
 
-    /// POST `/v1/aliases/resolve` without canonical account authentication.
+    /// Resolve a canonical account alias without account authentication.
     ///
     /// This variant is intended for aliases in public dataspaces. Restricted
     /// dataspaces reject unsigned requests without revealing whether the alias exists.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested alias.
     ///
     /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_resolve_unsigned(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+    /// Returns an error if the typed alias is invalid, request construction,
+    /// JSON serialization, or HTTP transport fails, or Torii returns a
+    /// malformed, non-canonical, or substituted response.
+    pub fn resolve_account_alias_unsigned(
+        &self,
+        alias: &AccountAliasName,
+    ) -> Result<Option<AccountAliasResolutionV1>> {
+        ensure_typed_account_alias_is_canonical(alias, "alias")?;
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
-        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(&AccountAliasResolveRequestWireV1 {
+            alias: alias.to_string(),
+        })?;
+        let response = self.send_builder(
             self.request_without_canonical_account_auth(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
                 .body(body),
-        )
+        )?;
+        decode_account_alias_resolution(response, alias)
     }
 
-    /// POST `/v1/aliases/resolve` with canonical account authentication.
+    /// Resolve a canonical account alias with canonical account authentication.
     ///
     /// The request carries the configured account, signature, timestamp, and nonce headers.
     /// Use this variant when resolving aliases in restricted dataspaces.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested alias.
     ///
     /// # Errors
-    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
-    /// fails.
-    pub fn post_alias_resolve_authenticated(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+    /// Returns an error if the typed alias is invalid, request signing,
+    /// construction, JSON serialization, or HTTP transport fails, or Torii
+    /// returns a malformed, non-canonical, or substituted response.
+    pub fn resolve_account_alias_authenticated(
+        &self,
+        alias: &AccountAliasName,
+    ) -> Result<Option<AccountAliasResolutionV1>> {
+        ensure_typed_account_alias_is_canonical(alias, "alias")?;
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
-        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(&AccountAliasResolveRequestWireV1 {
+            alias: alias.to_string(),
+        })?;
+        let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        decode_account_alias_resolution(response, alias)
     }
 
-    /// POST `/v1/aliases/resolve-index` without canonical account authentication.
+    /// Resolve an exact alias index without account authentication.
     ///
     /// This variant is intended for indexes in public dataspaces. Restricted
     /// dataspaces reject unsigned requests without revealing whether the index exists.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested index.
     ///
     /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_resolve_index_unsigned(&self, index: u64) -> Result<Response<Vec<u8>>> {
+    /// Returns an error if request construction, JSON serialization, or HTTP
+    /// transport fails, or Torii returns a malformed, non-canonical, or
+    /// substituted response.
+    pub fn resolve_account_alias_index_unsigned(
+        &self,
+        index: AliasIndex,
+    ) -> Result<Option<AccountAliasIndexResolutionV1>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
-        let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(&AccountAliasResolveIndexRequestWireV1 { index: index.0 })?;
+        let response = self.send_builder(
             self.request_without_canonical_account_auth(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
                 .body(body),
-        )
+        )?;
+        decode_account_alias_index_resolution(response, index)
     }
 
-    /// POST `/v1/aliases/resolve-index` with canonical account authentication.
+    /// Resolve an exact alias index with canonical account authentication.
     ///
     /// The request carries the configured account, signature, timestamp, and nonce headers.
     /// Use this variant when resolving indexes in restricted dataspaces.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested index.
     ///
     /// # Errors
-    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
-    /// fails.
-    pub fn post_alias_resolve_index_authenticated(&self, index: u64) -> Result<Response<Vec<u8>>> {
+    /// Returns an error if request signing, construction, JSON serialization,
+    /// or HTTP transport fails, or Torii returns a malformed, non-canonical,
+    /// or substituted response.
+    pub fn resolve_account_alias_index_authenticated(
+        &self,
+        index: AliasIndex,
+    ) -> Result<Option<AccountAliasIndexResolutionV1>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
-        let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(&AccountAliasResolveIndexRequestWireV1 { index: index.0 })?;
+        let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        decode_account_alias_index_resolution(response, index)
     }
 
-    /// POST `/v1/aliases/by-account` without canonical account authentication.
+    /// List aliases bound to an account without account authentication.
     ///
     /// Results contain only entries visible through public dataspace policy. Restricted entries
     /// are filtered before pagination and totals are calculated.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested account and filters.
     ///
     /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_lookup_by_account_unsigned(
+    /// Returns an error if request construction, JSON serialization, or HTTP
+    /// transport fails, or Torii returns malformed, non-canonical,
+    /// non-deterministically ordered, or substituted data.
+    pub fn list_account_aliases_unsigned(
         &self,
-        account_id: &str,
-        dataspace: Option<&str>,
-        domain: Option<&str>,
-    ) -> Result<Response<Vec<u8>>> {
+        request: &AccountAliasesByAccountRequestV1,
+    ) -> Result<Option<AccountAliasesByAccountV1>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/by-account");
-        let body = norito::json::to_vec(&norito::json!({
-            "account_id": account_id,
-            "dataspace": dataspace,
-            "domain": domain,
-        }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(request)?;
+        let response = self.send_builder(
             self.request_without_canonical_account_auth(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
                 .body(body),
-        )
+        )?;
+        decode_account_aliases_by_account(response, request)
     }
 
-    /// POST `/v1/aliases/by-account` with canonical account authentication.
+    /// List aliases bound to an account with canonical account authentication.
     ///
     /// The request carries the configured account, signature, timestamp, and nonce headers so
     /// Torii can include restricted aliases that the configured account may resolve.
+    /// A `404` is returned as `Ok(None)`; successful responses are strictly
+    /// pinned to the requested account and filters.
     ///
     /// # Errors
-    /// Returns an error if request signing, construction, NORITO serialization, or the HTTP call
-    /// fails.
-    pub fn post_alias_lookup_by_account_authenticated(
+    /// Returns an error if request signing, construction, JSON serialization,
+    /// or HTTP transport fails, or Torii returns malformed, non-canonical,
+    /// non-deterministically ordered, or substituted data.
+    pub fn list_account_aliases_authenticated(
         &self,
-        account_id: &str,
-        dataspace: Option<&str>,
-        domain: Option<&str>,
-    ) -> Result<Response<Vec<u8>>> {
+        request: &AccountAliasesByAccountRequestV1,
+    ) -> Result<Option<AccountAliasesByAccountV1>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/by-account");
-        let body = norito::json::to_vec(&norito::json!({
-            "account_id": account_id,
-            "dataspace": dataspace,
-            "domain": domain,
-        }))?;
-        self.send_builder(
+        let body = norito::json::to_vec(request)?;
+        let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        decode_account_aliases_by_account(response, request)
     }
 
     /// Account-signed GET `/v1/accounts/{account_id}/permissions` retaining the exact response.
@@ -24015,13 +24700,28 @@ mod tests {
     fn account_alias_resolve_unsigned_omits_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let alias = "bright-brook-5859@ubl.sbp"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasResolutionWireV1 {
+                alias: alias.to_string(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                index: Some(7),
+                source: Some("active_sns".to_owned()),
+            })
+            .expect("encode alias resolution"),
+        );
 
-        with_mock_http(respond_with(&store, response), || {
+        let resolved = with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve_unsigned("bright-brook-5859@ubl.sbp")
-                .expect("unsigned alias resolve request");
+                .resolve_account_alias_unsigned(&alias)
+                .expect("unsigned alias resolve request")
+                .expect("alias exists")
         });
+        assert_eq!(resolved.alias(), &alias);
+        assert_eq!(resolved.index(), Some(AliasIndex(7)));
 
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
@@ -24040,12 +24740,25 @@ mod tests {
     fn account_alias_resolve_authenticated_sends_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let alias = "bright-brook-5859@ubl.sbp"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasResolutionWireV1 {
+                alias: alias.to_string(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                index: None,
+                source: Some("active_sns".to_owned()),
+            })
+            .expect("encode alias resolution"),
+        );
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve_authenticated("bright-brook-5859@ubl.sbp")
-                .expect("signed alias resolve request");
+                .resolve_account_alias_authenticated(&alias)
+                .expect("signed alias resolve request")
+                .expect("alias exists");
         });
 
         let snapshots = store.lock().expect("snapshot store");
@@ -24065,12 +24778,22 @@ mod tests {
     fn account_alias_resolve_index_unsigned_omits_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
+                index: 42,
+                alias: "bright-brook-5859@ubl.sbp".to_owned(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                source: Some("active_sns".to_owned()),
+            })
+            .expect("encode alias-index resolution"),
+        );
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve_index_unsigned(42)
-                .expect("unsigned alias-index resolve request");
+                .resolve_account_alias_index_unsigned(AliasIndex(42))
+                .expect("unsigned alias-index resolve request")
+                .expect("index exists");
         });
 
         let snapshots = store.lock().expect("snapshot store");
@@ -24087,12 +24810,22 @@ mod tests {
     fn account_alias_resolve_index_authenticated_sends_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
+                index: 42,
+                alias: "bright-brook-5859@ubl.sbp".to_owned(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                source: Some("active_sns".to_owned()),
+            })
+            .expect("encode alias-index resolution"),
+        );
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_resolve_index_authenticated(42)
-                .expect("signed alias-index resolve request");
+                .resolve_account_alias_index_authenticated(AliasIndex(42))
+                .expect("signed alias-index resolve request")
+                .expect("index exists");
         });
 
         let snapshots = store.lock().expect("snapshot store");
@@ -24109,16 +24842,32 @@ mod tests {
     fn account_alias_by_account_unsigned_omits_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let request =
+            AccountAliasesByAccountRequestV1::try_new(&account_id, Some("sbp"), Some("ubl"))
+                .expect("canonical by-account request");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 1,
+                items: vec![AccountAliasListItemWireV1 {
+                    alias: "bright-brook-5859@ubl.sbp".to_owned(),
+                    dataspace: "sbp".to_owned(),
+                    domain: Some("ubl".to_owned()),
+                    is_primary: true,
+                }],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode aliases-by-account response"),
+        );
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_lookup_by_account_unsigned(
-                    TEST_WORKER_I105,
-                    Some("sbp"),
-                    Some("ubl.sbp"),
-                )
-                .expect("unsigned alias-by-account request");
+                .list_account_aliases_unsigned(&request)
+                .expect("unsigned alias-by-account request")
+                .expect("account aliases exist");
         });
 
         let snapshots = store.lock().expect("snapshot store");
@@ -24132,7 +24881,7 @@ mod tests {
             norito::json!({
                 "account_id": TEST_WORKER_I105,
                 "dataspace": "sbp",
-                "domain": "ubl.sbp",
+                "domain": "ubl",
             }),
         );
         assert_unsigned_json_request(snapshot);
@@ -24142,16 +24891,32 @@ mod tests {
     fn account_alias_by_account_authenticated_sends_canonical_account_headers() {
         let client = client_with_static_canonical_auth_headers();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let request =
+            AccountAliasesByAccountRequestV1::try_new(&account_id, Some("sbp"), Some("ubl"))
+                .expect("canonical by-account request");
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 1,
+                items: vec![AccountAliasListItemWireV1 {
+                    alias: "bright-brook-5859@ubl.sbp".to_owned(),
+                    dataspace: "sbp".to_owned(),
+                    domain: Some("ubl".to_owned()),
+                    is_primary: true,
+                }],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode aliases-by-account response"),
+        );
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_alias_lookup_by_account_authenticated(
-                    TEST_WORKER_I105,
-                    Some("sbp"),
-                    Some("ubl.sbp"),
-                )
-                .expect("signed alias-by-account request");
+                .list_account_aliases_authenticated(&request)
+                .expect("signed alias-by-account request")
+                .expect("account aliases exist");
         });
 
         let snapshots = store.lock().expect("snapshot store");
@@ -24165,10 +24930,259 @@ mod tests {
             norito::json!({
                 "account_id": TEST_WORKER_I105,
                 "dataspace": "sbp",
-                "domain": "ubl.sbp",
+                "domain": "ubl",
             }),
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn typed_account_alias_reads_map_not_found_to_none() {
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        assert!(
+            decode_account_alias_resolution(empty_response(StatusCode::NOT_FOUND), &alias)
+                .expect("404 is a typed miss")
+                .is_none()
+        );
+        assert!(
+            decode_account_alias_index_resolution(
+                empty_response(StatusCode::NOT_FOUND),
+                AliasIndex(9),
+            )
+            .expect("404 is a typed index miss")
+            .is_none()
+        );
+        let account = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let request = AccountAliasesByAccountRequestV1::try_new(&account, None, None)
+            .expect("unfiltered request");
+        assert!(
+            decode_account_aliases_by_account(empty_response(StatusCode::NOT_FOUND), &request)
+                .expect("404 is a typed list miss")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn typed_account_alias_models_normalize_requests_and_serialize_canonical_responses() {
+        let account = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let request =
+            AccountAliasesByAccountRequestV1::try_new(&account, Some("PayNet"), Some("Banka"))
+                .expect("scope labels normalize deterministically");
+        assert_eq!(
+            request.dataspace().map(|name| name.as_ref()),
+            Some("paynet")
+        );
+        assert_eq!(request.domain().map(|name| name.as_ref()), Some("banka"));
+        assert!(AccountAliasesByAccountRequestV1::try_new(&account, None, Some("banka")).is_err());
+
+        let response = AccountAliasResolutionV1::try_new(
+            "merchant@banka.paynet"
+                .parse::<AccountAliasName>()
+                .expect("canonical alias"),
+            account,
+            Some(AliasIndex(17)),
+            Some("active_sns".to_owned()),
+        )
+        .expect("canonical response");
+        let json: JsonValue = norito::json::from_str(
+            &norito::json::to_json(&response).expect("serialize typed response"),
+        )
+        .expect("decode response JSON");
+        assert_eq!(json["alias"].as_str(), Some("merchant@banka.paynet"));
+        let expected_account = response.account_id().to_string();
+        assert_eq!(json["account_id"].as_str(), Some(expected_account.as_str()));
+        assert_eq!(json["index"].as_u64(), Some(17));
+        assert_eq!(json["source"].as_str(), Some("active_sns"));
+        assert!(
+            AccountAliasResolutionV1::try_new(
+                response.alias().clone(),
+                response.account_id().clone(),
+                None,
+                Some("Active SNS".to_owned()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn typed_account_alias_reads_reject_substituted_response_selectors() {
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let substituted_alias = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasResolutionWireV1 {
+                alias: "other@banka.paynet".to_owned(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                index: None,
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode substituted alias response"),
+        );
+        assert!(
+            decode_account_alias_resolution(substituted_alias, &alias)
+                .expect_err("substituted alias selector must fail")
+                .to_string()
+                .contains("selector")
+        );
+
+        let substituted_index = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasIndexResolutionWireV1 {
+                index: 10,
+                alias: alias.to_string(),
+                account_id: TEST_WORKER_I105.to_owned(),
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode substituted index response"),
+        );
+        assert!(
+            decode_account_alias_index_resolution(substituted_index, AliasIndex(9))
+                .expect_err("substituted index selector must fail")
+                .to_string()
+                .contains("selector")
+        );
+
+        let requested_account =
+            parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+                .expect("canonical fixture account");
+        let request = AccountAliasesByAccountRequestV1::try_new(
+            &requested_account,
+            Some("paynet"),
+            Some("banka"),
+        )
+        .expect("filtered request");
+        let substituted_account = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_AUDITOR_I105.to_owned(),
+                total: 0,
+                items: Vec::new(),
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode substituted account response"),
+        );
+        assert!(
+            decode_account_aliases_by_account(substituted_account, &request)
+                .expect_err("substituted account selector must fail")
+                .to_string()
+                .contains("selector")
+        );
+    }
+
+    #[test]
+    fn typed_account_alias_reads_reject_noncanonical_or_inconsistent_payloads() {
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let noncanonical_alias = json_response(
+            StatusCode::OK,
+            &format!(
+                r#"{{"alias":"Merchant@Banka.Paynet","account_id":"{TEST_WORKER_I105}","source":"on_chain"}}"#
+            ),
+        );
+        assert!(
+            decode_account_alias_resolution(noncanonical_alias, &alias)
+                .expect_err("non-canonical response alias must fail")
+                .to_string()
+                .contains("canonical")
+        );
+
+        let account = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let request =
+            AccountAliasesByAccountRequestV1::try_new(&account, Some("paynet"), Some("banka"))
+                .expect("filtered request");
+        let inconsistent_scope = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 1,
+                items: vec![AccountAliasListItemWireV1 {
+                    alias: alias.to_string(),
+                    dataspace: "other".to_owned(),
+                    domain: Some("banka".to_owned()),
+                    is_primary: true,
+                }],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode inconsistent list response"),
+        );
+        assert!(
+            decode_account_aliases_by_account(inconsistent_scope, &request)
+                .expect_err("redundant scope substitution must fail")
+                .to_string()
+                .contains("scope fields")
+        );
+
+        let unsorted = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 2,
+                items: vec![
+                    AccountAliasListItemWireV1 {
+                        alias: "zulu@banka.paynet".to_owned(),
+                        dataspace: "paynet".to_owned(),
+                        domain: Some("banka".to_owned()),
+                        is_primary: false,
+                    },
+                    AccountAliasListItemWireV1 {
+                        alias: "alpha@banka.paynet".to_owned(),
+                        dataspace: "paynet".to_owned(),
+                        domain: Some("banka".to_owned()),
+                        is_primary: true,
+                    },
+                ],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode unsorted list response"),
+        );
+        assert!(
+            decode_account_aliases_by_account(unsorted, &request)
+                .expect_err("non-deterministic response ordering must fail")
+                .to_string()
+                .contains("strict canonical alias order")
+        );
+
+        let wrong_total = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&AccountAliasesByAccountWireV1 {
+                account_id: TEST_WORKER_I105.to_owned(),
+                total: 2,
+                items: vec![AccountAliasListItemWireV1 {
+                    alias: alias.to_string(),
+                    dataspace: "paynet".to_owned(),
+                    domain: Some("banka".to_owned()),
+                    is_primary: true,
+                }],
+                source: Some("on_chain".to_owned()),
+            })
+            .expect("encode wrong-total list response"),
+        );
+        assert!(
+            decode_account_aliases_by_account(wrong_total, &request)
+                .expect_err("response total must equal the filtered item count")
+                .to_string()
+                .contains("total")
+        );
+
+        let unknown_field = json_response(
+            StatusCode::OK,
+            &format!(
+                r#"{{"alias":"{alias}","account_id":"{TEST_WORKER_I105}","source":"on_chain","legacy":true}}"#
+            ),
+        );
+        assert!(
+            decode_account_alias_resolution(unknown_field, &alias)
+                .expect_err("unknown response fields must fail")
+                .to_string()
+                .contains("decode account-alias")
+        );
     }
 
     #[test]
@@ -24498,6 +25512,95 @@ mod tests {
         let decoded: AccountOnboardingApplyRequestV1 =
             norito::json::from_slice(&snapshot.body).expect("typed apply request");
         assert_eq!(decoded.receipt, receipt);
+    }
+
+    #[test]
+    fn sponsored_onboarding_disposition_transitions_are_monotonic() {
+        use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
+
+        for live in [Create, Repair, NoOp] {
+            assert!(onboarding_disposition_transition_allowed(Create, live));
+        }
+        assert!(onboarding_disposition_transition_allowed(Repair, Repair));
+        assert!(onboarding_disposition_transition_allowed(Repair, NoOp));
+        assert!(onboarding_disposition_transition_allowed(NoOp, NoOp));
+
+        for (planned, live) in [
+            (NoOp, Repair),
+            (NoOp, Create),
+            (Repair, Create),
+            (Conflict, NoOp),
+            (Create, Conflict),
+        ] {
+            assert!(!onboarding_disposition_transition_allowed(planned, live));
+        }
+    }
+
+    #[test]
+    fn sponsored_onboarding_apply_rejects_inconsistent_status_hash_or_disposition() {
+        let client = client_with_base_url(base_url());
+        let (_, receipt) = account_onboarding_plan_fixture(&client);
+        let token = "R".repeat(32);
+        let apply = |http_status, status: &str, disposition, tx_hash_hex: Option<String>| {
+            let body = norito::json::to_json(&AccountOnboardingResponseWireV1 {
+                account_id: receipt.body.request.account_id.clone(),
+                alias: receipt.body.request.alias.clone(),
+                tx_hash_hex,
+                status: status.to_owned(),
+                disposition,
+            })
+            .expect("encode onboarding response");
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            with_mock_http(
+                respond_with(&store, json_response(http_status, &body)),
+                || client.apply_account_onboarding(&receipt, &token),
+            )
+        };
+
+        let ancillary_repair = apply(
+            StatusCode::ACCEPTED,
+            "Repaired",
+            AliasPlanDispositionV1::NoOp,
+            Some("cd".repeat(32)),
+        )
+        .expect("create plan may become an ancillary-only repair");
+        assert_eq!(ancillary_repair.status, AccountOnboardingStatusV1::Repaired);
+
+        let error = apply(
+            StatusCode::ACCEPTED,
+            "Queued",
+            AliasPlanDispositionV1::Repair,
+            Some("ab".repeat(32)),
+        )
+        .expect_err("Queued must report create");
+        assert!(error.to_string().contains("queued account onboarding"));
+
+        let error = apply(
+            StatusCode::ACCEPTED,
+            "Repaired",
+            AliasPlanDispositionV1::Conflict,
+            Some("ab".repeat(32)),
+        )
+        .expect_err("conflict must never be accepted");
+        assert!(error.to_string().contains("allowed transition"));
+
+        let error = apply(
+            StatusCode::ACCEPTED,
+            "Queued",
+            AliasPlanDispositionV1::Create,
+            Some("AB".repeat(32)),
+        )
+        .expect_err("non-canonical transaction hashes must fail");
+        assert!(error.to_string().contains("tx_hash_hex"));
+
+        let error = apply(
+            StatusCode::OK,
+            "Unchanged",
+            AliasPlanDispositionV1::NoOp,
+            Some("ab".repeat(32)),
+        )
+        .expect_err("unchanged responses must omit a transaction hash");
+        assert!(error.to_string().contains("unchanged account onboarding"));
     }
 
     #[test]

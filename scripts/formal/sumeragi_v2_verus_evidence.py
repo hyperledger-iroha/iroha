@@ -28,10 +28,10 @@ sys.path.insert(0, str(ROOT_DIR / "scripts"))
 from compute_workspace_source_manifest import workspace_source_manifest  # noqa: E402
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXPECTED_VERUS_VERSION = "0.2026.05.31.5dd6d83"
 EXPECTED_DEPENDENCY_VERIFIED = 1690
-EXPECTED_ROOT_VERIFIED = 107
+EXPECTED_ROOT_VERIFIED = 126
 EXPECTED_LOG_PATH = "target/formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",
@@ -65,16 +65,24 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_sumeragi_core/src/lib.rs",
     "crates/iroha_sumeragi_core/src/verus_proofs.rs",
     "crates/iroha_core/src/sumeragi/v2.rs",
+    "crates/iroha_core/src/sumeragi/status.rs",
+    "crates/iroha_core/src/sumeragi/v2_apply.rs",
+    "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
     "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
     "crates/iroha_core/src/sumeragi/v2_body_store.rs",
     "crates/iroha_core/src/sumeragi/v2_effects.rs",
-    "crates/iroha_core/src/sumeragi/v2_ingress.rs",
+    "crates/iroha_core/src/sumeragi/mod.rs",
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+    "crates/iroha_core/src/sumeragi/v2_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_runner.rs",
     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
     "crates/iroha_core/src/sumeragi/v2_transport.rs",
     "crates/iroha_core/src/sumeragi/v2_worker.rs",
+    "crates/iroha_core/src/merge_sidecar.rs",
+    "crates/iroha_p2p/src/network.rs",
+    "crates/iroha_p2p/src/peer.rs",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisition.tla",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisitionProofs.tla",
     "docs/formal/sumeragi_v2/proof_coverage.json",
@@ -122,6 +130,25 @@ def _sha256_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def verification_contract_sha256() -> str:
+    """Hash every code-owned input which defines a valid verifier transcript."""
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "verus_version": EXPECTED_VERUS_VERSION,
+        "dependency_verified": EXPECTED_DEPENDENCY_VERIFIED,
+        "root_verified": EXPECTED_ROOT_VERIFIED,
+        "log_path": EXPECTED_LOG_PATH,
+        "invocation": list(EXPECTED_INVOCATION),
+        "required_source_paths": list(REQUIRED_SOURCE_PATHS),
+        "tool_sha256": EXPECTED_TOOL_SHA256,
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _host_key() -> str:
@@ -285,6 +312,7 @@ def build_evidence(
     )
     return {
         "schema_version": SCHEMA_VERSION,
+        "verification_contract_sha256": verification_contract_sha256(),
         "source_manifest_sha256": source_manifest_sha256,
         "sources": _source_entries(root),
         "tool": _tool_evidence(verus.resolve(strict=True), cargo_verus.resolve(strict=True)),
@@ -315,6 +343,7 @@ def validate_evidence(
         return ("Verus evidence must be an object",)
     expected_keys = {
         "schema_version",
+        "verification_contract_sha256",
         "source_manifest_sha256",
         "sources",
         "tool",
@@ -333,6 +362,8 @@ def validate_evidence(
 
     if evidence.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"Verus evidence schema_version must equal {SCHEMA_VERSION}")
+    if evidence.get("verification_contract_sha256") != verification_contract_sha256():
+        errors.append("Verus evidence verification contract digest has drifted")
     if evidence.get("backend_verification") is not True:
         errors.append("Verus evidence requires backend_verification=true")
     if evidence.get("invocation") != list(EXPECTED_INVOCATION):

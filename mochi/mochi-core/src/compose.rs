@@ -32,7 +32,7 @@ use iroha_data_model::{
     name::Name,
     nexus::AssetPermissionManifest,
     role::RoleId,
-    transaction::{Executable, SignedTransaction, TransactionBuilder},
+    transaction::{Executable, ExecutableBatchItem, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -520,6 +520,16 @@ impl TransactionPreview {
                 .map(|instr| format!("{instr}"))
                 .collect(),
             Executable::Ivm(_) => vec!["IVM bytecode executable".to_owned()],
+            Executable::Batch(items) => items
+                .iter()
+                .map(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => format!("{instruction}"),
+                    ExecutableBatchItem::ContractCall(call) => format!(
+                        "Contract call {}::{}",
+                        call.contract_address, call.entrypoint
+                    ),
+                })
+                .collect(),
         };
         Self {
             signed,
@@ -1523,7 +1533,11 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
 
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
@@ -1666,6 +1680,58 @@ mod tests {
             preview.instructions().len(),
             2,
             "preview should include both instructions"
+        );
+    }
+
+    #[test]
+    fn transaction_preview_preserves_mixed_batch_order() {
+        let first: InstructionBox = iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "before contract".to_owned(),
+        )
+        .into();
+        let last: InstructionBox = iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "after contract".to_owned(),
+        )
+        .into();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &ALICE_ID,
+            1,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let invocation = iroha_data_model::transaction::ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::prehashed([0x42; 32]),
+            entrypoint: "apply".to_owned(),
+            arguments: None,
+        };
+        let signed = TransactionBuilder::new(
+            ChainId::from("mixed-preview"),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ),
+        )
+        .with_executable_batch(vec![
+            ExecutableBatchItem::from(first.clone()),
+            ExecutableBatchItem::from(invocation),
+            ExecutableBatchItem::from(last.clone()),
+        ])
+        .try_sign(ALICE_KEYPAIR.private_key())
+        .expect("sign mixed batch");
+
+        let preview = TransactionPreview::new(signed);
+        assert_eq!(
+            preview.instructions(),
+            [
+                format!("{first}"),
+                format!("Contract call {contract_address}::apply"),
+                format!("{last}"),
+            ]
         );
     }
 

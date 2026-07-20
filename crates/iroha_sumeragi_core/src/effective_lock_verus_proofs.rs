@@ -1,5 +1,16 @@
 //! Source-linked Verus kernels for exact body ownership, retirement, and bounded service.
 
+use crate::refinement::{
+    CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL,
+    IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_CONSENSUS_CONTEXT,
+    IDENTITY_KIND_CONSENSUS_SUBJECT,
+};
+use crate::verus_proofs::{
+    EnterViewProjection, ProductionTransitionProjection, accepted_core_enter_view_has_exact_fact,
+    accepted_core_enter_view_projection_selects_post_install_lock,
+    production_enter_view_exact_fact, production_enter_view_preserves_locked_prepare_qc_identity,
+    production_kernel_relation,
+};
 use vstd::prelude::*;
 
 verus! {
@@ -13,6 +24,88 @@ pub struct ProductionTagProjection {
     pub view: u64,
     /// Reducer generation consuming the body pipeline.
     pub generation: u64,
+}
+
+/// Verus mirror of the production effective-lock trace projection.
+#[derive(Copy, Clone)]
+pub struct EffectiveLockTraceProjection {
+    /// Production action discriminator.
+    pub kind: u8,
+    /// Exact lower-level relation derived from live state.
+    pub relation_exact: bool,
+    /// Protected-lock evidence before the checked seam.
+    pub protected_before: u64,
+    /// Protected-lock evidence after the checked seam.
+    pub protected_after: u64,
+    /// Exact body-owner count before the checked seam.
+    pub owner_before: u64,
+    /// Exact body-owner count after the checked seam.
+    pub owner_after: u64,
+    /// Whether an existing owner was reused monotonically.
+    pub owner_reused: bool,
+    /// Ready/retained byte capacity before retirement.
+    pub ready_before: u64,
+    /// Retained locked-body bytes retired by the step.
+    pub retired_retained: u64,
+    /// Ready-body bytes retired by the step.
+    pub retired_ready: u64,
+    /// Ready/retained byte capacity after retirement.
+    pub ready_after: u64,
+    /// Pending-store byte capacity before retirement.
+    pub store_before: u64,
+    /// Pending-store bytes retired by the step.
+    pub retired_store: u64,
+    /// Pending-store byte capacity after retirement.
+    pub store_after: u64,
+    /// Persistent bounded-service cursor before selection.
+    pub cursor_before: u8,
+    /// Whether the trusted completion class is ready.
+    pub completion_ready: bool,
+    /// Whether the certified progress class is ready.
+    pub progress_ready: bool,
+    /// Whether the ordinary ingress class is ready.
+    pub normal_ready: bool,
+    /// Selected bounded-service class.
+    pub selected: u8,
+    /// Persistent bounded-service cursor after selection.
+    pub cursor_after: u8,
+}
+
+/// Verus instance of the compact production effective-lock trace relation.
+pub closed spec fn effective_lock_trace_step_is_valid(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_step_body!(projection)
+}
+
+/// Exact Verus mirror of the production EnterView trace gate.
+pub closed spec fn production_enter_view_uses_post_install_effective_lock_kernel(
+    trace: EffectiveLockTraceProjection,
+    enter_view: EnterViewProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(trace, 1u8)
+        && enter_view_locked_prepare_qc_identity_body!(enter_view)
+}
+
+/// Exact Verus mirror of the production body-owner trace gate.
+pub closed spec fn production_body_ownership_preserves_effective_lock_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 2u8)
+}
+
+/// Exact Verus mirror of the production capacity-retirement trace gate.
+pub closed spec fn production_body_capacity_retirement_preserves_effective_lock_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 3u8)
+}
+
+/// Exact Verus mirror of the production bounded-service trace gate.
+pub closed spec fn production_body_service_refines_async_fairness_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 4u8)
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +492,292 @@ pub fn verified_production_exact_body_owner_rebind(
         reveal(production_exact_body_owner_rebind);
     }
     rebound
+}
+
+// ---------------------------------------------------------------------------
+// Effective-lock production refinement claims
+// ---------------------------------------------------------------------------
+
+/// Exact trace projected from the reducer's post-WAL `EnterView` seam.
+pub closed spec fn production_enter_view_effective_lock_trace(
+    projection: ProductionTransitionProjection,
+) -> EffectiveLockTraceProjection {
+    let enter_view = projection.enter_view;
+    let protected_after = if enter_view.durable_lock_after.present { 1u64 } else { 0u64 };
+    let owner_after = if enter_view.following_fetch_lock.present { 1u64 } else { 0u64 };
+    EffectiveLockTraceProjection {
+        kind: 1u8,
+        relation_exact: production_enter_view_exact_fact(projection),
+        protected_before: protected_after,
+        protected_after: if enter_view.effect_protected_lock.present { 1u64 } else { 0u64 },
+        owner_before: enter_view.fetch_count,
+        owner_after,
+        owner_reused: false,
+        ready_before: 0u64,
+        retired_retained: 0u64,
+        retired_ready: 0u64,
+        ready_after: 0u64,
+        store_before: 0u64,
+        retired_store: 0u64,
+        store_after: 0u64,
+        cursor_before: 0u8,
+        completion_ready: false,
+        progress_ready: false,
+        normal_ready: false,
+        selected: 0u8,
+        cursor_after: 0u8,
+    }
+}
+
+/// Exact trace projected from the executor's body-owner binding seam.
+pub closed spec fn production_body_ownership_effective_lock_trace(
+    current: Option<ProductionExactBodyOwnerProjection>,
+    incoming: ProductionExactBodyOwnerProjection,
+    binding: ProductionExactBodyOwnerBindingProjection,
+) -> EffectiveLockTraceProjection {
+    EffectiveLockTraceProjection {
+        kind: 2u8,
+        relation_exact: production_exact_body_owner_binding(current, incoming) == Some(binding),
+        protected_before: if current.is_some() && current.unwrap().manifest_hash.is_some() {
+            1u64
+        } else {
+            0u64
+        },
+        protected_after: if binding.owner.manifest_hash.is_some() { 1u64 } else { 0u64 },
+        owner_before: if current.is_some() { 1u64 } else { 0u64 },
+        owner_after: 1u64,
+        owner_reused: binding.already_owned,
+        ready_before: 0u64,
+        retired_retained: 0u64,
+        retired_ready: 0u64,
+        ready_after: 0u64,
+        store_before: 0u64,
+        retired_store: 0u64,
+        store_after: 0u64,
+        cursor_before: 0u8,
+        completion_ready: false,
+        progress_ready: false,
+        normal_ready: false,
+        selected: 0u8,
+        cursor_after: 0u8,
+    }
+}
+
+/// Exact trace projected from either executor body-retirement seam.
+pub closed spec fn production_body_capacity_retirement_effective_lock_trace(
+    ready_before: u64,
+    retained_bytes: u64,
+    ready_bytes: u64,
+    store_before: u64,
+    store_bytes: u64,
+    accounting: ExactBodyRetirementAccountingProjection,
+) -> EffectiveLockTraceProjection {
+    EffectiveLockTraceProjection {
+        kind: 3u8,
+        relation_exact: exact_body_retirement_accounting(
+            ready_before,
+            retained_bytes,
+            ready_bytes,
+            store_before,
+            store_bytes,
+        ) == Some(accounting),
+        protected_before: 0u64,
+        protected_after: 0u64,
+        owner_before: 0u64,
+        owner_after: 0u64,
+        owner_reused: false,
+        ready_before,
+        retired_retained: retained_bytes,
+        retired_ready: ready_bytes,
+        ready_after: accounting.ready_after,
+        store_before,
+        retired_store: store_bytes,
+        store_after: accounting.store_after,
+        cursor_before: 0u8,
+        completion_ready: false,
+        progress_ready: false,
+        normal_ready: false,
+        selected: 0u8,
+        cursor_after: 0u8,
+    }
+}
+
+/// Exact trace projected from one runtime bounded-service selection.
+pub closed spec fn production_body_service_effective_lock_trace(
+    cursor: u8,
+    completion_ready: bool,
+    progress_ready: bool,
+    normal_ready: bool,
+    selection: BoundedServiceSelectionProjection,
+) -> EffectiveLockTraceProjection {
+    EffectiveLockTraceProjection {
+        kind: 4u8,
+        relation_exact: selection == bounded_service_selection(
+            cursor,
+            completion_ready,
+            progress_ready,
+            normal_ready,
+        ),
+        protected_before: 0u64,
+        protected_after: 0u64,
+        owner_before: 0u64,
+        owner_after: 0u64,
+        owner_reused: false,
+        ready_before: 0u64,
+        retired_retained: 0u64,
+        retired_ready: 0u64,
+        ready_after: 0u64,
+        store_before: 0u64,
+        retired_store: 0u64,
+        store_after: 0u64,
+        cursor_before: cursor,
+        completion_ready,
+        progress_ready,
+        normal_ready,
+        selected: selection.selected,
+        cursor_after: selection.next,
+    }
+}
+
+/// A reducer-accepted active `EnterView` carries the exact installed lock and
+/// matching recovery-fetch evidence into the shared effective-lock trace.
+pub proof fn production_enter_view_uses_post_install_effective_lock(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        projection.enter_view.active,
+        production_kernel_relation(projection),
+    ensures
+        production_enter_view_uses_post_install_effective_lock_kernel(
+            production_enter_view_effective_lock_trace(projection),
+            projection.enter_view,
+        ),
+        production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
+{
+    accepted_core_enter_view_has_exact_fact(projection);
+    accepted_core_enter_view_projection_selects_post_install_lock(projection);
+    reveal(production_enter_view_effective_lock_trace);
+    reveal(production_enter_view_uses_post_install_effective_lock_kernel);
+    reveal(effective_lock_trace_step_is_valid);
+    reveal(production_enter_view_preserves_locked_prepare_qc_identity);
+    assert(production_enter_view_uses_post_install_effective_lock_kernel(
+        production_enter_view_effective_lock_trace(projection),
+        projection.enter_view,
+    ));
+}
+
+/// A successful exact-owner binding creates one owner or reuses it without
+/// dropping previously installed manifest evidence.
+pub proof fn production_body_ownership_preserves_effective_lock(
+    current: Option<ProductionExactBodyOwnerProjection>,
+    incoming: ProductionExactBodyOwnerProjection,
+    binding: ProductionExactBodyOwnerBindingProjection,
+)
+    requires
+        production_exact_body_owner_binding(current, incoming) == Some(binding),
+    ensures
+        production_body_ownership_preserves_effective_lock_kernel(
+            production_body_ownership_effective_lock_trace(current, incoming, binding),
+        ),
+{
+    reveal(production_body_ownership_effective_lock_trace);
+    reveal(production_exact_body_owner_binding);
+    reveal(production_body_ownership_preserves_effective_lock_kernel);
+    reveal(effective_lock_trace_step_is_valid);
+    assert(production_body_ownership_preserves_effective_lock_kernel(
+        production_body_ownership_effective_lock_trace(current, incoming, binding),
+    ));
+}
+
+/// Successful exact retirement accounts for every retained, ready, and store
+/// byte without underflow or residual leakage.
+pub proof fn production_body_capacity_retirement_preserves_effective_lock(
+    ready_before: u64,
+    retained_bytes: u64,
+    ready_bytes: u64,
+    store_before: u64,
+    store_bytes: u64,
+    accounting: ExactBodyRetirementAccountingProjection,
+)
+    requires
+        exact_body_retirement_accounting(
+            ready_before,
+            retained_bytes,
+            ready_bytes,
+            store_before,
+            store_bytes,
+        ) == Some(accounting),
+    ensures
+        production_body_capacity_retirement_preserves_effective_lock_kernel(
+            production_body_capacity_retirement_effective_lock_trace(
+                ready_before,
+                retained_bytes,
+                ready_bytes,
+                store_before,
+                store_bytes,
+                accounting,
+            ),
+        ),
+{
+    reveal(production_body_capacity_retirement_effective_lock_trace);
+    reveal(exact_body_retirement_accounting);
+    reveal(production_body_capacity_retirement_preserves_effective_lock_kernel);
+    reveal(effective_lock_trace_step_is_valid);
+    assert(production_body_capacity_retirement_preserves_effective_lock_kernel(
+        production_body_capacity_retirement_effective_lock_trace(
+            ready_before,
+            retained_bytes,
+            ready_bytes,
+            store_before,
+            store_bytes,
+            accounting,
+        ),
+    ));
+}
+
+/// When any class is ready, the bounded-service cursor selects one exact
+/// ready class and advances to the unique next cursor.
+pub proof fn production_body_service_refines_async_fairness(
+    cursor: u8,
+    completion_ready: bool,
+    progress_ready: bool,
+    normal_ready: bool,
+    selection: BoundedServiceSelectionProjection,
+)
+    requires
+        cursor >= 1u8,
+        cursor <= 3u8,
+        completion_ready || progress_ready || normal_ready,
+        selection == bounded_service_selection(
+            cursor,
+            completion_ready,
+            progress_ready,
+            normal_ready,
+        ),
+    ensures
+        production_body_service_refines_async_fairness_kernel(
+            production_body_service_effective_lock_trace(
+                cursor,
+                completion_ready,
+                progress_ready,
+                normal_ready,
+                selection,
+            ),
+        ),
+{
+    reveal(production_body_service_effective_lock_trace);
+    reveal(bounded_service_selection);
+    reveal(production_body_service_refines_async_fairness_kernel);
+    reveal(effective_lock_trace_step_is_valid);
+    assert(production_body_service_refines_async_fairness_kernel(
+        production_body_service_effective_lock_trace(
+            cursor,
+            completion_ready,
+            progress_ready,
+            normal_ready,
+            selection,
+        ),
+    ));
 }
 
 } // verus!

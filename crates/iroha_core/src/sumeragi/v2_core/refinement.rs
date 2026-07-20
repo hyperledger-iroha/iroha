@@ -64,6 +64,7 @@ pub const CONTINUATION_DECIDE: u8 = 3;
 /// This helper is intentionally generic: the production call moves concrete
 /// effects, while the refinement regression uses opaque tokens to pin the
 /// queue transformation independently of effect identity or cloning.
+#[allow(dead_code)]
 pub fn prepend_causal_continuation<T>(pending: &mut VecDeque<T>, continuation: Vec<T>) {
     for item in continuation.into_iter().rev() {
         pending.push_front(item);
@@ -157,6 +158,157 @@ pub const SERVICE_CLASS_PROGRESS: u8 = 2;
 /// Ordinary proposal and vote ingress class.
 #[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
 pub const SERVICE_CLASS_NORMAL: u8 = 3;
+
+/// A persisted view transition selected the effective lock and its fetch.
+pub const EFFECTIVE_LOCK_TRACE_ENTER_VIEW: u8 = 1;
+/// The body pipeline bound or monotonically enriched its exact owner.
+pub const EFFECTIVE_LOCK_TRACE_OWNER: u8 = 2;
+/// Supersession retired the exact body-capacity residuals.
+pub const EFFECTIVE_LOCK_TRACE_RETIRE: u8 = 3;
+/// One bounded ingress invocation selected an exact ready service class.
+pub const EFFECTIVE_LOCK_TRACE_SERVICE: u8 = 4;
+
+/// No quorum-certificate evidence is present at this projection position.
+pub(crate) const CERTIFICATE_EVIDENCE_ABSENT: u8 = 0;
+/// The certificate is byte-for-byte equal to the transition's local lock.
+pub(crate) const CERTIFICATE_EVIDENCE_LOCAL: u8 = 1;
+/// The certificate is byte-for-byte equal to the incoming timeout high-QC.
+pub(crate) const CERTIFICATE_EVIDENCE_INCOMING: u8 = 2;
+/// The certificate is not owned by either authenticated transition source.
+pub(crate) const CERTIFICATE_EVIDENCE_FOREIGN: u8 = 3;
+
+/// Domain for a frozen consensus context digest.
+pub(crate) const IDENTITY_DOMAIN_CONTEXT: u8 = 1;
+/// Domain for a canonical block or consensus subject component.
+pub(crate) const IDENTITY_DOMAIN_SUBJECT: u8 = 2;
+/// Domain for canonical body, request, or response bytes.
+pub(crate) const IDENTITY_DOMAIN_PAYLOAD: u8 = 3;
+/// Domain for an authenticated network source or semantic origin.
+pub(crate) const IDENTITY_DOMAIN_PEER: u8 = 4;
+/// Domain for a durable receipt or finality artifact.
+pub(crate) const IDENTITY_DOMAIN_DURABLE_ARTIFACT: u8 = 5;
+/// Canonical identity kind for one frozen consensus context.
+pub(crate) const IDENTITY_KIND_CONSENSUS_CONTEXT: u8 = 1;
+/// Canonical identity kind for one consensus subject.
+pub(crate) const IDENTITY_KIND_CONSENSUS_SUBJECT: u8 = 1;
+/// Canonical identity kind for one wire-level frozen height context.
+pub(crate) const IDENTITY_KIND_WIRE_HEIGHT_CONTEXT: u8 = 2;
+/// Canonical identity kind for one wire-level block subject.
+pub(crate) const IDENTITY_KIND_WIRE_BLOCK_SUBJECT: u8 = 2;
+/// Canonical identity kind for one block-header hash.
+pub(crate) const IDENTITY_KIND_BLOCK_HEADER: u8 = 3;
+/// Canonical identity kind for one canonical payload hash.
+pub(crate) const IDENTITY_KIND_CANONICAL_PAYLOAD: u8 = 1;
+/// Canonical identity kind for one execution commitment.
+pub(crate) const IDENTITY_KIND_EXECUTION_COMMITMENT: u8 = 2;
+/// Canonical identity kind for one complete quorum certificate.
+pub(crate) const IDENTITY_KIND_QUORUM_CERTIFICATE: u8 = 3;
+/// Canonical identity kind for one payload manifest.
+pub(crate) const IDENTITY_KIND_PAYLOAD_MANIFEST: u8 = 4;
+/// Canonical identity kind for one result-bearing block wire.
+pub(crate) const IDENTITY_KIND_EXECUTED_BLOCK_WIRE: u8 = 5;
+/// Canonical identity kind for one signed sidecar request.
+pub(crate) const IDENTITY_KIND_SIDECAR_REQUEST: u8 = 6;
+/// Canonical identity kind for one actor-admitted reply payload.
+pub(crate) const IDENTITY_KIND_REPLY_PAYLOAD: u8 = 7;
+/// Canonical identity kind for one merge-ledger entry.
+pub(crate) const IDENTITY_KIND_MERGE_ENTRY: u8 = 8;
+/// Canonical identity kind for one sidecar ledger-reference digest.
+pub(crate) const IDENTITY_KIND_REFERENCE_DIGEST: u8 = 9;
+/// Canonical identity kind for one complete network response.
+pub(crate) const IDENTITY_KIND_NETWORK_RESPONSE: u8 = 10;
+/// Canonical identity kind for one certified sidecar response.
+pub(crate) const IDENTITY_KIND_SIDECAR_RESPONSE: u8 = 11;
+/// Canonical identity kind for one certified sidecar chunk.
+pub(crate) const IDENTITY_KIND_SIDECAR_CHUNK: u8 = 12;
+/// Canonical identity kind for one sidecar payload digest.
+pub(crate) const IDENTITY_KIND_SIDECAR_PAYLOAD: u8 = 13;
+/// Canonical identity kind for one checksummed durable body frame.
+pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
+/// Canonical identity kind for one finality artifact.
+pub(crate) const IDENTITY_KIND_FINALITY_ARTIFACT: u8 = 2;
+/// Canonical identity kind for one authenticated peer.
+pub(crate) const IDENTITY_KIND_PEER: u8 = 1;
+
+/// Lossless fixed-width view of one existing canonical 256-bit identity.
+///
+/// `domain` and `kind` are kept outside the digest so projections of equal
+/// bytes used for different protocol objects cannot be confused. The four
+/// words preserve every input bit; this helper does not hash or truncate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CanonicalIdentityProjection {
+    pub(crate) domain: u8,
+    pub(crate) kind: u8,
+    pub(crate) word0: u64,
+    pub(crate) word1: u64,
+    pub(crate) word2: u64,
+    pub(crate) word3: u64,
+}
+
+impl CanonicalIdentityProjection {
+    /// Canonical absent identity used by fixed-width optional projections.
+    #[must_use]
+    pub(crate) const fn zero() -> Self {
+        Self {
+            domain: 0,
+            kind: 0,
+            word0: 0,
+            word1: 0,
+            word2: 0,
+            word3: 0,
+        }
+    }
+
+    /// Project all 32 canonical bytes into four big-endian words.
+    #[must_use]
+    pub(crate) const fn from_bytes(domain: u8, kind: u8, bytes: [u8; 32]) -> Self {
+        Self {
+            domain,
+            kind,
+            word0: u64::from_be_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]),
+            word1: u64::from_be_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]),
+            word2: u64::from_be_bytes([
+                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22],
+                bytes[23],
+            ]),
+            word3: u64::from_be_bytes([
+                bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30],
+                bytes[31],
+            ]),
+        }
+    }
+}
+
+macro_rules! canonical_identity_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.domain == $right.domain
+            && $left.kind == $right.kind
+            && $left.word0 == $right.word0
+            && $left.word1 == $right.word1
+            && $left.word2 == $right.word2
+            && $left.word3 == $right.word3
+    }};
+}
+
+macro_rules! canonical_identity_is_typed_body {
+    ($identity:expr, $domain:expr, $kind:expr) => {{ $identity.domain == $domain && $identity.kind == $kind }};
+}
+
+macro_rules! canonical_identity_is_zero_body {
+    ($identity:expr) => {{
+        $identity.domain == 0u8
+            && $identity.kind == 0u8
+            && $identity.word0 == 0u64
+            && $identity.word1 == 0u64
+            && $identity.word2 == 0u64
+            && $identity.word3 == 0u64
+    }};
+}
 
 // One exact body-pipeline identity is carried unchanged through FetchBody,
 // BodyAvailable, StoreBody, and ValidateBody. These macros are instantiated by
@@ -375,6 +527,812 @@ macro_rules! bounded_service_selection_body {
                 next: 0u8,
             }
         }
+    }};
+}
+
+// A compact discriminated trace ties the four production effective-lock seams
+// to one executable relation. Each producer fills only its action branch and
+// must use canonical zeroes for every unrelated field. Verus instantiates this
+// exact macro over its mathematical mirror, while production invokes one of
+// the four checked wrappers below with values derived from live state.
+macro_rules! effective_lock_trace_step_body {
+    ($projection:expr) => {{
+        if $projection.kind == 1u8 {
+            $projection.relation_exact
+                && $projection.protected_before <= 1u64
+                && $projection.protected_after == $projection.protected_before
+                && $projection.owner_before == $projection.protected_before
+                && $projection.owner_after == $projection.owner_before
+                && !$projection.owner_reused
+                && $projection.ready_before == 0u64
+                && $projection.retired_retained == 0u64
+                && $projection.retired_ready == 0u64
+                && $projection.ready_after == 0u64
+                && $projection.store_before == 0u64
+                && $projection.retired_store == 0u64
+                && $projection.store_after == 0u64
+                && $projection.cursor_before == 0u8
+                && !$projection.completion_ready
+                && !$projection.progress_ready
+                && !$projection.normal_ready
+                && $projection.selected == 0u8
+                && $projection.cursor_after == 0u8
+        } else if $projection.kind == 2u8 {
+            $projection.relation_exact
+                && $projection.protected_before <= 1u64
+                && $projection.protected_after <= 1u64
+                && $projection.protected_before <= $projection.protected_after
+                && $projection.owner_before <= 1u64
+                && $projection.owner_after == 1u64
+                && $projection.owner_reused == ($projection.owner_before == 1u64)
+                && $projection.ready_before == 0u64
+                && $projection.retired_retained == 0u64
+                && $projection.retired_ready == 0u64
+                && $projection.ready_after == 0u64
+                && $projection.store_before == 0u64
+                && $projection.retired_store == 0u64
+                && $projection.store_after == 0u64
+                && $projection.cursor_before == 0u8
+                && !$projection.completion_ready
+                && !$projection.progress_ready
+                && !$projection.normal_ready
+                && $projection.selected == 0u8
+                && $projection.cursor_after == 0u8
+        } else if $projection.kind == 3u8 {
+            $projection.relation_exact
+                && $projection.protected_before == 0u64
+                && $projection.protected_after == 0u64
+                && $projection.owner_before == 0u64
+                && $projection.owner_after == 0u64
+                && !$projection.owner_reused
+                && $projection.retired_retained <= $projection.ready_before
+                && $projection.retired_ready
+                    <= $projection.ready_before - $projection.retired_retained
+                && $projection.ready_after
+                    == $projection.ready_before
+                        - $projection.retired_retained
+                        - $projection.retired_ready
+                && $projection.retired_store <= $projection.store_before
+                && $projection.store_after == $projection.store_before - $projection.retired_store
+                && $projection.cursor_before == 0u8
+                && !$projection.completion_ready
+                && !$projection.progress_ready
+                && !$projection.normal_ready
+                && $projection.selected == 0u8
+                && $projection.cursor_after == 0u8
+        } else if $projection.kind == 4u8 {
+            $projection.relation_exact
+                && $projection.protected_before == 0u64
+                && $projection.protected_after == 0u64
+                && $projection.owner_before == 0u64
+                && $projection.owner_after == 0u64
+                && !$projection.owner_reused
+                && $projection.ready_before == 0u64
+                && $projection.retired_retained == 0u64
+                && $projection.retired_ready == 0u64
+                && $projection.ready_after == 0u64
+                && $projection.store_before == 0u64
+                && $projection.retired_store == 0u64
+                && $projection.store_after == 0u64
+                && $projection.cursor_before >= 1u8
+                && $projection.cursor_before <= 3u8
+                && (if $projection.selected == 0u8 {
+                    !$projection.completion_ready
+                        && !$projection.progress_ready
+                        && !$projection.normal_ready
+                        && $projection.cursor_after == $projection.cursor_before
+                } else if $projection.selected == 1u8 {
+                    $projection.completion_ready && $projection.cursor_after == 2u8
+                } else if $projection.selected == 2u8 {
+                    $projection.progress_ready && $projection.cursor_after == 3u8
+                } else if $projection.selected == 3u8 {
+                    $projection.normal_ready && $projection.cursor_after == 1u8
+                } else {
+                    false
+                })
+        } else {
+            false
+        }
+    }};
+}
+
+macro_rules! effective_lock_trace_claim_body {
+    ($projection:expr, $kind:expr) => {{ $projection.kind == $kind && effective_lock_trace_step_is_valid($projection) }};
+}
+
+macro_rules! pending_projection_is_absent_body {
+    ($pending:expr) => {{
+        $pending.record_kind == WAL_RECORD_NONE
+            && $pending.continuation == CONTINUATION_NONE
+            && $pending.persistence_id == 0u64
+            && canonical_identity_is_zero_body!($pending.context_id)
+            && $pending.height == 0u64
+            && $pending.view == 0u64
+            && canonical_identity_is_zero_body!($pending.subject)
+    }};
+}
+
+macro_rules! pending_projection_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.record_kind == $right.record_kind
+            && $left.continuation == $right.continuation
+            && $left.persistence_id == $right.persistence_id
+            && canonical_identity_equal_body!($left.context_id, $right.context_id)
+            && $left.height == $right.height
+            && $left.view == $right.view
+            && canonical_identity_equal_body!($left.subject, $right.subject)
+    }};
+}
+
+macro_rules! pending_projection_matches_boundary_body {
+    ($pending:expr, $boundary:expr) => {{
+        $boundary.subject.present
+            && $pending.record_kind == $boundary.record_kind
+            && $pending.continuation == $boundary.continuation
+            && $pending.persistence_id == $boundary.persistence_id
+            && canonical_identity_equal_body!($pending.context_id, $boundary.context_identity)
+            && $pending.height == $boundary.tag.height
+            && $pending.view == $boundary.tag.view
+            && canonical_identity_equal_body!($pending.subject, $boundary.subject_identity)
+    }};
+}
+
+macro_rules! wal_record_continuation_is_exact_body {
+    ($record_kind:expr, $continuation:expr) => {{
+        match $record_kind {
+            WAL_RECORD_PROPOSAL_INTENT
+            | WAL_RECORD_PREPARE_INTENT
+            | WAL_RECORD_LOCK_AND_COMMIT
+            | WAL_RECORD_TIMEOUT_INTENT => $continuation == CONTINUATION_SIGN,
+            WAL_RECORD_OBSERVE_PREPARE => $continuation == CONTINUATION_NONE,
+            WAL_RECORD_INSTALL_TIMEOUT => $continuation == CONTINUATION_INSTALL_TIMEOUT,
+            WAL_RECORD_DECISION => $continuation == CONTINUATION_DECIDE,
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! event_can_start_wal_record_body {
+    ($event_kind:expr, $record_kind:expr) => {{
+        match $event_kind {
+            0u8 => $record_kind == WAL_RECORD_PROPOSAL_INTENT,
+            2u8 | 3u8 => {
+                $record_kind == WAL_RECORD_OBSERVE_PREPARE
+                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
+                    || $record_kind == WAL_RECORD_DECISION
+            }
+            4u8 | 5u8 => $record_kind == WAL_RECORD_INSTALL_TIMEOUT,
+            6u8 => $record_kind == WAL_RECORD_TIMEOUT_INTENT,
+            10u8 => {
+                $record_kind == WAL_RECORD_PREPARE_INTENT
+                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
+            }
+            EVENT_SIGNED => {
+                $record_kind == WAL_RECORD_PREPARE_INTENT
+                    || $record_kind == WAL_RECORD_OBSERVE_PREPARE
+                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
+                    || $record_kind == WAL_RECORD_INSTALL_TIMEOUT
+                    || $record_kind == WAL_RECORD_DECISION
+            }
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! persist_slot_matches_boundary_body {
+    ($slot:expr, $boundary:expr) => {{
+        if $slot.kind == EFFECT_PERSIST {
+            $slot.requested.persistence_id == $boundary.persistence_id
+                && $slot.requested.record_kind == $boundary.record_kind
+                && $slot.requested.context_id == $boundary.context_id
+                && $slot.requested.height == $boundary.tag.height
+                && $slot.requested.view == $boundary.tag.view
+                && $slot.requested.subject == $boundary.subject.subject
+                && $slot.requested.tag.height == $boundary.tag.height
+                && $slot.requested.tag.view == $boundary.tag.view
+                && $slot.requested.tag.generation == $boundary.tag.generation
+        } else {
+            true
+        }
+    }};
+}
+
+macro_rules! tag_projection_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.height == $right.height
+            && $left.view == $right.view
+            && $left.generation == $right.generation
+    }};
+}
+
+// These six expressions are the source-shared production/Verus kernels for
+// the progress-witness refinement.  Every field is a primitive observation at
+// the enforcing production seam; in particular, callers cannot supply an
+// already-computed "valid" or "owned" bit.
+macro_rules! production_durable_intent_trace_body {
+    ($projection:expr) => {{
+        let boundary_exact = $projection.boundary_claimed.kind != BOUNDARY_NONE
+            && boundary_capability_equal_body!(
+                $projection.boundary_claimed,
+                $projection.boundary_granted
+            );
+        let persist_effects = effect_count_body!($projection.effects, EFFECT_PERSIST);
+        effect_slots_authorized_body!($projection.effects)
+            && persist_effects <= 1u64
+            && $projection.durable_sequence_after >= $projection.durable_sequence_before
+            && tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before)
+            && (if boundary_exact && $projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL {
+                pending_projection_is_absent_body!($projection.pending_before)
+                    && boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && $projection.boundary_claimed.subject.present
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_after,
+                        $projection.boundary_claimed.tag
+                    )
+                    && pending_projection_matches_boundary_body!(
+                        $projection.pending_after,
+                        $projection.boundary_claimed
+                    )
+                    && wal_record_continuation_is_exact_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.boundary_claimed.continuation
+                    )
+                    && event_can_start_wal_record_body!(
+                        $projection.event_kind,
+                        $projection.boundary_claimed.record_kind
+                    )
+                    && $projection.durable_sequence_after == $projection.durable_sequence_before
+                    && $projection.event_kind != EVENT_PERSISTED
+                    && $projection.event_persistence_id == 0u64
+                    && persist_effects == 1u64
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot0,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot1,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot2,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot3,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot4,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot5,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot6,
+                        $projection.boundary_claimed
+                    )
+                    && persist_slot_matches_boundary_body!(
+                        $projection.effects.slot7,
+                        $projection.boundary_claimed
+                    )
+            } else if boundary_exact
+                && $projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            {
+                pending_projection_matches_boundary_body!(
+                    $projection.pending_before,
+                    $projection.boundary_claimed
+                ) && boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && $projection.boundary_claimed.subject.present
+                    && wal_record_continuation_is_exact_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.boundary_claimed.continuation
+                    )
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_after,
+                        $projection.boundary_claimed.tag
+                    )
+                    && pending_projection_is_absent_body!($projection.pending_after)
+                    && $projection.durable_sequence_before < u64::MAX
+                    && $projection.durable_sequence_after
+                        == $projection.durable_sequence_before + 1u64
+                    && $projection.event_kind == EVENT_PERSISTED
+                    && $projection.event_persistence_id
+                        == $projection.boundary_claimed.persistence_id
+                    && persist_effects == 0u64
+            } else if boundary_exact
+                && $projection.boundary_claimed.kind == BOUNDARY_COMPLETE_APPLICATION
+            {
+                boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && $projection.boundary_claimed.subject.present
+                    && $projection.boundary_claimed.record_kind == WAL_RECORD_NONE
+                    && $projection.boundary_claimed.continuation == CONTINUATION_NONE
+                    && $projection.boundary_claimed.replay_effect_kind == REPLAY_EFFECT_NONE
+                    && $projection.boundary_claimed.persistence_id == 0u64
+                    && $projection.boundary_claimed.replay_plan.len == 0u8
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_after,
+                        $projection.boundary_claimed.tag
+                    )
+                    && pending_projection_equal_body!(
+                        $projection.pending_before,
+                        $projection.pending_after
+                    )
+                    && $projection.durable_sequence_after == $projection.durable_sequence_before
+                    && $projection.event_kind == 14u8
+                    && $projection.event_persistence_id == 0u64
+                    && persist_effects == 0u64
+            } else if boundary_exact
+                && $projection.boundary_claimed.kind == BOUNDARY_RESUME_AFTER_REPLAY
+            {
+                boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && $projection.boundary_claimed.record_kind == WAL_RECORD_NONE
+                    && $projection.boundary_claimed.continuation == CONTINUATION_NONE
+                    && $projection.boundary_claimed.persistence_id
+                        == $projection.durable_sequence_before
+                    && replay_plan_well_formed_body!(
+                        $projection.boundary_claimed.replay_plan,
+                        $projection.boundary_claimed.replay_effect_kind
+                    )
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_after,
+                        $projection.boundary_claimed.tag
+                    )
+                    && pending_projection_equal_body!(
+                        $projection.pending_before,
+                        $projection.pending_after
+                    )
+                    && $projection.durable_sequence_after == $projection.durable_sequence_before
+                    && $projection.event_kind == EVENT_RESUME_AFTER_REPLAY
+                    && $projection.event_persistence_id == 0u64
+                    && persist_effects == 0u64
+            } else {
+                boundary_capability_is_absent_body!($projection.boundary_claimed)
+                    && boundary_capability_is_absent_body!($projection.boundary_granted)
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
+                    && $projection.durable_sequence_after == $projection.durable_sequence_before
+                    && pending_projection_equal_body!(
+                        $projection.pending_before,
+                        $projection.pending_after
+                    )
+                    && $projection.event_persistence_id == 0u64
+                    && persist_effects == 0u64
+            })
+    }};
+}
+
+macro_rules! production_decision_identity_is_canonical_body {
+    ($decision:expr) => {{
+        canonical_identity_is_typed_body!(
+            $decision.context_id,
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+        ) && $decision.height > 0u64
+            && ($decision.phase == 1u8 || $decision.phase == 2u8)
+            && canonical_identity_is_typed_body!(
+                $decision.subject,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT
+            )
+            && canonical_identity_is_typed_body!(
+                $decision.block_hash,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER
+            )
+            && canonical_identity_is_typed_body!(
+                $decision.payload_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD
+            )
+            && canonical_identity_is_typed_body!(
+                $decision.execution_commitment,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTION_COMMITMENT
+            )
+            && canonical_identity_is_typed_body!(
+                $decision.executed_block_wire_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTED_BLOCK_WIRE
+            )
+    }};
+}
+
+macro_rules! production_decision_identity_equal_body {
+    ($left:expr, $right:expr) => {{
+        production_decision_identity_is_canonical_body!($left)
+            && production_decision_identity_is_canonical_body!($right)
+            && canonical_identity_equal_body!($left.context_id, $right.context_id)
+            && $left.height == $right.height
+            && $left.view == $right.view
+            && $left.phase == $right.phase
+            && canonical_identity_equal_body!($left.subject, $right.subject)
+            && canonical_identity_equal_body!($left.block_hash, $right.block_hash)
+            && canonical_identity_equal_body!($left.payload_hash, $right.payload_hash)
+            && canonical_identity_equal_body!(
+                $left.execution_commitment,
+                $right.execution_commitment
+            )
+            && canonical_identity_equal_body!(
+                $left.executed_block_wire_hash,
+                $right.executed_block_wire_hash
+            )
+    }};
+}
+
+macro_rules! production_quorum_certificate_is_canonical_body {
+    ($certificate:expr) => {{
+        production_decision_identity_is_canonical_body!($certificate.decision)
+            && canonical_identity_is_typed_body!(
+                $certificate.certificate,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_QUORUM_CERTIFICATE
+            )
+            && $certificate.signer_count > 0u64
+            && $certificate.aggregate_signature_len > 0u64
+    }};
+}
+
+macro_rules! production_quorum_certificate_equal_body {
+    ($left:expr, $right:expr) => {{
+        production_quorum_certificate_is_canonical_body!($left)
+            && production_quorum_certificate_is_canonical_body!($right)
+            && production_decision_identity_equal_body!($left.decision, $right.decision)
+            && canonical_identity_equal_body!($left.certificate, $right.certificate)
+            && $left.signer_count == $right.signer_count
+            && $left.aggregate_signature_len == $right.aggregate_signature_len
+    }};
+}
+
+macro_rules! production_durable_body_is_canonical_body {
+    ($body:expr) => {{
+        canonical_identity_is_typed_body!(
+            $body.context_id,
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+        ) && $body.height > 0u64
+            && canonical_identity_is_typed_body!(
+                $body.subject,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT
+            )
+            && canonical_identity_is_typed_body!(
+                $body.block_hash,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER
+            )
+            && canonical_identity_is_typed_body!(
+                $body.payload_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD
+            )
+            && canonical_identity_is_typed_body!(
+                $body.manifest,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST
+            )
+            && canonical_identity_is_typed_body!(
+                $body.frame,
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_DURABLE_BODY_FRAME
+            )
+    }};
+}
+
+macro_rules! production_durable_body_equal_body {
+    ($left:expr, $right:expr) => {{
+        production_durable_body_is_canonical_body!($left)
+            && production_durable_body_is_canonical_body!($right)
+            && canonical_identity_equal_body!($left.context_id, $right.context_id)
+            && $left.height == $right.height
+            && $left.view == $right.view
+            && canonical_identity_equal_body!($left.subject, $right.subject)
+            && canonical_identity_equal_body!($left.block_hash, $right.block_hash)
+            && canonical_identity_equal_body!($left.payload_hash, $right.payload_hash)
+            && canonical_identity_equal_body!($left.manifest, $right.manifest)
+            && canonical_identity_equal_body!($left.frame, $right.frame)
+    }};
+}
+
+macro_rules! production_decision_recovery_trace_body {
+    ($projection:expr) => {{
+        $projection.expected_height > 0u64
+            && $projection.state_height <= $projection.expected_height
+            && $projection.expected_height - $projection.state_height <= 1u64
+            && canonical_identity_is_typed_body!(
+                $projection.expected_context_id,
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+            )
+            && canonical_identity_equal_body!(
+                $projection.expected_context_id,
+                $projection.frozen_context_id
+            )
+            && $projection.expected_height == $projection.frozen_height
+            && $projection.replay_tag.height == $projection.frozen_height
+            && $projection.replay_tag.view == $projection.commit_qc.decision.view
+            && $projection.replay_tag.generation == $projection.replay_generation
+            && production_quorum_certificate_is_canonical_body!($projection.commit_qc)
+            && $projection.commit_qc.decision.phase == 2u8
+            && canonical_identity_equal_body!(
+                $projection.commit_qc.decision.context_id,
+                $projection.frozen_context_id
+            )
+            && $projection.commit_qc.decision.height == $projection.frozen_height
+            && canonical_identity_equal_body!(
+                $projection.commit_qc.decision.block_hash,
+                $projection.expected_block_hash
+            )
+            && $projection.manifest_round.height == $projection.commit_qc.decision.height
+            && $projection.manifest_round.view == $projection.commit_qc.decision.view
+            && $projection.manifest_round.generation == 0u64
+            && canonical_identity_equal_body!(
+                $projection.manifest_subject,
+                $projection.commit_qc.decision.subject
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.manifest,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST
+            )
+            && production_durable_body_equal_body!(
+                $projection.durable_body,
+                $projection.validated_body
+            )
+            && canonical_identity_equal_body!(
+                $projection.durable_body.context_id,
+                $projection.frozen_context_id
+            )
+            && $projection.durable_body.height == $projection.frozen_height
+            && $projection.durable_body.view == $projection.commit_qc.decision.view
+            && canonical_identity_equal_body!(
+                $projection.durable_body.subject,
+                $projection.commit_qc.decision.subject
+            )
+            && canonical_identity_equal_body!(
+                $projection.durable_body.block_hash,
+                $projection.commit_qc.decision.block_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.durable_body.payload_hash,
+                $projection.commit_qc.decision.payload_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.durable_body.manifest,
+                $projection.manifest
+            )
+            && canonical_identity_equal_body!(
+                $projection.validated_execution_commitment,
+                $projection.commit_qc.decision.execution_commitment
+            )
+            && $projection.stage == 1u8
+    }};
+}
+
+macro_rules! production_scheduler_trace_body {
+    ($projection:expr) => {{
+        if $projection.timeout_due {
+            $projection.selected == 1u8 && $projection.fifo_owed_after == $projection.fifo_ready
+        } else if $projection.fifo_ready && $projection.fifo_owed_before {
+            $projection.selected == 3u8 && !$projection.fifo_owed_after
+        } else if $projection.periodic_timer_due {
+            $projection.selected == 2u8 && $projection.fifo_owed_after == $projection.fifo_ready
+        } else if $projection.fifo_ready {
+            $projection.selected == 3u8 && !$projection.fifo_owed_after
+        } else {
+            $projection.selected == 0u8 && !$projection.fifo_owed_after
+        }
+    }};
+}
+
+macro_rules! production_ingress_identity_and_class_trace_body {
+    ($projection:expr) => {{
+        $projection.incoming_height == $projection.stored_height
+            && $projection.incoming_view == $projection.stored_view
+            && $projection.incoming_generation == $projection.stored_generation
+            && $projection.incoming_class == $projection.stored_class
+            && $projection.incoming_class >= 1u8
+            && $projection.incoming_class <= 3u8
+            && $projection.queue_len_before < u64::MAX
+            && $projection.queue_len_after == $projection.queue_len_before + 1u64
+            && $projection.queue_len_after <= $projection.queue_capacity
+    }};
+}
+
+macro_rules! production_reliable_flush_trace_body {
+    ($projection:expr) => {{
+        canonical_identity_is_typed_body!(
+            $projection.semantic_target,
+            IDENTITY_DOMAIN_PEER,
+            IDENTITY_KIND_PEER
+        ) && canonical_identity_is_typed_body!(
+            $projection.authenticated_source,
+            IDENTITY_DOMAIN_PEER,
+            IDENTITY_KIND_PEER
+        ) && canonical_identity_is_typed_body!(
+            $projection.requester,
+            IDENTITY_DOMAIN_PEER,
+            IDENTITY_KIND_PEER
+        ) && canonical_identity_is_typed_body!(
+            $projection.responder,
+            IDENTITY_DOMAIN_PEER,
+            IDENTITY_KIND_PEER
+        ) && canonical_identity_equal_body!($projection.semantic_target, $projection.requester)
+            && $projection.ticket_rank > 0u64
+            && $projection.ticket_topic == 3u8
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_request_digest,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_REPLY_PAYLOAD
+            )
+            && $projection.stream_wire_bytes > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.request_id,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_SIDECAR_REQUEST
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.entry_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_MERGE_ENTRY
+            )
+            && $projection.encoded_len > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.reference_digest,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_REFERENCE_DIGEST
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_response_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_NETWORK_RESPONSE
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.sidecar_response_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_SIDECAR_RESPONSE
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.chunk_hash,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_SIDECAR_CHUNK
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.payload_digest,
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_SIDECAR_PAYLOAD
+            )
+            && $projection.chunk_count > 0u64
+            && $projection.chunk_index < $projection.chunk_count
+            && $projection.message_cursor_before == 0u64
+            && $projection.chunk_cursor_before == $projection.chunk_index
+            && $projection.flushing_after <= $projection.capacity
+            && $projection.admitted_after <= $projection.capacity - $projection.flushing_after
+            && (if $projection.status == 1u8 {
+                $projection.flushing_after == $projection.flushing_before
+                    && $projection.admitted_after == $projection.admitted_before
+                    && $projection.message_cursor_after == $projection.message_cursor_before
+                    && $projection.chunk_cursor_after == $projection.chunk_cursor_before
+            } else if $projection.status == 2u8 {
+                $projection.flushing_after < u64::MAX
+                    && $projection.flushing_before == $projection.flushing_after + 1u64
+                    && $projection.admitted_before < u64::MAX
+                    && $projection.admitted_after == $projection.admitted_before + 1u64
+                    && $projection.message_cursor_before < u64::MAX
+                    && $projection.message_cursor_after == $projection.message_cursor_before + 1u64
+                    && $projection.chunk_cursor_before < u64::MAX
+                    && $projection.chunk_cursor_after == $projection.chunk_cursor_before + 1u64
+            } else if $projection.status == 3u8 {
+                $projection.flushing_after < u64::MAX
+                    && $projection.flushing_before == $projection.flushing_after + 1u64
+                    && $projection.admitted_after == $projection.admitted_before
+                    && $projection.message_cursor_after == $projection.message_cursor_before
+                    && $projection.chunk_cursor_after == $projection.chunk_cursor_before
+            } else {
+                false
+            })
+    }};
+}
+
+macro_rules! production_application_trace_body {
+    ($projection:expr) => {{
+        $projection.context_height > 0u64
+            && $projection.task_tag.height == $projection.context_height
+            && $projection.task_tag.view == $projection.commit_qc.decision.view
+            && $projection.task_tag.generation == $projection.task_generation
+            && production_quorum_certificate_is_canonical_body!($projection.commit_qc)
+            && $projection.commit_qc.decision.phase == 2u8
+            && canonical_identity_equal_body!(
+                $projection.context_id,
+                $projection.commit_qc.decision.context_id
+            )
+            && $projection.context_height == $projection.commit_qc.decision.height
+            && production_durable_body_is_canonical_body!($projection.validated_body)
+            && canonical_identity_equal_body!(
+                $projection.validated_body.context_id,
+                $projection.context_id
+            )
+            && $projection.validated_body.height == $projection.context_height
+            && $projection.validated_body.view == $projection.commit_qc.decision.view
+            && canonical_identity_equal_body!(
+                $projection.validated_body.subject,
+                $projection.commit_qc.decision.subject
+            )
+            && canonical_identity_equal_body!(
+                $projection.validated_body.block_hash,
+                $projection.proposal_block_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.validated_body.payload_hash,
+                $projection.proposal_payload_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.validated_execution_commitment,
+                $projection.commit_qc.decision.execution_commitment
+            )
+            && canonical_identity_equal_body!(
+                $projection.proposal_block_hash,
+                $projection.commit_qc.decision.block_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.proposal_payload_hash,
+                $projection.commit_qc.decision.payload_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.committed_block_hash,
+                $projection.commit_qc.decision.block_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.executed_block_wire_hash,
+                $projection.commit_qc.decision.executed_block_wire_hash
+            )
+            && production_decision_identity_equal_body!(
+                $projection.kura_decision,
+                $projection.commit_qc.decision
+            )
+            && canonical_identity_equal_body!(
+                $projection.kura_artifact_hash,
+                $projection.artifact_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.artifact_context_id,
+                $projection.context_id
+            )
+            && $projection.artifact_height == $projection.context_height
+            && canonical_identity_equal_body!(
+                $projection.artifact_subject,
+                $projection.commit_qc.decision.subject
+            )
+            && canonical_identity_equal_body!(
+                $projection.artifact_block_hash,
+                $projection.committed_block_hash
+            )
+            && production_quorum_certificate_equal_body!(
+                $projection.artifact_commit_qc,
+                $projection.commit_qc
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.artifact_hash,
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_FINALITY_ARTIFACT
+            )
+            && $projection.state_height_after == $projection.context_height
+            && $projection.completion_work_id == $projection.task_work_id
     }};
 }
 
@@ -659,20 +1617,231 @@ pub fn select_bounded_service_class(
     )
 }
 
-/// Primitive identity of one optional quorum certificate.
+/// Primitive production trace spanning the effective-lock acquisition seams.
 ///
-/// Signatures remain in the concrete reducer state and effect. This projection
-/// names the complete safety identity selected by the post-WAL view transition;
-/// the reducer separately requires the effect-carried certificate object to be
-/// exactly equal to the durable one before granting its capability.
+/// Each action uses one discriminant and canonical zeroes for unrelated
+/// fields. The trace contains only facts derived from the live reducer,
+/// executor, or runtime state at its enforcement point; no authorization bit
+/// is accepted from an external caller.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CertificateIdentityProjection {
-    pub(crate) present: bool,
-    pub(crate) context_id: ContextId,
+pub struct EffectiveLockTraceProjection {
+    pub(crate) kind: u8,
+    pub(crate) relation_exact: bool,
+    pub(crate) protected_before: u64,
+    pub(crate) protected_after: u64,
+    pub(crate) owner_before: u64,
+    pub(crate) owner_after: u64,
+    pub(crate) owner_reused: bool,
+    pub(crate) ready_before: u64,
+    pub(crate) retired_retained: u64,
+    pub(crate) retired_ready: u64,
+    pub(crate) ready_after: u64,
+    pub(crate) store_before: u64,
+    pub(crate) retired_store: u64,
+    pub(crate) store_after: u64,
+    pub(crate) cursor_before: u8,
+    pub(crate) completion_ready: bool,
+    pub(crate) progress_ready: bool,
+    pub(crate) normal_ready: bool,
+    pub(crate) selected: u8,
+    pub(crate) cursor_after: u8,
+}
+
+/// Primitive durable-intent ownership observed around one reducer step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionDurableIntentTraceProjection {
+    pub(crate) event_tag: TagProjection,
+    pub(crate) owner_tag_before: TagProjection,
+    pub(crate) owner_tag_after: TagProjection,
+    pub(crate) event_kind: u8,
+    pub(crate) event_persistence_id: u64,
+    pub(crate) pending_before: PendingProjection,
+    pub(crate) pending_after: PendingProjection,
+    pub(crate) boundary_claimed: BoundaryCapabilityKey,
+    pub(crate) boundary_granted: BoundaryCapabilityKey,
+    pub(crate) effects: EffectTrace,
+    pub(crate) durable_sequence_before: u64,
+    pub(crate) durable_sequence_after: u64,
+}
+
+/// Complete semantic decision identity repeated by a certificate or receipt.
+///
+/// Every digest is a lossless four-word projection of an existing canonical
+/// 256-bit identity. The projection never hashes or truncates inside the pure
+/// kernel; production supplies identities derived at the typed protocol seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionDecisionIdentityProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) height: u64,
     pub(crate) view: u64,
     pub(crate) phase: u8,
-    pub(crate) subject: Subject,
+    pub(crate) subject: CanonicalIdentityProjection,
+    pub(crate) block_hash: CanonicalIdentityProjection,
+    pub(crate) payload_hash: CanonicalIdentityProjection,
+    pub(crate) execution_commitment: CanonicalIdentityProjection,
+    pub(crate) executed_block_wire_hash: CanonicalIdentityProjection,
+}
+
+/// Complete quorum-certificate identity at a production refinement seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionQuorumCertificateIdentityProjection {
+    pub(crate) decision: ProductionDecisionIdentityProjection,
+    pub(crate) certificate: CanonicalIdentityProjection,
+    pub(crate) signer_count: u64,
+    pub(crate) aggregate_signature_len: u64,
+}
+
+/// Exact durable-body identity shared by recovery and application.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionDurableBodyIdentityProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) height: u64,
+    pub(crate) view: u64,
+    pub(crate) subject: CanonicalIdentityProjection,
+    pub(crate) block_hash: CanonicalIdentityProjection,
+    pub(crate) payload_hash: CanonicalIdentityProjection,
+    pub(crate) manifest: CanonicalIdentityProjection,
+    pub(crate) frame: CanonicalIdentityProjection,
+}
+
+/// Primitive pending-Decision recovery boundary selected during startup.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionDecisionRecoveryTraceProjection {
+    pub(crate) state_height: u64,
+    pub(crate) expected_context_id: CanonicalIdentityProjection,
+    pub(crate) expected_height: u64,
+    pub(crate) expected_block_hash: CanonicalIdentityProjection,
+    pub(crate) frozen_context_id: CanonicalIdentityProjection,
+    pub(crate) frozen_height: u64,
+    pub(crate) replay_tag: TagProjection,
+    pub(crate) replay_generation: u64,
+    pub(crate) commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub(crate) manifest_round: TagProjection,
+    pub(crate) manifest_subject: CanonicalIdentityProjection,
+    pub(crate) manifest: CanonicalIdentityProjection,
+    pub(crate) durable_body: ProductionDurableBodyIdentityProjection,
+    pub(crate) validated_body: ProductionDurableBodyIdentityProjection,
+    pub(crate) validated_execution_commitment: CanonicalIdentityProjection,
+    pub(crate) stage: u8,
+}
+
+/// Primitive scheduler input and its concrete selected owner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionSchedulerTraceProjection {
+    pub(crate) fifo_owed_before: bool,
+    pub(crate) timeout_due: bool,
+    pub(crate) periodic_timer_due: bool,
+    pub(crate) fifo_ready: bool,
+    pub(crate) selected: u8,
+    pub(crate) fifo_owed_after: bool,
+}
+
+/// Primitive identity and queue-class observation for one admitted command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionIngressIdentityAndClassTraceProjection {
+    pub(crate) incoming_height: u64,
+    pub(crate) incoming_view: u64,
+    pub(crate) incoming_generation: u64,
+    pub(crate) incoming_class: u8,
+    pub(crate) stored_height: u64,
+    pub(crate) stored_view: u64,
+    pub(crate) stored_generation: u64,
+    pub(crate) stored_class: u8,
+    pub(crate) queue_len_before: u64,
+    pub(crate) queue_len_after: u64,
+    pub(crate) queue_capacity: u64,
+}
+
+/// Primitive per-source sidecar-flush cursor movement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionReliableFlushTraceProjection {
+    pub(crate) status: u8,
+    pub(crate) semantic_target: CanonicalIdentityProjection,
+    pub(crate) authenticated_source: CanonicalIdentityProjection,
+    pub(crate) requester: CanonicalIdentityProjection,
+    pub(crate) responder: CanonicalIdentityProjection,
+    pub(crate) connection_tenure_ordinal_high: u64,
+    pub(crate) connection_tenure_ordinal_low: u64,
+    pub(crate) delivery_ordinal_high: u64,
+    pub(crate) delivery_ordinal_low: u64,
+    pub(crate) ticket_id: u64,
+    pub(crate) ticket_rank: u64,
+    pub(crate) ticket_topic: u8,
+    pub(crate) canonical_request_digest: CanonicalIdentityProjection,
+    pub(crate) stream_wire_bytes: u64,
+    pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) entry_hash: CanonicalIdentityProjection,
+    pub(crate) encoded_len: u64,
+    pub(crate) epoch_id: u64,
+    pub(crate) reference_digest: CanonicalIdentityProjection,
+    pub(crate) canonical_response_hash: CanonicalIdentityProjection,
+    pub(crate) sidecar_response_hash: CanonicalIdentityProjection,
+    pub(crate) chunk_hash: CanonicalIdentityProjection,
+    pub(crate) payload_digest: CanonicalIdentityProjection,
+    pub(crate) chunk_index: u64,
+    pub(crate) chunk_count: u64,
+    pub(crate) message_cursor_before: u64,
+    pub(crate) message_cursor_after: u64,
+    pub(crate) chunk_cursor_before: u64,
+    pub(crate) chunk_cursor_after: u64,
+    pub(crate) flushing_before: u64,
+    pub(crate) flushing_after: u64,
+    pub(crate) admitted_before: u64,
+    pub(crate) admitted_after: u64,
+    pub(crate) capacity: u64,
+}
+
+/// Primitive durable application completion returned to the reducer owner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionApplicationTraceProjection {
+    pub(crate) task_tag: TagProjection,
+    pub(crate) task_generation: u64,
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) context_height: u64,
+    pub(crate) commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub(crate) validated_body: ProductionDurableBodyIdentityProjection,
+    pub(crate) validated_execution_commitment: CanonicalIdentityProjection,
+    pub(crate) proposal_block_hash: CanonicalIdentityProjection,
+    pub(crate) proposal_payload_hash: CanonicalIdentityProjection,
+    pub(crate) committed_block_hash: CanonicalIdentityProjection,
+    pub(crate) executed_block_wire_hash: CanonicalIdentityProjection,
+    pub(crate) kura_decision: ProductionDecisionIdentityProjection,
+    pub(crate) kura_artifact_hash: CanonicalIdentityProjection,
+    pub(crate) artifact_context_id: CanonicalIdentityProjection,
+    pub(crate) artifact_height: u64,
+    pub(crate) artifact_subject: CanonicalIdentityProjection,
+    pub(crate) artifact_block_hash: CanonicalIdentityProjection,
+    pub(crate) artifact_commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub(crate) artifact_hash: CanonicalIdentityProjection,
+    pub(crate) state_height_after: u64,
+    pub(crate) task_work_id: u64,
+    pub(crate) completion_work_id: u64,
+}
+
+const fn effective_lock_trace_step_is_valid(projection: EffectiveLockTraceProjection) -> bool {
+    effective_lock_trace_step_body!(projection)
+}
+
+/// Primitive identity of one optional quorum certificate.
+///
+/// The signer bitmap is indexed by the frozen, canonically ordered voting
+/// roster. `evidence_class` is assigned by full concrete
+/// [`super::QuorumCertificate`] equality against the local and incoming
+/// transition anchors, so signature/evidence changes cannot hide behind an
+/// equal stable certificate reference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CertificateIdentityProjection {
+    pub(crate) present: bool,
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) height: u64,
+    pub(crate) view: u64,
+    pub(crate) phase: u8,
+    pub(crate) subject: CanonicalIdentityProjection,
+    pub(crate) signer_bitmap: u128,
+    pub(crate) signer_bitmap_count: u64,
+    pub(crate) signer_count: u64,
+    pub(crate) voting_power: u64,
+    pub(crate) evidence_class: u8,
 }
 
 /// Primitive identity of one optional timeout certificate and its selected
@@ -680,7 +1849,7 @@ pub struct CertificateIdentityProjection {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TimeoutIdentityProjection {
     pub(crate) present: bool,
-    pub(crate) context_id: ContextId,
+    pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) height: u64,
     pub(crate) view: u64,
     pub(crate) highest_prepare: CertificateIdentityProjection,
@@ -695,7 +1864,7 @@ pub struct TimeoutIdentityProjection {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EnterViewProjection {
     pub(crate) active: bool,
-    pub(crate) context_id: ContextId,
+    pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) before_tag: TagProjection,
     pub(crate) after_tag: TagProjection,
     pub(crate) pending_record_kind: u8,
@@ -754,10 +1923,10 @@ pub struct PendingProjection {
     pub(crate) record_kind: u8,
     pub(crate) continuation: u8,
     pub(crate) persistence_id: u64,
-    pub(crate) context_id: ContextId,
+    pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) height: u64,
     pub(crate) view: u64,
-    pub(crate) subject: Subject,
+    pub(crate) subject: CanonicalIdentityProjection,
 }
 
 /// Concrete capability key used for one reducer effect.
@@ -896,8 +2065,10 @@ pub struct BoundaryCapabilityKey {
     pub(crate) replay_effect_kind: u8,
     pub(crate) persistence_id: u64,
     pub(crate) context_id: ContextId,
+    pub(crate) context_identity: CanonicalIdentityProjection,
     pub(crate) tag: TagProjection,
     pub(crate) subject: SubjectProjection,
+    pub(crate) subject_identity: CanonicalIdentityProjection,
     pub(crate) replay_plan: ReplayPlanProjection,
 }
 
@@ -911,6 +2082,7 @@ impl BoundaryCapabilityKey {
             replay_effect_kind: REPLAY_EFFECT_NONE,
             persistence_id: 0,
             context_id: ContextId::repeat(0),
+            context_identity: CanonicalIdentityProjection::zero(),
             tag: TagProjection {
                 height: 0,
                 view: 0,
@@ -920,6 +2092,7 @@ impl BoundaryCapabilityKey {
                 present: false,
                 subject: Subject::repeat(0),
             },
+            subject_identity: CanonicalIdentityProjection::zero(),
             replay_plan: ReplayPlanProjection::empty(),
         }
     }
@@ -1527,33 +2700,116 @@ macro_rules! boundary_capability_equal_body {
             && $left.replay_effect_kind == $right.replay_effect_kind
             && $left.persistence_id == $right.persistence_id
             && $left.context_id == $right.context_id
+            && canonical_identity_equal_body!($left.context_identity, $right.context_identity)
             && $left.tag.height == $right.tag.height
             && $left.tag.view == $right.tag.view
             && $left.tag.generation == $right.tag.generation
             && subject_projection_equal_body!($left.subject, $right.subject)
+            && canonical_identity_equal_body!($left.subject_identity, $right.subject_identity)
             && replay_plan_well_formed_body!($left.replay_plan, $left.replay_effect_kind)
             && replay_plan_well_formed_body!($right.replay_plan, $right.replay_effect_kind)
             && replay_plan_equal_body!($left.replay_plan, $right.replay_plan)
     }};
 }
 
+macro_rules! boundary_capability_is_absent_body {
+    ($boundary:expr) => {{
+        $boundary.kind == BOUNDARY_NONE
+            && $boundary.record_kind == WAL_RECORD_NONE
+            && $boundary.continuation == CONTINUATION_NONE
+            && $boundary.replay_effect_kind == REPLAY_EFFECT_NONE
+            && $boundary.persistence_id == 0u64
+            && canonical_identity_is_zero_body!($boundary.context_identity)
+            && $boundary.tag.height == 0u64
+            && $boundary.tag.view == 0u64
+            && $boundary.tag.generation == 0u64
+            && !$boundary.subject.present
+            && canonical_identity_is_zero_body!($boundary.subject_identity)
+            && $boundary.replay_plan.len == 0u8
+            && replay_plan_well_formed_body!($boundary.replay_plan, REPLAY_EFFECT_NONE)
+    }};
+}
+
+macro_rules! boundary_identity_is_canonical_body {
+    ($boundary:expr) => {{
+        canonical_identity_is_typed_body!(
+            $boundary.context_identity,
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_CONSENSUS_CONTEXT
+        ) && (if $boundary.subject.present {
+            canonical_identity_is_typed_body!(
+                $boundary.subject_identity,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_CONSENSUS_SUBJECT
+            )
+        } else {
+            canonical_identity_is_zero_body!($boundary.subject_identity)
+        })
+    }};
+}
+
+macro_rules! certificate_identity_is_canonical_body {
+    ($certificate:expr) => {{
+        if !$certificate.present {
+            canonical_identity_is_zero_body!($certificate.context_id)
+                && $certificate.height == 0u64
+                && $certificate.view == 0u64
+                && $certificate.phase == 0u8
+                && canonical_identity_is_zero_body!($certificate.subject)
+                && $certificate.signer_bitmap == 0u128
+                && $certificate.signer_bitmap_count == 0u64
+                && $certificate.signer_count == 0u64
+                && $certificate.voting_power == 0u64
+                && $certificate.evidence_class == CERTIFICATE_EVIDENCE_ABSENT
+        } else {
+            canonical_identity_is_typed_body!(
+                $certificate.context_id,
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_CONSENSUS_CONTEXT
+            ) && canonical_identity_is_typed_body!(
+                $certificate.subject,
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_CONSENSUS_SUBJECT
+            ) && $certificate.signer_bitmap != 0u128
+                && $certificate.signer_bitmap_count > 0u64
+                && $certificate.signer_bitmap_count == $certificate.signer_count
+                && $certificate.signer_count > 0u64
+                && $certificate.signer_count <= 128u64
+                && $certificate.voting_power > 0u64
+                && ($certificate.evidence_class == CERTIFICATE_EVIDENCE_LOCAL
+                    || $certificate.evidence_class == CERTIFICATE_EVIDENCE_INCOMING)
+        }
+    }};
+}
+
 macro_rules! certificate_identity_equal_body {
     ($left:expr, $right:expr) => {{
-        $left.present == $right.present
+        certificate_identity_is_canonical_body!($left)
+            && certificate_identity_is_canonical_body!($right)
+            && $left.present == $right.present
             && (!$left.present
-                || ($left.context_id == $right.context_id
+                || (canonical_identity_equal_body!($left.context_id, $right.context_id)
                     && $left.height == $right.height
                     && $left.view == $right.view
                     && $left.phase == $right.phase
-                    && $left.subject == $right.subject))
+                    && canonical_identity_equal_body!($left.subject, $right.subject)
+                    && $left.signer_bitmap == $right.signer_bitmap
+                    && $left.signer_bitmap_count == $right.signer_bitmap_count
+                    && $left.signer_count == $right.signer_count
+                    && $left.voting_power == $right.voting_power
+                    && $left.evidence_class == $right.evidence_class))
     }};
 }
 
 macro_rules! timeout_identity_equal_body {
     ($left:expr, $right:expr) => {{
-        $left.present == $right.present
+        certificate_identity_is_canonical_body!($left.highest_prepare)
+            && certificate_identity_is_canonical_body!($right.highest_prepare)
+            && $left.present == $right.present
+            && ($left.present || !$left.highest_prepare.present)
+            && ($right.present || !$right.highest_prepare.present)
             && (!$left.present
-                || ($left.context_id == $right.context_id
+                || (canonical_identity_equal_body!($left.context_id, $right.context_id)
                     && $left.height == $right.height
                     && $left.view == $right.view
                     && certificate_identity_equal_body!(
@@ -1565,11 +2821,50 @@ macro_rules! timeout_identity_equal_body {
 
 macro_rules! prepare_identity_in_context_body {
     ($certificate:expr, $context_id:expr, $height:expr, $maximum_view:expr) => {{
-        !$certificate.present
-            || ($certificate.context_id == $context_id
-                && $certificate.height == $height
-                && $certificate.phase == 1u8
-                && $certificate.view <= $maximum_view)
+        certificate_identity_is_canonical_body!($certificate)
+            && (!$certificate.present
+                || (canonical_identity_equal_body!($certificate.context_id, $context_id)
+                    && $certificate.height == $height
+                    && $certificate.phase == 1u8
+                    && $certificate.view <= $maximum_view))
+    }};
+}
+
+// Preserve every PrepareQC position through the post-WAL EnterView seam. The
+// local and incoming anchors are independently authenticated by the concrete
+// reducer. Their evidence classes are then copied through pending,
+// continuation, durable, effect, and immediate-fetch positions. In
+// particular, no FOREIGN class is canonical and no equality can omit signer
+// set, quorum totals, phase, or full concrete evidence identity.
+macro_rules! enter_view_locked_prepare_qc_identity_body {
+    ($projection:expr) => {{
+        let timeout = $projection.pending_record_timeout;
+        let local = $projection.local_lock_before;
+        let incoming = timeout.highest_prepare;
+        let selected = if !local.present {
+            incoming
+        } else if !incoming.present || incoming.view <= local.view {
+            local
+        } else {
+            incoming
+        };
+        certificate_identity_is_canonical_body!(local)
+            && (!local.present || local.evidence_class == CERTIFICATE_EVIDENCE_LOCAL)
+            && certificate_identity_is_canonical_body!(incoming)
+            && timeout_identity_equal_body!(timeout, $projection.pending_continuation_timeout)
+            && timeout_identity_equal_body!(timeout, $projection.durable_timeout_after)
+            && timeout_identity_equal_body!(timeout, $projection.effect_timeout)
+            && certificate_identity_equal_body!($projection.durable_lock_after, selected)
+            && certificate_identity_equal_body!(
+                $projection.effect_protected_lock,
+                $projection.durable_lock_after
+            )
+            && (if selected.present {
+                certificate_identity_equal_body!($projection.following_fetch_lock, selected)
+            } else {
+                certificate_identity_is_canonical_body!($projection.following_fetch_lock)
+                    && !$projection.following_fetch_lock.present
+            })
     }};
 }
 
@@ -1592,13 +2887,11 @@ macro_rules! enter_view_projection_gate_body {
                 incoming
             };
             $projection.enter_count == 1u64
+                && enter_view_locked_prepare_qc_identity_body!($projection)
                 && $projection.pending_record_kind == 6u8
                 && $projection.pending_continuation == 2u8
                 && timeout.present
-                && timeout_identity_equal_body!(timeout, $projection.pending_continuation_timeout)
-                && timeout_identity_equal_body!(timeout, $projection.durable_timeout_after)
-                && timeout_identity_equal_body!(timeout, $projection.effect_timeout)
-                && timeout.context_id == $projection.context_id
+                && canonical_identity_equal_body!(timeout.context_id, $projection.context_id)
                 && timeout.height == $projection.before_tag.height
                 && $projection.after_tag.height == $projection.before_tag.height
                 && $projection.before_tag.view <= timeout.view
@@ -1619,18 +2912,9 @@ macro_rules! enter_view_projection_gate_body {
                     timeout.view
                 )
                 && (!(local.present && incoming.present && local.view == incoming.view)
-                    || local.subject == incoming.subject)
-                && certificate_identity_equal_body!($projection.durable_lock_after, selected)
-                && certificate_identity_equal_body!(
-                    $projection.effect_protected_lock,
-                    $projection.durable_lock_after
-                )
+                    || canonical_identity_equal_body!(local.subject, incoming.subject))
                 && (if selected.present {
                     $projection.fetch_count == 1u64
-                        && certificate_identity_equal_body!(
-                            $projection.following_fetch_lock,
-                            selected
-                        )
                         && $projection.enter_index < 254u8
                         && $projection.following_fetch_index == $projection.enter_index + 1u8
                 } else {
@@ -2133,6 +3417,78 @@ macro_rules! production_transition_gate_body {
     }};
 }
 
+/// Validate the exact post-WAL effective-lock selection trace.
+pub(crate) const fn production_enter_view_uses_post_install_effective_lock_kernel(
+    trace: EffectiveLockTraceProjection,
+    enter_view: EnterViewProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(trace, 1u8)
+        && enter_view_locked_prepare_qc_identity_body!(enter_view)
+}
+
+/// Validate monotonic exact body-pipeline ownership.
+pub(crate) const fn production_body_ownership_preserves_effective_lock_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 2u8)
+}
+
+/// Validate exact byte/capacity retirement for superseded body ownership.
+pub(crate) const fn production_body_capacity_retirement_preserves_effective_lock_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 3u8)
+}
+
+/// Validate one exact bounded fair-service selection.
+pub(crate) const fn production_body_service_refines_async_fairness_kernel(
+    projection: EffectiveLockTraceProjection,
+) -> bool {
+    effective_lock_trace_claim_body!(projection, 4u8)
+}
+
+/// Validate one reducer step's durable intent owner and WAL cursor movement.
+pub(crate) fn production_durable_intent_trace_refines_progress_witness_kernel(
+    projection: ProductionDurableIntentTraceProjection,
+) -> bool {
+    production_durable_intent_trace_body!(projection)
+}
+
+/// Validate startup reconstruction of one durable pending Decision.
+pub(crate) const fn production_decision_trace_refines_recovery_witness_kernel(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> bool {
+    production_decision_recovery_trace_body!(projection)
+}
+
+/// Validate exact scheduler selection and the resulting FIFO debt owner.
+pub(crate) const fn production_scheduler_trace_refines_protected_ownership_kernel(
+    projection: ProductionSchedulerTraceProjection,
+) -> bool {
+    production_scheduler_trace_body!(projection)
+}
+
+/// Validate ingress identity preservation and its admitted service class.
+pub(crate) const fn production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> bool {
+    production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Validate that sidecar delivery ownership moves only after exact flush.
+pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
+    projection: ProductionReliableFlushTraceProjection,
+) -> bool {
+    production_reliable_flush_trace_body!(projection)
+}
+
+/// Validate the exact durable application completion exposed to the reducer.
+pub(crate) const fn production_application_trace_refines_decision_completion_kernel(
+    projection: ProductionApplicationTraceProjection,
+) -> bool {
+    production_application_trace_body!(projection)
+}
+
 fn volatile_summary_is_well_formed(summary: VolatileSummary, validator_count: u64) -> bool {
     volatile_summary_well_formed_body!(summary, validator_count)
 }
@@ -2281,6 +3637,38 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
 /// exact pre/post state identities, event tags, and invariant violation counts.
 #[must_use]
 pub fn accepts(projection: TransitionProjection<'_>) -> bool {
+    if projection.enter_view.active {
+        let enter_view = projection.enter_view;
+        let protected_after = u64::from(enter_view.durable_lock_after.present);
+        let ownership_after = u64::from(enter_view.following_fetch_lock.present);
+        let trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_ENTER_VIEW,
+            relation_exact: enter_view_projection_gate_body!(enter_view)
+                && enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+                && enter_view.fetch_count == effect_count_body!(projection.effects, 2u8),
+            protected_before: protected_after,
+            protected_after: u64::from(enter_view.effect_protected_lock.present),
+            owner_before: enter_view.fetch_count,
+            owner_after: ownership_after,
+            owner_reused: false,
+            ready_before: 0,
+            retired_retained: 0,
+            retired_ready: 0,
+            ready_after: 0,
+            store_before: 0,
+            retired_store: 0,
+            store_after: 0,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        if !production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
+            return false;
+        }
+    }
     accepts_facts(transition_facts(projection))
 }
 
@@ -2288,11 +3676,440 @@ pub fn accepts(projection: TransitionProjection<'_>) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn durable_intent_refinement_rejects_each_identity_family_mutation() {
+        let durable_intent = durable_begin_trace();
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(durable_intent));
+
+        let mut wrong_event = durable_intent;
+        wrong_event.event_kind = EVENT_PERSISTED;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_event));
+
+        let mut wrong_context = durable_intent;
+        wrong_context.pending_after.context_id.word3 ^= 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_context));
+
+        let mut wrong_subject = durable_intent;
+        wrong_subject.pending_after.subject.word0 ^= 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_subject));
+
+        let mut wrong_continuation = durable_intent;
+        wrong_continuation.boundary_granted.continuation = CONTINUATION_NONE;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(wrong_continuation)
+        );
+
+        let mut wrong_wal_id = durable_intent;
+        wrong_wal_id.boundary_granted.persistence_id += 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_wal_id));
+
+        let mut wrong_effect = durable_intent;
+        wrong_effect.effects.slot0.granted.persistence_id += 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_effect));
+    }
+
+    #[test]
+    fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
+        let identity =
+            |domain, kind, byte| CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32]);
+        let context = identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            1,
+        );
+        let subject = identity(IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_WIRE_BLOCK_SUBJECT, 2);
+        let block_hash = identity(IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, 3);
+        let payload_hash = identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_CANONICAL_PAYLOAD, 4);
+        let execution = identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTION_COMMITMENT,
+            5,
+        );
+        let executed_wire = identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+            6,
+        );
+        let decision = ProductionDecisionIdentityProjection {
+            context_id: context,
+            height: 9,
+            view: 4,
+            phase: 2,
+            subject,
+            block_hash,
+            payload_hash,
+            execution_commitment: execution,
+            executed_block_wire_hash: executed_wire,
+        };
+        let commit_qc = ProductionQuorumCertificateIdentityProjection {
+            decision,
+            certificate: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_QUORUM_CERTIFICATE, 7),
+            signer_count: 3,
+            aggregate_signature_len: 96,
+        };
+        let manifest = identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_PAYLOAD_MANIFEST, 8);
+        let durable_body = ProductionDurableBodyIdentityProjection {
+            context_id: context,
+            height: 9,
+            view: 4,
+            subject,
+            block_hash,
+            payload_hash,
+            manifest,
+            frame: identity(
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_DURABLE_BODY_FRAME,
+                9,
+            ),
+        };
+        let recovery = ProductionDecisionRecoveryTraceProjection {
+            state_height: 8,
+            expected_context_id: context,
+            expected_height: 9,
+            expected_block_hash: block_hash,
+            frozen_context_id: context,
+            frozen_height: 9,
+            replay_tag: TagProjection {
+                height: 9,
+                view: 4,
+                generation: 12,
+            },
+            replay_generation: 12,
+            commit_qc,
+            manifest_round: TagProjection {
+                height: 9,
+                view: 4,
+                generation: 0,
+            },
+            manifest_subject: subject,
+            manifest,
+            durable_body,
+            validated_body: durable_body,
+            validated_execution_commitment: execution,
+            stage: 1,
+        };
+        assert!(production_decision_trace_refines_recovery_witness_kernel(
+            recovery
+        ));
+        assert!(!production_decision_trace_refines_recovery_witness_kernel(
+            ProductionDecisionRecoveryTraceProjection {
+                validated_execution_commitment: identity(
+                    IDENTITY_DOMAIN_PAYLOAD,
+                    IDENTITY_KIND_EXECUTION_COMMITMENT,
+                    10,
+                ),
+                ..recovery
+            }
+        ));
+
+        let scheduler = ProductionSchedulerTraceProjection {
+            fifo_owed_before: false,
+            timeout_due: false,
+            periodic_timer_due: true,
+            fifo_ready: true,
+            selected: 2,
+            fifo_owed_after: true,
+        };
+        assert!(production_scheduler_trace_refines_protected_ownership_kernel(scheduler));
+        assert!(
+            !production_scheduler_trace_refines_protected_ownership_kernel(
+                ProductionSchedulerTraceProjection {
+                    selected: 3,
+                    ..scheduler
+                }
+            )
+        );
+
+        let ingress = ProductionIngressIdentityAndClassTraceProjection {
+            incoming_height: 4,
+            incoming_view: 2,
+            incoming_generation: 3,
+            incoming_class: SERVICE_CLASS_PROGRESS,
+            stored_height: 4,
+            stored_view: 2,
+            stored_generation: 3,
+            stored_class: SERVICE_CLASS_PROGRESS,
+            queue_len_before: 1,
+            queue_len_after: 2,
+            queue_capacity: 4,
+        };
+        assert!(
+            production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(ingress)
+        );
+        assert!(
+            !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+                ProductionIngressIdentityAndClassTraceProjection {
+                    stored_generation: 4,
+                    ..ingress
+                }
+            )
+        );
+
+        let flush = ProductionReliableFlushTraceProjection {
+            status: 2,
+            semantic_target: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
+            authenticated_source: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 21),
+            requester: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
+            responder: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 22),
+            connection_tenure_ordinal_high: 0,
+            connection_tenure_ordinal_low: 1,
+            delivery_ordinal_high: 0,
+            delivery_ordinal_low: 2,
+            ticket_id: 3,
+            ticket_rank: 1,
+            ticket_topic: 3,
+            canonical_request_digest: identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_REPLY_PAYLOAD,
+                23,
+            ),
+            stream_wire_bytes: 512,
+            request_id: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, 24),
+            entry_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_MERGE_ENTRY, 25),
+            encoded_len: 256,
+            epoch_id: 4,
+            reference_digest: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_REFERENCE_DIGEST, 26),
+            canonical_response_hash: identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_NETWORK_RESPONSE,
+                27,
+            ),
+            sidecar_response_hash: identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_SIDECAR_RESPONSE,
+                28,
+            ),
+            chunk_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK, 29),
+            payload_digest: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_PAYLOAD, 30),
+            chunk_index: 0,
+            chunk_count: 2,
+            message_cursor_before: 0,
+            message_cursor_after: 1,
+            chunk_cursor_before: 0,
+            chunk_cursor_after: 1,
+            flushing_before: 1,
+            flushing_after: 0,
+            admitted_before: 0,
+            admitted_after: 1,
+            capacity: 2,
+        };
+        assert!(production_reliable_flush_trace_refines_outbound_ownership_kernel(flush));
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    admitted_after: 0,
+                    ..flush
+                }
+            )
+        );
+
+        let artifact_hash = identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_FINALITY_ARTIFACT,
+            11,
+        );
+        let application = ProductionApplicationTraceProjection {
+            task_tag: TagProjection {
+                height: 9,
+                view: 4,
+                generation: 12,
+            },
+            task_generation: 12,
+            context_id: context,
+            context_height: 9,
+            commit_qc,
+            validated_body: durable_body,
+            validated_execution_commitment: execution,
+            proposal_block_hash: block_hash,
+            proposal_payload_hash: payload_hash,
+            committed_block_hash: block_hash,
+            executed_block_wire_hash: executed_wire,
+            kura_decision: decision,
+            kura_artifact_hash: artifact_hash,
+            artifact_context_id: context,
+            artifact_height: 9,
+            artifact_subject: subject,
+            artifact_block_hash: block_hash,
+            artifact_commit_qc: commit_qc,
+            artifact_hash,
+            state_height_after: 9,
+            task_work_id: 11,
+            completion_work_id: 11,
+        };
+        assert!(production_application_trace_refines_decision_completion_kernel(application));
+        assert!(
+            !production_application_trace_refines_decision_completion_kernel(
+                ProductionApplicationTraceProjection {
+                    completion_work_id: 12,
+                    ..application
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
+        let enter_view = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_ENTER_VIEW,
+            relation_exact: true,
+            protected_before: 1,
+            protected_after: 1,
+            owner_before: 1,
+            owner_after: 1,
+            ..EffectiveLockTraceProjection::default()
+        };
+        let enter_view_identity = EnterViewProjection::default();
+        assert!(
+            production_enter_view_uses_post_install_effective_lock_kernel(
+                enter_view,
+                enter_view_identity,
+            )
+        );
+        assert!(
+            !production_enter_view_uses_post_install_effective_lock_kernel(
+                EffectiveLockTraceProjection {
+                    owner_after: 0,
+                    ..enter_view
+                },
+                enter_view_identity,
+            )
+        );
+
+        let ownership = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_OWNER,
+            relation_exact: true,
+            protected_after: 1,
+            owner_after: 1,
+            ..EffectiveLockTraceProjection::default()
+        };
+        assert!(production_body_ownership_preserves_effective_lock_kernel(
+            ownership
+        ));
+        assert!(!production_body_ownership_preserves_effective_lock_kernel(
+            EffectiveLockTraceProjection {
+                owner_reused: true,
+                ..ownership
+            }
+        ));
+
+        let retirement = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_RETIRE,
+            relation_exact: true,
+            ready_before: 13,
+            retired_retained: 3,
+            retired_ready: 4,
+            ready_after: 6,
+            store_before: 11,
+            retired_store: 5,
+            store_after: 6,
+            ..EffectiveLockTraceProjection::default()
+        };
+        assert!(production_body_capacity_retirement_preserves_effective_lock_kernel(retirement));
+        assert!(
+            !production_body_capacity_retirement_preserves_effective_lock_kernel(
+                EffectiveLockTraceProjection {
+                    ready_after: 7,
+                    ..retirement
+                }
+            )
+        );
+
+        let service = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_SERVICE,
+            relation_exact: true,
+            cursor_before: SERVICE_CLASS_COMPLETION,
+            completion_ready: true,
+            progress_ready: true,
+            selected: SERVICE_CLASS_COMPLETION,
+            cursor_after: SERVICE_CLASS_PROGRESS,
+            ..EffectiveLockTraceProjection::default()
+        };
+        assert!(production_body_service_refines_async_fairness_kernel(
+            service
+        ));
+        assert!(!production_body_service_refines_async_fairness_kernel(
+            EffectiveLockTraceProjection {
+                selected: SERVICE_CLASS_PROGRESS,
+                ..service
+            }
+        ));
+    }
+
     fn capability(kind: u8, nonce: u64) -> EffectCapabilityKey {
         EffectCapabilityKey {
             kind,
             persistence_id: nonce,
             ..EffectCapabilityKey::default()
+        }
+    }
+
+    fn durable_begin_trace() -> ProductionDurableIntentTraceProjection {
+        let context = ContextId::repeat(1);
+        let subject = Subject::repeat(2);
+        let context_identity = CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_CONSENSUS_CONTEXT,
+            *context.as_bytes(),
+        );
+        let subject_identity = CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_CONSENSUS_SUBJECT,
+            *subject.as_bytes(),
+        );
+        let tag = TagProjection {
+            height: 4,
+            view: 2,
+            generation: 3,
+        };
+        let boundary = BoundaryCapabilityKey {
+            kind: BOUNDARY_BEGIN_WAL,
+            record_kind: WAL_RECORD_PROPOSAL_INTENT,
+            continuation: CONTINUATION_SIGN,
+            persistence_id: 8,
+            context_id: context,
+            context_identity,
+            tag,
+            subject: SubjectProjection {
+                present: true,
+                subject,
+            },
+            subject_identity,
+            ..BoundaryCapabilityKey::none()
+        };
+        let persist = EffectCapabilityKey {
+            kind: EFFECT_PERSIST,
+            tag,
+            context_id: context,
+            height: tag.height,
+            view: tag.view,
+            subject,
+            persistence_id: boundary.persistence_id,
+            record_kind: boundary.record_kind,
+            ..EffectCapabilityKey::default()
+        };
+        let mut effects = EffectTrace::empty();
+        assert!(effects.push(persist, persist));
+        ProductionDurableIntentTraceProjection {
+            event_tag: tag,
+            owner_tag_before: tag,
+            owner_tag_after: tag,
+            event_kind: 0,
+            event_persistence_id: 0,
+            pending_before: PendingProjection::default(),
+            pending_after: PendingProjection {
+                record_kind: boundary.record_kind,
+                continuation: boundary.continuation,
+                persistence_id: boundary.persistence_id,
+                context_id: context_identity,
+                height: tag.height,
+                view: tag.view,
+                subject: subject_identity,
+            },
+            boundary_claimed: boundary,
+            boundary_granted: boundary,
+            effects,
+            durable_sequence_before: 7,
+            durable_sequence_after: 7,
         }
     }
 

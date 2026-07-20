@@ -1,8 +1,9 @@
 //! Deterministic gas metering for native ISI execution.
 //!
-//! This module provides a minimal, stable cost model for non-VM transactions
-//! (Executable::Instructions). It assigns a base cost per instruction family
-//! and adds small dynamic components for payload sizes (e.g., JSON values).
+//! This module provides a minimal, stable cost model for native instructions,
+//! including `Executable::Instructions` and explicit instruction items inside
+//! `Executable::Batch`. It assigns a base cost per instruction family and adds
+//! small dynamic components for payload sizes (e.g., JSON values).
 //!
 //! Goals
 //! - Deterministic across peers and hardware.

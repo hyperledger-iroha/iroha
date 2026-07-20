@@ -295,7 +295,22 @@ progress representatives, so the exact concrete class/byte correspondence is
 part of `ProgressWitnessProductionRefinementObligation`, not a proved premise.
 The concrete resource lane is keyed by the authenticated `via` hop, while
 semantic origin remains attached for validation, response routing, and
-coalescing. Its direct-origin projection in the model does not prove that split.
+coalescing. `SumeragiV2ReplyRouteOwnership` now gives each canonical semantic
+request a bounded set of authenticated-source attempts. Its actor-global
+delivery ordinal is distinct from connection tenure. Exact and later
+same-tenure deliveries preserve per-source message/chunk cursors. A reconnect
+preserves the source's current cursor while replacing its writer tenure, and a
+newly observed alternate source starts at zero.
+Tickets bind semantic identity and tenure but not delivery ordinal, and the
+round-robin cursor is source isolated. The cursor-reset and alternate-source-
+replacement mutations exercise these same transition operators. A
+reconnect advances source-scoped tenure once; subsequent deliveries rebind
+other retained semantic attempts independently, preserving each newly bound
+attempt's cursor while clearing its stale ticket. The liveness formula assumes
+eventual stable-responsive service eligibility and requires strict cursor advance or
+completion, so route retirement or ticket loss cannot discharge it. This
+abstract ownership machine still does not prove the production origin/`via`
+projection or runner/worker/sidecar call-path mapping.
 
 That bare envelope is lifted through the exact `BlockMessage::V2`, framed
 `BlockMessageWire`, `NetworkMessage::SumeragiBlock`, direct P2P relay, and
@@ -322,7 +337,12 @@ acknowledgement. That acknowledgement proves one local transport attempt, not
 relay-final-target receipt, subscriber consumption, or application. The exact
 actor-to-flush trace, later custody transitions, and decreasing service rank
 remain unassigned production-refinement propositions, so the abstract packet
-action cannot by itself discharge starvation freedom. Concretely, a reliable
+action cannot by itself discharge starvation freedom. The Sumeragi-side queue
+is bounded by the frozen height roster crossed with all three reliable output
+classes plus separate shared capacity. A deterministic matching gives each
+retained fanout at most one unique frozen reservation and is recomputed after
+partial progress. Non-roster replies and repeated target/class output
+therefore cannot spend unopened validator reservations. Concretely, a reliable
 broadcast snapshots the actor-accepted relay-aware topology and acquires each
 target's ordinary `(target, class)` lane independently. An existing target
 child coalesces only a retry with the identical canonical request digest and
@@ -428,6 +448,13 @@ chunks if needed, reconstructs and validates the exact body, applies it, and
 advances its own height. None of these local transitions waits for every other
 correct node.
 
+The mechanization records the missing step explicitly as
+`LockedBodyReproposalProgressObligation`: a stable available retained lock must
+eventually commit in its original round, be reproposed unchanged in a later
+round, or be legitimately decided/superseded by a higher certified Prepare
+lock. It sits between timeout/view and rotating-leader progress and remains
+`specified_unproved`; view movement or byte retention alone is not an outcome.
+
 The application property is quantified per responsive validator: after GST,
 one validator's durable decision leads to that validator's application even
 if another validator has not decided. A separate aggregate clause composes the
@@ -459,7 +486,7 @@ multi-height liveness obligations as `specified_unproved`.
 `proof_coverage.json` is the checked-in status declaration, not independent
 proof authority. The checker binds it to exact theorem declarations and
 structural dependencies. The release runner checks the ordered deductive
-modules with pinned TLAPM commit `763bf3c`, requires a positive
+modules with pinned TLAPM commit `3ab43c7`, requires a positive
 all-obligations-proved result from each backend run, and writes
 source/log/tool-bound evidence under `target/formal/sumeragi_v2/`. Checked-in
 backend counts are intentionally prohibited because they become stale as
@@ -605,14 +632,22 @@ The abstract protected-rank prerequisites are separately ledgered as
 `async-progress-ownership-invariant`,
 `protected-service-rank-stage4-ready-causal`,
 `protected-service-rank-serve-fifo`, and
-`protected-service-rank-stage5-consensus-fifo`. All four remain
-`specified_unproved`: progress ownership consumes the now-proved async type
-closure; Stage 4 and Serve FIFO also consume the proved exact fair-action
-refinement; and Stage-5 Consensus FIFO still depends on unproved progress
-ownership. The aggregate
+`protected-service-rank-stage5-consensus-fifo`. All four are now
+`tlaps_proved`. Fresh strict `--nofp` theorem-range runs under pinned TLAPM
+`3ab43c7`, against
+`SumeragiV2AsyncLivenessProofs.tla` SHA-256
+`2fe00973f8f983fd7682667baadbccbbe422a6c34dec02205cfe9cfe697f95ec`,
+proved the complete selected obligations: progress ownership at lines
+33324--33348 (15/15), Serve FIFO at 42007--42049 (15/15), Stage 4 at
+46313--46342 (9/9), and Stage 5 at 46344--46373 (9/9). Each invocation exited
+zero. Declaration-only `--line` attempts selected zero obligations and exited
+12; they were rejected rather than counted as evidence. Progress ownership
+consumes the proved async type closure; Stage 4 and Stage 5 additionally
+consume progress ownership, while all three rank leaves consume their exact
+proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 53-entry ledger contains 29 `tlaps_proved`, 17
+abstract results. The 54-entry ledger contains 33 `tlaps_proved`, 14
 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries, so
 `machine_checked_completion` remains false.
@@ -630,11 +665,15 @@ model exhausts seven bounded states without error and returns status 0. These
 are followed by the causal-capacity refill matrix, blind-successor/coalesced
 replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
 index mutations. An exhaustive one-validator configuration checks the logical
-ownership invariant through 42,817 generated states, 6,208 distinct states,
-and depth 45. The larger graph covers separate non-timeout-progress and
+ownership invariant through 983,041 generated states, 99,328 distinct states,
+and depth 49. The larger graph covers separate non-timeout-progress and
 TimeoutVote ingress reservations. These are bounded regression witnesses, not
-deductive proof and not a reason to promote a ledger entry. Two additional
-seam models make the remaining temporal
+deductive proof and not a reason to promote a ledger entry. Two reply-route
+mutations use the production-shared abstract kernel: resetting a cursor across
+a new connection tenure and replacing an alternate source both violate
+`RouteMutationSafety`, while the fixed prefix also covers exact retry, a later
+delivery update, A/B source isolation, and per-semantic rebind after
+reconnect. Two additional seam models make the remaining temporal
 gap executable: an unprotected Normal proposal/Prepare candidate starves, and
 a dynamic delivery-class mutation loses a stored CommitVote after a TC, while
 the frozen constructor inventory closes both cases; separately, a
@@ -739,15 +778,26 @@ work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
 reconstruction-refinement, or starvation obligations.
 
-The current pre-network release inventory names 298 tests across twenty-one Rust
-modules. Relative to the preceding 264-name inventory, 37 positive regressions
+The current pre-network release inventory names 378 tests across twenty-four Rust
+modules. The preceding 298-name inventory arose from the 264-name inventory by
+adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
 2 peer-writer flush/old-generation custody tests, 20 exact progress-ticket,
 topology, removal, replacement, and identical-retry tests plus
 distinct/cross-kind broadcast-residual and subscriber-backlog tests, and 1
 runtime/Busy-deferred exact CommitQC coalescing test, plus 4 Nexus lane-relay
 ownership/fairness tests. Removing the obsolete adapter cursor alias and two
-superseded network broadcast-residual tests yields the net delta of 34.
+superseded network broadcast-residual tests yielded the net delta of 34. The
+current expansion adds three lane-work route/scheduling tests, one production
+runner scan test, and ten exact-output route/reservation tests, then removes
+the superseded target-only backpressure name, for a net delta of 13.
+The P2P reply-route slice adds nine opaque-tenure, reconstruction,
+classification, cancellation-race, and invalid-admission tests while removing
+one phantom historical name, for a further net delta of 8.
+The preceding completion added another 33 per-source route, worker, sidecar,
+runner, daemon, and boundary regressions across three additional modules. The
+latest writer-flush and retirement closure adds 25 current regressions and
+removes one phantom runner inventory name, for a further net delta of 24.
 They are local ownership and reconstruction
 contracts, not remote application acknowledgement, relay second-hop
 completion, or unbounded broadcast admission. The 264-name baseline added 32
@@ -760,10 +810,10 @@ owners (`4N+2` total), including a roster-origin completion relayed through an
 untrusted authenticated hop, and retains the capacity-negative boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 41 legs, including separate exact data-model status and atomic
+now has 47 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts. Its `iroha_p2p` legs use the crate's empty
 default feature set; feature-gated QUIC first-packet geometry tests are not
-claimed by the twenty-one-module, forty-one-leg corridor. It includes
+claimed by the twenty-four-module, forty-seven-leg corridor. It includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
@@ -782,7 +832,7 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 298-name
+earlier 168-name inventory. Fresh 378-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt

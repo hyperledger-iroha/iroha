@@ -8,7 +8,7 @@ description: Dashboard, pricing, and automation artifacts referenced by roadmap 
 Roadmap item **SN-8** bundles two promises:
 
 1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
+   freeze windows for explicitly selected live SNS policies.
 2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
    APIs consistently before any suffix goes live.
 
@@ -55,18 +55,17 @@ files from its export so reviewers get a consistent digest:
 
 ```bash
 cargo xtask sns-annex \
-  --suffix .sora \
+  --suffix .example \
   --cycle 2026-03 \
   --dashboard dashboards/grafana/sns_suffix_analytics.json \
-  --dashboard-artifact artifacts/sns/regulatory/.sora/2026-03/sns_suffix_analytics.json \
-  --output docs/source/sns/reports/.sora/2026-03.md \
+  --dashboard-artifact artifacts/sns/regulatory/.example/2026-03/sns_suffix_analytics.json \
+  --output docs/source/sns/reports/.example/2026-03.md \
   --regulatory-entry docs/source/sns/regulatory/eu-dsa/2026-03.md \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
 - The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
+  Markdown annex under `docs/source/sns/reports/<suffix>/<cycle>.md`.
 - `--dashboard-artifact` copies the export into
   `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
   canonical evidence path; use `--dashboard-label` only when you need to point
@@ -102,20 +101,13 @@ guarding schedule, marker, and localization drift in CI.
 - For every registrar launch, file a short note under
   `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
 
-### Pricing cheatsheet
+### Pricing and lease-policy preflight
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
-| 3 | $240 |
-| 4 | $90 |
-| 5 | $30 |
-| 6–9 | $12 |
-| 10+ | $8 |
-
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+Do not copy fee tables, suffix coefficients, term discounts, or lifecycle
+windows into client collateral. Inspect the active read-only SNS policy and
+request an `AliasTransactionPlanV1` immediately before approval. Record the
+expected policy version, payment asset, maximum amount, deadline, exact quote,
+and any blockers from that live plan in the registrar ticket.
 
 ### Premium auctions vs renewals
 
@@ -139,10 +131,11 @@ registrar ticket.
 ```bash
 python3 scripts/sns_bulk_onboard.py setup.json \
   --config client.toml \
-  --plan-file artifacts/sns/releases/2026q2/setup.plan.json \
-  --plan-only
+  --plan-file artifacts/sns/releases/2026q2/setup.plan.json
 ```
 
+The command above is read-only. After approval, append `--apply` to have the
+ordinary client locally sign and submit the complete plan as one transaction.
 Archive the verified plan hash, live-state anchor, exact asset totals, and
 single-transaction result. The helper neither accepts tokens/keys nor calls a
 direct SNS mutation endpoint.
@@ -152,7 +145,7 @@ direct SNS mutation endpoint.
 1. Registrar ticket with contacts, suffix scope, expected payment asset,
    policy version, and approved caps.
 2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
+3. Live policy snapshot plus the planner quote and quote-guard values.
 4. API/CLI smoke-test artefacts (signed plan, verified hash, and one atomic
    transaction result).
 5. Safe read-only report export attached to the monthly annex; do not attach

@@ -148,10 +148,32 @@ class AccountOnboardingResponseV1(
     /** Live disposition observed immediately before apply. */ @JvmField val disposition: AliasPlanDispositionV1,
 ) {
     @JvmField val accountId: String = requireCanonicalI105Address(accountId, "accountId")
-    @JvmField val alias: String = AccountAliasName.parse(alias).canonicalText()
+    @JvmField val alias: String = requireCanonicalResponseAlias(alias)
     @JvmField val transactionHashHex: String? = transactionHashHex?.also {
         require(it.length == 64 && it.all { value -> value in '0'..'9' || value in 'a'..'f' }) {
             "transactionHashHex must contain 64 lowercase hex characters"
+        }
+    }
+
+    init {
+        when (status) {
+            AccountOnboardingStatusV1.UNCHANGED -> require(
+                transactionHashHex == null && disposition == AliasPlanDispositionV1.NO_OP,
+            ) {
+                "Unchanged onboarding must omit transactionHashHex and report no-op"
+            }
+            AccountOnboardingStatusV1.QUEUED -> require(
+                transactionHashHex != null && disposition == AliasPlanDispositionV1.CREATE,
+            ) {
+                "Queued onboarding must carry transactionHashHex and report create"
+            }
+            AccountOnboardingStatusV1.REPAIRED -> require(
+                transactionHashHex != null &&
+                    (disposition == AliasPlanDispositionV1.REPAIR ||
+                        disposition == AliasPlanDispositionV1.NO_OP),
+            ) {
+                "Repaired onboarding must carry transactionHashHex and report repair or no-op"
+            }
         }
     }
 }
@@ -301,4 +323,10 @@ private fun requireOnboardingToken(value: String, field: String): String {
         "$field must be non-blank without whitespace or controls"
     }
     return value
+}
+
+private fun requireCanonicalResponseAlias(value: String): String {
+    val canonical = AccountAliasName.parse(value).canonicalText()
+    require(canonical == value) { "alias must be canonical" }
+    return canonical
 }

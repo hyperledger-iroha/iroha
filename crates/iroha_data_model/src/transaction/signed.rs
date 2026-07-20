@@ -1002,6 +1002,15 @@ impl SignedTransaction {
                 modified.extend(additions);
                 *instructions = modified.into();
             }
+            Executable::Batch(items) => {
+                let mut modified = items.clone().into_vec();
+                modified.extend(
+                    additions
+                        .into_iter()
+                        .map(crate::transaction::ExecutableBatchItem::Instruction),
+                );
+                *items = modified.into();
+            }
             Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
                 Self::apply_fault_injection_overlay(&mut self.payload.metadata, additions);
             }
@@ -1649,6 +1658,24 @@ impl TransactionBuilder {
         self
     }
 
+    /// Set an ordered, atomic mix of instructions and deployed-contract calls.
+    ///
+    /// An empty iterator can be represented for decoding symmetry but is
+    /// rejected by transaction admission.
+    pub fn with_executable_batch<I>(mut self, items: impl IntoIterator<Item = I>) -> Self
+    where
+        I: Into<crate::transaction::ExecutableBatchItem>,
+    {
+        self.payload.instructions = Executable::Batch(
+            items
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<crate::transaction::ExecutableBatchItem>>()
+                .into(),
+        );
+        self
+    }
+
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
@@ -2230,6 +2257,55 @@ mod tests {
         } else {
             panic!("expected Instructions variant");
         }
+    }
+
+    #[test]
+    fn with_executable_batch_preserves_mixed_item_order() {
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let invocation = crate::transaction::executable::ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: Hash::new(b"builder-batch-contract"),
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let items = vec![
+            crate::transaction::ExecutableBatchItem::Instruction(
+                Log::new(Level::INFO, "before".into()).into(),
+            ),
+            crate::transaction::ExecutableBatchItem::ContractCall(invocation),
+            crate::transaction::ExecutableBatchItem::Instruction(
+                Log::new(Level::INFO, "after".into()).into(),
+            ),
+        ];
+        let tx = TransactionBuilder::new(
+            "test-chain".parse().expect("chain id"),
+            authority,
+            FeePaymentIntent::authority(
+                Vec::new(),
+                Some(NonZeroU64::new(100_000).expect("nonzero gas limit")),
+            ),
+        )
+        .with_executable_batch(items)
+        .sign(key_pair.private_key());
+
+        let Executable::Batch(items) = tx.instructions() else {
+            panic!("expected mixed executable batch");
+        };
+        assert!(matches!(
+            items[0],
+            crate::transaction::ExecutableBatchItem::Instruction(_)
+        ));
+        assert!(matches!(
+            items[1],
+            crate::transaction::ExecutableBatchItem::ContractCall(_)
+        ));
+        assert!(matches!(
+            items[2],
+            crate::transaction::ExecutableBatchItem::Instruction(_)
+        ));
     }
 
     #[test]

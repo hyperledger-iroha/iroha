@@ -30,7 +30,7 @@ Two-module Kotlin SDK (`iroha_kotlin_sdk`) for the Hyperledger Iroha SDK.
 All protocol logic — no Android dependencies:
 - **`sdk.norito`** — Norito binary codec (TypeAdapter, NoritoCodec, NoritoEncoder/Decoder, compression)
 - **`sdk.core.model`** — transaction models, 84 instruction types, InstructionBox, Executable (sealed class)
-- **`sdk.crypto`** — Blake2b/2s/3, Ed25519, IrohaHash, key export (JCA only)
+- **`sdk.crypto`** — Blake2b/2s/3, Ed25519, IrohaHash, and Argon2id key export (JCA + direct BouncyCastle dependency)
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters
 - **`sdk.client`** — Torii HTTP/WS/SSE client, JSON, transport, queue

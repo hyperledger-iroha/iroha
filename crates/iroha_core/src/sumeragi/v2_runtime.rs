@@ -18,20 +18,28 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use super::v2_core::{
-    EventTag, ExactBodyCompletionOwnership, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
-    SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
-    classify_exact_body_completion_ownership, select_bounded_service_class,
+    EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection, EventTag,
+    ExactBodyCompletionOwnership, ProductionIngressIdentityAndClassTraceProjection,
+    SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS,
+    ScheduleState, ScheduledWork, classify_exact_body_completion_ownership,
+    production_body_service_refines_async_fairness_kernel,
+    production_ingress_identity_and_class_trace_refines_protected_ownership_kernel,
+    select_bounded_service_class,
 };
 use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode as _, Encode as _};
 
 use super::{
+    FairV2IngressOwnershipEvidence,
     v2::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
-        DecisionLocalProposalDisposition, SumeragiV2Adapter, classify_decided_local_proposal,
+        DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredPriority,
+        DeferredServiceEvidence, SumeragiV2Adapter, classify_decided_local_proposal,
         proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
@@ -168,7 +176,8 @@ pub(crate) enum EnqueueError {
     ReservedCapacity,
     /// The entire command ingress is full.
     Full,
-    /// The runtime stopped accepting work after an adapter failure.
+    /// The runtime stopped accepting work after an adapter failure or
+    /// process-local admission-ordinal exhaustion.
     FailClosed,
     /// One logical completion stage had conflicting trusted evidence or more
     /// than one serialized owner.
@@ -294,18 +303,611 @@ impl CommandClass {
     }
 }
 
+/// Exact production command variant selected from serialized ingress.
+///
+/// The discriminant is carried separately from the canonical bytes so source
+/// refinement can reject either a changed projection or a changed command
+/// class without trusting a caller-supplied validity bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeCommandKind {
+    /// Cryptographically authenticated consensus envelope.
+    Authenticated,
+    /// Locally built, durable, and validated proposal body.
+    LocalProposalReady,
+    /// Reconstructed canonical body became available.
+    BodyAvailable,
+    /// Exact body-store persistence completed.
+    BodyStored,
+    /// Deterministic body validation succeeded.
+    ValidationSucceeded,
+    /// Deterministic body validation failed.
+    ValidationFailed,
+    /// Consensus signing completed.
+    SignatureCompleted,
+    /// Decided-body application completed.
+    ApplicationCompleted,
+    #[cfg(test)]
+    /// Deterministic scheduling test command.
+    Test,
+}
+
+/// Immutable, lossless command identity derived by the command implementation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeCommandIdentity {
+    /// Exact command variant.
+    pub(crate) kind: RuntimeCommandKind,
+    /// Length-framed canonical fields for the complete command.
+    pub(crate) canonical_bytes: Arc<[u8]>,
+    /// Hash of `canonical_bytes`, derived alongside the immutable bytes.
+    pub(crate) canonical_hash: iroha_crypto::Hash,
+}
+
+/// Exact fair-ingress ownership retained for one authenticated runtime
+/// command.
+///
+/// A Commit-certificate discovery response is authenticated as its outer
+/// envelope and then projects the enclosed CommitQC into reducer ingress.
+/// Direct QC delivery and discovery-response delivery therefore occupy two
+/// independent, fixed slots while sharing one immutable runtime command. Each
+/// slot still carries its own bounded per-source routes and cursors.
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeIngressOwnershipEvidence {
+    runtime_bytes: Arc<[u8]>,
+    direct: Option<FairV2IngressOwnershipEvidence>,
+    commit_certificate_response: Option<FairV2IngressOwnershipEvidence>,
+    projection_hash: iroha_crypto::Hash,
+}
+
+impl RuntimeIngressOwnershipEvidence {
+    fn from_fair_ingress(
+        message: &wire::ConsensusMessageV2,
+        ownership: FairV2IngressOwnershipEvidence,
+    ) -> Option<Self> {
+        let outer = ownership.canonical_v2_message()?;
+        let (direct, commit_certificate_response) = if outer == *message {
+            (Some(ownership), None)
+        } else if matches!(
+            (&outer.payload, &message.payload),
+            (
+                wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+            ) if response.certificate == *certificate
+        ) {
+            (None, Some(ownership))
+        } else {
+            return None;
+        };
+        let mut evidence = Self {
+            runtime_bytes: Arc::from(message.encode()),
+            direct,
+            commit_certificate_response,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        evidence.projection_hash = runtime_ingress_ownership_projection_hash(&evidence);
+        evidence.validate_exact().then_some(evidence)
+    }
+
+    fn merge_downstream(&mut self, candidate: Self) -> bool {
+        if !self.validate_exact()
+            || !candidate.validate_exact()
+            || self.runtime_bytes != candidate.runtime_bytes
+        {
+            return false;
+        }
+        let mut merged = self.clone();
+        if !merge_runtime_ingress_slot(&mut merged.direct, candidate.direct)
+            || !merge_runtime_ingress_slot(
+                &mut merged.commit_certificate_response,
+                candidate.commit_certificate_response,
+            )
+        {
+            return false;
+        }
+        merged.projection_hash = runtime_ingress_ownership_projection_hash(&merged);
+        if !merged.validate_exact() {
+            return false;
+        }
+        *self = merged;
+        true
+    }
+
+    fn matches_authenticated(&self, authenticated: &AuthenticatedConsensusMessage) -> bool {
+        self.validate_exact()
+            && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
+    }
+
+    fn validate_exact(&self) -> bool {
+        if self.direct.is_none() && self.commit_certificate_response.is_none() {
+            return false;
+        }
+        let mut runtime_cursor = self.runtime_bytes.as_ref();
+        let Ok(runtime) = wire::ConsensusMessageV2::decode(&mut runtime_cursor) else {
+            return false;
+        };
+        if !runtime_cursor.is_empty() {
+            return false;
+        }
+        let direct_exact = self.direct.as_ref().is_none_or(|ownership| {
+            ownership.validate_exact()
+                && ownership
+                    .canonical_v2_message()
+                    .is_some_and(|message| message == runtime)
+        });
+        let response_exact = self
+            .commit_certificate_response
+            .as_ref()
+            .is_none_or(|ownership| {
+                ownership.validate_exact()
+                    && ownership.canonical_v2_message().is_some_and(|outer| {
+                        matches!(
+                            (&outer.payload, &runtime.payload),
+                            (
+                                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                                    response,
+                                ),
+                                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+                            ) if response.certificate == *certificate
+                        )
+                    })
+            });
+        direct_exact
+            && response_exact
+            && self.projection_hash == runtime_ingress_ownership_projection_hash(self)
+    }
+}
+
+impl PartialEq for RuntimeIngressOwnershipEvidence {
+    fn eq(&self, other: &Self) -> bool {
+        self.runtime_bytes == other.runtime_bytes
+            && self.projection_hash == other.projection_hash
+            && self.direct.is_some() == other.direct.is_some()
+            && self.commit_certificate_response.is_some()
+                == other.commit_certificate_response.is_some()
+            && self.validate_exact()
+            && other.validate_exact()
+    }
+}
+
+impl Eq for RuntimeIngressOwnershipEvidence {}
+
+fn merge_runtime_ingress_slot(
+    retained: &mut Option<FairV2IngressOwnershipEvidence>,
+    candidate: Option<FairV2IngressOwnershipEvidence>,
+) -> bool {
+    match (retained, candidate) {
+        (Some(retained), Some(candidate)) => retained.merge_downstream(candidate),
+        (slot @ None, Some(candidate)) => {
+            *slot = Some(candidate);
+            true
+        }
+        (Some(_), None) | (None, None) => true,
+    }
+}
+
+fn runtime_ingress_ownership_projection_hash(
+    evidence: &RuntimeIngressOwnershipEvidence,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-ingress-owner:v1");
+    append_runtime_identity_field(&mut projection, &evidence.runtime_bytes);
+    for carrier in [&evidence.direct, &evidence.commit_certificate_response] {
+        match carrier {
+            None => projection.push(0),
+            Some(carrier) => {
+                projection.push(1);
+                append_runtime_identity_field(
+                    &mut projection,
+                    carrier.process_local_projection_hash().as_ref(),
+                );
+            }
+        }
+    }
+    iroha_crypto::Hash::new(projection)
+}
+
+/// Derive the exact identity of a command rather than accepting an asserted
+/// identity from the scheduler's caller.
+pub(crate) trait ExactRuntimeCommandIdentity {
+    /// Project every command field which can distinguish reducer behavior.
+    fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity;
+}
+
+fn append_runtime_identity_field(identity: &mut Vec<u8>, field: &[u8]) {
+    let len = u64::try_from(field.len()).expect("runtime command identity field fits u64");
+    identity.extend_from_slice(&len.to_le_bytes());
+    identity.extend_from_slice(field);
+}
+
+fn append_runtime_identity_u64(identity: &mut Vec<u8>, value: u64) {
+    append_runtime_identity_field(identity, &value.to_le_bytes());
+}
+
+fn append_runtime_identity_tag(identity: &mut Vec<u8>, tag: EventTag) {
+    append_runtime_identity_u64(identity, tag.height());
+    append_runtime_identity_u64(identity, tag.view());
+    append_runtime_identity_u64(identity, tag.generation().get());
+}
+
+/// One exact FIFO candidate selected by the class-aware service cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeFifoCandidateOwnership {
+    /// Identity derived from the selected command itself.
+    pub(crate) identity: RuntimeCommandIdentity,
+    /// Redundant explicit kind pinned to the derived identity.
+    pub(crate) kind: RuntimeCommandKind,
+    /// Frozen service class assigned at admission.
+    pub(crate) class: u8,
+    /// Exact reducer incarnation tag retained by the queue owner.
+    pub(crate) tag: EventTag,
+    /// Process-local ordinal minted when this owner entered the runtime queue.
+    pub(crate) admission_ordinal: u128,
+    /// Exact fair-ingress carrier for authenticated commands. Local trusted
+    /// completions and timers never own one.
+    pub(crate) ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
+    /// Position in the physical FIFO before class-aware removal.
+    pub(crate) fifo_position: u64,
+    /// Eligible class skips accumulated before selection.
+    pub(crate) eligible_skips_before: u64,
+    /// Selection retires the candidate's service debt.
+    pub(crate) eligible_skips_after: u64,
+    /// Derived integrity hash over every candidate projection field.
+    pub(crate) projection_hash: iroha_crypto::Hash,
+}
+
+/// Queue rank observed immediately before or after one scheduler decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeQueueOwnershipProjection {
+    /// Number of admitted command owners.
+    pub(crate) len: u64,
+    /// Exact configured queue capacity.
+    pub(crate) capacity: u64,
+    /// Class-service cursor.
+    pub(crate) service_cursor: u8,
+    /// Greatest eligible-skip debt retained by any command.
+    pub(crate) max_service_debt: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeSchedulerArbitrationInputs {
+    live_mode: bool,
+    timeout_due: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+    completion_ready: bool,
+    progress_ready: bool,
+    normal_ready: bool,
+}
+
+/// Exact source selected for one live or recovery scheduler turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeSelectedOwnerKind {
+    /// One older adapter-owned Busy-deferred occurrence.
+    Deferred,
+    /// Absolute round timeout.
+    Timeout,
+    /// Periodic retransmission timer.
+    PeriodicTimer,
+    /// One live class-aware FIFO command.
+    Fifo,
+    /// No live owner was ready.
+    Idle,
+    /// One startup-recovery FIFO command.
+    RecoveryFifo,
+    /// Startup recovery had no ready owner.
+    RecoveryIdle,
+}
+
+/// Validation result for a retained scheduler ownership carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeSchedulerEvidenceError {
+    /// One exact production projection field was altered or inconsistent.
+    InvalidProjection,
+}
+
+/// Candidate identity carried by a scheduler selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeSelectedCandidateOwnership {
+    /// Timer and idle selections do not dispatch a command candidate.
+    NotApplicable,
+    /// A FIFO or recovery-FIFO selection owns this exact admitted command.
+    Exact(RuntimeFifoCandidateOwnership),
+    /// An adapter-owned Busy-deferred selection owns this exact occurrence.
+    ExactDeferred(DeferredServiceEvidence),
+}
+
+/// Complete scheduler ownership carrier retained at the production step seam.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeSchedulerOwnershipEvidence {
+    /// Selected scheduling branch.
+    pub(crate) selected: RuntimeSelectedOwnerKind,
+    /// Round tag which owned the scheduling decision before dispatch.
+    pub(crate) round_tag: EventTag,
+    /// Exact candidate, absence, or typed deferred integration state.
+    pub(crate) candidate: RuntimeSelectedCandidateOwnership,
+    /// Queue ownership before selection.
+    pub(crate) queue_before: RuntimeQueueOwnershipProjection,
+    /// Queue ownership after selection.
+    pub(crate) queue_after: RuntimeQueueOwnershipProjection,
+    /// Whether this occurrence ran the armed live scheduler rather than recovery.
+    pub(crate) live_mode: bool,
+    /// Whether the absolute round deadline was due before arbitration.
+    pub(crate) timeout_due: bool,
+    /// Whether the periodic retransmission deadline was due before arbitration.
+    pub(crate) periodic_timer_due: bool,
+    /// Whether at least one serialized FIFO owner was ready.
+    pub(crate) fifo_ready: bool,
+    /// Whether the Completion class had an admitted owner.
+    pub(crate) completion_ready: bool,
+    /// Whether the Progress class had an admitted owner.
+    pub(crate) progress_ready: bool,
+    /// Whether the Normal class had an admitted owner.
+    pub(crate) normal_ready: bool,
+    /// Scheduler FIFO debt before selection.
+    pub(crate) fifo_owed_before: bool,
+    /// Scheduler FIFO debt after selection.
+    pub(crate) fifo_owed_after: bool,
+    /// Derived integrity hash over the complete selected-owner projection.
+    pub(crate) projection_hash: iroha_crypto::Hash,
+}
+
+impl RuntimeCommandKind {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Authenticated => 1,
+            Self::LocalProposalReady => 2,
+            Self::BodyAvailable => 3,
+            Self::BodyStored => 4,
+            Self::ValidationSucceeded => 5,
+            Self::ValidationFailed => 6,
+            Self::SignatureCompleted => 7,
+            Self::ApplicationCompleted => 8,
+            #[cfg(test)]
+            Self::Test => 255,
+        }
+    }
+}
+
+impl RuntimeSelectedOwnerKind {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Deferred => 1,
+            Self::Timeout => 2,
+            Self::PeriodicTimer => 3,
+            Self::Fifo => 4,
+            Self::Idle => 5,
+            Self::RecoveryFifo => 6,
+            Self::RecoveryIdle => 7,
+        }
+    }
+}
+
+fn runtime_fifo_candidate_projection_hash(
+    candidate: &RuntimeFifoCandidateOwnership,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.push(candidate.kind.code());
+    append_runtime_identity_field(&mut projection, candidate.identity.canonical_bytes.as_ref());
+    append_runtime_identity_field(&mut projection, candidate.identity.canonical_hash.as_ref());
+    projection.push(candidate.class);
+    append_runtime_identity_tag(&mut projection, candidate.tag);
+    append_runtime_identity_field(&mut projection, &candidate.admission_ordinal.to_le_bytes());
+    match &candidate.ingress_ownership {
+        None => projection.push(0),
+        Some(ownership) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, ownership.projection_hash.as_ref());
+        }
+    }
+    append_runtime_identity_u64(&mut projection, candidate.fifo_position);
+    append_runtime_identity_u64(&mut projection, candidate.eligible_skips_before);
+    append_runtime_identity_u64(&mut projection, candidate.eligible_skips_after);
+    iroha_crypto::Hash::new(projection)
+}
+
+fn runtime_scheduler_projection_hash(
+    evidence: &RuntimeSchedulerOwnershipEvidence,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.push(evidence.selected.code());
+    append_runtime_identity_tag(&mut projection, evidence.round_tag);
+    match &evidence.candidate {
+        RuntimeSelectedCandidateOwnership::NotApplicable => projection.push(0),
+        RuntimeSelectedCandidateOwnership::Exact(candidate) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, candidate.projection_hash.as_ref());
+        }
+        RuntimeSelectedCandidateOwnership::ExactDeferred(candidate) => {
+            projection.push(2);
+            append_runtime_identity_field(&mut projection, candidate.projection_hash.as_ref());
+        }
+    }
+    for queue in [evidence.queue_before, evidence.queue_after] {
+        append_runtime_identity_u64(&mut projection, queue.len);
+        append_runtime_identity_u64(&mut projection, queue.capacity);
+        projection.push(queue.service_cursor);
+        append_runtime_identity_u64(&mut projection, queue.max_service_debt);
+    }
+    projection.push(u8::from(evidence.timeout_due));
+    projection.push(u8::from(evidence.periodic_timer_due));
+    projection.push(u8::from(evidence.fifo_ready));
+    projection.push(u8::from(evidence.completion_ready));
+    projection.push(u8::from(evidence.progress_ready));
+    projection.push(u8::from(evidence.normal_ready));
+    projection.push(u8::from(evidence.live_mode));
+    projection.push(u8::from(evidence.fifo_owed_before));
+    projection.push(u8::from(evidence.fifo_owed_after));
+    iroha_crypto::Hash::new(projection)
+}
+
+impl RuntimeSchedulerOwnershipEvidence {
+    /// Validate all locally closed scheduler-rank relations.
+    ///
+    /// Production deferred evidence is accepted only with the adapter's exact
+    /// selected-event token. The typed unavailable result exists solely for a
+    /// fake-driver boundary test and is compiled out of production.
+    pub(crate) fn validate_exact(&self) -> Result<(), RuntimeSchedulerEvidenceError> {
+        if self.projection_hash != runtime_scheduler_projection_hash(self)
+            || self.queue_before.capacity != self.queue_after.capacity
+            || self.queue_before.len > self.queue_before.capacity
+            || self.queue_after.len > self.queue_after.capacity
+            || self.fifo_ready != (self.queue_before.len != 0)
+            || self.fifo_ready
+                != (self.completion_ready || self.progress_ready || self.normal_ready)
+            || (!self.live_mode && (self.timeout_due || self.periodic_timer_due))
+        {
+            return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::Deferred,
+            RuntimeSelectedCandidateOwnership::ExactDeferred(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            return if candidate.validate_exact()
+                && candidate.service_handoff_is_complete()
+                && self.queue_before == self.queue_after
+                && self.fifo_owed_before == self.fifo_owed_after
+            {
+                Ok(())
+            } else {
+                Err(RuntimeSchedulerEvidenceError::InvalidProjection)
+            };
+        }
+        let schedule_before = ScheduleState {
+            fifo_owed: self.fifo_owed_before,
+        };
+        let (scheduled, schedule_after) =
+            schedule_before.select(self.timeout_due, self.periodic_timer_due, self.fifo_ready);
+        if schedule_after.fifo_owed != self.fifo_owed_after {
+            return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        match (&self.selected, &self.candidate) {
+            (
+                RuntimeSelectedOwnerKind::Fifo | RuntimeSelectedOwnerKind::RecoveryFifo,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+            ) => {
+                let recovery = self.selected == RuntimeSelectedOwnerKind::RecoveryFifo;
+                let service = select_bounded_service_class(
+                    self.queue_before.service_cursor,
+                    self.completion_ready,
+                    self.progress_ready,
+                    self.normal_ready,
+                );
+                let exact = candidate.kind == candidate.identity.kind
+                    && candidate.identity.canonical_hash
+                        == iroha_crypto::Hash::new(candidate.identity.canonical_bytes.as_ref())
+                    && match candidate.kind {
+                        RuntimeCommandKind::Authenticated => candidate
+                            .ingress_ownership
+                            .as_ref()
+                            .is_some_and(|ownership| {
+                                ownership.validate_exact()
+                                    && ownership.runtime_bytes
+                                        == candidate.identity.canonical_bytes
+                            }),
+                        _ => candidate.ingress_ownership.is_none(),
+                    }
+                    && candidate.projection_hash
+                        == runtime_fifo_candidate_projection_hash(candidate)
+                    && candidate.class != SERVICE_CLASS_NONE
+                    && service.selected == candidate.class
+                    && service.next == self.queue_after.service_cursor
+                    && candidate.fifo_position < self.queue_before.len
+                    && candidate.eligible_skips_after == 0
+                    && self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                    && scheduled == ScheduledWork::Fifo
+                    && self.live_mode != recovery;
+                if exact {
+                    Ok(())
+                } else {
+                    Err(RuntimeSchedulerEvidenceError::InvalidProjection)
+                }
+            }
+            (
+                RuntimeSelectedOwnerKind::Timeout,
+                RuntimeSelectedCandidateOwnership::NotApplicable,
+            ) if self.live_mode
+                && self.queue_before == self.queue_after
+                && scheduled == ScheduledWork::Timeout =>
+            {
+                Ok(())
+            }
+            (
+                RuntimeSelectedOwnerKind::PeriodicTimer,
+                RuntimeSelectedCandidateOwnership::NotApplicable,
+            ) if self.live_mode
+                && self.queue_before == self.queue_after
+                && scheduled == ScheduledWork::PeriodicTimer =>
+            {
+                Ok(())
+            }
+            (RuntimeSelectedOwnerKind::Idle, RuntimeSelectedCandidateOwnership::NotApplicable)
+                if self.live_mode
+                    && self.queue_before == self.queue_after
+                    && scheduled == ScheduledWork::Idle =>
+            {
+                Ok(())
+            }
+            (
+                RuntimeSelectedOwnerKind::RecoveryIdle,
+                RuntimeSelectedCandidateOwnership::NotApplicable,
+            ) if !self.live_mode
+                && self.queue_before == self.queue_after
+                && scheduled == ScheduledWork::Idle =>
+            {
+                Ok(())
+            }
+            _ => Err(RuntimeSchedulerEvidenceError::InvalidProjection),
+        }
+    }
+}
+
 pub(crate) struct TaggedCommand<C> {
     tag: EventTag,
     class: CommandClass,
     command: C,
     admitted_at: Instant,
     eligible_skips: u64,
+    admission_ordinal: Option<u128>,
+    ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
+}
+
+impl<C> TaggedCommand<C> {
+    fn new(tag: EventTag, class: CommandClass, command: C, admitted_at: Instant) -> Self {
+        Self {
+            tag,
+            class,
+            command,
+            admitted_at,
+            eligible_skips: 0,
+            admission_ordinal: None,
+            ingress_ownership: None,
+        }
+    }
+
+    fn with_ingress_ownership(
+        tag: EventTag,
+        class: CommandClass,
+        command: C,
+        admitted_at: Instant,
+        ingress_ownership: RuntimeIngressOwnershipEvidence,
+    ) -> Self {
+        Self {
+            tag,
+            class,
+            command,
+            admitted_at,
+            eligible_skips: 0,
+            admission_ordinal: None,
+            ingress_ownership: Some(ingress_ownership),
+        }
+    }
 }
 
 struct BoundedIngress<C> {
     config: RuntimeQueueConfig,
     commands: VecDeque<TaggedCommand<C>>,
     next_class: CommandClass,
+    next_admission_ordinal: Option<u128>,
     reserved_body_available: Option<BodyAvailableReservation>,
 }
 
@@ -315,19 +917,56 @@ impl<C> BoundedIngress<C> {
             config,
             commands: VecDeque::with_capacity(config.capacity),
             next_class: CommandClass::Completion,
+            next_admission_ordinal: Some(0),
             reserved_body_available: None,
         }
     }
 
     fn enqueue(&mut self, command: TaggedCommand<C>) -> Result<(), EnqueueError> {
+        self.enqueue_classified_command(command)
+    }
+
+    fn enqueue_classified_command(
+        &mut self,
+        mut command: TaggedCommand<C>,
+    ) -> Result<(), EnqueueError> {
         self.check_capacity(command.class)?;
+        command.admission_ordinal = Some(self.claim_admission_ordinal()?);
+        let incoming_tag = command.tag;
+        let incoming_class = command.class.service_code();
+        let queue_len_before = u64::try_from(self.commands.len())
+            .expect("bounded runtime ingress length is representable as u64");
         self.commands.push_back(command);
+        let stored = self
+            .commands
+            .back()
+            .expect("successful runtime ingress retains the admitted command");
+        let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+            incoming_height: incoming_tag.height(),
+            incoming_view: incoming_tag.view(),
+            incoming_generation: incoming_tag.generation().get(),
+            incoming_class,
+            stored_height: stored.tag.height(),
+            stored_view: stored.tag.view(),
+            stored_generation: stored.tag.generation().get(),
+            stored_class: stored.class.service_code(),
+            queue_len_before,
+            queue_len_after: u64::try_from(self.commands.len())
+                .expect("bounded runtime ingress length is representable as u64"),
+            queue_capacity: u64::try_from(self.config.capacity)
+                .expect("bounded runtime ingress capacity is representable as u64"),
+        };
+        if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            ingress_trace,
+        ) {
+            panic!("Sumeragi v2 ingress changed command identity or service class");
+        }
         Ok(())
     }
 
     fn enqueue_completion_batch(
         &mut self,
-        commands: Vec<TaggedCommand<C>>,
+        mut commands: Vec<TaggedCommand<C>>,
     ) -> Result<(), EnqueueError> {
         debug_assert!(
             commands
@@ -337,8 +976,42 @@ impl<C> BoundedIngress<C> {
         if commands.len() > self.remaining_capacity() {
             return Err(EnqueueError::Full);
         }
+        let first_ordinal = self.claim_admission_ordinal_range(commands.len())?;
+        if let Some(first_ordinal) = first_ordinal {
+            for (offset, command) in commands.iter_mut().enumerate() {
+                let offset = u128::try_from(offset)
+                    .expect("bounded runtime batch length is representable as u128");
+                command.admission_ordinal = Some(
+                    first_ordinal
+                        .checked_add(offset)
+                        .expect("admission ordinal range was preflighted"),
+                );
+            }
+        }
         self.commands.extend(commands);
         Ok(())
+    }
+
+    fn claim_admission_ordinal(&mut self) -> Result<u128, EnqueueError> {
+        self.claim_admission_ordinal_range(1)?
+            .ok_or(EnqueueError::FailClosed)
+    }
+
+    fn claim_admission_ordinal_range(
+        &mut self,
+        count: usize,
+    ) -> Result<Option<u128>, EnqueueError> {
+        if count == 0 {
+            return Ok(None);
+        }
+        let first = self
+            .next_admission_ordinal
+            .ok_or(EnqueueError::FailClosed)?;
+        let offset = u128::try_from(count - 1).map_err(|_| EnqueueError::FailClosed)?;
+        let last = first.checked_add(offset).ok_or(EnqueueError::FailClosed)?;
+        let successor = last.checked_add(1).ok_or(EnqueueError::FailClosed)?;
+        self.next_admission_ordinal = Some(successor);
+        Ok(Some(first))
     }
 
     fn check_capacity(&self, class: CommandClass) -> Result<(), EnqueueError> {
@@ -361,24 +1034,131 @@ impl<C> BoundedIngress<C> {
         Ok(())
     }
 
-    fn pop_next(&mut self) -> Option<TaggedCommand<C>> {
+    fn ownership_projection(&self) -> RuntimeQueueOwnershipProjection {
+        RuntimeQueueOwnershipProjection {
+            len: u64::try_from(self.commands.len())
+                .expect("bounded runtime ingress length is representable as u64"),
+            capacity: u64::try_from(self.config.capacity)
+                .expect("bounded runtime ingress capacity is representable as u64"),
+            service_cursor: self.next_class.service_code(),
+            max_service_debt: self
+                .commands
+                .iter()
+                .map(|queued| queued.eligible_skips)
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
+    fn class_readiness(&self) -> (bool, bool, bool) {
         let class_ready = |class| self.commands.iter().any(|queued| queued.class == class);
-        let selection = select_bounded_service_class(
-            self.next_class.service_code(),
+        (
             class_ready(CommandClass::Completion),
             class_ready(CommandClass::Progress),
             class_ready(CommandClass::Normal),
+        )
+    }
+
+    fn pop_next_with_ownership(
+        &mut self,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError>
+    where
+        C: ExactRuntimeCommandIdentity,
+    {
+        let queue_before = self.ownership_projection();
+        let cursor_before = self.next_class.service_code();
+        let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
+        let selection = select_bounded_service_class(
+            cursor_before,
+            completion_ready,
+            progress_ready,
+            normal_ready,
         );
-        let next = CommandClass::from_service_code(selection.next)?;
-        self.next_class = next;
-        if selection.selected == SERVICE_CLASS_NONE {
-            return None;
+        let service_trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_SERVICE,
+            relation_exact: select_bounded_service_class(
+                cursor_before,
+                completion_ready,
+                progress_ready,
+                normal_ready,
+            ) == selection,
+            protected_before: 0,
+            protected_after: 0,
+            owner_before: 0,
+            owner_after: 0,
+            owner_reused: false,
+            ready_before: 0,
+            retired_retained: 0,
+            retired_ready: 0,
+            ready_after: 0,
+            store_before: 0,
+            retired_store: 0,
+            store_after: 0,
+            cursor_before,
+            completion_ready,
+            progress_ready,
+            normal_ready,
+            selected: selection.selected,
+            cursor_after: selection.next,
+        };
+        if !production_body_service_refines_async_fairness_kernel(service_trace) {
+            panic!("Sumeragi v2 bounded service violated the effective-lock trace");
         }
-        let class = CommandClass::from_service_code(selection.selected)?;
-        let index = self
+        let Some(next) = CommandClass::from_service_code(selection.next) else {
+            return Err(EnqueueError::FailClosed);
+        };
+        if selection.selected == SERVICE_CLASS_NONE {
+            self.next_class = next;
+            return Ok(None);
+        }
+        let Some(class) = CommandClass::from_service_code(selection.selected) else {
+            return Err(EnqueueError::FailClosed);
+        };
+        let Some(index) = self
             .commands
             .iter()
-            .position(|queued| queued.class == class)?;
+            .position(|queued| queued.class == class)
+        else {
+            return Err(EnqueueError::FailClosed);
+        };
+        let selected = self
+            .commands
+            .get(index)
+            .expect("selected runtime FIFO position remains present");
+        let admission_ordinal = selected.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let identity = selected.command.exact_runtime_command_identity();
+        let mut candidate = RuntimeFifoCandidateOwnership {
+            kind: identity.kind,
+            identity,
+            class: selected.class.service_code(),
+            tag: selected.tag,
+            admission_ordinal,
+            ingress_ownership: selected.ingress_ownership.clone(),
+            fifo_position: u64::try_from(index)
+                .expect("bounded runtime FIFO position is representable as u64"),
+            eligible_skips_before: selected.eligible_skips,
+            eligible_skips_after: 0,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
+        for skipped_class in [
+            CommandClass::Completion,
+            CommandClass::Progress,
+            CommandClass::Normal,
+        ] {
+            if skipped_class == class {
+                continue;
+            }
+            if self
+                .commands
+                .iter()
+                .find(|queued| queued.class == skipped_class)
+                .is_some_and(|oldest| oldest.eligible_skips.checked_add(1).is_none())
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+        }
+        self.next_class = next;
         for skipped_class in [
             CommandClass::Completion,
             CommandClass::Progress,
@@ -392,10 +1172,28 @@ impl<C> BoundedIngress<C> {
                 .iter_mut()
                 .find(|queued| queued.class == skipped_class)
             {
-                oldest.eligible_skips = oldest.eligible_skips.saturating_add(1);
+                oldest.eligible_skips = oldest
+                    .eligible_skips
+                    .checked_add(1)
+                    .expect("service debt overflow was preflighted");
             }
         }
-        self.commands.remove(index)
+        let command = self
+            .commands
+            .remove(index)
+            .expect("selected runtime FIFO owner remains present");
+        debug_assert_eq!(queue_before.len, self.ownership_projection().len + 1);
+        Ok(Some((command, candidate)))
+    }
+
+    #[cfg(test)]
+    fn pop_next(&mut self) -> Option<TaggedCommand<C>>
+    where
+        C: ExactRuntimeCommandIdentity,
+    {
+        self.pop_next_with_ownership()
+            .expect("test ingress commands always own admission ordinals")
+            .map(|(command, _)| command)
     }
 
     fn len(&self) -> usize {
@@ -471,15 +1269,35 @@ pub(crate) struct BodyAvailableReservation {
     tag: EventTag,
     manifest: wire::PayloadManifest,
     owns_new_slot: bool,
+    admission_ordinal: Option<u128>,
 }
 
 impl BodyAvailableReservation {
-    /// Construct a token which owns one unpublished completion slot.
+    /// Construct a runtime-minted token which owns one unpublished completion slot.
+    fn reserved_with_admission_ordinal(
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        admission_ordinal: u128,
+    ) -> Self {
+        Self {
+            tag,
+            manifest,
+            owns_new_slot: true,
+            admission_ordinal: Some(admission_ordinal),
+        }
+    }
+
+    /// Construct an ordinal-free reservation for isolated runtime-driver tests.
+    ///
+    /// Production reservations are minted only by `BoundedIngress`, which
+    /// assigns their actor-local admission ordinal before publishing them.
+    #[cfg(test)]
     pub(crate) fn reserved(tag: EventTag, manifest: wire::PayloadManifest) -> Self {
         Self {
             tag,
             manifest,
             owns_new_slot: true,
+            admission_ordinal: None,
         }
     }
 
@@ -489,6 +1307,7 @@ impl BodyAvailableReservation {
             tag,
             manifest,
             owns_new_slot: false,
+            admission_ordinal: None,
         }
     }
 
@@ -869,6 +1688,102 @@ impl AdapterCommand {
     }
 }
 
+fn append_durable_receipt_identity(identity: &mut Vec<u8>, receipt: &DurableBodyReceipt) {
+    append_runtime_identity_field(identity, &receipt.context_id().encode());
+    append_runtime_identity_field(identity, &receipt.round().encode());
+    append_runtime_identity_field(identity, &receipt.subject().encode());
+    append_runtime_identity_field(identity, &receipt.manifest_hash().encode());
+    append_runtime_identity_field(identity, &receipt.frame_hash().encode());
+}
+
+fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &ValidatedBodyReceipt) {
+    let mut durable = Vec::new();
+    append_durable_receipt_identity(&mut durable, receipt.durable());
+    append_runtime_identity_field(identity, &durable);
+    append_runtime_identity_field(identity, &receipt.execution_commitment().encode());
+}
+
+impl ExactRuntimeCommandIdentity for AdapterCommand {
+    fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
+        let (kind, canonical_bytes) = match self {
+            Self::Authenticated(authenticated) => {
+                (
+                    RuntimeCommandKind::Authenticated,
+                    authenticated.canonical_wire_bytes(),
+                )
+            }
+            Self::LocalProposalReady {
+                manifest,
+                durable_receipt,
+                validated_receipt,
+            } => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &manifest.encode());
+                let mut durable = Vec::new();
+                append_durable_receipt_identity(&mut durable, durable_receipt);
+                append_runtime_identity_field(&mut identity, &durable);
+                let mut validated = Vec::new();
+                append_validated_receipt_identity(&mut validated, validated_receipt);
+                append_runtime_identity_field(&mut identity, &validated);
+                (RuntimeCommandKind::LocalProposalReady, identity)
+            }
+            Self::BodyAvailable { manifest } => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &manifest.encode());
+                (RuntimeCommandKind::BodyAvailable, identity)
+            }
+            Self::BodyStored {
+                round,
+                subject,
+                receipt,
+            } => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &round.encode());
+                append_runtime_identity_field(&mut identity, &subject.encode());
+                let mut receipt_identity = Vec::new();
+                append_durable_receipt_identity(&mut receipt_identity, receipt);
+                append_runtime_identity_field(&mut identity, &receipt_identity);
+                (RuntimeCommandKind::BodyStored, identity)
+            }
+            Self::ValidationSucceeded {
+                round,
+                subject,
+                receipt,
+            } => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &round.encode());
+                append_runtime_identity_field(&mut identity, &subject.encode());
+                let mut receipt_identity = Vec::new();
+                append_validated_receipt_identity(&mut receipt_identity, receipt);
+                append_runtime_identity_field(&mut identity, &receipt_identity);
+                (RuntimeCommandKind::ValidationSucceeded, identity)
+            }
+            Self::ValidationFailed { round, subject } => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &round.encode());
+                append_runtime_identity_field(&mut identity, &subject.encode());
+                (RuntimeCommandKind::ValidationFailed, identity)
+            }
+            Self::SignatureCompleted(signature) => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, signature);
+                (RuntimeCommandKind::SignatureCompleted, identity)
+            }
+            Self::ApplicationCompleted(subject) => {
+                let mut identity = Vec::new();
+                append_runtime_identity_field(&mut identity, &subject.encode());
+                (RuntimeCommandKind::ApplicationCompleted, identity)
+            }
+        };
+        let canonical_hash = iroha_crypto::Hash::new(&canonical_bytes);
+        RuntimeCommandIdentity {
+            kind,
+            canonical_bytes: Arc::from(canonical_bytes),
+            canonical_hash,
+        }
+    }
+}
+
 impl BoundedIngress<AdapterCommand> {
     fn body_pipeline_completion_ownership(
         &self,
@@ -949,27 +1864,63 @@ impl BoundedIngress<AdapterCommand> {
     /// suppression. Once the queued occurrence leaves, a later retransmission
     /// may be admitted and checked against the adapter's generation-aware
     /// delivery records in the usual way.
+    fn enqueue_authenticated_with_ingress_ownership(
+        &mut self,
+        tag: EventTag,
+        class: CommandClass,
+        authenticated: AuthenticatedConsensusMessage,
+        ingress_ownership: RuntimeIngressOwnershipEvidence,
+    ) -> Result<EventTag, EnqueueError> {
+        if !ingress_ownership.matches_authenticated(&authenticated) {
+            return Err(EnqueueError::FailClosed);
+        }
+        if let Some(index) = self.commands.iter().position(|queued| {
+            queued
+                .command
+                .is_same_authenticated_envelope(&authenticated)
+        }) {
+            let queued = self
+                .commands
+                .get_mut(index)
+                .expect("located authenticated runtime owner remains present");
+            let Some(retained) = queued.ingress_ownership.as_mut() else {
+                return Err(EnqueueError::FailClosed);
+            };
+            if !retained.merge_downstream(ingress_ownership) {
+                return Err(EnqueueError::FailClosed);
+            }
+            return Ok(queued.tag);
+        }
+        self.enqueue(TaggedCommand::with_ingress_ownership(
+            tag,
+            class,
+            AdapterCommand::Authenticated(authenticated),
+            Instant::now(),
+            ingress_ownership,
+        ))?;
+        Ok(tag)
+    }
+
+    #[cfg(test)]
     fn enqueue_authenticated(
         &mut self,
         tag: EventTag,
         class: CommandClass,
         authenticated: AuthenticatedConsensusMessage,
     ) -> Result<EventTag, EnqueueError> {
-        if let Some(queued) = self.commands.iter().find(|queued| {
-            queued
-                .command
-                .is_same_authenticated_envelope(&authenticated)
-        }) {
-            return Ok(queued.tag);
-        }
-        self.enqueue(TaggedCommand {
-            tag,
-            class,
-            command: AdapterCommand::Authenticated(authenticated),
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
-        })?;
-        Ok(tag)
+        let message = authenticated.wire_envelope_for_test();
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::new(
+                super::message::BlockMessage::V2(message.clone()),
+                None,
+            ),
+        );
+        let ownership = admitted
+            .take_ingress_ownership()
+            .expect("real test fair ingress produces exact ownership");
+        let ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ownership)
+            .expect("direct test runtime ingress projection is exact");
+        self.enqueue_authenticated_with_ingress_ownership(tag, class, authenticated, ownership)
     }
 
     #[cfg(test)]
@@ -1008,7 +1959,12 @@ impl BoundedIngress<AdapterCommand> {
         if occupied_after_commit > self.config.capacity {
             return Err(EnqueueError::Full);
         }
-        let reservation = BodyAvailableReservation::reserved(tag, manifest);
+        let admission_ordinal = self.claim_admission_ordinal()?;
+        let reservation = BodyAvailableReservation::reserved_with_admission_ordinal(
+            tag,
+            manifest,
+            admission_ordinal,
+        );
         self.reserved_body_available = Some(reservation.clone());
         Ok(reservation)
     }
@@ -1022,15 +1978,16 @@ impl BoundedIngress<AdapterCommand> {
         }
         self.reserved_body_available = None;
         self.discard_proposals_conflicting_with(reservation.manifest());
-        self.commands.push_back(TaggedCommand {
-            tag: reservation.tag(),
-            class: CommandClass::Completion,
-            command: AdapterCommand::BodyAvailable {
+        let mut command = TaggedCommand::new(
+            reservation.tag(),
+            CommandClass::Completion,
+            AdapterCommand::BodyAvailable {
                 manifest: reservation.manifest,
             },
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
-        });
+            Instant::now(),
+        );
+        command.admission_ordinal = reservation.admission_ordinal;
+        self.commands.push_back(command);
     }
 
     fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
@@ -1245,7 +2202,7 @@ impl BoundedIngress<AdapterCommand> {
 /// Production uses the implementation for [`SumeragiV2Adapter`] below.
 pub(crate) trait RuntimeDriver {
     /// Command payload consumed by the driver.
-    type Command;
+    type Command: ExactRuntimeCommandIdentity;
     /// Effect emitted unchanged to asynchronous adapters.
     type Effect;
     /// Fatal transition error.
@@ -1265,8 +2222,13 @@ pub(crate) trait RuntimeDriver {
     /// Return whether older adapter-owned Busy-deferred work can cross the
     /// reducer boundary without spinning behind a persistence/signing fence.
     fn deferred_work_is_serviceable(&self) -> bool;
-    /// Deliver exactly one serviceable adapter-owned deferred transition.
-    fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error>;
+    /// Actor-global source which minted deferred ownership capabilities.
+    fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource;
+    /// Deliver exactly one serviceable adapter-owned deferred transition and
+    /// its exact selected-occurrence token.
+    fn dispatch_deferred(
+        &mut self,
+    ) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error>;
     /// Identify only the effect which authorizes timer restart.
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
     /// Return whether the unauthenticated wire shape could match a protected
@@ -1336,8 +2298,14 @@ impl RuntimeDriver for SumeragiV2Adapter {
         SumeragiV2Adapter::deferred_work_is_serviceable(self)
     }
 
-    fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error> {
-        SumeragiV2Adapter::drain_deferred(self)
+    fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
+        SumeragiV2Adapter::deferred_admission_ordinal_source(self)
+    }
+
+    fn dispatch_deferred(
+        &mut self,
+    ) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error> {
+        SumeragiV2Adapter::drain_deferred_with_evidence(self)
     }
 
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
@@ -1383,6 +2351,7 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     clocks_armed: bool,
     timeout_emitted: bool,
     schedule: ScheduleState,
+    last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
     fail_closed: bool,
 }
 
@@ -1411,6 +2380,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             clocks_armed: false,
             timeout_emitted: false,
             schedule: ScheduleState::default(),
+            last_scheduler_ownership: None,
             fail_closed: false,
         };
         runtime.observe_effects(started_at, &startup_effects);
@@ -1426,13 +2396,76 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.fail_closed {
             return Err(EnqueueError::FailClosed);
         }
-        self.ingress.enqueue(TaggedCommand {
-            tag,
-            class,
-            command,
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
-        })
+        let result = self
+            .ingress
+            .enqueue(TaggedCommand::new(tag, class, command, Instant::now()));
+        if result == Err(EnqueueError::FailClosed) {
+            self.fail_closed = true;
+        }
+        result
+    }
+
+    fn scheduler_arbitration_inputs(&self, now: Instant) -> RuntimeSchedulerArbitrationInputs {
+        let (completion_ready, progress_ready, normal_ready) = self.ingress.class_readiness();
+        let fifo_ready = completion_ready || progress_ready || normal_ready;
+        let timers_enabled = self.clocks_armed;
+        let timeout_due = timers_enabled
+            && !self.timeout_emitted
+            && now.saturating_duration_since(self.round_started_at)
+                >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
+        let periodic_timer_due = timers_enabled
+            && now.saturating_duration_since(self.retransmit_started_at)
+                >= self.retransmit_interval;
+        RuntimeSchedulerArbitrationInputs {
+            live_mode: timers_enabled,
+            timeout_due,
+            periodic_timer_due,
+            fifo_ready,
+            completion_ready,
+            progress_ready,
+            normal_ready,
+        }
+    }
+
+    fn retain_scheduler_ownership(
+        &mut self,
+        selected: RuntimeSelectedOwnerKind,
+        round_tag: EventTag,
+        candidate: RuntimeSelectedCandidateOwnership,
+        queue_before: RuntimeQueueOwnershipProjection,
+        queue_after: RuntimeQueueOwnershipProjection,
+        arbitration: RuntimeSchedulerArbitrationInputs,
+        schedule_before: ScheduleState,
+        schedule_after: ScheduleState,
+    ) -> Result<(), RuntimeError<D::Error>> {
+        if self.last_scheduler_ownership.is_some() {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
+        let mut evidence = RuntimeSchedulerOwnershipEvidence {
+            selected,
+            round_tag,
+            candidate,
+            queue_before,
+            queue_after,
+            live_mode: arbitration.live_mode,
+            timeout_due: arbitration.timeout_due,
+            periodic_timer_due: arbitration.periodic_timer_due,
+            fifo_ready: arbitration.fifo_ready,
+            completion_ready: arbitration.completion_ready,
+            progress_ready: arbitration.progress_ready,
+            normal_ready: arbitration.normal_ready,
+            fifo_owed_before: schedule_before.fifo_owed,
+            fifo_owed_after: schedule_after.fifo_owed,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        evidence.projection_hash = runtime_scheduler_projection_hash(&evidence);
+        if evidence.validate_exact().is_err() {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
+        self.last_scheduler_ownership = Some(evidence);
+        Ok(())
     }
 
     /// Run at most one adapter-deferred transition, timer, or admitted command.
@@ -1452,6 +2485,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
         }
+        if self.last_scheduler_ownership.is_some() {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
         }
@@ -1466,18 +2503,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Ok(step);
         }
 
-        let round_timeout = round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
-        let timeout_due = !self.timeout_emitted
-            && now.saturating_duration_since(self.round_started_at) >= round_timeout;
-        let retransmit_due =
-            now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
-        let (work, next_schedule) =
-            self.schedule
-                .select(timeout_due, retransmit_due, self.ingress.len() != 0);
+        let selected_round_tag = self.round_tag;
+        let schedule_before = self.schedule;
+        let queue_before = self.ingress.ownership_projection();
+        let arbitration = self.scheduler_arbitration_inputs(now);
+        let (work, next_schedule) = self.schedule.select(
+            arbitration.timeout_due,
+            arbitration.periodic_timer_due,
+            arbitration.fifo_ready,
+        );
         self.schedule = next_schedule;
 
         let effects = match work {
             ScheduledWork::Timeout => {
+                let queue_after = self.ingress.ownership_projection();
+                self.retain_scheduler_ownership(
+                    RuntimeSelectedOwnerKind::Timeout,
+                    selected_round_tag,
+                    RuntimeSelectedCandidateOwnership::NotApplicable,
+                    queue_before,
+                    queue_after,
+                    arbitration,
+                    schedule_before,
+                    next_schedule,
+                )?;
                 self.timeout_emitted = true;
                 match self.driver.timeout_elapsed(self.round_tag) {
                     Ok(effects) => effects,
@@ -1485,6 +2534,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 }
             }
             ScheduledWork::PeriodicTimer => {
+                let queue_after = self.ingress.ownership_projection();
+                self.retain_scheduler_ownership(
+                    RuntimeSelectedOwnerKind::PeriodicTimer,
+                    selected_round_tag,
+                    RuntimeSelectedCandidateOwnership::NotApplicable,
+                    queue_before,
+                    queue_after,
+                    arbitration,
+                    schedule_before,
+                    next_schedule,
+                )?;
                 self.retransmit_started_at = now;
                 match self.driver.retransmit_elapsed(self.round_tag) {
                     Ok(effects) => effects,
@@ -1492,16 +2552,43 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 }
             }
             ScheduledWork::Fifo => {
-                let command = self
-                    .ingress
-                    .pop_next()
-                    .expect("scheduler selected non-empty serialized ingress");
+                let (command, candidate) = match self.ingress.pop_next_with_ownership() {
+                    Ok(Some(selected)) => selected,
+                    Ok(None) | Err(_) => {
+                        self.fail_closed = true;
+                        return Err(RuntimeError::FailClosed);
+                    }
+                };
+                let queue_after = self.ingress.ownership_projection();
+                self.retain_scheduler_ownership(
+                    RuntimeSelectedOwnerKind::Fifo,
+                    selected_round_tag,
+                    RuntimeSelectedCandidateOwnership::Exact(candidate),
+                    queue_before,
+                    queue_after,
+                    arbitration,
+                    schedule_before,
+                    next_schedule,
+                )?;
                 match self.driver.dispatch(command) {
                     Ok(effects) => effects,
                     Err(error) => return Err(self.close(error)),
                 }
             }
-            ScheduledWork::Idle => return Ok(RuntimeStep::Idle),
+            ScheduledWork::Idle => {
+                let queue_after = self.ingress.ownership_projection();
+                self.retain_scheduler_ownership(
+                    RuntimeSelectedOwnerKind::Idle,
+                    selected_round_tag,
+                    RuntimeSelectedCandidateOwnership::NotApplicable,
+                    queue_before,
+                    queue_after,
+                    arbitration,
+                    schedule_before,
+                    next_schedule,
+                )?;
+                return Ok(RuntimeStep::Idle);
+            }
         };
         self.observe_effects(now, &effects);
         Ok(RuntimeStep::Advanced(effects))
@@ -1523,15 +2610,66 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
         }
+        if self.last_scheduler_ownership.is_some() {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
         if self.clocks_armed {
             return Err(RuntimeError::RecoveryAfterClocksArmed);
         }
         if let Some(step) = self.dispatch_one_adapter_deferred(now)? {
             return Ok(step);
         }
-        let Some(command) = self.ingress.pop_next() else {
+        let round_tag = self.round_tag;
+        let queue_before = self.ingress.ownership_projection();
+        let schedule_before = self.schedule;
+        let arbitration = self.scheduler_arbitration_inputs(now);
+        let (scheduled, schedule_after) = schedule_before.select(
+            arbitration.timeout_due,
+            arbitration.periodic_timer_due,
+            arbitration.fifo_ready,
+        );
+        self.schedule = schedule_after;
+        let selected = match self.ingress.pop_next_with_ownership() {
+            Ok(selected) => selected,
+            Err(_) => {
+                self.fail_closed = true;
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let Some((command, candidate)) = selected else {
+            if scheduled != ScheduledWork::Idle {
+                self.fail_closed = true;
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_projection();
+            self.retain_scheduler_ownership(
+                RuntimeSelectedOwnerKind::RecoveryIdle,
+                round_tag,
+                RuntimeSelectedCandidateOwnership::NotApplicable,
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule_before,
+                schedule_after,
+            )?;
             return Ok(RuntimeStep::Idle);
         };
+        if scheduled != ScheduledWork::Fifo {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
+        let queue_after = self.ingress.ownership_projection();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::RecoveryFifo,
+            round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule_before,
+            schedule_after,
+        )?;
         let effects = match self.driver.dispatch(command) {
             Ok(effects) => effects,
             Err(error) => return Err(self.close(error)),
@@ -1553,12 +2691,57 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.driver.deferred_work_is_serviceable() {
             return Ok(None);
         }
-        let effects = match self.driver.dispatch_deferred() {
-            Ok(effects) => effects,
+        let round_tag = self.round_tag;
+        let queue_before = self.ingress.ownership_projection();
+        let schedule = self.schedule;
+        let arbitration = self.scheduler_arbitration_inputs(now);
+        let queue_after = self.ingress.ownership_projection();
+        let dispatch = match self.driver.dispatch_deferred() {
+            Ok(dispatch) => dispatch,
             Err(error) => return Err(self.close(error)),
         };
+        let Some((effects, evidence)) = dispatch else {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        };
+        if !evidence.belongs_to(self.driver.deferred_admission_ordinal_source())
+            || !evidence.adapter_service_is_claimed()
+            || !evidence.claim_runtime_handoff_once()
+        {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::Deferred,
+            round_tag,
+            RuntimeSelectedCandidateOwnership::ExactDeferred(evidence),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule,
+            schedule,
+        )?;
         self.observe_effects(now, &effects);
         Ok(Some(RuntimeStep::Advanced(effects)))
+    }
+
+    /// Last exact scheduling ownership carrier produced by `step` or
+    /// `step_recovery`.
+    pub(crate) const fn last_scheduler_ownership(
+        &self,
+    ) -> Option<&RuntimeSchedulerOwnershipEvidence> {
+        self.last_scheduler_ownership.as_ref()
+    }
+
+    /// Move the most recent exact scheduler carrier into the runner bridge.
+    ///
+    /// Taking the carrier before the next scheduling call prevents a later
+    /// branch from overwriting the production occurrence being handed to the
+    /// worker or recovery owner.
+    pub(crate) fn take_last_scheduler_ownership(
+        &mut self,
+    ) -> Option<RuntimeSchedulerOwnershipEvidence> {
+        self.last_scheduler_ownership.take()
     }
 
     /// Number of admitted commands awaiting serialized delivery.
@@ -1753,7 +2936,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             Err(EnqueueError::FailClosed) => {
                 Err("Sumeragi v2 runtime is fail-closed".to_owned())
             }
-            Err(error @ (EnqueueError::ReservedCapacity | EnqueueError::Full)) => {
+            Err(
+                error @ (EnqueueError::ReservedCapacity
+                | EnqueueError::Full),
+            ) => {
                 Err(error.to_string())
             }
         }
@@ -1890,9 +3076,17 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ));
         }
         let tag = self.driver.current_tag();
-        self.ingress
+        match self
+            .ingress
             .enqueue_authenticated(tag, class, authenticated)
-            .map_err(NetworkIngressError::Backpressure)
+        {
+            Ok(owner) => Ok(owner),
+            Err(EnqueueError::FailClosed) => {
+                self.fail_closed = true;
+                Err(NetworkIngressError::FailClosed)
+            }
+            Err(error) => Err(NetworkIngressError::Backpressure(error)),
+        }
     }
 
     /// Return whether the fair-ingress head can reach authentication and then
@@ -1984,7 +3178,11 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if self.body_pipeline_completion_is_owned(tag, &evidence)? {
             return Ok(BodyAvailableReservation::coalesced(tag, manifest));
         }
-        self.ingress.reserve_canonical_body_available(tag, manifest)
+        let result = self.ingress.reserve_canonical_body_available(tag, manifest);
+        if result == Err(EnqueueError::FailClosed) {
+            self.fail_closed = true;
+        }
+        result
     }
 
     /// Publish one previously reserved completion without another fallible
@@ -2360,15 +3558,18 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             if self.body_pipeline_completion_is_owned(tag, &evidence)? {
                 continue;
             }
-            commands.push(TaggedCommand {
+            commands.push(TaggedCommand::new(
                 tag,
-                class: CommandClass::Completion,
-                command: AdapterCommand::ValidationFailed { round, subject },
+                CommandClass::Completion,
+                AdapterCommand::ValidationFailed { round, subject },
                 admitted_at,
-                eligible_skips: 0,
-            });
+            ));
         }
-        self.ingress.enqueue_completion_batch(commands)
+        let result = self.ingress.enqueue_completion_batch(commands);
+        if result == Err(EnqueueError::FailClosed) {
+            self.fail_closed = true;
+        }
+        result
     }
 
     /// Enqueue a signer completion without retagging it to the current view.
@@ -2485,6 +3686,33 @@ mod tests {
         }
     }
 
+    impl ExactRuntimeCommandIdentity for FakeCommand {
+        fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
+            let mut identity = Vec::new();
+            match self.record {
+                Some(value) => {
+                    identity.push(1);
+                    identity.push(value);
+                }
+                None => identity.push(0),
+            }
+            match self.enter_view {
+                Some(tag) => {
+                    identity.push(1);
+                    append_runtime_identity_tag(&mut identity, tag);
+                }
+                None => identity.push(0),
+            }
+            identity.push(u8::from(self.fail));
+            let canonical_hash = iroha_crypto::Hash::new(&identity);
+            RuntimeCommandIdentity {
+                kind: RuntimeCommandKind::Test,
+                canonical_bytes: Arc::from(identity),
+                canonical_hash,
+            }
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FakeEffect {
         enter_view: Option<EventTag>,
@@ -2521,6 +3749,10 @@ mod tests {
         timer_effects: VecDeque<Vec<FakeEffect>>,
         deferred_effects: VecDeque<Vec<FakeEffect>>,
         deferred_dispatches: usize,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+        deferred_service_cursor: DeferredPriority,
+        deferred_identity_unavailable: bool,
+        deferred_evidence_overrides: VecDeque<DeferredServiceEvidence>,
         protected_commit: Option<(
             wire::ConsensusRound,
             wire::BlockSubject,
@@ -2538,6 +3770,10 @@ mod tests {
                 timer_effects: VecDeque::new(),
                 deferred_effects: VecDeque::new(),
                 deferred_dispatches: 0,
+                deferred_admission_ordinals: DeferredAdmissionOrdinalSource::new(0),
+                deferred_service_cursor: DeferredPriority::Completion,
+                deferred_identity_unavailable: false,
+                deferred_evidence_overrides: VecDeque::new(),
                 protected_commit: None,
             }
         }
@@ -2582,9 +3818,35 @@ mod tests {
             !self.deferred_effects.is_empty()
         }
 
-        fn dispatch_deferred(&mut self) -> Result<Vec<Self::Effect>, Self::Error> {
+        fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
+            &self.deferred_admission_ordinals
+        }
+
+        fn dispatch_deferred(
+            &mut self,
+        ) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error> {
             self.deferred_dispatches = self.deferred_dispatches.saturating_add(1);
-            Ok(self.deferred_effects.pop_front().unwrap_or_default())
+            let before = u64::try_from(self.deferred_effects.len())
+                .expect("bounded fake deferred queue length fits u64");
+            let effects = self.deferred_effects.pop_front().unwrap_or_default();
+            if self.deferred_identity_unavailable {
+                return Ok(None);
+            }
+            let evidence = match self.deferred_evidence_overrides.pop_front() {
+                Some(evidence) => evidence,
+                None => {
+                    let evidence = DeferredServiceEvidence::completion_for_test(
+                        &self.deferred_admission_ordinals,
+                        self.current_tag,
+                        before,
+                        self.deferred_service_cursor,
+                    );
+                    assert!(evidence.claim_adapter_service_for_test());
+                    evidence
+                }
+            };
+            self.deferred_service_cursor = evidence.service_cursor_after;
+            Ok(Some((effects, evidence)))
         }
 
         fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
@@ -2855,6 +4117,7 @@ mod tests {
                 build: Hash::new(b"runtime ingress build"),
                 config: Hash::new(b"runtime ingress config"),
             },
+            DeferredAdmissionOrdinalSource::new(0),
         )
         .expect("open authenticated network runtime adapter");
         assert!(startup.is_empty());
@@ -3354,15 +4617,491 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        enqueue_fake(
+            &mut runtime,
+            owner_tag,
+            CommandClass::Normal,
+            FakeCommand::record(1),
+        )
+        .expect("normal owner fits");
+        enqueue_fake(
+            &mut runtime,
+            owner_tag,
+            CommandClass::Progress,
+            FakeCommand::record(9),
+        )
+        .expect("progress owner fits");
+
+        assert!(matches!(runtime.step(start), Ok(RuntimeStep::Advanced(_))));
+        let evidence = runtime
+            .last_scheduler_ownership()
+            .expect("FIFO dispatch retains exact scheduler ownership")
+            .clone();
+        assert_eq!(evidence.selected, RuntimeSelectedOwnerKind::Fifo);
+        assert_eq!(evidence.round_tag, owner_tag);
+        assert_eq!(evidence.queue_before.len, 2);
+        assert_eq!(evidence.queue_after.len, 1);
+        assert_eq!(
+            evidence.queue_before.service_cursor,
+            SERVICE_CLASS_COMPLETION
+        );
+        assert_eq!(evidence.queue_after.service_cursor, SERVICE_CLASS_NORMAL);
+        assert_eq!(evidence.queue_before.max_service_debt, 0);
+        assert_eq!(evidence.queue_after.max_service_debt, 1);
+        assert!(evidence.live_mode);
+        assert!(!evidence.timeout_due);
+        assert!(!evidence.periodic_timer_due);
+        assert!(evidence.fifo_ready);
+        assert!(!evidence.completion_ready);
+        assert!(evidence.progress_ready);
+        assert!(evidence.normal_ready);
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+            panic!("FIFO dispatch must carry one exact command candidate");
+        };
+        assert_eq!(
+            candidate.identity,
+            FakeCommand::record(9).exact_runtime_command_identity()
+        );
+        assert_eq!(candidate.kind, RuntimeCommandKind::Test);
+        assert_eq!(candidate.class, SERVICE_CLASS_PROGRESS);
+        assert_eq!(candidate.tag, owner_tag);
+        assert_eq!(candidate.admission_ordinal, 1);
+        assert_eq!(candidate.fifo_position, 1);
+        assert_eq!(candidate.eligible_skips_before, 0);
+        assert_eq!(candidate.eligible_skips_after, 0);
+        assert_eq!(evidence.validate_exact(), Ok(()));
+
+        let rejected = |mutated: RuntimeSchedulerOwnershipEvidence| {
+            assert_eq!(
+                mutated.validate_exact(),
+                Err(RuntimeSchedulerEvidenceError::InvalidProjection)
+            );
+        };
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.identity.canonical_bytes = Arc::<[u8]>::from(vec![0xFF]);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.kind = RuntimeCommandKind::Authenticated;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.class = SERVICE_CLASS_NORMAL;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.tag = tag(99);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.admission_ordinal = 0;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.fifo_position = 0;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.queue_after.service_cursor = SERVICE_CLASS_COMPLETION;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.queue_after.max_service_debt = 0;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.timeout_due = true;
+        mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.progress_ready = false;
+        mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.fifo_owed_after = true;
+        mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
+        rejected(mutated);
+
+        let mut mutated = evidence;
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+            unreachable!();
+        };
+        candidate.eligible_skips_before = 1;
+        rejected(mutated);
+    }
+
+    #[test]
+    fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
+        let owner_tag = tag(4);
+        let command = AdapterCommand::SignatureCompleted(vec![0x11, 0x22, 0x33]);
+        let expected = command.exact_runtime_command_identity();
+        let shared = expected.clone();
+        assert!(Arc::ptr_eq(
+            &expected.canonical_bytes,
+            &shared.canonical_bytes
+        ));
+        assert_ne!(
+            expected,
+            AdapterCommand::SignatureCompleted(vec![0x11, 0x22, 0x34])
+                .exact_runtime_command_identity()
+        );
+
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
+        ingress
+            .enqueue(TaggedCommand::new(
+                owner_tag,
+                CommandClass::Completion,
+                command,
+                Instant::now(),
+            ))
+            .expect("exact adapter command fits completion capacity");
+        let (_, candidate) = ingress
+            .pop_next_with_ownership()
+            .expect("adapter command retains its admission ordinal")
+            .expect("adapter command owns the selected FIFO occurrence");
+        assert_eq!(candidate.identity, expected);
+        assert_eq!(candidate.kind, RuntimeCommandKind::SignatureCompleted);
+        assert_eq!(candidate.class, SERVICE_CLASS_COMPLETION);
+        assert_eq!(candidate.tag, owner_tag);
+        assert_eq!(candidate.admission_ordinal, 0);
+        assert_eq!(candidate.fifo_position, 0);
+    }
+
+    #[test]
+    fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+
+        let mut idle = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        assert!(matches!(idle.step(start), Ok(RuntimeStep::Idle)));
+        assert_eq!(
+            idle.last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::Idle)
+        );
+        assert!(idle.take_last_scheduler_ownership().is_some());
+
+        assert!(matches!(
+            idle.step(start + Duration::from_secs(2)),
+            Ok(RuntimeStep::Advanced(_))
+        ));
+        assert_eq!(
+            idle.last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::PeriodicTimer)
+        );
+        assert!(idle.take_last_scheduler_ownership().is_some());
+        assert!(matches!(
+            idle.step(start + Duration::from_secs(10)),
+            Ok(RuntimeStep::Advanced(_))
+        ));
+        assert_eq!(
+            idle.last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::Timeout)
+        );
+
+        let (mut recovery, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(owner_tag),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(6, 2, 1),
+            Vec::new(),
+        )
+        .expect("construct unarmed recovery runtime");
+        enqueue_fake(
+            &mut recovery,
+            owner_tag,
+            CommandClass::Completion,
+            FakeCommand::record(7),
+        )
+        .expect("recovery FIFO owner fits");
+        assert!(matches!(
+            recovery.step_recovery(start),
+            Ok(RuntimeStep::Advanced(_))
+        ));
+        assert_eq!(
+            recovery
+                .last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::RecoveryFifo)
+        );
+        assert_eq!(
+            recovery
+                .last_scheduler_ownership()
+                .expect("recovery FIFO retains evidence")
+                .validate_exact(),
+            Ok(())
+        );
+        assert!(
+            !recovery
+                .last_scheduler_ownership()
+                .expect("recovery FIFO retains evidence")
+                .live_mode
+        );
+        assert!(recovery.take_last_scheduler_ownership().is_some());
+        assert!(matches!(
+            recovery.step_recovery(start),
+            Ok(RuntimeStep::Idle)
+        ));
+        assert_eq!(
+            recovery
+                .last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::RecoveryIdle)
+        );
+        assert_eq!(
+            recovery
+                .last_scheduler_ownership()
+                .expect("recovery idle retains evidence")
+                .validate_exact(),
+            Ok(())
+        );
+
+        let mut deferred_driver = FakeDriver::new(owner_tag);
+        deferred_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        let mut deferred = runtime(deferred_driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        assert!(matches!(deferred.step(start), Ok(RuntimeStep::Advanced(_))));
+        let evidence = deferred
+            .last_scheduler_ownership()
+            .expect("deferred dispatch retains its typed occurrence");
+        assert_eq!(evidence.selected, RuntimeSelectedOwnerKind::Deferred);
+        assert_eq!(evidence.validate_exact(), Ok(()));
+        assert!(matches!(
+            &evidence.candidate,
+            RuntimeSelectedCandidateOwnership::ExactDeferred(candidate)
+                if candidate.admission_ordinal == 0 && candidate.validate_exact()
+        ));
+
+        let mut unavailable_driver = FakeDriver::new(owner_tag);
+        unavailable_driver.deferred_identity_unavailable = true;
+        unavailable_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        let mut unavailable = runtime(unavailable_driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        assert!(matches!(
+            unavailable.step(start),
+            Err(RuntimeError::FailClosed)
+        ));
+        assert!(unavailable.last_scheduler_ownership().is_none());
+    }
+
+    #[test]
+    fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+
+        let mut replay_driver = FakeDriver::new(owner_tag);
+        replay_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        replay_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        let replayed = DeferredServiceEvidence::completion_for_test(
+            &replay_driver.deferred_admission_ordinals,
+            owner_tag,
+            2,
+            DeferredPriority::Completion,
+        );
+        assert!(replayed.claim_adapter_service_for_test());
+        replay_driver
+            .deferred_evidence_overrides
+            .push_back(replayed.clone());
+        replay_driver
+            .deferred_evidence_overrides
+            .push_back(replayed);
+        let mut replay = runtime(replay_driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        assert!(matches!(replay.step(start), Ok(RuntimeStep::Advanced(_))));
+        assert!(replay.take_last_scheduler_ownership().is_some());
+        assert!(matches!(replay.step(start), Err(RuntimeError::FailClosed)));
+
+        let mut foreign_driver = FakeDriver::new(owner_tag);
+        foreign_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        let foreign_source = DeferredAdmissionOrdinalSource::new(0);
+        let foreign_evidence = DeferredServiceEvidence::completion_for_test(
+            &foreign_source,
+            owner_tag,
+            1,
+            DeferredPriority::Completion,
+        );
+        assert!(foreign_evidence.claim_adapter_service_for_test());
+        foreign_driver
+            .deferred_evidence_overrides
+            .push_back(foreign_evidence);
+        let mut foreign = runtime(foreign_driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        assert!(matches!(foreign.step(start), Err(RuntimeError::FailClosed)));
+
+        let mut mutated_driver = FakeDriver::new(owner_tag);
+        mutated_driver
+            .deferred_effects
+            .push_back(vec![FakeEffect::other()]);
+        let mut mutated = DeferredServiceEvidence::completion_for_test(
+            &mutated_driver.deferred_admission_ordinals,
+            owner_tag,
+            1,
+            DeferredPriority::Completion,
+        );
+        assert!(mutated.claim_adapter_service_for_test());
+        mutated.protected_progress = true;
+        mutated_driver
+            .deferred_evidence_overrides
+            .push_back(mutated);
+        let mut mutated = runtime(mutated_driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        assert!(matches!(mutated.step(start), Err(RuntimeError::FailClosed)));
+    }
+
+    #[test]
+    fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+
+        assert!(matches!(runtime.step(start), Ok(RuntimeStep::Idle)));
+        let first_projection_hash = runtime
+            .last_scheduler_ownership()
+            .expect("first idle selection retains a carrier")
+            .projection_hash;
+
+        let periodic_at = start + runtime.retransmit_interval();
+        assert!(matches!(
+            runtime.step(periodic_at),
+            Err(RuntimeError::FailClosed)
+        ));
+        let retained = runtime
+            .last_scheduler_ownership()
+            .expect("failed re-entry preserves the first unconsumed carrier");
+        assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
+        assert_eq!(retained.projection_hash, first_projection_hash);
+
+        let mut runtime = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        assert!(matches!(runtime.step(start), Ok(RuntimeStep::Idle)));
+
+        let taken = runtime
+            .take_last_scheduler_ownership()
+            .expect("effect boundary takes the exact first occurrence");
+        assert_eq!(taken.selected, RuntimeSelectedOwnerKind::Idle);
+        assert_eq!(taken.validate_exact(), Ok(()));
+        assert!(runtime.last_scheduler_ownership().is_none());
+
+        assert!(matches!(
+            runtime.step(periodic_at),
+            Ok(RuntimeStep::Advanced(_))
+        ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .map(|evidence| evidence.selected),
+            Some(RuntimeSelectedOwnerKind::PeriodicTimer)
+        );
+        assert!(runtime.last_scheduler_ownership().is_none());
+    }
+
+    #[test]
+    fn admission_ordinal_exhaustion_fails_runtime_closed() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        runtime.ingress.next_admission_ordinal = Some(u128::MAX - 1);
+        enqueue_fake(
+            &mut runtime,
+            owner_tag,
+            CommandClass::Normal,
+            FakeCommand::record(1),
+        )
+        .expect("the last ordinal with a representable successor is valid");
+        assert_eq!(
+            runtime.ingress.commands[0].admission_ordinal,
+            Some(u128::MAX - 1)
+        );
+        assert_eq!(
+            enqueue_fake(
+                &mut runtime,
+                owner_tag,
+                CommandClass::Normal,
+                FakeCommand::record(2),
+            ),
+            Err(EnqueueError::FailClosed)
+        );
+        assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn selected_owner_without_a_runtime_minted_ordinal_fails_closed() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(owner_tag),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        runtime.ingress.commands.push_back(TaggedCommand::new(
+            owner_tag,
+            CommandClass::Normal,
+            FakeCommand::record(1),
+            start,
+        ));
+
+        assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+        assert!(runtime.fail_closed);
+        assert!(runtime.last_scheduler_ownership().is_none());
+    }
+
+    #[test]
     fn class_cursor_advances_from_the_served_class_after_empty_classes() {
         let admitted_at = Instant::now();
         let initial = tag(0);
-        let queued = |class, value| TaggedCommand {
-            tag: initial,
-            class,
-            command: FakeCommand::record(value),
-            admitted_at,
-            eligible_skips: 0,
+        let queued = |class, value| {
+            TaggedCommand::new(initial, class, FakeCommand::record(value), admitted_at)
         };
         let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(6, 2, 1));
 
@@ -3418,13 +5157,12 @@ mod tests {
                 ] {
                     if ready {
                         ingress
-                            .enqueue(TaggedCommand {
-                                tag: initial,
+                            .enqueue(TaggedCommand::new(
+                                initial,
                                 class,
-                                command: FakeCommand::record(class.service_code()),
+                                FakeCommand::record(class.service_code()),
                                 admitted_at,
-                                eligible_skips: 0,
-                            })
+                            ))
                             .expect("one command per ready class fits reserved ingress");
                     }
                 }
@@ -3516,15 +5254,12 @@ mod tests {
             (tag(2), other.clone()),
         ] {
             ingress
-                .enqueue(TaggedCommand {
-                    tag: command_tag,
-                    class: CommandClass::Normal,
-                    command: AdapterCommand::Authenticated(authenticated_proposal_for_test(
-                        manifest,
-                    )),
-                    admitted_at: Instant::now(),
-                    eligible_skips: 0,
-                })
+                .enqueue(TaggedCommand::new(
+                    command_tag,
+                    CommandClass::Normal,
+                    AdapterCommand::Authenticated(authenticated_proposal_for_test(manifest)),
+                    Instant::now(),
+                ))
                 .expect("queue authenticated proposal");
         }
 
@@ -5833,6 +7568,10 @@ mod tests {
         let exact_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::QuorumCertificate(exact_certificate.clone()),
         );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm the production runtime before dispatch");
 
         let timeout = runtime
             .driver
@@ -5854,7 +7593,7 @@ mod tests {
             .expect("enqueue the authenticated CommitQC before the fence is observed");
         assert!(matches!(
             runtime
-                .step(Instant::now())
+                .step(now)
                 .expect("move the Busy CommitQC into adapter ownership"),
             RuntimeStep::Advanced(ref effects) if effects.is_empty()
         ));

@@ -9,10 +9,12 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from .crypto import (
+    ContractCall,
     Ed25519KeyPair,
     Instruction,
     SignedTransactionEnvelope,
     TransactionBuilder,
+    TransactionExecutableEntry,
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
@@ -24,8 +26,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .repo import RepoCashLeg, RepoCollateralLeg, RepoGovernance
 
 __all__ = [
+    "ContractCall",
     "TransactionConfig",
     "TransactionDraft",
+    "TransactionExecutableEntry",
     "authority_fee_payment",
     "sponsor_fee_payment",
 ]
@@ -337,7 +341,7 @@ def _normalize_rwa_quantity_fields(
 
 
 class TransactionDraft:
-    """Collect instructions and sign transactions with ergonomic helpers."""
+    """Collect ordered executable entries and sign transactions with ergonomic helpers."""
 
     def __init__(self, config: TransactionConfig):
         self._config = TransactionConfig(
@@ -352,7 +356,8 @@ class TransactionDraft:
             nonce=config.nonce,
             metadata=config.metadata,
         )
-        self._instructions: List[Instruction] = []
+        self._entries: List[TransactionExecutableEntry] = []
+        self._explicit_batch = False
         self._lane_privacy_attachments: List[Mapping[str, Any]] = []
 
     @property
@@ -365,18 +370,24 @@ class TransactionDraft:
     def instructions(self) -> Iterable[Instruction]:
         """Iterator over appended instructions."""
 
-        return tuple(self._instructions)
+        return tuple(entry for entry in self._entries if not isinstance(entry, ContractCall))
+
+    @property
+    def entries(self) -> Iterable[TransactionExecutableEntry]:
+        """Return the ordered instruction and contract-call entries."""
+
+        return tuple(self._entries)
 
     def __iter__(self):
-        return iter(self._instructions)
+        return iter(self.instructions)
 
     def __len__(self) -> int:
-        return len(self._instructions)
+        return len(self._entries)
 
     def add_instruction(self, instruction: Instruction) -> Instruction:
         """Append an existing :class:`Instruction` to the draft."""
 
-        self._instructions.append(instruction)
+        self._entries.append(instruction)
         return instruction
 
     def extend_instructions(self, instructions: Iterable[Instruction]) -> None:
@@ -384,6 +395,31 @@ class TransactionDraft:
 
         for instruction in instructions:
             self.add_instruction(instruction)
+
+    def use_executable_batch(self) -> TransactionDraft:
+        """Select batch encoding explicitly, including for instruction-only batches."""
+
+        self._explicit_batch = True
+        return self
+
+    def add_contract_call(
+        self,
+        contract_address: str,
+        expected_code_hash_hex: str,
+        entrypoint: str,
+        arguments: Optional[bytes | bytearray | memoryview] = None,
+    ) -> ContractCall:
+        """Append a deployed-contract invocation at the current ordered batch position."""
+
+        call = ContractCall(
+            contract_address=contract_address,
+            expected_code_hash_hex=expected_code_hash_hex,
+            entrypoint=entrypoint,
+            arguments=arguments,
+        )
+        self._entries.append(call)
+        self._explicit_batch = True
+        return call
 
     def commit_contract_deployment(
         self,
@@ -408,9 +444,10 @@ class TransactionDraft:
         return self.add_instruction(instruction)
 
     def clear_instructions(self) -> None:
-        """Remove all instructions from the draft."""
+        """Remove all executable entries from the draft."""
 
-        self._instructions.clear()
+        self._entries.clear()
+        self._explicit_batch = False
         self._lane_privacy_attachments.clear()
 
     def add_lane_privacy_merkle_proof(
@@ -1297,6 +1334,7 @@ class TransactionDraft:
         private_key: bytes,
         *,
         instructions: Optional[Iterable[Instruction]] = None,
+        entries: Optional[Iterable[TransactionExecutableEntry]] = None,
         creation_time_ms: Optional[int] = None,
         ttl_ms: Optional[int] = None,
         nonce: Optional[int] = None,
@@ -1306,7 +1344,22 @@ class TransactionDraft:
     ) -> SignedTransactionEnvelope:
         """Sign the draft with ``private_key`` and return a :class:`SignedTransactionEnvelope`."""
 
-        payload_instructions = list(instructions or self._instructions)
+        if instructions is not None and entries is not None:
+            raise ValueError("instructions and entries are mutually exclusive")
+        payload_instructions: Optional[List[Instruction]]
+        payload_entries: Optional[List[TransactionExecutableEntry]]
+        if entries is not None:
+            payload_instructions = None
+            payload_entries = list(entries)
+        elif instructions is not None:
+            payload_instructions = list(instructions)
+            payload_entries = None
+        elif self._explicit_batch:
+            payload_instructions = None
+            payload_entries = list(self._entries)
+        else:
+            payload_instructions = list(self.instructions)
+            payload_entries = None
         effective_chain = (
             _require_exact_non_empty_string(chain_id, "chain_id")
             if chain_id is not None
@@ -1331,6 +1384,7 @@ class TransactionDraft:
             private_key,
             fee_payment=self._config.fee_payment,
             instructions=payload_instructions,
+            entries=payload_entries,
             creation_time_ms=effective_creation,
             ttl_ms=effective_ttl,
             nonce=effective_nonce,
@@ -1444,8 +1498,18 @@ class TransactionDraft:
             builder.set_nonce(int(self._config.nonce))
         if self._config.metadata is not None:
             builder.set_metadata(self._config.metadata)
-        for instruction in self._instructions:
-            builder.add_instruction(instruction)
+        if self._explicit_batch:
+            builder.use_executable_batch()
+        for entry in self._entries:
+            if isinstance(entry, ContractCall):
+                builder.add_contract_call(
+                    entry.contract_address,
+                    entry.expected_code_hash_hex,
+                    entry.entrypoint,
+                    entry.arguments,
+                )
+            else:
+                builder.add_instruction(entry)
         for entry in self._lane_privacy_attachments:
             normalized = _normalize_lane_privacy_attachment(entry)
             builder.add_lane_privacy_merkle_attachment(
@@ -1484,10 +1548,27 @@ class TransactionDraft:
         manifest: dict[str, Any] = {
             "chain_id": self._config.chain_id,
             "authority": self._config.authority,
-            "instructions": [
-                json.loads(instruction.to_json()) for instruction in self._instructions
-            ],
         }
+        if self._explicit_batch:
+            manifest["entries"] = [
+                {
+                    "ContractCall": {
+                        "contract_address": entry.contract_address,
+                        "expected_code_hash": entry.expected_code_hash_hex,
+                        "entrypoint": entry.entrypoint,
+                        "arguments": None
+                        if entry.arguments is None
+                        else list(entry.arguments),
+                    }
+                }
+                if isinstance(entry, ContractCall)
+                else {"Instruction": json.loads(entry.to_json())}
+                for entry in self._entries
+            ]
+        else:
+            manifest["instructions"] = [
+                json.loads(instruction.to_json()) for instruction in self.instructions
+            ]
 
         if include_metadata and self._config.metadata is not None:
             manifest["metadata"] = _normalize_metadata(self._config.metadata)

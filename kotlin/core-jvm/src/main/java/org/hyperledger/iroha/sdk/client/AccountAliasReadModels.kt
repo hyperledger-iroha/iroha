@@ -69,6 +69,7 @@ class AccountAliasListItem(
         require(parsed.dataspace == normalized.dataspace && parsed.domain == normalized.domain) {
             "alias scope does not match dataspace/domain fields"
         }
+        require(parsed.canonicalText() == alias) { "alias must use its canonical representation" }
         this.alias = parsed.canonicalText()
         this.dataspace = normalized.dataspace
         this.domain = normalized.domain
@@ -117,7 +118,9 @@ class AccountAliasIndexResolution(
 
     /** Canonical account alias. */
     @JvmField
-    val alias: String = AccountAliasName.parse(alias).canonicalText()
+    val alias: String = AccountAliasName.parse(alias).canonicalText().also {
+        require(it == alias) { "alias must use its canonical representation" }
+    }
 
     /** Canonical domainless target account. */
     @JvmField

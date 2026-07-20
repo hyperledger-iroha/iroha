@@ -6,17 +6,21 @@ use std::{
 
 use super::{
     CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
-    OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal, ProposalJustification,
-    Quorum, QuorumCertificate, QuorumError, ReplayError, Round, SignatureShare, SignedProposal,
-    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
-    ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
+    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal,
+    ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
+    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
+    TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
     refinement::{
-        self, BoundaryCapabilityKey, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
-        CONTINUATION_NONE, CONTINUATION_SIGN, CertificateIdentityProjection, EFFECT_APPLY,
-        EFFECT_BROADCAST, EFFECT_ENTER_VIEW, EFFECT_FETCH, EFFECT_PERSIST, EFFECT_REPORT,
-        EFFECT_SIGN, EFFECT_STORE, EFFECT_VALIDATE, EVENT_BODY_AVAILABLE, EVENT_BODY_STORED,
-        EVENT_PERSISTED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey, EffectTrace,
-        EnterViewProjection, PendingProjection, REPLAY_EFFECT_COMMIT, REPLAY_EFFECT_DECISION,
+        self, BoundaryCapabilityKey, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_FOREIGN,
+        CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE,
+        CONTINUATION_INSTALL_TIMEOUT, CONTINUATION_NONE, CONTINUATION_SIGN,
+        CanonicalIdentityProjection, CertificateIdentityProjection, EFFECT_APPLY, EFFECT_BROADCAST,
+        EFFECT_ENTER_VIEW, EFFECT_FETCH, EFFECT_PERSIST, EFFECT_REPORT, EFFECT_SIGN, EFFECT_STORE,
+        EFFECT_VALIDATE, EVENT_BODY_AVAILABLE, EVENT_BODY_STORED, EVENT_PERSISTED,
+        EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey, EffectTrace,
+        EnterViewProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT,
+        IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT, PendingProjection,
+        ProductionDurableIntentTraceProjection, REPLAY_EFFECT_COMMIT, REPLAY_EFFECT_DECISION,
         REPLAY_EFFECT_NONE, REPLAY_EFFECT_PREPARE, REPLAY_EFFECT_PROPOSAL, REPLAY_EFFECT_TIMEOUT,
         ReplayPlanProjection, SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE, SIGNED_MESSAGE_PREPARE,
         SIGNED_MESSAGE_PROPOSAL, SIGNED_MESSAGE_TIMEOUT, SafetyProjection, SubjectProjection,
@@ -24,6 +28,7 @@ use super::{
         VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
         WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT,
         WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
+        production_durable_intent_trace_refines_progress_witness_kernel,
     },
 };
 
@@ -998,7 +1003,32 @@ impl Reducer {
         let mut next = self.clone();
         match next.step_in_place(event) {
             Ok(outcome) => {
-                if !self.transition_refines(&audit_event, &next, outcome.effects()) {
+                let transition = self.transition_projection(&audit_event, &next, outcome.effects());
+                if !refinement::accepts(transition) {
+                    return Err(ReducerError::RefinementViolation);
+                }
+                let durable_intent_trace = ProductionDurableIntentTraceProjection {
+                    event_tag: transition.event_tag,
+                    owner_tag_before: Self::tag_projection(self.current_tag()),
+                    owner_tag_after: Self::tag_projection(next.current_tag()),
+                    event_kind: transition.event_kind,
+                    event_persistence_id: match &audit_event {
+                        Event::Persisted { id, .. } | Event::PersistenceFailed { id, .. } => {
+                            id.get()
+                        }
+                        _ => 0,
+                    },
+                    pending_before: transition.pending_before,
+                    pending_after: next.pending_projection(),
+                    boundary_claimed: transition.boundary_claimed,
+                    boundary_granted: transition.boundary_granted,
+                    effects: transition.effects,
+                    durable_sequence_before: self.durable.last_id().get(),
+                    durable_sequence_after: next.durable.last_id().get(),
+                };
+                if !production_durable_intent_trace_refines_progress_witness_kernel(
+                    durable_intent_trace,
+                ) {
                     return Err(ReducerError::RefinementViolation);
                 }
                 if let Some(violation) = next.progress_witness_violation() {
@@ -1438,40 +1468,145 @@ impl Reducer {
                     record_kind: Self::wal_record_kind(pending.entry.record()),
                     continuation: Self::continuation_kind(&pending.continuation),
                     persistence_id: pending.entry.id().get(),
-                    context_id: pending.entry.record().context_id(),
+                    context_id: Self::context_identity_projection(
+                        pending.entry.record().context_id(),
+                    ),
                     height: round.height(),
                     view: round.view(),
-                    subject,
+                    subject: Self::subject_identity_projection(subject),
                 }
             })
     }
 
-    fn certificate_identity_projection(
+    fn context_identity_projection(context_id: ContextId) -> CanonicalIdentityProjection {
+        CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_CONSENSUS_CONTEXT,
+            *context_id.as_bytes(),
+        )
+    }
+
+    fn subject_identity_projection(subject: Subject) -> CanonicalIdentityProjection {
+        CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_CONSENSUS_SUBJECT,
+            *subject.as_bytes(),
+        )
+    }
+
+    fn certificate_evidence_class(
         certificate: Option<&QuorumCertificate>,
-    ) -> CertificateIdentityProjection {
-        certificate.map_or_else(CertificateIdentityProjection::default, |certificate| {
-            CertificateIdentityProjection {
-                present: true,
-                context_id: certificate.reference().context_id(),
-                height: certificate.round().height(),
-                view: certificate.round().view(),
-                phase: Self::phase_code(certificate.phase()),
-                subject: certificate.subject(),
+        local: Option<&QuorumCertificate>,
+        incoming: Option<&QuorumCertificate>,
+    ) -> u8 {
+        let Some(certificate) = certificate else {
+            return CERTIFICATE_EVIDENCE_ABSENT;
+        };
+        // LOCAL deliberately wins the equal-local/equal-incoming tie. Full
+        // QuorumCertificate equality makes either label semantically harmless,
+        // and one deterministic priority keeps every copied position identical.
+        if local.is_some_and(|candidate| candidate == certificate) {
+            CERTIFICATE_EVIDENCE_LOCAL
+        } else if incoming.is_some_and(|candidate| candidate == certificate) {
+            CERTIFICATE_EVIDENCE_INCOMING
+        } else {
+            CERTIFICATE_EVIDENCE_FOREIGN
+        }
+    }
+
+    fn certificate_signer_projection(
+        &self,
+        certificate: &QuorumCertificate,
+    ) -> Option<(u128, u64, u64, u64)> {
+        let roster = self.context.roster();
+        // HeightContext::new enforces this protocol bound. Repeat it here so a
+        // future constructor or recovery change cannot make the u128 mapping
+        // truncate or alias a signer set.
+        if roster.len() > MAX_VOTING_ROSTER_LEN || MAX_VOTING_ROSTER_LEN > u128::BITS as usize {
+            return None;
+        }
+        let quorum = certificate.validate(&self.context).ok()?;
+        let mut signer_bitmap = 0u128;
+        let mut signer_bitmap_count = 0u64;
+        for signature in certificate.signatures() {
+            let signer = signature.signer();
+            let index = roster
+                .binary_search_by_key(&signer, |validator| validator.id())
+                .ok()?;
+            if index >= MAX_VOTING_ROSTER_LEN {
+                return None;
             }
-        })
+            let shift = u32::try_from(index).ok()?;
+            let bit = 1u128.checked_shl(shift)?;
+            if signer_bitmap & bit != 0 {
+                return None;
+            }
+            signer_bitmap |= bit;
+            signer_bitmap_count = signer_bitmap_count.checked_add(1)?;
+        }
+        let signer_count = u64::try_from(quorum.signer_count()).ok()?;
+        if signer_count == 0
+            || signer_count > u64::try_from(MAX_VOTING_ROSTER_LEN).ok()?
+            || signer_bitmap_count != signer_count
+        {
+            return None;
+        }
+        Some((
+            signer_bitmap,
+            signer_bitmap_count,
+            signer_count,
+            quorum.voting_power().get(),
+        ))
+    }
+
+    fn certificate_identity_projection(
+        &self,
+        certificate: Option<&QuorumCertificate>,
+        local: Option<&QuorumCertificate>,
+        incoming: Option<&QuorumCertificate>,
+    ) -> CertificateIdentityProjection {
+        let Some(certificate) = certificate else {
+            return CertificateIdentityProjection::default();
+        };
+        let evidence_class = Self::certificate_evidence_class(Some(certificate), local, incoming);
+        let signer_projection = self.certificate_signer_projection(certificate);
+        let (signer_bitmap, signer_bitmap_count, signer_count, voting_power) =
+            signer_projection.unwrap_or((0, 0, 0, 0));
+        CertificateIdentityProjection {
+            present: true,
+            context_id: Self::context_identity_projection(certificate.reference().context_id()),
+            height: certificate.round().height(),
+            view: certificate.round().view(),
+            phase: Self::phase_code(certificate.phase()),
+            subject: Self::subject_identity_projection(certificate.subject()),
+            signer_bitmap,
+            signer_bitmap_count,
+            signer_count,
+            voting_power,
+            evidence_class: if signer_projection.is_some() {
+                evidence_class
+            } else {
+                CERTIFICATE_EVIDENCE_FOREIGN
+            },
+        }
     }
 
     fn timeout_identity_projection(
+        &self,
         certificate: Option<&TimeoutCertificate>,
+        local: Option<&QuorumCertificate>,
+        incoming: Option<&QuorumCertificate>,
     ) -> TimeoutIdentityProjection {
         certificate.map_or_else(TimeoutIdentityProjection::default, |certificate| {
             TimeoutIdentityProjection {
                 present: true,
-                context_id: certificate.context_id(),
+                context_id: Self::context_identity_projection(certificate.context_id()),
                 height: certificate.round().height(),
                 view: certificate.round().view(),
-                highest_prepare: Self::certificate_identity_projection(
+                highest_prepare: self.certificate_identity_projection(
                     certificate.highest_prepare(),
+                    local,
+                    incoming,
                 ),
             }
         })
@@ -1540,23 +1675,55 @@ impl Reducer {
             }
         }
         let pending = self.pending_projection();
+        let local_lock = self.durable.locked();
+        let incoming_lock = pending_record_timeout.and_then(TimeoutCertificate::highest_prepare);
         EnterViewProjection {
             active: enter_count != 0,
-            context_id: self.context.id(),
+            context_id: Self::context_identity_projection(self.context.id()),
             before_tag: Self::tag_projection(self.current_tag()),
             after_tag: Self::tag_projection(after.current_tag()),
             pending_record_kind: pending.record_kind,
             pending_continuation: pending.continuation,
-            pending_record_timeout: Self::timeout_identity_projection(pending_record_timeout),
-            pending_continuation_timeout: Self::timeout_identity_projection(
-                pending_continuation_timeout,
+            pending_record_timeout: self.timeout_identity_projection(
+                pending_record_timeout,
+                local_lock,
+                incoming_lock,
             ),
-            durable_timeout_after: Self::timeout_identity_projection(after.durable.last_timeout()),
-            effect_timeout: Self::timeout_identity_projection(effect_timeout),
-            local_lock_before: Self::certificate_identity_projection(self.durable.locked()),
-            durable_lock_after: Self::certificate_identity_projection(after.durable.locked()),
-            effect_protected_lock: Self::certificate_identity_projection(effect_protected_lock),
-            following_fetch_lock: Self::certificate_identity_projection(following_fetch_lock),
+            pending_continuation_timeout: self.timeout_identity_projection(
+                pending_continuation_timeout,
+                local_lock,
+                incoming_lock,
+            ),
+            durable_timeout_after: self.timeout_identity_projection(
+                after.durable.last_timeout(),
+                local_lock,
+                incoming_lock,
+            ),
+            effect_timeout: self.timeout_identity_projection(
+                effect_timeout,
+                local_lock,
+                incoming_lock,
+            ),
+            local_lock_before: self.certificate_identity_projection(
+                local_lock,
+                local_lock,
+                incoming_lock,
+            ),
+            durable_lock_after: self.certificate_identity_projection(
+                after.durable.locked(),
+                local_lock,
+                incoming_lock,
+            ),
+            effect_protected_lock: self.certificate_identity_projection(
+                effect_protected_lock,
+                local_lock,
+                incoming_lock,
+            ),
+            following_fetch_lock: self.certificate_identity_projection(
+                following_fetch_lock,
+                local_lock,
+                incoming_lock,
+            ),
             enter_count,
             fetch_count,
             enter_index,
@@ -1606,8 +1773,12 @@ impl Reducer {
             replay_effect_kind: REPLAY_EFFECT_NONE,
             persistence_id: pending.entry.id().get(),
             context_id: pending.entry.record().context_id(),
+            context_identity: Self::context_identity_projection(
+                pending.entry.record().context_id(),
+            ),
             tag: Self::tag_projection(tag),
             subject: Self::subject_projection(Some(subject)),
+            subject_identity: Self::subject_identity_projection(subject),
             replay_plan: ReplayPlanProjection::empty(),
         }
     }
@@ -1641,8 +1812,13 @@ impl Reducer {
             return BoundaryCapabilityKey {
                 kind: refinement::BOUNDARY_COMPLETE_APPLICATION,
                 context_id: after.context.id(),
+                context_identity: Self::context_identity_projection(after.context.id()),
                 tag: Self::tag_projection(after.current_tag()),
                 subject: Self::subject_projection(after.applied_subject),
+                subject_identity: after.applied_subject.map_or_else(
+                    CanonicalIdentityProjection::zero,
+                    Self::subject_identity_projection,
+                ),
                 ..BoundaryCapabilityKey::none()
             };
         }
@@ -1655,10 +1831,17 @@ impl Reducer {
                 replay_effect_kind: Self::replay_effect_kind(after, effects),
                 persistence_id: after.durable.last_id().get(),
                 context_id: after.context.id(),
+                context_identity: Self::context_identity_projection(after.context.id()),
                 tag: Self::tag_projection(after.current_tag()),
                 subject: Self::subject_projection(
                     after.durable.decision().map(QuorumCertificate::subject),
                 ),
+                subject_identity: after
+                    .durable
+                    .decision()
+                    .map_or_else(CanonicalIdentityProjection::zero, |decision| {
+                        Self::subject_identity_projection(decision.subject())
+                    }),
                 replay_plan: Self::observed_replay_plan(after, effects),
                 ..BoundaryCapabilityKey::none()
             };
@@ -1703,8 +1886,13 @@ impl Reducer {
                 BoundaryCapabilityKey {
                     kind: refinement::BOUNDARY_COMPLETE_APPLICATION,
                     context_id: after.context.id(),
+                    context_identity: Self::context_identity_projection(after.context.id()),
                     tag: Self::tag_projection(after.current_tag()),
                     subject: Self::subject_projection(after.applied_subject),
+                    subject_identity: after.applied_subject.map_or_else(
+                        CanonicalIdentityProjection::zero,
+                        Self::subject_identity_projection,
+                    ),
                     ..BoundaryCapabilityKey::none()
                 }
             }
@@ -1717,10 +1905,17 @@ impl Reducer {
                     replay_effect_kind: Self::first_replay_plan_kind(replay_plan),
                     persistence_id: after.durable.last_id().get(),
                     context_id: after.context.id(),
+                    context_identity: Self::context_identity_projection(after.context.id()),
                     tag: Self::tag_projection(after.current_tag()),
                     subject: Self::subject_projection(
                         after.durable.decision().map(QuorumCertificate::subject),
                     ),
+                    subject_identity: after
+                        .durable
+                        .decision()
+                        .map_or_else(CanonicalIdentityProjection::zero, |decision| {
+                            Self::subject_identity_projection(decision.subject())
+                        }),
                     replay_plan,
                     ..BoundaryCapabilityKey::none()
                 }
@@ -4426,6 +4621,24 @@ mod source_link_tests {
         ));
         let projection = before.transition_projection(&event, &after, outcome.effects());
         assert!(refinement::accepts(projection));
+        for projected in [
+            projection.enter_view.pending_record_timeout.highest_prepare,
+            projection
+                .enter_view
+                .pending_continuation_timeout
+                .highest_prepare,
+            projection.enter_view.durable_timeout_after.highest_prepare,
+            projection.enter_view.effect_timeout.highest_prepare,
+            projection.enter_view.durable_lock_after,
+            projection.enter_view.effect_protected_lock,
+            projection.enter_view.following_fetch_lock,
+        ] {
+            assert_eq!(projected.signer_bitmap, 0b111);
+            assert_eq!(projected.signer_bitmap_count, 3);
+            assert_eq!(projected.signer_count, 3);
+            assert_eq!(projected.voting_power, 3);
+            assert_eq!(projected.evidence_class, CERTIFICATE_EVIDENCE_INCOMING);
+        }
 
         let mut mismatched_effect_lock = projection;
         mismatched_effect_lock
@@ -4433,6 +4646,41 @@ mod source_link_tests {
             .effect_protected_lock
             .subject = Subject::repeat(0xb3);
         assert!(!refinement::accepts(mismatched_effect_lock));
+
+        let mut mismatched_signer_set = projection;
+        mismatched_signer_set
+            .enter_view
+            .effect_protected_lock
+            .signer_bitmap ^= 1u128 << 3;
+        assert!(!refinement::accepts(mismatched_signer_set));
+
+        let mut mismatched_signer_count = projection;
+        mismatched_signer_count
+            .enter_view
+            .effect_protected_lock
+            .signer_count += 1;
+        assert!(!refinement::accepts(mismatched_signer_count));
+
+        let mut mismatched_bitmap_count = projection;
+        mismatched_bitmap_count
+            .enter_view
+            .effect_protected_lock
+            .signer_bitmap_count += 1;
+        assert!(!refinement::accepts(mismatched_bitmap_count));
+
+        let mut mismatched_voting_power = projection;
+        mismatched_voting_power
+            .enter_view
+            .effect_protected_lock
+            .voting_power += 1;
+        assert!(!refinement::accepts(mismatched_voting_power));
+
+        let mut foreign_evidence = projection;
+        foreign_evidence
+            .enter_view
+            .effect_protected_lock
+            .evidence_class = CERTIFICATE_EVIDENCE_FOREIGN;
+        assert!(!refinement::accepts(foreign_evidence));
 
         let mut missing_fetch = projection;
         missing_fetch.enter_view.following_fetch_lock.present = false;
@@ -4443,17 +4691,20 @@ mod source_link_tests {
         assert!(!refinement::accepts(reordered_fetch));
 
         let mut foreign_timeout = projection;
-        foreign_timeout.enter_view.pending_record_timeout.context_id = ContextId::repeat(0xb4);
+        foreign_timeout.enter_view.pending_record_timeout.context_id =
+            Reducer::context_identity_projection(ContextId::repeat(0xb4));
         assert!(!refinement::accepts(foreign_timeout));
 
         let mut future_local_lock = projection;
         future_local_lock.enter_view.local_lock_before.present = true;
-        future_local_lock.enter_view.local_lock_before.context_id = before.context.id();
+        future_local_lock.enter_view.local_lock_before.context_id =
+            Reducer::context_identity_projection(before.context.id());
         future_local_lock.enter_view.local_lock_before.height = before.context.height();
         future_local_lock.enter_view.local_lock_before.phase = 1;
         future_local_lock.enter_view.local_lock_before.view =
             before.current_tag().view().saturating_add(1);
-        future_local_lock.enter_view.local_lock_before.subject = subject;
+        future_local_lock.enter_view.local_lock_before.subject =
+            Reducer::subject_identity_projection(subject);
         assert!(!refinement::accepts(future_local_lock));
     }
 
@@ -4474,12 +4725,30 @@ mod source_link_tests {
         let projection = before.transition_projection(&event, &after, outcome.effects());
         assert!(refinement::accepts(projection));
 
+        let mut nonzero_absent_context = projection;
+        nonzero_absent_context
+            .enter_view
+            .effect_protected_lock
+            .context_id
+            .word0 = 1;
+        assert!(!refinement::accepts(nonzero_absent_context));
+
+        let mut nonzero_absent_subject = projection;
+        nonzero_absent_subject
+            .enter_view
+            .effect_protected_lock
+            .subject
+            .word3 = 1;
+        assert!(!refinement::accepts(nonzero_absent_subject));
+
         let mut invented = projection;
         invented.enter_view.effect_protected_lock.present = true;
-        invented.enter_view.effect_protected_lock.context_id = before.context.id();
+        invented.enter_view.effect_protected_lock.context_id =
+            Reducer::context_identity_projection(before.context.id());
         invented.enter_view.effect_protected_lock.height = before.context.height();
         invented.enter_view.effect_protected_lock.phase = 1;
-        invented.enter_view.effect_protected_lock.subject = Subject::repeat(0xb5);
+        invented.enter_view.effect_protected_lock.subject =
+            Reducer::subject_identity_projection(Subject::repeat(0xb5));
         assert!(!refinement::accepts(invented));
     }
 
@@ -4501,7 +4770,62 @@ mod source_link_tests {
             panic!("first install effect must enter the view")
         };
         *protected_lock = Some(substitute);
+        let projection = before.transition_projection(&event, &after, &effects);
+        assert_eq!(
+            projection.enter_view.effect_protected_lock.evidence_class,
+            CERTIFICATE_EVIDENCE_FOREIGN
+        );
+        assert_eq!(
+            projection.enter_view.effect_protected_lock.signer_bitmap,
+            projection.enter_view.durable_lock_after.signer_bitmap
+        );
+        assert_eq!(
+            projection.enter_view.effect_protected_lock.signer_count,
+            projection.enter_view.durable_lock_after.signer_count
+        );
+        assert_eq!(
+            projection
+                .enter_view
+                .effect_protected_lock
+                .signer_bitmap_count,
+            projection.enter_view.durable_lock_after.signer_bitmap_count
+        );
+        assert_eq!(
+            projection.enter_view.effect_protected_lock.voting_power,
+            projection.enter_view.durable_lock_after.voting_power
+        );
+        assert!(!refinement::accepts(projection));
         assert!(!before.transition_refines(&event, &after, &effects));
+    }
+
+    #[test]
+    fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
+        assert_eq!(MAX_VOTING_ROSTER_LEN, u128::BITS as usize);
+        let fixture = reducer();
+        let certificate = certificate(
+            &fixture.context,
+            0,
+            Phase::Prepare,
+            Subject::repeat(0xb9),
+            0xba,
+        );
+        assert_eq!(
+            Reducer::certificate_evidence_class(
+                Some(&certificate),
+                Some(&certificate),
+                Some(&certificate),
+            ),
+            CERTIFICATE_EVIDENCE_LOCAL
+        );
+        assert_eq!(
+            fixture.certificate_signer_projection(&certificate),
+            Some((0b111, 3, 3, 3))
+        );
+        let (bitmap, bitmap_count, signer_count, _) = fixture
+            .certificate_signer_projection(&certificate)
+            .expect("valid certificate signer projection");
+        assert_eq!(u64::from(bitmap.count_ones()), bitmap_count);
+        assert_eq!(bitmap_count, signer_count);
     }
 
     #[test]

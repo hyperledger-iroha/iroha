@@ -224,6 +224,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
+iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }

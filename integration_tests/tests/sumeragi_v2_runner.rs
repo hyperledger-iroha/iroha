@@ -13,7 +13,7 @@ use iroha::{
     client::Client,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
-        Identifiable,
+        Identifiable, Level,
         account::{Account, AccountId},
         block::{
             BlockHeader,
@@ -27,7 +27,7 @@ use iroha::{
             },
         },
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
-        isi::{Register, register::RegisterBox},
+        isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
         peer::PeerId,
         prelude::FindAccountById,
@@ -39,7 +39,8 @@ use iroha::{
 };
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
-    ConsensusMessageControlRule, NetworkBuilder, NetworkPeer, init_instruction_registry,
+    ConsensusMessageControlRule, NetworkBuilder, NetworkPeer, ObserverP2pBootstrap,
+    ObserverSlowReaderRelayConfig, init_instruction_registry,
 };
 use norito::json::Value;
 use tokio::{task, time::sleep};
@@ -61,6 +62,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const FAST_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TAIRA_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const TAIRA_RECOVERY_BOUND: Duration = Duration::from_secs(50);
+const SIGNED_OBSERVER_COUNT: usize = 5;
+const OBSERVER_SLOW_READ_CHUNK_BYTES: usize = 1_024;
+const OBSERVER_SLOW_READ_DELAY: Duration = Duration::from_millis(2);
+const OBSERVER_PRESSURE_PAYLOAD_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Debug)]
 struct V2StatusSnapshot {
@@ -711,6 +716,33 @@ fn locked_reproposal_receiver_rules(
         }
     }
     rules
+}
+
+fn observer_pressure_view_change_rules(
+    receiver_index: usize,
+    peer_ids: &[PeerId],
+) -> Vec<ConsensusMessageControlRule> {
+    peer_ids
+        .iter()
+        .enumerate()
+        .filter(|(sender_index, _)| *sender_index != receiver_index)
+        .flat_map(|(_, sender)| {
+            [
+                ConsensusMessageControlKind::CommitVote,
+                ConsensusMessageControlKind::CommitCertificate,
+                ConsensusMessageControlKind::CommitCertificateResponse,
+            ]
+            .map(|kind| {
+                ConsensusMessageControlRule::exact(
+                    sender.clone(),
+                    kind,
+                    LOCKED_REPROPOSAL_HEIGHT,
+                    LOCKED_REPROPOSAL_FIRST_VIEW,
+                    ConsensusMessageControlAction::Drop,
+                )
+            })
+        })
+        .collect()
 }
 
 fn distinct_prepare_qc_receiver_rules(
@@ -1500,6 +1532,27 @@ mod prepare_qc_split_tests {
     }
 
     #[test]
+    fn observer_pressure_rules_drop_only_remote_view_zero_commit_evidence() {
+        let peer_ids = peer_ids();
+        for receiver_index in 0..VALIDATOR_COUNT {
+            let rules = observer_pressure_view_change_rules(receiver_index, &peer_ids);
+            assert_eq!(rules.len(), 3 * (VALIDATOR_COUNT - 1));
+            assert!(rules.iter().all(|rule| {
+                rule.sender != peer_ids[receiver_index]
+                    && rule.height == LOCKED_REPROPOSAL_HEIGHT
+                    && rule.view == LOCKED_REPROPOSAL_FIRST_VIEW
+                    && rule.action == ConsensusMessageControlAction::Drop
+                    && matches!(
+                        rule.kind,
+                        ConsensusMessageControlKind::CommitVote
+                            | ConsensusMessageControlKind::CommitCertificate
+                            | ConsensusMessageControlKind::CommitCertificateResponse
+                    )
+            }));
+        }
+    }
+
+    #[test]
     fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
         let cadence_ms = u64::try_from(DISTINCT_PREPARE_QC_BLOCK_CADENCE.as_millis())
             .expect("scenario cadence fits the canonical millisecond width");
@@ -1569,6 +1622,343 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
         Ok(())
     }
     .await;
+    network.shutdown_and_release().await;
+    result
+}
+
+/// Four validators must retain the exact voting roster while five signed
+/// observers recover through authenticated body sync after receiver-local
+/// control forces a view change under bounded, byte-transparent slow-reader
+/// transport delay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "runs nine real peers with transparent slow-reader relays"]
+async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Result<()> {
+    init_instruction_registry();
+
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_base_seed(stringify!(
+            signed_observer_slow_reader_pressure_recovers_exact_successor
+        ))
+        .with_observer_p2p_bootstrap(ObserverP2pBootstrap::new(SIGNED_OBSERVER_COUNT)?)?
+        .with_observer_slow_reader_relays(ObserverSlowReaderRelayConfig::new(
+            OBSERVER_SLOW_READ_CHUNK_BYTES,
+            OBSERVER_SLOW_READ_DELAY,
+        )?)?
+        .with_block_cadence(DISTINCT_PREPARE_QC_BLOCK_CADENCE)
+        .with_initial_consensus_message_control_rules(
+            LOCKED_REPROPOSAL_QUEUE_CAPACITY,
+            observer_pressure_view_change_rules,
+        )
+        .with_sync_timeout(Duration::from_secs(240))
+        .with_peer_startup_timeout(Duration::from_secs(180));
+
+    let context = stringify!(signed_observer_slow_reader_pressure_recovers_exact_successor);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+
+    let result = async {
+        let validators = network.validators().to_vec();
+        let observers = network.observers().to_vec();
+        let all_participants = network.all_peers().cloned().collect::<Vec<_>>();
+        ensure!(
+            validators.len() == VALIDATOR_COUNT
+                && observers.len() == SIGNED_OBSERVER_COUNT
+                && all_participants.len() == VALIDATOR_COUNT + SIGNED_OBSERVER_COUNT,
+            "observer pressure scenario requires exactly four validators and five observers"
+        );
+
+        let validator_ids = validators
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<BTreeSet<_>>();
+        let validator_peer_ids = validators.iter().map(NetworkPeer::id).collect::<Vec<_>>();
+        let expected_rules = validators
+            .iter()
+            .enumerate()
+            .map(|(receiver_index, _)| {
+                observer_pressure_view_change_rules(receiver_index, &validator_peer_ids)
+            })
+            .collect::<Vec<_>>();
+        let observer_ids = observers
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<BTreeSet<_>>();
+        let topology_ids = network
+            .topology_entries()
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            topology_ids == validator_ids
+                && topology_ids.len() == VALIDATOR_COUNT
+                && topology_ids.is_disjoint(&observer_ids),
+            "signed observers entered the validator topology: validators={validator_ids:?}, observers={observer_ids:?}, topology={topology_ids:?}"
+        );
+
+        try_join_all(validators.iter().zip(&expected_rules).map(|(peer, expected)| async move {
+            let ack = peer
+                .consensus_message_control()
+                .ok_or_else(|| eyre!("{} lacks receiver-local control", peer.mnemonic()))?
+                .wait_until_ready(Duration::from_secs(20))
+                .await?;
+            ensure!(
+                ack.revision == 1
+                    && ack.rules.as_slice() == expected.as_slice()
+                    && ack.queue_capacity == LOCKED_REPROPOSAL_QUEUE_CAPACITY
+                    && !ack.fatal
+                    && ack.overflowed == 0,
+                "{} did not install its exact bounded view-zero control schedule: revision={}, queue_capacity={}, rules_match={}",
+                peer.mnemonic(),
+                ack.revision,
+                ack.queue_capacity,
+                ack.rules.as_slice() == expected.as_slice(),
+            );
+            Ok::<(), eyre::Report>(())
+        }))
+        .await?;
+
+        let initial = wait_for_v2_status_condition(
+            &validators,
+            "one common open observer-pressure height-two view-zero round",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                snapshots.iter().all(|snapshot| {
+                    snapshot.height == LOCKED_REPROPOSAL_HEIGHT
+                        && snapshot.view == LOCKED_REPROPOSAL_FIRST_VIEW
+                        && snapshot.last_committed_height < LOCKED_REPROPOSAL_HEIGHT
+                        && snapshot.leader == snapshots[0].leader
+                        && status_round_is_open(
+                            snapshot,
+                            LOCKED_REPROPOSAL_HEIGHT,
+                            LOCKED_REPROPOSAL_FIRST_VIEW,
+                        )
+                })
+            },
+        )
+        .await?;
+        validate_v2_status_set(&initial, VALIDATOR_COUNT)?;
+        validate_open_round(
+            &initial,
+            LOCKED_REPROPOSAL_HEIGHT,
+            LOCKED_REPROPOSAL_FIRST_VIEW,
+        )?;
+        ensure!(
+            network.set_observer_slow_reader_relays_paused(true),
+            "observer slow-reader relays were unavailable at the exact open-round boundary"
+        );
+
+        let recovered_account = fixture_account(0xD5)?;
+        assert_accounts_absent(&all_participants, &[recovered_account.clone()]).await?;
+        let relay_stats_before = observers
+            .iter()
+            .map(|observer| {
+                network
+                    .observer_slow_reader_relay_stats_for(&observer.id())
+                    .ok_or_else(|| {
+                        eyre!(
+                            "observer slow-reader relay stats were unavailable for {}",
+                            observer.mnemonic()
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        submit_pressure_account(
+            network.client(),
+            recovered_account.clone(),
+            OBSERVER_PRESSURE_PAYLOAD_BYTES,
+        )
+        .await?;
+        wait_for_validator_commit_before_observer_catchup(
+            &validators,
+            &observers,
+            LOCKED_REPROPOSAL_HEIGHT,
+            DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT,
+        )
+        .await?;
+        ensure!(
+            network.set_observer_slow_reader_relays_paused(false),
+            "observer slow-reader relays disappeared before bounded recovery"
+        );
+        network
+            .ensure_blocks_with(|height| height.total >= LOCKED_REPROPOSAL_HEIGHT)
+            .await
+            .wrap_err("observers did not recover the later-view body")?;
+        wait_for_normal_statuses(
+            &all_participants,
+            LOCKED_REPROPOSAL_HEIGHT,
+            STATUS_TIMEOUT,
+        )
+        .await?;
+        wait_for_accounts_visible(
+            &all_participants,
+            &[recovered_account.clone()],
+            ACCOUNT_VISIBILITY_TIMEOUT,
+        )
+        .await?;
+
+        let committed_views =
+            try_join_all(validators.iter().map(|peer| {
+                committed_view_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
+            }))
+            .await?;
+        ensure!(
+            committed_views.iter().all(|view| *view > LOCKED_REPROPOSAL_FIRST_VIEW),
+            "receiver-local control did not force a view change: {committed_views:?}"
+        );
+        let dropped = try_join_all(validators.iter().zip(&expected_rules).map(
+            |(peer, expected)| async move {
+                wait_for_control_selection(
+                    peer,
+                    "an exact rule-matched view-zero commit-evidence drop",
+                    STATUS_TIMEOUT,
+                    |ack| {
+                        (ack.revision == 1
+                            && ack.rules.as_slice() == expected.as_slice()
+                            && ack.dropped > 0)
+                            .then_some(ack.dropped)
+                    },
+                )
+                .await
+            },
+        ))
+        .await?;
+        ensure!(
+            dropped.iter().all(|count| *count > 0),
+            "a validator changed view without proving its exact receiver-local drop rule fired: {dropped:?}"
+        );
+
+        let recovered = wait_for_common_awaiting_v2_round(
+            &validators,
+            LOCKED_REPROPOSAL_HEIGHT,
+            STATUS_TIMEOUT,
+        )
+        .await?;
+        validate_v2_status_set(&recovered, VALIDATOR_COUNT)?;
+        for snapshot in &recovered {
+            validate_applied_successor_witness(snapshot, LOCKED_REPROPOSAL_HEIGHT)?;
+        }
+
+        let proof = fetch_bridge_finality_proof(&validators[0], LOCKED_REPROPOSAL_HEIGHT).await?;
+        verify_bridge_finality_proof(&proof, &network.chain_id())
+            .wrap_err("recovered block finality proof failed cryptographic validation")?;
+        let committed_hashes = try_join_all(all_participants.iter().map(|peer| {
+            committed_hash_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
+        }))
+        .await?;
+        let proof_hash = proof.block_header.hash().to_string();
+        ensure!(
+            committed_hashes.iter().all(|hash| hash == &proof_hash),
+            "validators and signed observers did not converge on the exact finalized height-two block: proof={proof_hash}, committed={committed_hashes:?}"
+        );
+        let artifact = &proof.finality_artifact;
+        let roster_ids = artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            roster_ids == validator_ids
+                && roster_ids.len() == VALIDATOR_COUNT
+                && roster_ids.is_disjoint(&observer_ids),
+            "the frozen finality roster included an observer: {roster_ids:?}"
+        );
+        let signer_count = u32::try_from(artifact.commit_qc.signers.len())
+            .wrap_err("CommitQC signer count does not fit u32")?;
+        let signed_power = artifact.commit_qc.signers.iter().try_fold(
+            0_u64,
+            |power, signer| -> Result<u64> {
+                let index = usize::try_from(*signer)
+                    .wrap_err("CommitQC signer index does not fit usize")?;
+                let member = artifact
+                    .height_context
+                    .roster
+                    .get(index)
+                    .ok_or_else(|| eyre!("CommitQC signer {signer} is outside the roster"))?;
+                ensure!(
+                    validator_ids.contains(&member.validator)
+                        && !observer_ids.contains(&member.validator),
+                    "CommitQC signer index {signer} resolved to an observer"
+                );
+                power
+                    .checked_add(member.power)
+                    .ok_or_else(|| eyre!("CommitQC signed power overflowed"))
+            },
+        )?;
+        ensure!(
+            artifact.height_context.roster.len() == VALIDATOR_COUNT
+                && artifact.height_context.quorum.min_signers == 3
+                && artifact.height_context.quorum.total_power == 4
+                && strict_dual_quorum(
+                    signer_count,
+                    artifact.height_context.quorum.min_signers,
+                    signed_power,
+                    artifact.height_context.quorum.total_power,
+                ),
+            "recovered CommitQC lacked the exact four-validator count-and-power quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+            artifact.commit_qc.signers,
+            artifact.height_context.quorum,
+        );
+
+        let observer_snapshots = wait_for_v2_status_condition(
+            &observers,
+            "observer convergence on the applied successor",
+            STATUS_TIMEOUT,
+            |snapshots| {
+                snapshots.iter().all(|snapshot| {
+                    snapshot.last_committed_height >= LOCKED_REPROPOSAL_HEIGHT
+                        && snapshot.height_context.validator_count
+                            == u32::try_from(VALIDATOR_COUNT).expect("validator count fits u32")
+                })
+            },
+        )
+        .await?;
+        ensure!(
+            observer_snapshots.iter().all(|snapshot| {
+                snapshot
+                    .last_commit_qc
+                    .is_some_and(|qc| qc.validator_count == VALIDATOR_COUNT as u32)
+            }),
+            "an observer converged without retaining the validator-only CommitQC"
+        );
+        assert_account_registration_in_exact_block(
+            &all_participants,
+            LOCKED_REPROPOSAL_HEIGHT,
+            &recovered_account,
+        )
+        .await?;
+        for (observer, before) in observers.iter().zip(&relay_stats_before) {
+            let after = network
+                .observer_slow_reader_relay_stats_for(&observer.id())
+                .ok_or_else(|| {
+                    eyre!(
+                        "observer slow-reader relay stats disappeared for {}",
+                        observer.mnemonic()
+                    )
+                })?;
+            let delayed_reads_during_pressure =
+                after.delayed_reads.saturating_sub(before.delayed_reads);
+            let forwarded_bytes_during_pressure = after
+                .forwarded_to_observers_bytes
+                .saturating_sub(before.forwarded_to_observers_bytes);
+            ensure!(
+                after.accepted_connections > 0
+                    && after.upstream_connections > 0
+                    && delayed_reads_during_pressure > 0
+                    && forwarded_bytes_during_pressure
+                        >= OBSERVER_PRESSURE_PAYLOAD_BYTES as u64,
+                "transparent relay for {} did not carry the exact bounded pressure body after submission: before={before:?}, after={after:?}, delayed_reads_delta={delayed_reads_during_pressure}, forwarded_bytes_delta={forwarded_bytes_during_pressure}",
+                observer.mnemonic(),
+            );
+        }
+        Ok(())
+    }
+    .await;
+
     network.shutdown_and_release().await;
     result
 }
@@ -3305,6 +3695,26 @@ async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     Ok(())
 }
 
+async fn submit_pressure_account(
+    client: Client,
+    account_id: AccountId,
+    payload_bytes: usize,
+) -> Result<()> {
+    task::spawn_blocking(move || {
+        let instructions = vec![
+            InstructionBox::from(Register::account(Account::new(account_id))),
+            InstructionBox::from(Log::new(Level::INFO, "X".repeat(payload_bytes))),
+        ];
+        client.submit_all(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err("observer-pressure transaction task panicked")??;
+    Ok(())
+}
+
 async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
     task::spawn_blocking(move || {
         client.submit(
@@ -3333,6 +3743,60 @@ async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Sta
         );
     }
     Ok(statuses)
+}
+
+async fn wait_for_validator_commit_before_observer_catchup(
+    validators: &[NetworkPeer],
+    observers: &[NetworkPeer],
+    height: u64,
+    timeout: Duration,
+) -> Result<()> {
+    ensure!(
+        !validators.is_empty() && !observers.is_empty(),
+        "observer-lag witness requires validators and observers"
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let validator_statuses = normal_statuses(validators).await?;
+        let observer_statuses = normal_statuses(observers).await?;
+        let validators_committed = validator_statuses
+            .iter()
+            .all(|status| status.blocks >= height);
+        let lagging_observers = observers
+            .iter()
+            .zip(&observer_statuses)
+            .filter(|(_, status)| status.blocks < height)
+            .map(|(peer, status)| (peer.mnemonic().to_owned(), status.blocks))
+            .collect::<Vec<_>>();
+        if validators_committed && !lagging_observers.is_empty() {
+            return Ok(());
+        }
+        let validator_heights = validators
+            .iter()
+            .zip(&validator_statuses)
+            .map(|(peer, status)| (peer.mnemonic().to_owned(), status.blocks))
+            .collect::<Vec<_>>();
+        let observer_heights = observers
+            .iter()
+            .zip(&observer_statuses)
+            .map(|(peer, status)| (peer.mnemonic().to_owned(), status.blocks))
+            .collect::<Vec<_>>();
+        if validators_committed
+            && observer_statuses
+                .iter()
+                .all(|status| status.blocks >= height)
+        {
+            return Err(eyre!(
+                "slow-reader scenario reached height {height} everywhere without observing a validator-before-observer recovery boundary: validators={validator_heights:?}, observers={observer_heights:?}"
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "validators did not commit height {height} ahead of at least one delayed observer within {timeout:?}: validators={validator_heights:?}, observers={observer_heights:?}"
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
 }
 
 async fn wait_for_normal_statuses(

@@ -1081,9 +1081,17 @@ PROOF
     <2>8. HighestAndLockAreCertified
       BY <1>1, Isa
          DEF InitAt, HighestAndLockAreCertified, NoRank, NoSubject
-    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+    <2>9. DurableLockRecoveryProvenanceInvariant
+      BY <1>1, Isa
+         DEF InitAt, DurableLockRecoveryProvenanceInvariant, NoRank
+    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
        DEF ReducerProvenanceInvariant
   <1> QED BY <1>1
+
+THEOREM InitAtEstablishesDurableLockRecoveryProvenance ==
+  \A initialContext:
+    InitAt(initialContext) => DurableLockRecoveryProvenanceInvariant
+BY Isa DEF InitAt, DurableLockRecoveryProvenanceInvariant, NoRank
 
 THEOREM BootstrapParentContextPrecedes ==
   \A initialContext:
@@ -1340,7 +1348,7 @@ THEOREM PendingLowerLockCommitRequiresHistoricalTcAuthorization ==
   PendingVoteWritesAuthorized
     => \A request \in pendingLockCommit:
          request.vote.view < nodeView[request.node]
-           => HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+           => HistoricalLockedPrepareForCommit(request.node, request.qc)
 BY SMT
    DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
 
@@ -1359,13 +1367,19 @@ BY SMT
    DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
        TimeoutVoteProtectsCommitSet
 
-THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
+THEOREM ReducerProvenanceImpliesHistoricalLockedCommitAuthorization ==
   ReducerProvenanceInvariant
-    => HistoricalTcLockedCommitAuthorizationInvariant
+    => HistoricalLockedCommitAuthorizationInvariant
 BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
    DurableTimeoutProtectionSuppliesInstalledTcAuthorization
    DEF ReducerProvenanceInvariant,
-       HistoricalTcLockedCommitAuthorizationInvariant
+       HistoricalLockedCommitAuthorizationInvariant
+
+THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
+  ReducerProvenanceInvariant
+    => HistoricalTcLockedCommitAuthorizationInvariant
+BY ReducerProvenanceImpliesHistoricalLockedCommitAuthorization
+   DEF HistoricalTcLockedCommitAuthorizationInvariant
 
 THEOREM UnchangedPendingVoteWriteVarsPreservesAuthorization ==
   PendingVoteWritesAuthorized
@@ -1425,7 +1439,7 @@ PROOF
              /\ request.qc.phase = "Prepare"
              /\ request.qc \in prepareQCs
              /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-                \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+                \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
              /\ request.vote.subject \in ValidSubjects
              /\ BodyHeldBy(durableBodies, request.node,
                            request.vote.context, request.vote.view,
@@ -1436,7 +1450,7 @@ PROOF
              /\ CanAppendVote(commitIntents, request.vote))'
       BY <1>1, <2>1, Isa
          DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit,
-             HistoricalTcLockedPrepareForCommit,
+             HistoricalLockedPrepareForCommit,
              InstalledTcSelectsPrepareFor,
              NoHigherConflictingPrepareKnown, NodeTimedOut
     <2>4. (\A request \in pendingTimeout:
@@ -1461,6 +1475,15 @@ BY Isa
        PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
        CurrentIntentViewsBound, HonestCommitIntentPrepared,
        CertificatePhasesCorrect, DurableIntentsDoNotAnticipateHeight
+
+THEOREM UnchangedDurableLockRecoveryProvenanceVarsPreserves ==
+  DurableLockRecoveryProvenanceInvariant
+    /\ UNCHANGED
+         <<context, commitIntents, installedTCs, lockRank, lockSubject>>
+    => DurableLockRecoveryProvenanceInvariant'
+BY Isa
+   DEF DurableLockRecoveryProvenanceInvariant,
+       ExactLockedCommitIntents, NoRank
 
 THEOREM UnchangedProvenanceVarsPreservesReducerProvenance ==
   ReducerProvenanceInvariant /\ UNCHANGED ProvenanceVars
@@ -1543,7 +1566,10 @@ PROOF
            DEF ProvenanceVars, ReducerProvenanceInvariant,
                HighestAndLockAreCertified
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5
+    <2>6. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF ReducerProvenanceInvariant, ProvenanceVars
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
        DEF ReducerProvenanceInvariant
   <1> QED BY <1>1
 
@@ -1632,7 +1658,11 @@ PROOF
                ProvenanceWithoutVoteTransportVars,
                HighestAndLockAreCertified
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
-    <2> QED BY <2>1, <2>2, <2>3
+    <2>4. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF ReducerProvenanceWithoutVoteTransport,
+             ProvenanceWithoutVoteTransportVars
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
        DEF ReducerProvenanceWithoutVoteTransport
   <1> QED BY <1>1
 
@@ -2023,6 +2053,31 @@ PROOF
                   ProofRelevantStutterPreservesStrongInvariant
   <1> QED BY <1>1
 
+THEOREM ValidateLockedBodyPreservesStrongInvariant ==
+  \A node, qc:
+    StrongInductiveInvariant /\ ValidateLockedBody(node, qc)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW qc,
+              StrongInductiveInvariant,
+              ValidateLockedBody(node, qc)
+         PROVE StrongInductiveInvariant'
+    <2>1. ValidatedBodiesSound(validatedBodies', ValidSubjects)
+      BY <1>1, SMT
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ValidatedBodiesSound, ValidateLockedBody, ValidationRecord
+    <2>2. /\ availableBodies' \subseteq BodyRecordSet
+          /\ validatedBodies' \subseteq ValidationRecordSet
+          /\ invalidBodies' \subseteq BodyRecordSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ValidateLockedBody
+    <2>3. UNCHANGED ProofRelevantVars
+      BY <1>1 DEF ValidateLockedBody, ProofRelevantVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
+                  ProofRelevantStutterPreservesStrongInvariant
+  <1> QED BY <1>1
+
 THEOREM RejectBodyPreservesStrongInvariant ==
   \A node, proposal:
     StrongInductiveInvariant /\ RejectBody(node, proposal)
@@ -2097,6 +2152,35 @@ THEOREM UnchangedHighestAndLockCertificationVarsPreserves ==
                    highestRank, highestSubject>>
     => HighestAndLockAreCertified'
 BY Isa DEF HighestAndLockAreCertified
+
+THEOREM PersistLockCommitPreservesDurableLockRecoveryProvenance ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ PersistLockCommit(request)
+    => DurableLockRecoveryProvenanceInvariant'
+BY SMTT(90), Isa
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       PendingVoteWritesAuthorized,
+       DurableLockRecoveryProvenanceInvariant,
+       ExactLockedCommitIntents, PersistLockCommit
+
+THEOREM PersistInstallTCPreservesDurableLockRecoveryProvenance ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ PersistInstallTC(request)
+    => DurableLockRecoveryProvenanceInvariant'
+BY SMTT(120), Isa
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       DurableLockRecoveryProvenanceInvariant,
+       ExactLockedCommitIntents, PersistInstallTC,
+       ResultingInstallLockRank, ResultingInstallLockSubject
+
+THEOREM AdvanceContextPreservesDurableLockRecoveryProvenance ==
+  \A subject:
+    AdvanceContext(subject)
+      => DurableLockRecoveryProvenanceInvariant'
+BY Isa
+   DEF AdvanceContext, DurableLockRecoveryProvenanceInvariant, NoRank
 
 THEOREM DurableGrowthPreservesStrongInvariant ==
   StrongInductiveInvariant
@@ -2235,7 +2319,7 @@ PROOF
                /\ request.qc \in prepareQCs'
                /\ \/ CurrentOpenPrepareForCommit(
                         request.node, request.qc)'
-                  \/ HistoricalTcLockedPrepareForCommit(
+                  \/ HistoricalLockedPrepareForCommit(
                         request.node, request.qc)'
                /\ request.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', request.node,
@@ -2256,7 +2340,7 @@ PROOF
                      /\ request.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               request.node, request.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               request.node, request.qc)'
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', request.node,
@@ -2286,7 +2370,7 @@ PROOF
                  /\ request.qc \in prepareQCs
                  /\ \/ CurrentOpenPrepareForCommit(
                           request.node, request.qc)
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                           request.node, request.qc)
                  /\ request.vote.subject \in ValidSubjects
                  /\ request.qc.view >= lockRank[request.node]
@@ -2315,7 +2399,7 @@ PROOF
                  /\ request.qc \in prepareQCs'
                  /\ \/ CurrentOpenPrepareForCommit(
                           request.node, request.qc)'
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                           request.node, request.qc)'
                  /\ request.vote.subject \in ValidSubjects
                  /\ request.qc.view >= lockRank'[request.node]
@@ -2325,7 +2409,7 @@ PROOF
             BY <1>1, <5>4, <5>5, Isa
                DEF ProofRelevantWithoutDurableVars,
                    CurrentOpenPrepareForCommit,
-                   HistoricalTcLockedPrepareForCommit,
+                   HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
                    NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>2, <5>6
@@ -2399,8 +2483,12 @@ PROOF
         BY <3>4, <3>5,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>3, <3>6
+    <2>9a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             ProofRelevantWithoutDurableVars
     <2>10. ReducerProvenanceInvariant'
-      BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
+      BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9, <2>9a
          DEF ReducerProvenanceInvariant
     <2>11. LineageInvariant'
       BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
@@ -3308,7 +3396,7 @@ PROOF
                /\ pending.qc \in prepareQCs'
                /\ \/ CurrentOpenPrepareForCommit(
                         pending.node, pending.qc)'
-                  \/ HistoricalTcLockedPrepareForCommit(
+                  \/ HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
@@ -3320,7 +3408,7 @@ PROOF
         BY <3>1, <3>4, IsaM("blast")
            DEF PendingVoteWritesAuthorized,
                CurrentOpenPrepareForCommit,
-               HistoricalTcLockedPrepareForCommit,
+               HistoricalLockedPrepareForCommit,
                InstalledTcSelectsPrepareFor,
                NoHigherConflictingPrepareKnown, NodeTimedOut
       <3>7. \A pending \in pendingTimeout':
@@ -3366,6 +3454,7 @@ PROOF
           /\ FormedTimeoutCertificatesSound'
           /\ DurableTimeoutsProtectCommits'
           /\ HighestAndLockAreCertified'
+          /\ DurableLockRecoveryProvenanceInvariant'
       <3>1. DurableTimeoutsProtectCommits'
         BY <1>1, Isa
            DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
@@ -3399,7 +3488,11 @@ PROOF
                CertificatesBackedByIntents, HonestDurableIntentsSound,
                FormedTimeoutCertificatesSound,
                HighestAndLockAreCertified, VoteIntentFor
-      <3> QED BY <3>1, <3>2
+      <3>3. DurableLockRecoveryProvenanceInvariant'
+        BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               BeginPrepare
+      <3> QED BY <3>1, <3>2, <3>3
     <2>8. ReducerProvenanceInvariant'
       BY <2>6, <2>7
          DEF ReducerProvenanceInvariant,
@@ -3593,7 +3686,7 @@ PROOF
                      /\ pending.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               pending.node, pending.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
@@ -3614,7 +3707,7 @@ PROOF
                      /\ pending.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               pending.node, pending.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
@@ -3650,7 +3743,7 @@ PROOF
                 /\ pending.qc \in prepareQCs
                 /\ \/ CurrentOpenPrepareForCommit(
                          pending.node, pending.qc)
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                          pending.node, pending.qc)
                 /\ pending.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, pending.node,
@@ -3678,9 +3771,9 @@ PROOF
           <5>6. CurrentOpenPrepareForCommit(pending.node, pending.qc)
                    => CurrentOpenPrepareForCommit(pending.node, pending.qc)'
             BY <5>5 DEF CurrentOpenPrepareForCommit, NodeTimedOut
-          <5>7. HistoricalTcLockedPrepareForCommit(
+          <5>7. HistoricalLockedPrepareForCommit(
                    pending.node, pending.qc)
-                   => HistoricalTcLockedPrepareForCommit(
+                   => HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
             <6>1. request.vote.signer = request.node
               BY <3>1, <5>1 DEF PendingVoteWritesAuthorized
@@ -3691,11 +3784,11 @@ PROOF
               BY <5>3, <5>5, <6>1, Isa
                  DEF NoHigherConflictingPrepareKnown
             <6> QED BY <5>5, <6>2, Isa
-               DEF HistoricalTcLockedPrepareForCommit,
+               DEF HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor
           <5>8. \/ CurrentOpenPrepareForCommit(
                        pending.node, pending.qc)'
-                 \/ HistoricalTcLockedPrepareForCommit(
+                 \/ HistoricalLockedPrepareForCommit(
                        pending.node, pending.qc)'
             BY <5>4, <5>6, <5>7
           <5> QED BY <5>4, <5>5, <5>8, Isa
@@ -3777,8 +3870,12 @@ PROOF
         BY <1>1 DEF PersistPrepare
       <3> QED BY <3>2, <3>3, <3>4
          DEF CertificatesBackedByIntents
+    <2>16a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PersistPrepare
     <2>17. ReducerProvenanceInvariant'
-      BY <2>4, <2>5, <2>6, <2>13, <2>14, <2>15, <2>16
+      BY <2>4, <2>5, <2>6, <2>13, <2>14, <2>15, <2>16, <2>16a
          DEF ReducerProvenanceInvariant
     <2>18. LineageInvariant'
       <3>1. /\ TypeInvariant
@@ -4095,31 +4192,51 @@ PROOF
          PROVE CertifiedBodyAvailable(
                  CurrentEpoch, qc.signers, durableBodies,
                  context, qc.view, qc.subject)
-    <2>1. PICK decision \in decisions:
-             /\ decision.node = node
-             /\ decision.qc = qc
+    <2>1. CertifiedBodyRecoveryAuthority(node, qc)
       BY <1>1 DEF FetchCertifiedBody
-    <2>2. /\ qc \in commitQCs
-          /\ qc.context = context
-      BY <1>1, <2>1
-         DEF StrongInductiveInvariant, Safety, DecisionAgreement,
-             FetchCertifiedBody
-    <2>3. /\ HistoricalQcValid(qc)
-          /\ CertificateBackedBy(CurrentEpoch, qc, commitIntents)
-          /\ HonestIntentSound(commitIntents, durableBodies,
-                               ValidSubjects)
-          /\ QuorumConfiguration
-      BY <1>1, <2>2
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             ReducerProvenanceInvariant, CertificatesBackedByIntents,
-             HonestDurableIntentsSound, CurrentEpoch, ModelConfiguration
-    <2>4. CurrentEpoch \in Epochs
-      BY <2>2, <2>3 DEF HistoricalQcValid, QcWireValid, CurrentEpoch
-    <2>5. CertificateValidityAndAvailability(
-             qc, durableBodies, ValidSubjects)
-      BY <2>3, <2>4, BackedCertificateIsValidAndAvailable
-    <2> QED BY <2>2, <2>5
-       DEF CertificateValidityAndAvailability, CertifiedBodyAvailable
+    <2>2. CASE DecisionCertifiedBodyRecoveryAuthority(node, qc)
+      <3>1. /\ qc \in commitQCs
+            /\ qc.context = context
+        BY <1>1, <2>2
+           DEF StrongInductiveInvariant, Safety, DecisionAgreement,
+               DecisionCertifiedBodyRecoveryAuthority
+      <3>2. /\ HistoricalQcValid(qc)
+            /\ CertificateBackedBy(CurrentEpoch, qc, commitIntents)
+            /\ HonestIntentSound(commitIntents, durableBodies,
+                                 ValidSubjects)
+            /\ QuorumConfiguration
+        BY <1>1, <3>1
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               ReducerProvenanceInvariant, CertificatesBackedByIntents,
+               HonestDurableIntentsSound, CurrentEpoch, ModelConfiguration
+      <3>3. CurrentEpoch \in Epochs
+        BY <3>1, <3>2 DEF HistoricalQcValid, CurrentEpoch
+      <3>4. CertificateValidityAndAvailability(
+               qc, durableBodies, ValidSubjects)
+        BY <3>2, <3>3, BackedCertificateIsValidAndAvailable
+      <3> QED BY <3>1, <3>4
+         DEF CertificateValidityAndAvailability, CertifiedBodyAvailable
+    <2>3. CASE HistoricalLockedPrepareSource(node, qc)
+      <3>1. /\ qc \in prepareQCs
+            /\ qc.context = context
+        BY <2>3 DEF HistoricalLockedPrepareSource
+      <3>2. /\ HistoricalQcValid(qc)
+            /\ CertificateBackedBy(CurrentEpoch, qc, prepareIntents)
+            /\ HonestIntentSound(prepareIntents, durableBodies,
+                                 ValidSubjects)
+            /\ QuorumConfiguration
+        BY <1>1, <3>1
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               ReducerProvenanceInvariant, CertificatesBackedByIntents,
+               HonestDurableIntentsSound, CurrentEpoch, ModelConfiguration
+      <3>3. CurrentEpoch \in Epochs
+        BY <3>1, <3>2 DEF HistoricalQcValid, CurrentEpoch
+      <3>4. CertificateValidityAndAvailability(
+               qc, durableBodies, ValidSubjects)
+        BY <3>2, <3>3, BackedCertificateIsValidAndAvailable
+      <3> QED BY <3>1, <3>4
+         DEF CertificateValidityAndAvailability, CertifiedBodyAvailable
+    <2> QED BY <2>1, <2>2, <2>3 DEF CertifiedBodyRecoveryAuthority
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -4565,7 +4682,7 @@ PROOF
                /\ request.qc \in prepareQCs'
                /\ \/ CurrentOpenPrepareForCommit(
                         request.node, request.qc)'
-                  \/ HistoricalTcLockedPrepareForCommit(
+                  \/ HistoricalLockedPrepareForCommit(
                         request.node, request.qc)'
                /\ request.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', request.node,
@@ -4587,7 +4704,7 @@ PROOF
                      /\ request.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               request.node, request.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               request.node, request.qc)'
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', request.node,
@@ -4612,7 +4729,7 @@ PROOF
                  /\ request.qc \in prepareQCs
                  /\ \/ CurrentOpenPrepareForCommit(
                           request.node, request.qc)
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                           request.node, request.qc)
                  /\ request.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies, request.node,
@@ -4625,16 +4742,16 @@ PROOF
             BY <3>1, <5>1 DEF PendingVoteWritesAuthorized
           <5>3. \/ CurrentOpenPrepareForCommit(
                     request.node, request.qc)'
-                 \/ HistoricalTcLockedPrepareForCommit(
+                 \/ HistoricalLockedPrepareForCommit(
                     request.node, request.qc)'
             <6>1. CASE CurrentOpenPrepareForCommit(
                          request.node, request.qc)
               BY <3>2, <6>1, Isa
                  DEF CurrentOpenPrepareForCommit, NodeTimedOut
-            <6>2. CASE HistoricalTcLockedPrepareForCommit(
+            <6>2. CASE HistoricalLockedPrepareForCommit(
                          request.node, request.qc)
               BY <3>2, <6>2, Isa
-                 DEF HistoricalTcLockedPrepareForCommit,
+                 DEF HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
                      NoHigherConflictingPrepareKnown
             <6> QED BY <5>2, <6>1, <6>2
@@ -4655,8 +4772,12 @@ PROOF
                InstalledTcAuthorizesCommitVote
       <3> QED BY <3>3, <3>4, <3>5
          DEF PendingVoteWritesAuthorized
+    <2>12a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             FormPrepareQC
     <2>13. ReducerProvenanceInvariant'
-      BY <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
+      BY <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>12a
          DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>5, <2>6, <2>13,
                   FormPrepareQCPreservesLineageInvariant
@@ -4786,7 +4907,7 @@ PROOF
                  /\ request.qc \in prepareQCs'
                  /\ \/ CurrentOpenPrepareForCommit(
                           request.node, request.qc)'
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                           request.node, request.qc)'
                  /\ request.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies', request.node,
@@ -4808,7 +4929,7 @@ PROOF
                        /\ request.qc \in prepareQCs'
                        /\ \/ CurrentOpenPrepareForCommit(
                                 request.node, request.qc)'
-                          \/ HistoricalTcLockedPrepareForCommit(
+                          \/ HistoricalLockedPrepareForCommit(
                                 request.node, request.qc)'
                        /\ request.vote.subject \in ValidSubjects
                        /\ BodyHeldBy(durableBodies', request.node,
@@ -4833,7 +4954,7 @@ PROOF
                    /\ request.qc \in prepareQCs
                    /\ \/ CurrentOpenPrepareForCommit(
                             request.node, request.qc)
-                      \/ HistoricalTcLockedPrepareForCommit(
+                      \/ HistoricalLockedPrepareForCommit(
                             request.node, request.qc)
                    /\ request.vote.subject \in ValidSubjects
                    /\ BodyHeldBy(durableBodies, request.node,
@@ -4847,16 +4968,16 @@ PROOF
               BY <4>1, <6>1 DEF PendingVoteWritesAuthorized
             <6>3. \/ CurrentOpenPrepareForCommit(
                       request.node, request.qc)'
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                       request.node, request.qc)'
               <7>1. CASE CurrentOpenPrepareForCommit(
                            request.node, request.qc)
                 BY <3>1, <7>1, Isa
                    DEF CurrentOpenPrepareForCommit, NodeTimedOut
-              <7>2. CASE HistoricalTcLockedPrepareForCommit(
+              <7>2. CASE HistoricalLockedPrepareForCommit(
                            request.node, request.qc)
                 BY <3>1, <7>2, Isa
-                   DEF HistoricalTcLockedPrepareForCommit,
+                   DEF HistoricalLockedPrepareForCommit,
                        InstalledTcSelectsPrepareFor,
                        NoHigherConflictingPrepareKnown
               <7> QED BY <6>2, <7>1, <7>2
@@ -4951,8 +5072,13 @@ PROOF
         BY <3>1, <3>7,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>2, <3>3, <3>4, <3>6, <3>8
+    <2>5a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             DeliverQC
     <2>6. ReducerProvenanceInvariant'
-      BY <2>1, <2>3, <2>4, <2>5 DEF ReducerProvenanceInvariant
+      BY <2>1, <2>3, <2>4, <2>5, <2>5a
+         DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>2, <2>6,
                   UnchangedLineageVarsPreservesLineageInvariant
        DEF StrongInductiveInvariant, DeliverQC, LineageVars
@@ -5146,7 +5272,7 @@ PROOF
                    /\ request.qc \in prepareQCs'
                    /\ \/ CurrentOpenPrepareForCommit(
                             request.node, request.qc)'
-                      \/ HistoricalTcLockedPrepareForCommit(
+                      \/ HistoricalLockedPrepareForCommit(
                             request.node, request.qc)'
                    /\ request.vote.subject \in ValidSubjects
                    /\ BodyHeldBy(durableBodies', request.node,
@@ -5168,7 +5294,7 @@ PROOF
                          /\ request.qc \in prepareQCs'
                          /\ \/ CurrentOpenPrepareForCommit(
                                   request.node, request.qc)'
-                            \/ HistoricalTcLockedPrepareForCommit(
+                            \/ HistoricalLockedPrepareForCommit(
                                   request.node, request.qc)'
                          /\ request.vote.subject \in ValidSubjects
                          /\ BodyHeldBy(durableBodies', request.node,
@@ -5193,7 +5319,7 @@ PROOF
                      /\ request.qc \in prepareQCs
                      /\ \/ CurrentOpenPrepareForCommit(
                               request.node, request.qc)
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               request.node, request.qc)
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies, request.node,
@@ -5207,16 +5333,16 @@ PROOF
                 BY <5>1, <7>1 DEF PendingVoteWritesAuthorized
               <7>3. \/ CurrentOpenPrepareForCommit(
                         request.node, request.qc)'
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                         request.node, request.qc)'
                 <8>1. CASE CurrentOpenPrepareForCommit(
                              request.node, request.qc)
                   BY <4>1, <8>1, Isa
                      DEF CurrentOpenPrepareForCommit, NodeTimedOut
-                <8>2. CASE HistoricalTcLockedPrepareForCommit(
+                <8>2. CASE HistoricalLockedPrepareForCommit(
                              request.node, request.qc)
                   BY <4>1, <8>2, Isa
-                     DEF HistoricalTcLockedPrepareForCommit,
+                     DEF HistoricalLockedPrepareForCommit,
                          InstalledTcSelectsPrepareFor,
                          NoHigherConflictingPrepareKnown
                 <8> QED BY <7>2, <8>1, <8>2
@@ -5303,7 +5429,11 @@ PROOF
         <4>8. HighestAndLockAreCertified'
           BY <4>1, <4>7,
              UnchangedHighestAndLockCertificationVarsPreserves
-        <4> QED BY <4>2, <4>3, <4>4, <4>6, <4>8
+        <4>9. DurableLockRecoveryProvenanceInvariant'
+          BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 Crash
+        <4> QED BY <4>2, <4>3, <4>4, <4>6, <4>8, <4>9
       <3> QED BY <3>2, <3>3 DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>4, <2>5, <2>6,
                   UnchangedLineageVarsPreservesLineageInvariant
@@ -5684,7 +5814,7 @@ PROOF
                /\ pending.qc \in prepareQCs'
                /\ \/ CurrentOpenPrepareForCommit(
                         pending.node, pending.qc)'
-                  \/ HistoricalTcLockedPrepareForCommit(
+                  \/ HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
@@ -5696,7 +5826,7 @@ PROOF
         BY <1>1, <3>1, <3>3, Isa
            DEF BeginTimeout, PendingVoteWritesAuthorized,
                CurrentOpenPrepareForCommit,
-               HistoricalTcLockedPrepareForCommit,
+               HistoricalLockedPrepareForCommit,
                InstalledTcSelectsPrepareFor,
                NoHigherConflictingPrepareKnown, NodeTimedOut
       <3>6. \A pending \in pendingTimeout':
@@ -5851,8 +5981,13 @@ PROOF
         BY <3>1, <3>7,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>2, <3>3, <3>4, <3>6, <3>8
+    <2>8a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             BeginTimeout
     <2>9. ReducerProvenanceInvariant'
-      BY <2>5, <2>6, <2>7, <2>8 DEF ReducerProvenanceInvariant
+      BY <2>5, <2>6, <2>7, <2>8, <2>8a
+         DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>3, <2>4, <2>9,
                   UnchangedLineageVarsPreservesLineageInvariant
        DEF StrongInductiveInvariant, BeginTimeout, LineageVars
@@ -6014,7 +6149,7 @@ PROOF
                      /\ pending.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               pending.node, pending.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
@@ -6035,7 +6170,7 @@ PROOF
                      /\ pending.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               pending.node, pending.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
@@ -6070,7 +6205,7 @@ PROOF
                 /\ pending.qc \in prepareQCs
                 /\ \/ CurrentOpenPrepareForCommit(
                          pending.node, pending.qc)
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                          pending.node, pending.qc)
                 /\ pending.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, pending.node,
@@ -6099,13 +6234,13 @@ PROOF
                           pending.node, pending.qc)'
                         <=> CurrentOpenPrepareForCommit(
                               pending.node, pending.qc))
-                 /\ (HistoricalTcLockedPrepareForCommit(
+                 /\ (HistoricalLockedPrepareForCommit(
                           pending.node, pending.qc)'
-                        <=> HistoricalTcLockedPrepareForCommit(
+                        <=> HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc))
             BY <5>3, <5>5, Isa
                DEF CurrentOpenPrepareForCommit,
-                   HistoricalTcLockedPrepareForCommit,
+                   HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
                    NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>4, <5>5, <5>6, Isa
@@ -6168,8 +6303,13 @@ PROOF
       BY <1>1, Isa
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
              PersistTimeout, FormedTimeoutCertificatesSound
+    <2>16a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PersistTimeout
     <2>17. ReducerProvenanceInvariant'
-      BY <2>4, <2>5, <2>11, <2>12, <2>13, <2>14, <2>15, <2>16
+      BY <2>4, <2>5, <2>11, <2>12, <2>13, <2>14, <2>15, <2>16,
+         <2>16a
          DEF ReducerProvenanceInvariant
     <2>18. CurrentIntentViewsBound'
       <3>1. /\ context' = context
@@ -6334,7 +6474,11 @@ PROOF
            DEF ReducerProvenanceWithoutTimeoutTransport,
                HighestAndLockAreCertified
       <3> QED BY <3>3, <3>5
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5
+    <2>6. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF ReducerProvenanceWithoutTimeoutTransport,
+             ProvenanceWithoutTimeoutTransportVars
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
        DEF ReducerProvenanceWithoutTimeoutTransport
   <1> QED BY <1>1
 
@@ -6701,7 +6845,11 @@ PROOF
           BY <4>4, <4>5,
              UnchangedHighestAndLockCertificationVarsPreserves
         <4> QED BY <4>3, <4>6
-      <3> QED BY <2>6, <3>1, <3>2, <3>3, <3>4
+      <3>5. DurableLockRecoveryProvenanceInvariant'
+        BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               BeginObservePrepare
+      <3> QED BY <2>6, <3>1, <3>2, <3>3, <3>4, <3>5
          DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>7, <2>8,
                   UnchangedLineageVarsPreservesLineageInvariant
@@ -7174,13 +7322,13 @@ PROOF
              DEF PersistObservePrepare, CurrentOpenPrepareForCommit,
                  NodeTimedOut
         <4>7. \A pending \in pendingLockCommit:
-                 HistoricalTcLockedPrepareForCommit(
+                 HistoricalLockedPrepareForCommit(
                    pending.node, pending.qc)
-                   => HistoricalTcLockedPrepareForCommit(
+                   => HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
           BY <1>1, <4>4, Isa
              DEF PersistObservePrepare,
-                 HistoricalTcLockedPrepareForCommit,
+                 HistoricalLockedPrepareForCommit,
                  InstalledTcSelectsPrepareFor,
                  NoHigherConflictingPrepareKnown
         <4>8. (\A pending \in pendingLockCommit:
@@ -7206,7 +7354,7 @@ PROOF
         <4>9. (\A pending \in pendingLockCommit:
                  \/ CurrentOpenPrepareForCommit(
                       pending.node, pending.qc)
-                 \/ HistoricalTcLockedPrepareForCommit(
+                 \/ HistoricalLockedPrepareForCommit(
                       pending.node, pending.qc))'
           BY <1>1, <4>1, <4>6, <4>7, Isa
              DEF PersistObservePrepare, PendingVoteWritesAuthorized
@@ -7222,7 +7370,7 @@ PROOF
                   /\ pending.qc \in prepareQCs
                   /\ \/ CurrentOpenPrepareForCommit(
                            pending.node, pending.qc)
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                            pending.node, pending.qc)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
@@ -7280,7 +7428,11 @@ PROOF
           BY <4>2, <4>3,
              UnchangedDurableTimeoutProtectionVarsPreserves
         <4> QED BY <4>1, <4>4
-      <3> QED BY <2>6, <2>7, <3>1, <3>2, <3>3, <3>4
+      <3>5. DurableLockRecoveryProvenanceInvariant'
+        BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistObservePrepare
+      <3> QED BY <2>6, <2>7, <3>1, <3>2, <3>3, <3>4, <3>5
          DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>8, <2>9,
                   UnchangedLineageVarsPreservesLineageInvariant
@@ -7300,10 +7452,10 @@ THEOREM PendingLockCommitAuthorizationFacts ==
     /\ PendingVoteWritesAuthorized
     /\ request \in pendingLockCommit
     => /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-           \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+           \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
        /\ request.qc.view <= nodeView[request.node]
        /\ (request.qc.view < nodeView[request.node]
-             => HistoricalTcLockedPrepareForCommit(
+             => HistoricalLockedPrepareForCommit(
                   request.node, request.qc))
 PROOF
   <1>1. ASSUME NEW request,
@@ -7311,14 +7463,14 @@ PROOF
                 PendingVoteWritesAuthorized,
                 request \in pendingLockCommit
          PROVE /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                          request.node, request.qc)
                /\ request.qc.view <= nodeView[request.node]
                /\ (request.qc.view < nodeView[request.node]
-                     => HistoricalTcLockedPrepareForCommit(
+                     => HistoricalLockedPrepareForCommit(
                           request.node, request.qc))
     <2>1. \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-           \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+           \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
       BY <1>1 DEF PendingVoteWritesAuthorized
     <2>2. /\ request.qc.view \in Nat
            /\ nodeView[request.node] \in Nat
@@ -7336,9 +7488,9 @@ PROOF
     <2>3. request.qc.view <= nodeView[request.node]
       BY <2>1, <2>2, SMT
          DEF CurrentOpenPrepareForCommit,
-             HistoricalTcLockedPrepareForCommit
+             HistoricalLockedPrepareForCommit
     <2>4. request.qc.view < nodeView[request.node]
-             => HistoricalTcLockedPrepareForCommit(
+             => HistoricalLockedPrepareForCommit(
                   request.node, request.qc)
       BY <2>1, SMT DEF CurrentOpenPrepareForCommit
     <2> QED BY <2>1, <2>3, <2>4
@@ -7348,11 +7500,11 @@ THEOREM HistoricalPendingLockCommitHasInstalledTcAuthorization ==
   \A request:
     /\ PendingVoteWritesAuthorized
     /\ request \in pendingLockCommit
-    /\ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+    /\ HistoricalLockedPrepareForCommit(request.node, request.qc)
     => InstalledTcAuthorizesCommitVote(request.vote)
 BY SMT
    DEF PendingVoteWritesAuthorized,
-       HistoricalTcLockedPrepareForCommit,
+       HistoricalLockedPrepareForCommit,
        InstalledTcSelectsPrepareFor,
        InstalledTcAuthorizesCommitVote
 
@@ -7378,7 +7530,7 @@ PROOF
     <2>1. qc \in prepareQCs
       <3>1. qc \in prepareQCs \cup commitQCs
         <4>1. \/ CurrentOpenPrepareForCommit(node, qc)
-               \/ HistoricalTcLockedPrepareForCommit(node, qc)
+               \/ HistoricalLockedPrepareForCommit(node, qc)
           BY <1>1 DEF BeginLockCommit
         <4>2. QcTransportBacked
           BY <1>1
@@ -7386,8 +7538,8 @@ PROOF
         <4>3. CASE CurrentOpenPrepareForCommit(node, qc)
           BY <4>2, <4>3
              DEF QcTransportBacked, CurrentOpenPrepareForCommit, QcAt
-        <4>4. CASE HistoricalTcLockedPrepareForCommit(node, qc)
-          BY <4>4 DEF HistoricalTcLockedPrepareForCommit
+        <4>4. CASE HistoricalLockedPrepareForCommit(node, qc)
+          BY <4>4 DEF HistoricalLockedPrepareForCommit
         <4> QED BY <4>1, <4>3, <4>4
       <3>2. qc.phase = "Prepare"
         BY <1>1 DEF BeginLockCommit
@@ -7450,7 +7602,7 @@ PROOF
           /\ Request.qc.phase = "Prepare"
           /\ Request.qc \in prepareQCs
           /\ \/ CurrentOpenPrepareForCommit(Request.node, Request.qc)
-             \/ HistoricalTcLockedPrepareForCommit(
+             \/ HistoricalLockedPrepareForCommit(
                   Request.node, Request.qc)
           /\ Request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, Request.node,
@@ -7467,7 +7619,7 @@ PROOF
             /\ qc.subject \in ValidSubjects
             /\ qc.phase = "Prepare"
             /\ \/ CurrentOpenPrepareForCommit(node, qc)
-               \/ HistoricalTcLockedPrepareForCommit(node, qc)
+               \/ HistoricalLockedPrepareForCommit(node, qc)
             /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
             /\ qc.view >= lockRank[node]
             /\ (qc.view = lockRank[node]
@@ -7552,7 +7704,7 @@ PROOF
                /\ pending.qc \in prepareQCs'
                /\ \/ CurrentOpenPrepareForCommit(
                         pending.node, pending.qc)'
-                  \/ HistoricalTcLockedPrepareForCommit(
+                  \/ HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
@@ -7573,7 +7725,7 @@ PROOF
                      /\ pending.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               pending.node, pending.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
@@ -7596,7 +7748,7 @@ PROOF
                   /\ pending.qc \in prepareQCs
                   /\ \/ CurrentOpenPrepareForCommit(
                            pending.node, pending.qc)
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                            pending.node, pending.qc)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
@@ -7624,13 +7776,13 @@ PROOF
                             pending.node, pending.qc)'
                           <=> CurrentOpenPrepareForCommit(
                                 pending.node, pending.qc))
-                   /\ (HistoricalTcLockedPrepareForCommit(
+                   /\ (HistoricalLockedPrepareForCommit(
                             pending.node, pending.qc)'
-                          <=> HistoricalTcLockedPrepareForCommit(
+                          <=> HistoricalLockedPrepareForCommit(
                                 pending.node, pending.qc))
               BY <6>2
                  DEF CurrentOpenPrepareForCommit,
-                     HistoricalTcLockedPrepareForCommit,
+                     HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
                      NoHigherConflictingPrepareKnown, NodeTimedOut
             <6> QED BY <6>1, <6>2, <6>3, Isa
@@ -7651,7 +7803,7 @@ PROOF
               BY <1>1 DEF BeginLockCommit
             <6> QED BY <2>3, <5>3, <6>1, Isa
                DEF CurrentOpenPrepareForCommit,
-                   HistoricalTcLockedPrepareForCommit,
+                   HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
                    NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>1, <5>2, <5>3
@@ -7773,7 +7925,11 @@ PROOF
             BY <5>5, <5>6,
                UnchangedHighestAndLockCertificationVarsPreserves
           <5> QED BY <5>1, <5>4, <5>7
-        <4> QED BY <4>1, <4>2, <4>3, <4>4
+        <4>5. DurableLockRecoveryProvenanceInvariant'
+          BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 BeginLockCommit
+        <4> QED BY <4>1, <4>2, <4>3, <4>4, <4>5
       <3> QED BY <2>6, <3>1 DEF ReducerProvenanceInvariant
     <2> QED BY <1>1, <2>7, <2>8,
                   UnchangedLineageVarsPreservesLineageInvariant
@@ -7807,7 +7963,7 @@ PROOF
           /\ request.vote.view = request.qc.view
           /\ request.vote.subject = request.qc.subject
           /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-             \/ HistoricalTcLockedPrepareForCommit(
+             \/ HistoricalLockedPrepareForCommit(
                   request.node, request.qc)
           /\ request.vote.view <= nodeView[request.node]
           /\ request.vote.subject \in ValidSubjects
@@ -7845,7 +8001,7 @@ PROOF
         BY <3>1, <3>2 DEF PendingVoteWritesAuthorized
       <3>5. /\ \/ CurrentOpenPrepareForCommit(
                          request.node, request.qc)
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                          request.node, request.qc)
             /\ request.qc.view <= nodeView[request.node]
         BY <3>1, <3>2, PendingLockCommitAuthorizationFacts
@@ -8266,7 +8422,7 @@ PROOF
                  /\ pending.qc \in prepareQCs'
                  /\ \/ CurrentOpenPrepareForCommit(
                           pending.node, pending.qc)'
-                    \/ HistoricalTcLockedPrepareForCommit(
+                    \/ HistoricalLockedPrepareForCommit(
                           pending.node, pending.qc)'
                  /\ pending.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies', pending.node,
@@ -8288,7 +8444,7 @@ PROOF
                        /\ pending.qc \in prepareQCs'
                        /\ \/ CurrentOpenPrepareForCommit(
                                 pending.node, pending.qc)'
-                          \/ HistoricalTcLockedPrepareForCommit(
+                          \/ HistoricalLockedPrepareForCommit(
                                 pending.node, pending.qc)'
                        /\ pending.vote.subject \in ValidSubjects
                        /\ BodyHeldBy(durableBodies', pending.node,
@@ -8319,7 +8475,7 @@ PROOF
                   /\ pending.qc \in prepareQCs
                   /\ \/ CurrentOpenPrepareForCommit(
                            pending.node, pending.qc)
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                            pending.node, pending.qc)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
@@ -8411,13 +8567,13 @@ PROOF
                             pending.node, pending.qc)'
                           <=> CurrentOpenPrepareForCommit(
                                 pending.node, pending.qc))
-                   /\ (HistoricalTcLockedPrepareForCommit(
+                   /\ (HistoricalLockedPrepareForCommit(
                             pending.node, pending.qc)'
-                          <=> HistoricalTcLockedPrepareForCommit(
+                          <=> HistoricalLockedPrepareForCommit(
                                 pending.node, pending.qc))
               BY <6>5
                  DEF CurrentOpenPrepareForCommit,
-                     HistoricalTcLockedPrepareForCommit,
+                     HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
                      NoHigherConflictingPrepareKnown, NodeTimedOut
             <6> QED BY <6>3, <6>5, <6>7, <6>8
@@ -8643,10 +8799,10 @@ PROOF
                 BY <2>1, <6>1
               <7>2. \/ CurrentOpenPrepareForCommit(
                            request.node, request.qc)
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                            request.node, request.qc)
                 BY <2>1
-              <7>3. CASE HistoricalTcLockedPrepareForCommit(
+              <7>3. CASE HistoricalLockedPrepareForCommit(
                             request.node, request.qc)
                 <8>1. InstalledTcAuthorizesCommitVote(request.vote)
                   BY <1>1, <2>1, <7>3,
@@ -8722,7 +8878,7 @@ PROOF
       <3>9. HistoricalTcLockedCommitAuthorizationInvariant'
         <4>1. \A pending \in pendingLockCommit':
                  pending.vote.view < nodeView'[pending.node]
-                   => HistoricalTcLockedPrepareForCommit(
+                   => HistoricalLockedPrepareForCommit(
                         pending.node, pending.qc)'
           BY <3>2, SMT
              DEF PendingVoteWritesAuthorized,
@@ -8894,7 +9050,9 @@ PROOF
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>4 DEF HighestAndLockAreCertified
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5,
-                  <3>6, <3>7, <3>8, <3>9, <3>10
+                  <3>6, <3>7, <3>8, <3>9, <3>10,
+                  <1>1,
+                  PersistLockCommitPreservesDurableLockRecoveryProvenance
          DEF ReducerProvenanceInvariant
     <2>8. LineageInvariant'
       <3>1. PrepareLineageSound'
@@ -8958,7 +9116,7 @@ PROOF
                 <8> QED BY <5>1, <5>2, <7>1, <8>1
               <7>3. \/ CurrentOpenPrepareForCommit(
                            request.node, request.qc)
-                     \/ HistoricalTcLockedPrepareForCommit(
+                     \/ HistoricalLockedPrepareForCommit(
                            request.node, request.qc)
                 BY <2>1
               <7>4. /\ vote.view \in Views
@@ -8985,7 +9143,7 @@ PROOF
                 <8>2. FALSE
                   BY <7>1, <7>2, <7>5, <8>1, SMT
                 <8> QED BY <8>2
-              <7>7. CASE HistoricalTcLockedPrepareForCommit(
+              <7>7. CASE HistoricalLockedPrepareForCommit(
                             request.node, request.qc)
                 <8>1. vote.phase = "Prepare"
                   BY <1>1, <5>1
@@ -9013,7 +9171,7 @@ PROOF
                          /\ prepareVote.view > request.qc.view
                          /\ prepareVote.subject # request.qc.subject
                   BY <7>7
-                     DEF HistoricalTcLockedPrepareForCommit,
+                     DEF HistoricalLockedPrepareForCommit,
                          NoHigherConflictingPrepareKnown
                 <8>4. \E prepareVote \in prepareIntents:
                          /\ prepareVote.signer = request.node
@@ -9548,7 +9706,11 @@ PROOF
                          UnchangedHighestAndLockCertificationVarsPreserves
           <5> QED BY <5>1, <5>2, <5>3, <5>4, <5>5,
                        <5>6, <5>7, <5>8, <5>9
-        <4> QED BY <2>3, <4>3, <4>4
+        <4>5. DurableLockRecoveryProvenanceInvariant'
+          BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 FormCommitQC
+        <4> QED BY <2>3, <4>3, <4>4, <4>5
            DEF ReducerProvenanceInvariant
       <3>3. LineageInvariant'
         <4>1. LineageInvariant
@@ -9803,7 +9965,11 @@ PROOF
             BY <5>5, <5>6,
                UnchangedHighestAndLockCertificationVarsPreserves
           <5> QED BY <5>1, <5>4, <5>7
-        <4> QED BY <2>3, <4>2, <4>3, <4>4, <4>5
+        <4>6. DurableLockRecoveryProvenanceInvariant'
+          BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 BeginDecision
+        <4> QED BY <2>3, <4>2, <4>3, <4>4, <4>5, <4>6
            DEF ReducerProvenanceInvariant
       <3>3. LineageInvariant'
         BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
@@ -10024,7 +10190,11 @@ PROOF
             BY <5>5, <5>6,
                UnchangedHighestAndLockCertificationVarsPreserves
           <5> QED BY <5>1, <5>4, <5>7
-        <4> QED BY <4>2, <4>3, <4>4, <4>5, <4>6
+        <4>7. DurableLockRecoveryProvenanceInvariant'
+          BY <1>1, UnchangedDurableLockRecoveryProvenanceVarsPreserves
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 PersistDecision
+        <4> QED BY <4>2, <4>3, <4>4, <4>5, <4>6, <4>7
            DEF ReducerProvenanceInvariant
       <3>3. LineageInvariant'
         BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
@@ -10689,8 +10859,13 @@ PROOF
         BY <3>5, <3>6,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>1, <3>4, <3>7
+    <2>18a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, <2>8,
+         UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             StableVars, FormTC
     <2>19. ReducerProvenanceInvariant'
-      BY <2>7, <2>12, <2>13, <2>15, <2>16, <2>17, <2>18
+      BY <2>7, <2>12, <2>13, <2>15, <2>16, <2>17, <2>18, <2>18a
          DEF ReducerProvenanceInvariant
     <2>20. LineageInvariant'
       BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
@@ -10901,8 +11076,13 @@ PROOF
         BY <3>5, <3>6,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>1, <3>4, <3>7
+    <2>15a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, <2>2,
+         UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             StableVars, DeliverTC
     <2>16. ReducerProvenanceInvariant'
-      BY <2>6, <2>11, <2>12, <2>13, <2>14, <2>15
+      BY <2>6, <2>11, <2>12, <2>13, <2>14, <2>15, <2>15a
          DEF ReducerProvenanceInvariant
     <2>17. LineageInvariant'
       BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
@@ -11088,8 +11268,13 @@ PROOF
         BY <3>5, <3>6,
            UnchangedHighestAndLockCertificationVarsPreserves
       <3> QED BY <3>1, <3>4, <3>7
+    <2>10a. DurableLockRecoveryProvenanceInvariant'
+      BY <1>1, <2>3,
+         UnchangedDurableLockRecoveryProvenanceVarsPreserves
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             StableVars, BeginInstallTC
     <2>11. ReducerProvenanceInvariant'
-      BY <2>7, <2>9, <2>10 DEF ReducerProvenanceInvariant
+      BY <2>7, <2>9, <2>10, <2>10a DEF ReducerProvenanceInvariant
     <2>12. LineageInvariant'
       BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
          DEF StrongInductiveInvariant, BeginInstallTC, LineageVars
@@ -11636,7 +11821,7 @@ PROOF
                 /\ other.qc \in prepareQCs'
                 /\ \/ CurrentOpenPrepareForCommit(
                          other.node, other.qc)'
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                          other.node, other.qc)'
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies', other.node,
@@ -11657,7 +11842,7 @@ PROOF
                      /\ other.qc \in prepareQCs'
                      /\ \/ CurrentOpenPrepareForCommit(
                               other.node, other.qc)'
-                        \/ HistoricalTcLockedPrepareForCommit(
+                        \/ HistoricalLockedPrepareForCommit(
                               other.node, other.qc)'
                      /\ other.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', other.node,
@@ -11679,7 +11864,7 @@ PROOF
                 /\ other.qc \in prepareQCs
                 /\ \/ CurrentOpenPrepareForCommit(
                          other.node, other.qc)
-                   \/ HistoricalTcLockedPrepareForCommit(
+                   \/ HistoricalLockedPrepareForCommit(
                          other.node, other.qc)
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, other.node,
@@ -11715,12 +11900,12 @@ PROOF
                         other.node, other.qc)'
             BY <3>6, <3>7, <5>1, Isa
                DEF NoHigherConflictingPrepareKnown
-          <5>8. HistoricalTcLockedPrepareForCommit(
+          <5>8. HistoricalLockedPrepareForCommit(
                    other.node, other.qc)
-                   => HistoricalTcLockedPrepareForCommit(
+                   => HistoricalLockedPrepareForCommit(
                         other.node, other.qc)'
             BY <5>3, <5>6, <5>7, Isa
-               DEF HistoricalTcLockedPrepareForCommit
+               DEF HistoricalLockedPrepareForCommit
           <5> QED BY <5>2, <5>3, <5>5, <5>8
         <4> QED BY <4>1
       <3>11. \A other \in pendingTimeout':
@@ -11965,7 +12150,8 @@ PROOF
              InstalledTcGrowthPreservesDurableTimeoutProtection
         <4> QED BY <4>1, <4>3, <4>6
       <3>4. ReducerProvenanceInvariant'
-        BY <2>6, <2>7, <2>8, <3>3
+        BY <1>1, <2>6, <2>7, <2>8, <3>3,
+           PersistInstallTCPreservesDurableLockRecoveryProvenance
            DEF ReducerProvenanceInvariant
       <3>5. \A other \in ValidatorIds:
                /\ nodeView'[other] >= nodeView[other]
@@ -12662,7 +12848,9 @@ PROOF
       <3>10. HighestAndLockAreCertified'
         BY <1>1, Isa
            DEF AdvanceContext, HighestAndLockAreCertified
-      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, <3>9, <3>10
+      <3> QED BY <1>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+                  <3>9, <3>10,
+                  AdvanceContextPreservesDurableLockRecoveryProvenance
          DEF ReducerProvenanceInvariant
     <2>12. LineageInvariant'
       <3>1. LineageInvariant
@@ -12838,6 +13026,7 @@ BY SMT,
    StoreBodyPreservesStrongInvariant,
    ValidateOrRejectBodyPreservesStrongInvariant,
    ValidateDecidedBodyPreservesStrongInvariant,
+   ValidateLockedBodyPreservesStrongInvariant,
    BeginPreparePreservesStrongInvariant,
    PersistPreparePreservesStrongInvariant,
    CompleteVoteSignaturePreservesStrongInvariant,

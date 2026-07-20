@@ -14,10 +14,23 @@ public final class ToriiWebSocketClientTests {
   private ToriiWebSocketClientTests() {}
 
   public static void main(final String[] args) {
+    buildRequiresExplicitConnector();
     connectDeliversEvents();
     connectRejectsInsecureCredentialedWebSocket();
     connectorFailuresPropagate();
     System.out.println("[IrohaAndroid] ToriiWebSocketClientTests passed.");
+  }
+
+  private static void buildRequiresExplicitConnector() {
+    try {
+      ToriiWebSocketClient.builder().build();
+    } catch (final IllegalArgumentException expected) {
+      if (!expected.getMessage().contains("setWebSocketConnector(...)")) {
+        throw new AssertionError("Missing connector diagnostic was not actionable", expected);
+      }
+      return;
+    }
+    throw new AssertionError("Expected an explicit WebSocket connector to be required");
   }
 
   private static void connectDeliversEvents() {

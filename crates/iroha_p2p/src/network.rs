@@ -7,7 +7,7 @@
 #[cfg(feature = "quic")]
 use std::sync::OnceLock;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt::Debug,
     io,
     net::{IpAddr, ToSocketAddrs},
@@ -1132,6 +1132,21 @@ enum SubscriberProgressClass {
     Bulk,
 }
 
+/// Stable scheduling class for a reliable progress route.
+///
+/// Consensus producers use the same classification as the network actor so a
+/// blocked bulk stream cannot accidentally share FIFO or reservation state
+/// with safety and lane traffic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ReliableProgressClass {
+    /// Votes, quorum certificates, timeout evidence, and proposals.
+    Safety,
+    /// Small consensus-control and authenticated bootstrap requests.
+    Lane,
+    /// Payload chunks, certified bodies, and block-sync responses.
+    Bulk,
+}
+
 fn subscriber_progress_class(
     topic: message::Topic,
     route: message::SubscriberRoute,
@@ -1148,6 +1163,23 @@ fn subscriber_progress_class(
             _,
         ) => Some(SubscriberProgressClass::Bulk),
         _ => None,
+    }
+}
+
+/// Classify one topic/consumer route accepted by reliable progress admission.
+///
+/// Returns `None` for traffic that the reliable actor corridor would reject.
+#[must_use]
+pub fn reliable_progress_class(
+    topic: message::Topic,
+    route: message::SubscriberRoute,
+) -> Option<ReliableProgressClass> {
+    if matches!(topic, message::Topic::ConsensusSafety) {
+        return Some(ReliableProgressClass::Safety);
+    }
+    match subscriber_progress_class(topic, route)? {
+        SubscriberProgressClass::Lane => Some(ReliableProgressClass::Lane),
+        SubscriberProgressClass::Bulk => Some(ReliableProgressClass::Bulk),
     }
 }
 
@@ -1597,17 +1629,17 @@ impl<T: Pload + message::ClassifyTopic> DeferredPeerFrameQueue<T> {
         });
     }
 
-    /// Detach work owned by `peer_id` from a retired volatile connection.
+    /// Release `peer_id` work from one retired volatile connection tenure.
     ///
-    /// Deferred frames are peer-owned progress witnesses.  Once their exact
-    /// transport generation is removed, a successor session must be allowed to
-    /// reconstruct delivery instead of treating them as stale duplicates.
-    fn clear_generation(&mut self, peer_id: &PeerId, generation: ConnectionId) -> usize {
+    /// Deferred frames remain owned by their semantic peer. Removing only the
+    /// retired tenure binding lets a later live tenure service the same exact
+    /// frame without manufacturing or updating a reply capability.
+    fn release_retired_tenure_binding(&mut self, peer_id: &PeerId, tenure: ConnectionId) -> usize {
         let mut cleared = 0usize;
         for queues in [&mut self.safety_by_peer, &mut self.by_peer] {
             if let Some(entries) = queues.get_mut(peer_id) {
                 for entry in entries {
-                    if entry.generation == Some(generation) {
+                    if entry.generation == Some(tenure) {
                         entry.generation = None;
                         cleared = cleared.saturating_add(1);
                     }
@@ -2380,14 +2412,15 @@ impl ReliableProgressTopology {
     }
 }
 
-/// One exact authenticated connection generation which may carry a reply to
-/// a semantic origin reached through that transport peer.
+/// One exact authenticated connection tenure which may carry a reply to a
+/// semantic origin reached through that transport peer.
 #[derive(Debug)]
 struct ReliableReplyRouteTenure {
     owner: Arc<()>,
     delivery_peer: PeerId,
     connection_id: ConnectionId,
-    generation: u128,
+    connection_ordinal: u128,
+    source_capacity: usize,
     active: AtomicBool,
 }
 
@@ -2405,12 +2438,172 @@ impl ReliableReplyRouteTenure {
 ///
 /// The semantic target can differ from the authenticated delivery peer when a
 /// trusted hub relays the request. The route is valid only for the exact
-/// accepted connection generation which delivered that request; callers
+/// authenticated connection tenure which delivered that request; callers
 /// cannot construct or retarget it.
 #[derive(Clone)]
 pub struct NetworkReplyRoute {
     semantic_target: PeerId,
     tenure: Arc<ReliableReplyRouteTenure>,
+    delivery_ordinal: u128,
+}
+
+/// Test-only authority for minting opaque authenticated reply-route tenures.
+///
+/// This fixture is absent from normal builds. It lets dependent-crate tests
+/// exercise capability preservation and per-source delivery updates while
+/// keeping [`NetworkReplyRoute`]'s production constructor private.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct NetworkReplyRouteTestFixture {
+    owner: Arc<()>,
+    delivery_peer: PeerId,
+    next_connection_id: ConnectionId,
+    next_connection_ordinal: u128,
+    next_delivery_ordinal: u128,
+    source_capacity: usize,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl NetworkReplyRouteTestFixture {
+    /// Create an isolated actor authority whose routes are delivered through
+    /// `delivery_peer`.
+    #[must_use]
+    pub fn new(delivery_peer: PeerId) -> Self {
+        Self::with_source_capacity(delivery_peer, 8)
+    }
+
+    /// Create an isolated actor authority with an explicit authenticated-source bound.
+    #[must_use]
+    pub fn with_source_capacity(delivery_peer: PeerId, source_capacity: usize) -> Self {
+        assert!(
+            source_capacity > 0,
+            "test reply-route source capacity must be non-zero"
+        );
+        Self {
+            owner: Arc::new(()),
+            delivery_peer,
+            next_connection_id: 0,
+            next_connection_ordinal: 0,
+            next_delivery_ordinal: 0,
+            source_capacity,
+        }
+    }
+
+    /// Mint the next live authenticated connection tenure for one semantic
+    /// reply target.
+    ///
+    /// Successive calls produce strictly ordered tenures owned by the same
+    /// synthetic actor, matching production reconnect semantics.
+    #[must_use]
+    pub fn mint(&mut self, semantic_target: PeerId) -> NetworkReplyRoute {
+        let delivery_peer = self.delivery_peer.clone();
+        self.mint_via(semantic_target, delivery_peer)
+    }
+
+    /// Mint the next live tenure through an explicitly selected delivery peer.
+    ///
+    /// One production network actor owns routes for every concurrently live
+    /// peer connection. This variant lets adversarial tests reproduce fallback
+    /// from a cancelled newer hub connection to an older hub which stayed live.
+    #[must_use]
+    pub fn mint_via(
+        &mut self,
+        semantic_target: PeerId,
+        delivery_peer: PeerId,
+    ) -> NetworkReplyRoute {
+        let connection_id = self.next_connection_id;
+        self.next_connection_id = connection_id
+            .checked_add(1)
+            .expect("test reply-route connection id cannot wrap");
+        let connection_ordinal = self.next_connection_ordinal;
+        self.next_connection_ordinal = connection_ordinal
+            .checked_add(1)
+            .expect("test reply-route connection ordinal cannot wrap");
+        let delivery_ordinal = self.next_delivery_ordinal;
+        self.next_delivery_ordinal = delivery_ordinal
+            .checked_add(1)
+            .expect("test reply-route delivery ordinal cannot wrap");
+        NetworkReplyRoute::new(
+            semantic_target,
+            Arc::new(ReliableReplyRouteTenure {
+                owner: Arc::clone(&self.owner),
+                delivery_peer,
+                connection_id,
+                connection_ordinal,
+                source_capacity: self.source_capacity,
+                active: AtomicBool::new(true),
+            }),
+            delivery_ordinal,
+        )
+    }
+
+    /// Mint a later delivery on the exact same authenticated connection tenure.
+    ///
+    /// Returns `None` when `prior` belongs to another fixture. The new
+    /// capability has the same source and tenure but a strictly later
+    /// actor-global delivery ordinal.
+    #[must_use]
+    pub fn redeliver(&mut self, prior: &NetworkReplyRoute) -> Option<NetworkReplyRoute> {
+        if !Arc::ptr_eq(&self.owner, &prior.tenure.owner) {
+            return None;
+        }
+        let delivery_ordinal = self.next_delivery_ordinal;
+        self.next_delivery_ordinal = delivery_ordinal
+            .checked_add(1)
+            .expect("test reply-route delivery ordinal cannot wrap");
+        Some(NetworkReplyRoute::new(
+            prior.semantic_target.clone(),
+            Arc::clone(&prior.tenure),
+            delivery_ordinal,
+        ))
+    }
+
+    /// Forge an adversarial capability which reuses `prior`'s opaque delivery
+    /// ordinal under a distinct connection tenure.
+    ///
+    /// This exists only for cross-crate rejection tests. Production minting
+    /// never reuses an actor-global delivery ordinal. Returns `None` when
+    /// `prior` belongs to another fixture authority.
+    #[must_use]
+    pub fn forge_equal_ordinal_different_tenure(
+        &mut self,
+        prior: &NetworkReplyRoute,
+        semantic_target: PeerId,
+        delivery_peer: PeerId,
+    ) -> Option<NetworkReplyRoute> {
+        if !Arc::ptr_eq(&self.owner, &prior.tenure.owner) {
+            return None;
+        }
+        let connection_id = self.next_connection_id;
+        self.next_connection_id = connection_id
+            .checked_add(1)
+            .expect("test reply-route connection id cannot wrap");
+        let connection_ordinal = self.next_connection_ordinal;
+        self.next_connection_ordinal = connection_ordinal
+            .checked_add(1)
+            .expect("test reply-route connection ordinal cannot wrap");
+        Some(NetworkReplyRoute::new(
+            semantic_target,
+            Arc::new(ReliableReplyRouteTenure {
+                owner: Arc::clone(&self.owner),
+                delivery_peer,
+                connection_id,
+                connection_ordinal,
+                source_capacity: self.source_capacity,
+                active: AtomicBool::new(true),
+            }),
+            prior.delivery_ordinal,
+        ))
+    }
+
+    /// Cancel a route minted by this fixture, matching actor-side connection
+    /// teardown. Returns `false` for a route owned by another fixture.
+    pub fn retire(&self, route: &NetworkReplyRoute) -> bool {
+        if !Arc::ptr_eq(&self.owner, &route.tenure.owner) {
+            return false;
+        }
+        route.tenure.cancel();
+        true
+    }
 }
 
 /// Opaque fairness key for replies sharing one authenticated transport source.
@@ -2418,7 +2611,8 @@ pub struct NetworkReplyRoute {
 /// The key deliberately excludes the semantic origin and connection tenure:
 /// every origin relayed by the same authenticated peer shares one source lane,
 /// including after that peer reconnects. Actor identity is retained opaquely so
-/// keys minted by independent network actors can never alias.
+/// keys minted by independent network actors can never alias. This is a
+/// process-local scheduling key and must not enter wire or consensus state.
 #[derive(Clone)]
 pub struct NetworkReplySourceKey {
     owner: Arc<()>,
@@ -2433,8 +2627,7 @@ impl NetworkReplySourceKey {
 
 impl PartialEq for NetworkReplySourceKey {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.owner, &other.owner)
-            && self.authenticated_via == other.authenticated_via
+        Arc::ptr_eq(&self.owner, &other.owner) && self.authenticated_via == other.authenticated_via
     }
 }
 
@@ -2478,10 +2671,15 @@ impl core::fmt::Debug for NetworkReplyRoute {
 }
 
 impl NetworkReplyRoute {
-    fn new(semantic_target: PeerId, tenure: Arc<ReliableReplyRouteTenure>) -> Self {
+    fn new(
+        semantic_target: PeerId,
+        tenure: Arc<ReliableReplyRouteTenure>,
+        delivery_ordinal: u128,
+    ) -> Self {
         Self {
             semantic_target,
             tenure,
+            delivery_ordinal,
         }
     }
 
@@ -2494,7 +2692,7 @@ impl NetworkReplyRoute {
     /// Return the opaque authenticated-source key used for fair reply service.
     ///
     /// Semantic origins reached through one relay intentionally return the
-    /// same key. No connection identifier or tenure generation is exposed.
+    /// same key. No connection identifier or tenure ordinal is exposed.
     #[must_use]
     pub fn source_key(&self) -> NetworkReplySourceKey {
         NetworkReplySourceKey {
@@ -2503,28 +2701,508 @@ impl NetworkReplyRoute {
         }
     }
 
-    /// Whether this live route is a safe freshness replacement for `prior`.
+    /// Whether this capability was minted for the supplied authenticated delivery peer.
     ///
-    /// Replacement is permitted only within one actor and semantic target.
-    /// Equal generations must be the exact same tenure; otherwise the strictly
-    /// increasing, non-reused actor generation establishes successor order.
+    /// This predicate lets transport boundaries bind an opaque route to their
+    /// independently authenticated hop without exposing connection identifiers
+    /// or the route's delivery peer.
     #[must_use]
-    pub fn refreshes(&self, prior: &Self) -> bool {
-        if !self.is_active()
-            || !Arc::ptr_eq(&self.tenure.owner, &prior.tenure.owner)
-            || self.semantic_target != prior.semantic_target
-        {
-            return false;
-        }
-        match self.tenure.generation.cmp(&prior.tenure.generation) {
-            core::cmp::Ordering::Less => false,
-            core::cmp::Ordering::Equal => Arc::ptr_eq(&self.tenure, &prior.tenure),
-            core::cmp::Ordering::Greater => true,
-        }
+    pub fn is_authenticated_via(&self, peer: &PeerId) -> bool {
+        &self.tenure.delivery_peer == peer
     }
 
-    fn is_active(&self) -> bool {
+    pub(crate) fn authenticated_via(&self) -> &PeerId {
+        &self.tenure.delivery_peer
+    }
+
+    /// Whether both routes were minted from the exact same authenticated
+    /// connection tenure.
+    ///
+    /// Semantic targets are deliberately not compared: one relay tenure may
+    /// carry requests for many origins. Callers which key by requester can use
+    /// this predicate without learning a connection identifier.
+    #[must_use]
+    pub fn same_tenure(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tenure, &other.tenure)
+    }
+
+    /// Whether both capabilities represent the exact same authenticated local delivery.
+    #[must_use]
+    pub fn same_delivery(&self, other: &Self) -> bool {
+        self.same_tenure(other)
+            && self.semantic_target == other.semantic_target
+            && self.delivery_ordinal == other.delivery_ordinal
+    }
+
+    /// Whether one actor-global delivery ordinal was paired with two tenures.
+    ///
+    /// The ordinal itself remains opaque. Equal numeric ordinals minted by
+    /// independent network actors do not conflict, while any reuse within one
+    /// actor under another connection tenure is an invalid capability even if
+    /// one of those tenures has since retired.
+    #[must_use]
+    pub fn equal_ordinal_different_tenure(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tenure.owner, &other.tenure.owner)
+            && self.delivery_ordinal == other.delivery_ordinal
+            && !self.same_tenure(other)
+    }
+
+    /// Whether two capabilities belong to the same authenticated source lane.
+    ///
+    /// Reconnects from the same peer retain this identity. A different relay
+    /// hub is an independent source even when it carries the same semantic
+    /// request.
+    #[must_use]
+    pub fn same_source(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tenure.owner, &other.tenure.owner)
+            && self.tenure.delivery_peer == other.tenure.delivery_peer
+    }
+
+    /// Classify this capability as an exact or later delivery for one retained source.
+    ///
+    /// This rejects cross-actor, retargeted, inactive, stale, and forged
+    /// equal-ordinal capabilities. A reconnect is distinguished from a later
+    /// delivery on the same tenure because admission authority is tenure-bound.
+    /// Callers must replace tenure-bound tickets while preserving their
+    /// semantic source cursor and retrying its current immutable item.
+    ///
+    /// # Errors
+    ///
+    /// Returns the precise capability violation when `self` cannot update
+    /// `prior` for the same authenticated source.
+    pub fn source_update_from(
+        &self,
+        prior: &Self,
+    ) -> Result<NetworkReplyRouteSourceUpdate, NetworkReplyRouteError> {
+        if !self.is_active() {
+            return Err(NetworkReplyRouteError::Inactive);
+        }
+        if !Arc::ptr_eq(&self.tenure.owner, &prior.tenure.owner) {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+        if self.semantic_target != prior.semantic_target {
+            return Err(NetworkReplyRouteError::Retargeted);
+        }
+        if self.tenure.delivery_peer != prior.tenure.delivery_peer {
+            return Err(NetworkReplyRouteError::DifferentSource);
+        }
+        if self.delivery_ordinal < prior.delivery_ordinal {
+            return Err(NetworkReplyRouteError::Stale);
+        }
+        if self.delivery_ordinal == prior.delivery_ordinal {
+            return self
+                .same_tenure(prior)
+                .then_some(NetworkReplyRouteSourceUpdate::Exact)
+                .ok_or(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+        }
+        Ok(if self.same_tenure(prior) {
+            NetworkReplyRouteSourceUpdate::LaterDelivery
+        } else {
+            NetworkReplyRouteSourceUpdate::Reconnected
+        })
+    }
+
+    /// Whether this capability belongs to the same actor and semantic request target.
+    #[must_use]
+    pub fn same_request_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tenure.owner, &other.tenure.owner)
+            && self.semantic_target == other.semantic_target
+    }
+
+    /// Whether this exact authenticated connection tenure is still live.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
         self.tenure.is_active()
+    }
+}
+
+/// Valid update of one authenticated reply-source attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkReplyRouteSourceUpdate {
+    /// The exact same local delivery capability was observed again.
+    Exact,
+    /// A later delivery arrived on the same connection tenure.
+    LaterDelivery,
+    /// A later delivery arrived after the authenticated source reconnected.
+    Reconnected,
+}
+
+/// Permanent reason an authenticated reply capability cannot join a semantic request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum NetworkReplyRouteError {
+    /// The capability's connection tenure has been retired.
+    #[error("reply capability is inactive")]
+    Inactive,
+    /// The capability belongs to another network actor instance.
+    #[error("reply capability belongs to another actor")]
+    ForeignOwner,
+    /// The capability addresses another semantic request target.
+    #[error("reply capability was retargeted")]
+    Retargeted,
+    /// The capability belongs to another authenticated source lane.
+    #[error("reply capability belongs to a different authenticated source")]
+    DifferentSource,
+    /// A newer delivery for this source is already retained.
+    #[error("reply capability delivery ordinal is stale")]
+    Stale,
+    /// One actor-global delivery ordinal was paired with a different tenure.
+    #[error("reply capability reused a delivery ordinal for another tenure")]
+    EqualOrdinalDifferentTenure,
+    /// The configured authenticated-source geometry is already fully reserved.
+    #[error("reply capability set exceeds configured source capacity")]
+    Capacity,
+}
+
+/// Bounded independent return routes for one canonical semantic request.
+///
+/// At most one attempt is retained per authenticated source. Updating one
+/// source cannot replace another source's attempt, and the bound is copied
+/// from the network actor's configured connection geometry.
+#[derive(Clone)]
+pub struct NetworkReplyRoutes {
+    semantic_target: PeerId,
+    owner: Arc<()>,
+    source_capacity: usize,
+    attempts: BTreeMap<NetworkReplySourceKey, NetworkReplyRoute>,
+    /// Latest delivery which left the live attempt set for each source.
+    ///
+    /// The map is independently bounded by `source_capacity`. Holding the
+    /// opaque capabilities preserves source-local stale checks and the
+    /// equal-ordinal/different-tenure diagnostic across destructive live-route
+    /// pruning, while lower ordinals from another authenticated source remain
+    /// valid independent attempts.
+    retired_attempts: BTreeMap<NetworkReplySourceKey, NetworkReplyRoute>,
+}
+
+impl core::fmt::Debug for NetworkReplyRoutes {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyRoutes")
+            .field("semantic_target", &self.semantic_target)
+            .field("attempts", &self.attempts.len())
+            .field("retired_attempts", &self.retired_attempts.len())
+            .field("source_capacity", &self.source_capacity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyRoutes {
+    /// Start a bounded route set from one live authenticated delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NetworkReplyRouteError::Inactive`] for a retired capability.
+    pub fn try_from_route(route: NetworkReplyRoute) -> Result<Self, NetworkReplyRouteError> {
+        if !route.is_active() {
+            return Err(NetworkReplyRouteError::Inactive);
+        }
+        let source_capacity = route.tenure.source_capacity;
+        if source_capacity == 0 {
+            return Err(NetworkReplyRouteError::Capacity);
+        }
+        let semantic_target = route.semantic_target.clone();
+        let owner = Arc::clone(&route.tenure.owner);
+        let attempts = BTreeMap::from([(route.source_key(), route)]);
+        Ok(Self {
+            semantic_target,
+            owner,
+            source_capacity,
+            attempts,
+            retired_attempts: BTreeMap::new(),
+        })
+    }
+
+    /// Semantic peer identity shared by every retained route attempt.
+    #[must_use]
+    pub fn semantic_target(&self) -> &PeerId {
+        &self.semantic_target
+    }
+
+    /// Configured upper bound on independent authenticated sources.
+    #[must_use]
+    pub const fn source_capacity(&self) -> usize {
+        self.source_capacity
+    }
+
+    /// Number of currently retained authenticated-source attempts.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.attempts.len()
+    }
+
+    /// Whether no authenticated-source attempt is retained.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.attempts.is_empty()
+    }
+
+    /// Iterate over independent source attempts in stable local order.
+    pub fn iter(&self) -> impl Iterator<Item = &NetworkReplyRoute> {
+        self.attempts.values()
+    }
+
+    /// Consume the set into independent source attempts in stable local order.
+    pub fn into_routes(self) -> impl Iterator<Item = NetworkReplyRoute> {
+        self.attempts.into_values()
+    }
+
+    /// Drop retired connection tenures from an already-owned route set.
+    ///
+    /// This is local ownership maintenance, not candidate admission: callers
+    /// should validate every newly observed route before invoking it. The
+    /// returned count is the number of live authenticated-source attempts
+    /// which remain available for dispatch.
+    pub fn retain_active(&mut self) -> usize {
+        let retired = self
+            .attempts
+            .values()
+            .filter(|route| !route.is_active())
+            .cloned()
+            .collect::<Vec<_>>();
+        for retired in retired {
+            self.record_retired_delivery(retired);
+        }
+        self.attempts.retain(|_, route| route.is_active());
+        self.attempts.len()
+    }
+
+    /// Attach all valid source attempts from `candidate` atomically.
+    ///
+    /// Exact duplicates do not change retained rank. A later delivery updates
+    /// only its source, while a newly observed source receives an independent
+    /// attempt. Any invalid member rejects the entire merge.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capability or capacity error without changing `self`.
+    pub fn merge(&mut self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
+        self.preflight_merge(candidate)?;
+        let mut merged = self.clone();
+        merged.retain_active();
+        for retired in candidate.retired_attempts.values().cloned() {
+            merged.merge_retired_delivery(retired)?;
+        }
+        for route in candidate.iter().cloned() {
+            merged.attach(route)?;
+        }
+        *self = merged;
+        Ok(())
+    }
+
+    /// Reconcile an independently observed route history atomically.
+    ///
+    /// A stale delivery or a capability whose tenure retired after it was
+    /// observed is a benign no-op for that source. Other live members of the
+    /// same candidate are still admitted. Authority, target, actor geometry,
+    /// equal-ordinal tenure, and capacity violations reject the whole merge.
+    /// Retired observations are retained as bounded tombstones so ignoring a
+    /// stale source cannot erase collision history for a fresh sibling.
+    ///
+    /// # Errors
+    ///
+    /// Returns a non-stale capability or capacity error without changing
+    /// `self`.
+    pub fn merge_observed(&mut self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
+        self.preflight_merge(candidate)?;
+
+        let mut merged = self.clone();
+        merged.retain_active();
+        let observed_routes = candidate
+            .iter()
+            .cloned()
+            .map(|route| {
+                let observed_active = route.is_active();
+                (route, observed_active)
+            })
+            .collect::<Vec<_>>();
+        for retired in candidate.retired_attempts.values().cloned() {
+            merged.merge_retired_delivery(retired)?;
+        }
+        for (route, observed_active) in &observed_routes {
+            if !*observed_active {
+                merged.merge_retired_delivery(route.clone())?;
+            }
+        }
+        for (route, observed_active) in observed_routes {
+            if !observed_active {
+                continue;
+            }
+            match merged.attach(route.clone()) {
+                Ok(()) | Err(NetworkReplyRouteError::Stale) => {}
+                Err(NetworkReplyRouteError::Inactive) => {
+                    merged.merge_retired_delivery(route)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        merged.retain_active();
+        *self = merged;
+        Ok(())
+    }
+
+    fn preflight_merge(&self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
+        if !Arc::ptr_eq(&self.owner, &candidate.owner) {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+        if self.semantic_target != candidate.semantic_target {
+            return Err(NetworkReplyRouteError::Retargeted);
+        }
+        if self.source_capacity != candidate.source_capacity {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+
+        let candidate_history = candidate
+            .attempts
+            .iter()
+            .chain(&candidate.retired_attempts)
+            .collect::<Vec<_>>();
+        for (source, route) in &candidate_history {
+            if *source != &route.source_key()
+                || !Arc::ptr_eq(&self.owner, &route.tenure.owner)
+                || route.tenure.source_capacity != self.source_capacity
+            {
+                return Err(NetworkReplyRouteError::ForeignOwner);
+            }
+            if self.semantic_target != route.semantic_target {
+                return Err(NetworkReplyRouteError::Retargeted);
+            }
+            if self
+                .attempts
+                .values()
+                .chain(self.retired_attempts.values())
+                .any(|prior| prior.equal_ordinal_different_tenure(route))
+            {
+                return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+            }
+        }
+        if candidate_history
+            .iter()
+            .enumerate()
+            .any(|(index, (_, route))| {
+                candidate_history[index + 1..]
+                    .iter()
+                    .any(|(_, other)| route.equal_ordinal_different_tenure(other))
+            })
+        {
+            return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+        }
+        Ok(())
+    }
+
+    fn attach(&mut self, route: NetworkReplyRoute) -> Result<(), NetworkReplyRouteError> {
+        if !route.is_active() {
+            return Err(NetworkReplyRouteError::Inactive);
+        }
+        if !Arc::ptr_eq(&self.owner, &route.tenure.owner) {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+        if self.semantic_target != route.semantic_target {
+            return Err(NetworkReplyRouteError::Retargeted);
+        }
+        if self
+            .attempts
+            .values()
+            .any(|prior| prior.equal_ordinal_different_tenure(&route))
+        {
+            return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+        }
+        let source = route.source_key();
+        if let Some(prior) = self.attempts.get(&source) {
+            match route.source_update_from(prior)? {
+                NetworkReplyRouteSourceUpdate::Exact => {}
+                NetworkReplyRouteSourceUpdate::LaterDelivery
+                | NetworkReplyRouteSourceUpdate::Reconnected => {
+                    self.validate_after_retired_delivery(&route)?;
+                    let prior = prior.clone();
+                    self.attempts.insert(source, route);
+                    self.record_retired_delivery(prior);
+                }
+            }
+            return Ok(());
+        }
+        self.validate_after_retired_delivery(&route)?;
+        if self.attempts.len() >= self.source_capacity {
+            return Err(NetworkReplyRouteError::Capacity);
+        }
+        self.attempts.insert(source, route);
+        Ok(())
+    }
+
+    fn validate_after_retired_delivery(
+        &self,
+        route: &NetworkReplyRoute,
+    ) -> Result<(), NetworkReplyRouteError> {
+        if self
+            .retired_attempts
+            .values()
+            .any(|retired| retired.equal_ordinal_different_tenure(route))
+        {
+            return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+        }
+        if let Some(retired) = self.retired_attempts.get(&route.source_key()) {
+            match route.source_update_from(retired)? {
+                NetworkReplyRouteSourceUpdate::Exact => {
+                    return Err(NetworkReplyRouteError::Stale);
+                }
+                NetworkReplyRouteSourceUpdate::LaterDelivery
+                | NetworkReplyRouteSourceUpdate::Reconnected => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_retired_delivery(
+        &mut self,
+        retired: NetworkReplyRoute,
+    ) -> Result<(), NetworkReplyRouteError> {
+        if !Arc::ptr_eq(&self.owner, &retired.tenure.owner) {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+        if self.semantic_target != retired.semantic_target {
+            return Err(NetworkReplyRouteError::Retargeted);
+        }
+        if self.source_capacity != retired.tenure.source_capacity {
+            return Err(NetworkReplyRouteError::ForeignOwner);
+        }
+        if self
+            .attempts
+            .values()
+            .chain(self.retired_attempts.values())
+            .any(|current| current.equal_ordinal_different_tenure(&retired))
+        {
+            return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);
+        }
+        let source = retired.source_key();
+        if self
+            .attempts
+            .get(&source)
+            .is_some_and(|current| retired.delivery_ordinal >= current.delivery_ordinal)
+            && let Some(superseded) = self.attempts.remove(&source)
+        {
+            self.record_retired_delivery(superseded);
+        }
+        self.record_retired_delivery(retired);
+        Ok(())
+    }
+
+    fn record_retired_delivery(&mut self, retired: NetworkReplyRoute) {
+        let source = retired.source_key();
+        if let Some(current) = self.retired_attempts.get_mut(&source) {
+            if retired.delivery_ordinal > current.delivery_ordinal {
+                *current = retired;
+            }
+            return;
+        }
+        if self.retired_attempts.len() >= self.source_capacity
+            && let Some(oldest) = self
+                .retired_attempts
+                .iter()
+                .min_by_key(|(_, route)| route.delivery_ordinal)
+                .map(|(source, _)| source.clone())
+        {
+            self.retired_attempts.remove(&oldest);
+        }
+        self.retired_attempts.insert(source, retired);
     }
 }
 
@@ -2546,7 +3224,7 @@ impl ProgressDeliveryAuthority {
             Self::Topology(membership) => {
                 ProgressAuthorityIdentity::Topology(membership.generation)
             }
-            Self::Reply(route) => ProgressAuthorityIdentity::Reply(route.tenure.generation),
+            Self::Reply(route) => ProgressAuthorityIdentity::Reply(route.tenure.connection_ordinal),
         }
     }
 
@@ -2629,13 +3307,10 @@ impl ActorProgressClass {
     }
 
     fn for_route(topic: message::Topic, route: message::SubscriberRoute) -> Option<Self> {
-        if matches!(topic, message::Topic::ConsensusSafety) {
-            Some(Self::Safety)
-        } else {
-            match subscriber_progress_class(topic, route)? {
-                SubscriberProgressClass::Lane => Some(Self::Lane),
-                SubscriberProgressClass::Bulk => Some(Self::Bulk),
-            }
+        match reliable_progress_class(topic, route)? {
+            ReliableProgressClass::Safety => Some(Self::Safety),
+            ReliableProgressClass::Lane => Some(Self::Lane),
+            ReliableProgressClass::Bulk => Some(Self::Bulk),
         }
     }
 }
@@ -2755,6 +3430,49 @@ pub struct NetworkActorAdmissionTicket {
     active: bool,
 }
 
+/// Immutable identity of the ticket which crossed actor admission.
+///
+/// This projection remains process-local: pointer ownership prevents ticket
+/// identifiers reused by another actor budget from aliasing this ticket.
+#[derive(Clone)]
+struct NetworkActorAdmittedTicketIdentity {
+    budget: Arc<NetworkActorProgressBudget>,
+    id: u64,
+    rank: usize,
+    shape: ProgressTicketShape,
+    source: ActorProgressSource,
+    authority: ProgressDeliveryAuthority,
+}
+
+impl NetworkActorAdmittedTicketIdentity {
+    fn from_ready_ticket(
+        ticket: &NetworkActorAdmissionTicket,
+        authority: &ProgressDeliveryAuthority,
+        rank: usize,
+    ) -> Self {
+        debug_assert!(ticket.active);
+        debug_assert_eq!(rank, 1);
+        Self {
+            budget: Arc::clone(&ticket.budget),
+            id: ticket.id,
+            // Capture the rank computed under the budget lock before commit
+            // removes the waiter and makes a later rank query impossible.
+            rank,
+            shape: ticket.shape,
+            source: ticket.source.clone(),
+            authority: authority.clone(),
+        }
+    }
+
+    fn same_ticket(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.budget, &other.budget)
+            && self.id == other.id
+            && self.rank == other.rank
+            && self.shape == other.shape
+            && self.source == other.source
+    }
+}
+
 impl NetworkActorAdmissionTicket {
     /// Return the ticket's one-based per-source service rank, or `None` after cancellation.
     #[must_use]
@@ -2803,6 +3521,8 @@ pub enum NetworkActorAdmissionRejection {
     StreamChargeOverflow,
     /// The supplied ticket belongs to another request or actor handle.
     InvalidTicket,
+    /// The authenticated reply connection tenure has been retired.
+    InactiveReplyRoute,
 }
 
 /// Recoverable result of semantic-progress admission into the network actor.
@@ -2851,6 +3571,402 @@ impl<M> NetworkActorAdmissionError<M> {
                 reason,
             },
         }
+    }
+}
+
+/// Non-blocking state of one process-local reliable reply completion.
+///
+/// Completion is deliberately not serializable: it witnesses only the local
+/// network actor observing a successful full write and flush by the exact peer
+/// writer which owns the admitted reply occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkReplyFlushAckStatus {
+    /// The admitted actor item has not yet observed a successful writer flush.
+    Pending,
+    /// The exact admitted reply was fully written and flushed by its peer writer.
+    Flushed,
+    /// Actor ownership ended without observing a successful writer flush.
+    Closed,
+}
+
+/// Immutable process-local identity of one admitted reliable-reply flush.
+///
+/// The identity retains the opaque route tenure and actor-budget owner which
+/// admitted the exact canonical request. Numeric ordinals and ticket ids are
+/// therefore facts about this identity, never ambient globally forgeable ids.
+/// It intentionally has no wire codec.
+#[derive(Clone)]
+pub struct NetworkReplyFlushIdentity {
+    route: NetworkReplyRoute,
+    ticket: NetworkActorAdmittedTicketIdentity,
+}
+
+impl core::fmt::Debug for NetworkReplyFlushIdentity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyFlushIdentity")
+            .field("semantic_target", &self.route.semantic_target)
+            .field("authenticated_source", &self.route.tenure.delivery_peer)
+            .field(
+                "connection_tenure_ordinal",
+                &self.route.tenure.connection_ordinal,
+            )
+            .field("delivery_ordinal", &self.route.delivery_ordinal)
+            .field("ticket_id", &self.ticket.id)
+            .field("ticket_rank", &self.ticket.rank)
+            .field("topic", &self.ticket.shape.topic)
+            .field("stream_wire_bytes", &self.ticket.shape.stream_wire_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyFlushIdentity {
+    fn from_admitted_ticket(ticket: NetworkActorAdmittedTicketIdentity) -> Option<Self> {
+        let ProgressDeliveryAuthority::Reply(route) = &ticket.authority else {
+            return None;
+        };
+        let route = route.clone();
+        debug_assert_eq!(
+            ticket.shape.authority,
+            Some(ProgressAuthorityIdentity::Reply(
+                route.tenure.connection_ordinal
+            ))
+        );
+        debug_assert_eq!(ticket.source.target.as_ref(), Some(&route.tenure.delivery_peer));
+        debug_assert!(!ticket.shape.broadcast);
+        Some(Self { route, ticket })
+    }
+
+    /// Semantic peer to which the admitted reply is addressed.
+    #[must_use]
+    pub fn semantic_target(&self) -> &PeerId {
+        self.route.semantic_target()
+    }
+
+    /// Opaque authenticated-source identity which owns this reply attempt.
+    #[must_use]
+    pub fn source_key(&self) -> NetworkReplySourceKey {
+        self.route.source_key()
+    }
+
+    /// Authenticated transport peer which owns this reply attempt.
+    #[must_use]
+    pub fn authenticated_source_peer(&self) -> &PeerId {
+        &self.route.tenure.delivery_peer
+    }
+
+    /// Whether the reply was admitted through `peer` as its authenticated source.
+    #[must_use]
+    pub fn is_authenticated_via(&self, peer: &PeerId) -> bool {
+        self.route.is_authenticated_via(peer)
+    }
+
+    /// Actor-global ordinal of the authenticated connection tenure.
+    #[must_use]
+    pub fn connection_tenure_ordinal(&self) -> u128 {
+        self.route.tenure.connection_ordinal
+    }
+
+    /// Actor-global ordinal of this local delivery occurrence.
+    ///
+    /// This occurrence ordinal is deliberately excluded from
+    /// [`Self::same_ticket_identity`].
+    #[must_use]
+    pub fn delivery_ordinal(&self) -> u128 {
+        self.route.delivery_ordinal
+    }
+
+    /// Actor-budget-local ticket identifier which crossed admission.
+    #[must_use]
+    pub fn ticket_id(&self) -> u64 {
+        self.ticket.id
+    }
+
+    /// One-based service rank at the instant this ticket crossed admission.
+    #[must_use]
+    pub fn ticket_rank(&self) -> usize {
+        self.ticket.rank
+    }
+
+    /// Canonical reliable-progress topic bound into the admitted ticket.
+    #[must_use]
+    pub fn ticket_topic(&self) -> message::Topic {
+        self.ticket.shape.topic
+    }
+
+    /// Exact encrypted-stream queue charge bound into the admitted ticket.
+    #[must_use]
+    pub fn ticket_stream_wire_bytes(&self) -> usize {
+        self.ticket.shape.stream_wire_bytes
+    }
+
+    /// Digest of the canonical priority, semantic target, and encoded payload.
+    #[must_use]
+    pub fn canonical_request_digest(&self) -> Hash {
+        self.ticket.shape.request_digest
+    }
+
+    /// Whether `route` is the exact authenticated tenure and semantic target.
+    ///
+    /// A later delivery on that tenure remains tenure-bound even though it is
+    /// not the same delivery occurrence.
+    #[must_use]
+    pub fn is_bound_to_tenure(&self, route: &NetworkReplyRoute) -> bool {
+        self.route.same_tenure(route)
+            && self.route.semantic_target == route.semantic_target
+            && self.route.same_source(route)
+    }
+
+    /// Whether `route` is the exact local delivery occurrence admitted here.
+    #[must_use]
+    pub fn is_bound_to_delivery(&self, route: &NetworkReplyRoute) -> bool {
+        self.route.same_delivery(route)
+    }
+
+    /// Whether `post` has the exact canonical semantic target and payload
+    /// identity admitted by this reply ticket.
+    #[must_use]
+    pub fn is_bound_to_canonical_reply<T>(&self, post: &Post<T>) -> bool
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        if !post.data.is_outbound_allowed() {
+            return false;
+        }
+        let topic = post.data.topic();
+        let route = post.data.subscriber_route();
+        if !is_reliable_progress_route(topic, route) {
+            return false;
+        }
+        let canonical = NetworkMessage::Post(Post {
+            data: post.data.clone(),
+            peer_id: post.peer_id.clone(),
+            priority: canonical_outbound_priority(topic, route, post.priority),
+        });
+        self.route.semantic_target == post.peer_id
+            && self.ticket.shape.topic == topic
+            && !self.ticket.shape.broadcast
+            && self.ticket.shape.request_digest == progress_ticket_request_digest(&canonical)
+    }
+
+    /// Whether both completions came from the exact actor ticket, route
+    /// tenure, semantic target, authenticated source, and canonical payload.
+    ///
+    /// The delivery ordinal is intentionally absent: a later occurrence on
+    /// the same tenure retains ticket identity, whereas another tenure,
+    /// source, payload, or actor budget cannot alias it.
+    #[must_use]
+    pub fn same_ticket_identity(&self, other: &Self) -> bool {
+        self.ticket.same_ticket(&other.ticket)
+            && self.route.same_tenure(&other.route)
+            && self.route.semantic_target == other.route.semantic_target
+            && self.route.same_source(&other.route)
+    }
+
+    /// Whether both completions identify the same ticket and exact delivery occurrence.
+    #[must_use]
+    pub fn same_delivery_occurrence(&self, other: &Self) -> bool {
+        self.same_ticket_identity(other) && self.route.same_delivery(&other.route)
+    }
+}
+
+/// Opaque process-local completion for a newly admitted reliable reply.
+///
+/// Route retirement, actor shutdown, cancellation, or dropping the retained
+/// actor item closes the handle without producing a false successful result.
+/// The handle is intentionally neither cloneable nor serializable, so one
+/// caller owns the exact local completion witness.
+#[derive(Debug)]
+#[must_use = "dropping the flush acknowledgement discards the delivery witness"]
+pub struct NetworkReplyFlushAck {
+    identity: NetworkReplyFlushIdentity,
+    receiver: Option<tokio::sync::oneshot::Receiver<()>>,
+    terminal: Option<NetworkReplyFlushAckStatus>,
+}
+
+impl NetworkReplyFlushAck {
+    fn new(
+        identity: NetworkReplyFlushIdentity,
+        receiver: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        Self {
+            identity,
+            receiver: Some(receiver),
+            terminal: None,
+        }
+    }
+
+    /// Immutable route, ticket, and canonical-payload identity for this completion.
+    #[must_use]
+    pub fn identity(&self) -> &NetworkReplyFlushIdentity {
+        &self.identity
+    }
+
+    /// Poll without blocking for the local writer-flush outcome.
+    ///
+    /// Once this returns [`NetworkReplyFlushAckStatus::Flushed`] or
+    /// [`NetworkReplyFlushAckStatus::Closed`], every later poll returns the
+    /// same terminal result.
+    pub fn poll(&mut self) -> NetworkReplyFlushAckStatus {
+        if let Some(terminal) = self.terminal {
+            return terminal;
+        }
+        let receiver = self
+            .receiver
+            .as_mut()
+            .expect("nonterminal reply flush acknowledgement owns its receiver");
+        match receiver.try_recv() {
+            Ok(()) => {
+                self.receiver = None;
+                self.terminal = Some(NetworkReplyFlushAckStatus::Flushed);
+                NetworkReplyFlushAckStatus::Flushed
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                NetworkReplyFlushAckStatus::Pending
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.receiver = None;
+                self.terminal = Some(NetworkReplyFlushAckStatus::Closed);
+                NetworkReplyFlushAckStatus::Closed
+            }
+        }
+    }
+}
+
+/// Test-only controller for one opaque reply writer-flush completion.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct NetworkReplyFlushAckTestFixture {
+    sender: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl NetworkReplyFlushAckTestFixture {
+    /// Create one pending completion and its sole test controller.
+    #[must_use]
+    pub fn new() -> (Self, NetworkReplyFlushAck) {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let route_owner = Arc::new(());
+        let authenticated_source = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let route = NetworkReplyRoute::new(
+            semantic_target,
+            Arc::new(ReliableReplyRouteTenure {
+                owner: route_owner,
+                delivery_peer: authenticated_source.clone(),
+                connection_id: 0,
+                connection_ordinal: 0,
+                source_capacity: 1,
+                active: AtomicBool::new(true),
+            }),
+            0,
+        );
+        let ticket = NetworkActorAdmittedTicketIdentity {
+            budget: NetworkActorProgressBudget::new(1, 1, 1)
+                .expect("test flush identity geometry must be valid"),
+            id: 0,
+            rank: 1,
+            shape: ProgressTicketShape {
+                topic: message::Topic::Consensus,
+                stream_wire_bytes: 1,
+                broadcast: false,
+                request_digest: Hash::new(b"test-only-reply-flush-identity"),
+                authority: Some(ProgressAuthorityIdentity::Reply(0)),
+            },
+            source: ActorProgressSource {
+                target: Some(authenticated_source),
+                class: ActorProgressClass::Lane,
+            },
+            authority: ProgressDeliveryAuthority::Reply(route.clone()),
+        };
+        let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
+            .expect("test completion must retain reply authority");
+        (
+            Self {
+                sender: Some(sender),
+            },
+            NetworkReplyFlushAck::new(identity, receiver),
+        )
+    }
+
+    /// Create a pending completion bound to an exact canonical reply post and route.
+    ///
+    /// Independent calls deliberately mint distinct synthetic actor budgets, so
+    /// tests cannot mistake equal visible ticket fields for the same opaque
+    /// admission authority.
+    #[must_use]
+    pub fn for_reply<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+    ) -> (Self, NetworkReplyFlushAck)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        assert!(route.is_active(), "test reply route must remain active");
+        assert_eq!(
+            &post.peer_id,
+            route.semantic_target(),
+            "test reply post must retain the route's semantic target"
+        );
+        let topic = post.data.topic();
+        let subscriber_route = post.data.subscriber_route();
+        assert!(
+            is_reliable_progress_route(topic, subscriber_route),
+            "test reply post must use a reliable-progress route"
+        );
+        let mut canonical_post = post.clone();
+        canonical_post.priority = canonical_outbound_priority(
+            topic,
+            subscriber_route,
+            canonical_post.priority,
+        );
+        let canonical = NetworkMessage::Post(canonical_post);
+        let stream_wire_bytes = norito::to_bytes(&canonical)
+            .expect("test reply post must have a canonical Norito encoding")
+            .len()
+            .max(1);
+        let class = ActorProgressClass::for_route(topic, subscriber_route)
+            .expect("reliable test reply route must have an actor class");
+        let ticket = NetworkActorAdmittedTicketIdentity {
+            budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
+                .expect("test flush identity geometry must be valid"),
+            id: 0,
+            rank: 1,
+            shape: ProgressTicketShape {
+                topic,
+                stream_wire_bytes,
+                broadcast: false,
+                request_digest: progress_ticket_request_digest(&canonical),
+                authority: Some(ProgressAuthorityIdentity::Reply(
+                    route.tenure.connection_ordinal,
+                )),
+            },
+            source: ActorProgressSource {
+                target: Some(route.tenure.delivery_peer.clone()),
+                class,
+            },
+            authority: ProgressDeliveryAuthority::Reply(route.clone()),
+        };
+        let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
+            .expect("test completion must retain reply authority");
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                sender: Some(sender),
+            },
+            NetworkReplyFlushAck::new(identity, receiver),
+        )
+    }
+
+    /// Publish the exact successful writer-flush witness once.
+    pub fn flush(&mut self) -> bool {
+        self.sender
+            .take()
+            .is_some_and(|sender| sender.send(()).is_ok())
+    }
+
+    /// Close the completion without publishing success once.
+    pub fn close(&mut self) -> bool {
+        self.sender.take().is_some()
     }
 }
 
@@ -2947,6 +4063,8 @@ struct NetworkActorProgressLease {
     budget: Arc<NetworkActorProgressBudget>,
     bytes: usize,
     source: ActorProgressSource,
+    /// One-based waiter rank observed under the admission budget lock.
+    admission_rank: usize,
     /// Cryptographic identity of the canonical request which owns this lease.
     request_digest: Hash,
     broadcast: bool,
@@ -3277,6 +4395,7 @@ impl NetworkActorProgressBudget {
                 budget: Arc::clone(self),
                 bytes,
                 source,
+                admission_rank: rank,
                 request_digest: shape.request_digest,
                 broadcast: shape.broadcast,
                 authority: shape.authority,
@@ -3396,7 +4515,7 @@ impl NetworkActorProgressBudget {
     fn cancel_reply_route(&self, tenure: &ReliableReplyRouteTenure) -> usize {
         self.cancel_authority_waiters(
             &tenure.delivery_peer,
-            ProgressAuthorityIdentity::Reply(tenure.generation),
+            ProgressAuthorityIdentity::Reply(tenure.connection_ordinal),
             false,
         )
     }
@@ -3565,6 +4684,10 @@ struct AdmittedNetworkMessage<T> {
     /// message and actor lease.  A closed receiver moves its target back to
     /// the retry cursor; a pending receiver cannot be mistaken for delivery.
     pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
+    /// Process-local completion owned by the caller which admitted this exact
+    /// reply occurrence. Only a fully observed peer-writer flush consumes it
+    /// successfully; every cancellation and drop path closes its receiver.
+    reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl<T> AdmittedNetworkMessage<T> {
@@ -3577,6 +4700,7 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority: None,
             remaining_broadcast_targets: None,
             pending_flush_acks: HashMap::new(),
+            reply_flush_ack: None,
         }
     }
 
@@ -3596,6 +4720,7 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets: Some(VecDeque::from([membership.peer_id.clone()])),
             progress_authority: Some(authority),
             pending_flush_acks: HashMap::new(),
+            reply_flush_ack: None,
         }
     }
 
@@ -3603,6 +4728,7 @@ impl<T> AdmittedNetworkMessage<T> {
         message: NetworkMessage<T>,
         byte_lease: NetworkActorProgressLease,
         authority: ProgressDeliveryAuthority,
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
         debug_assert!(matches!(message, NetworkMessage::Post(_)));
         debug_assert_eq!(
@@ -3615,6 +4741,7 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority: Some(authority),
             remaining_broadcast_targets: None,
             pending_flush_acks: HashMap::new(),
+            reply_flush_ack,
         }
     }
 
@@ -3650,6 +4777,7 @@ impl<T> AdmittedNetworkMessage<T> {
         Option<VecDeque<PeerId>>,
         HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
         Option<ProgressDeliveryAuthority>,
+        Option<tokio::sync::oneshot::Sender<()>>,
     ) {
         let Self {
             mut message,
@@ -3657,6 +4785,7 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets,
             pending_flush_acks,
             progress_authority,
+            reply_flush_ack,
         } = self;
         (
             message
@@ -3666,6 +4795,7 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets,
             pending_flush_acks,
             progress_authority,
+            reply_flush_ack,
         )
     }
 
@@ -3675,6 +4805,7 @@ impl<T> AdmittedNetworkMessage<T> {
         remaining_broadcast_targets: Option<VecDeque<PeerId>>,
         pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
         progress_authority: Option<ProgressDeliveryAuthority>,
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
         Self {
             message: Some(message),
@@ -3682,6 +4813,7 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority,
             remaining_broadcast_targets,
             pending_flush_acks,
+            reply_flush_ack,
         }
     }
 
@@ -4312,20 +5444,7 @@ pub(crate) fn is_reliable_progress_route(
     topic: message::Topic,
     route: message::SubscriberRoute,
 ) -> bool {
-    matches!(
-        topic,
-        message::Topic::ConsensusSafety
-            | message::Topic::Consensus
-            | message::Topic::ConsensusPayload
-            | message::Topic::ConsensusChunk
-            | message::Topic::BlockSync
-    ) || matches!(
-        (topic, route),
-        (
-            message::Topic::Control,
-            message::SubscriberRoute::GenesisBootstrap
-        )
-    )
+    reliable_progress_class(topic, route).is_some()
 }
 
 fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
@@ -5293,6 +6412,8 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
     /// Unforgeable identity binding reply-route tokens to this actor instance.
     reply_route_owner: Arc<()>,
+    /// Maximum independent authenticated reply sources derived from connection geometry.
+    reply_route_source_capacity: usize,
     /// Latest [`UpdateTopology`] snapshot sender.
     update_topology_sender: ControlUpdateSender<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot sender.
@@ -5355,6 +6476,7 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             reliable_broadcast_topology: Arc::clone(&self.reliable_broadcast_topology),
             reliable_direct_topology: Arc::clone(&self.reliable_direct_topology),
             reply_route_owner: Arc::clone(&self.reply_route_owner),
+            reply_route_source_capacity: self.reply_route_source_capacity,
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
             update_peer_capabilities_sender: self.update_peer_capabilities_sender.clone(),
@@ -5795,6 +6917,12 @@ fn network_actor_byte_budget(
 }
 
 impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
+    /// Maximum independent authenticated reply sources reserved by this actor.
+    #[must_use]
+    pub const fn reply_route_source_capacity(&self) -> usize {
+        self.reply_route_source_capacity
+    }
+
     /// Start network peer and return handle to it
     ///
     /// # Errors
@@ -5866,6 +6994,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             reliable_broadcast_topology,
             reliable_direct_topology,
             reply_route_owner,
+            reply_route_source_capacity: 1,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -6572,7 +7701,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             reliable_direct_topology: Arc::clone(&reliable_direct_topology),
             reply_route_owner: Arc::clone(&reply_route_owner),
             reply_route_tenures: HashMap::new(),
-            next_reply_route_generation: 0,
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
             network_actor_progress_budget: Arc::clone(&network_actor_progress_budget),
             update_topology_receiver,
             update_peers_receiver,
@@ -6702,6 +7832,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 reliable_broadcast_topology,
                 reliable_direct_topology,
                 reply_route_owner,
+                reply_route_source_capacity: max_total_connections,
                 update_topology_sender,
                 update_peers_sender,
                 update_peer_capabilities_sender,
@@ -6955,7 +8086,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         source: ActorProgressSource,
         authority: ProgressDeliveryAuthority,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<bool, NetworkActorAdmissionError<NetworkMessage<T>>> {
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<
+        Option<NetworkActorAdmittedTicketIdentity>,
+        NetworkActorAdmissionError<NetworkMessage<T>>,
+    > {
         use tokio::sync::mpsc::error::TrySendError;
 
         let wire_bytes = match self.outbound_actor_wire_bytes_recoverable(&message, topic) {
@@ -7002,8 +8137,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     rank,
                 });
             }
-            ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(false),
-            ProgressLeaseAttempt::CancelledMembership => return Ok(false),
+            ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),
+            ProgressLeaseAttempt::CancelledMembership => return Ok(None),
             ProgressLeaseAttempt::InvalidTicket => {
                 return Err(NetworkActorAdmissionError::Rejected {
                     message,
@@ -7017,6 +8152,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 });
             }
         };
+        let admitted_ticket_identity = NetworkActorAdmittedTicketIdentity::from_ready_ticket(
+            &ticket,
+            &authority,
+            lease.admission_rank,
+        );
 
         let (sender, deferred_permits) = if matches!(topic, message::Topic::ConsensusSafety) {
             (
@@ -7030,14 +8170,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             )
         };
         let admitted = if broadcast {
+            debug_assert!(reply_flush_ack.is_none());
             AdmittedNetworkMessage::new_targeted_broadcast(message, lease, authority)
         } else {
-            AdmittedNetworkMessage::new_targeted_post(message, lease, authority)
+            AdmittedNetworkMessage::new_targeted_post(message, lease, authority, reply_flush_ack)
         };
         match sender.try_send(admitted) {
             Ok(()) => {
                 ticket.commit();
-                Ok(true)
+                Ok(Some(admitted_ticket_identity))
             }
             Err(TrySendError::Closed(admitted)) => {
                 let (message, lease) = admitted.into_parts();
@@ -7054,7 +8195,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 ) {
                     Ok(()) => {
                         ticket.commit();
-                        return Ok(true);
+                        return Ok(Some(admitted_ticket_identity));
                     }
                     Err(admitted) => admitted,
                 };
@@ -7104,14 +8245,41 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 reason: NetworkActorAdmissionRejection::NotReliableProgress,
             });
         }
+        msg.priority = canonical_outbound_priority(topic, route, msg.priority);
+        let message = NetworkMessage::Post(msg);
+        let restore_requested_priority = |message| match message {
+            NetworkMessage::Post(mut post) => {
+                post.priority = requested_priority;
+                post
+            }
+            NetworkMessage::Broadcast(_) => {
+                unreachable!("direct admission must return the submitted post")
+            }
+        };
+        if let Err(reason) = self.outbound_actor_wire_bytes_recoverable(&message, topic) {
+            return Err(NetworkActorAdmissionError::Rejected {
+                message: restore_requested_priority(message),
+                reason,
+            });
+        }
+
         let actor_closed = if matches!(topic, message::Topic::ConsensusSafety) {
             self.network_message_safety_sender.is_closed()
         } else {
             self.network_message_progress_sender.is_closed()
         };
         if actor_closed {
-            return Err(NetworkActorAdmissionError::Closed { message: msg });
+            return Err(NetworkActorAdmissionError::Closed {
+                message: restore_requested_priority(message),
+            });
         }
+
+        let peer_id = match &message {
+            NetworkMessage::Post(post) => &post.peer_id,
+            NetworkMessage::Broadcast(_) => {
+                unreachable!("direct admission contains one post")
+            }
+        };
 
         let membership = self
             .reliable_direct_topology
@@ -7119,7 +8287,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .snapshot()
             .into_iter()
-            .find(|membership| membership.peer_id == msg.peer_id);
+            .find(|membership| &membership.peer_id == peer_id);
         if let Some(existing_ticket) = ticket.as_ref() {
             let (prior_is_cancelled, same_membership) = match existing_ticket.authority.as_ref() {
                 Some(WeakProgressDeliveryAuthority::Topology(prior)) => {
@@ -7143,7 +8311,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 drop(ticket.take());
             } else if !same_membership {
                 return Err(NetworkActorAdmissionError::Rejected {
-                    message: msg,
+                    message: restore_requested_priority(message),
                     reason: NetworkActorAdmissionRejection::InvalidTicket,
                 });
             }
@@ -7151,13 +8319,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let Some(membership) = membership else {
             drop(ticket);
             return Err(NetworkActorAdmissionError::Backpressured {
-                message: msg,
+                message: restore_requested_priority(message),
                 ticket: None,
                 rank: 1,
             });
         };
-        msg.priority = canonical_outbound_priority(topic, route, msg.priority);
-        let message = NetworkMessage::Post(msg);
         let source = ActorProgressSource::for_message(&message)
             .expect("a reliable post must have one exact target/class source");
         self.submit_progress_message_to_source(
@@ -7167,19 +8333,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             source,
             ProgressDeliveryAuthority::Topology(membership),
             ticket,
+            None,
         )
         .map(|_| ())
-        .map_err(|error| {
-            error.map_message(|message| match message {
-                NetworkMessage::Post(mut post) => {
-                    post.priority = requested_priority;
-                    post
-                }
-                NetworkMessage::Broadcast(_) => {
-                    unreachable!("post admission must return the submitted post")
-                }
-            })
-        })
+        .map_err(|error| error.map_message(restore_requested_priority))
     }
 
     /// Admit a reliable reply over the exact authenticated route which
@@ -7188,7 +8345,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// Relayed requests address replies to their semantic origin while actor
     /// accounting and writer ownership remain keyed by the authenticated hub
     /// connection. A cancelled connection tenure retires this occurrence; the
-    /// requester's durable retry is its reconstruction path.
+    /// requester's durable source retains its exact retry state.
     ///
     /// # Errors
     ///
@@ -7198,10 +8355,52 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     #[allow(clippy::needless_pass_by_value)]
     pub fn post_reply_recoverable(
         &self,
+        msg: Post<T>,
+        reply_route: &NetworkReplyRoute,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<T>>> {
+        self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)
+            .map(drop)
+    }
+
+    /// Admit a reliable reply and return its process-local writer-flush completion.
+    ///
+    /// `Some` is returned only when this call admits a new actor-owned item.
+    /// Its immutable [`NetworkReplyFlushIdentity`] binds the exact route
+    /// tenure, delivery occurrence, admission ticket, and canonical request;
+    /// the identity remains unchanged as completion advances.
+    /// Actor admission alone leaves the handle pending. It becomes
+    /// [`NetworkReplyFlushAckStatus::Flushed`] only after the network actor
+    /// observes the peer writer's complete write and flush; route retirement,
+    /// cancellation, shutdown, or retained-item drop instead closes it.
+    /// `None` specifically means the reply tenure was cancelled after the
+    /// public live-route precheck but before the actor budget lock admitted the
+    /// item. That retired occurrence transfers no actor ownership and must not
+    /// be treated as a delivery receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same recoverable admission errors as
+    /// [`Self::post_reply_recoverable`].
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn post_reply_recoverable_with_flush_ack(
+        &self,
+        msg: Post<T>,
+        reply_route: &NetworkReplyRoute,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<Option<NetworkReplyFlushAck>, NetworkActorAdmissionError<Post<T>>> {
+        self.post_reply_recoverable_with_flush_ack_inner(msg, reply_route, ticket, || {})
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn post_reply_recoverable_with_flush_ack_inner(
+        &self,
         mut msg: Post<T>,
         reply_route: &NetworkReplyRoute,
         mut ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<T>>> {
+        after_route_preflight: impl FnOnce(),
+    ) -> Result<Option<NetworkReplyFlushAck>, NetworkActorAdmissionError<Post<T>>> {
+        let (reply_flush_sender, reply_flush_receiver) = tokio::sync::oneshot::channel();
         let requested_priority = msg.priority;
         if !msg.data.is_outbound_allowed() {
             return Err(NetworkActorAdmissionError::Rejected {
@@ -7263,8 +8462,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         }
         if !reply_route.is_active() {
             drop(ticket);
-            return Ok(());
+            return Err(NetworkActorAdmissionError::Rejected {
+                message: msg,
+                reason: NetworkActorAdmissionRejection::InactiveReplyRoute,
+            });
         }
+        after_route_preflight();
 
         msg.priority = canonical_outbound_priority(topic, route, msg.priority);
         let message = NetworkMessage::Post(msg);
@@ -7281,8 +8484,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             source,
             ProgressDeliveryAuthority::Reply(reply_route.clone()),
             ticket,
+            Some(reply_flush_sender),
         )
-        .map(|_| ())
+        .map(|admitted_ticket| {
+            admitted_ticket.map(|ticket| {
+                let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
+                    .expect("reply admission must retain exact reply authority");
+                NetworkReplyFlushAck::new(
+                    identity,
+                    reply_flush_receiver,
+                )
+            })
+        })
         .map_err(|error| {
             error.map_message(|message| match message {
                 NetworkMessage::Post(mut post) => {
@@ -7377,6 +8590,23 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             ),
         };
 
+        if ticket.needs_topology_snapshot {
+            let targets = self
+                .reliable_broadcast_topology
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .snapshot();
+            if !targets.is_empty() {
+                ticket.targets.extend(targets.into_iter().map(|membership| {
+                    NetworkBroadcastTargetTicket {
+                        membership,
+                        actor_ticket: None,
+                    }
+                }));
+                ticket.needs_topology_snapshot = false;
+            }
+        }
+
         let actor_closed = if matches!(topic, message::Topic::ConsensusSafety) {
             self.network_message_safety_sender.is_closed()
         } else {
@@ -7389,28 +8619,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 ticket,
             });
         }
-
         if ticket.needs_topology_snapshot {
-            let targets = self
-                .reliable_broadcast_topology
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .snapshot();
-            if targets.is_empty() {
-                msg.priority = requested_priority;
-                return Err(NetworkBroadcastAdmissionError::Backpressured {
-                    message: msg,
-                    ticket,
-                    rank: 1,
-                });
-            }
-            ticket.targets.extend(targets.into_iter().map(|membership| {
-                NetworkBroadcastTargetTicket {
-                    membership,
-                    actor_ticket: None,
-                }
-            }));
-            ticket.needs_topology_snapshot = false;
+            msg.priority = requested_priority;
+            return Err(NetworkBroadcastAdmissionError::Backpressured {
+                message: msg,
+                ticket,
+                rank: 1,
+            });
         }
 
         let class = ActorProgressClass::for_route(topic, route)
@@ -7438,6 +8653,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 source,
                 ProgressDeliveryAuthority::Topology(Arc::clone(&target.membership)),
                 target.actor_ticket.take(),
+                None,
             ) {
                 Ok(_new_owner) => {}
                 Err(NetworkActorAdmissionError::Backpressured {
@@ -8605,6 +9821,7 @@ mod handle_update_tests {
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
                 reply_route_owner: Arc::new(()),
+                reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -8704,6 +9921,7 @@ mod handle_update_tests {
             reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
             reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
             reply_route_owner: Arc::new(()),
+            reply_route_source_capacity: 8,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -8737,6 +9955,17 @@ mod handle_update_tests {
             network_message_high_rx,
             network_message_low_rx,
         )
+    }
+
+    fn accept_direct_targets<T: Pload>(
+        handle: &NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>,
+        targets: HashSet<PeerId>,
+    ) {
+        let _ = handle
+            .reliable_direct_topology
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reconcile(&targets, &handle.self_id);
     }
 
     fn handle_with_subscriber_receiver() -> (
@@ -8779,6 +10008,7 @@ mod handle_update_tests {
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
                 reply_route_owner: Arc::new(()),
+                reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
@@ -9554,6 +10784,7 @@ mod handle_update_tests {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
 
         handle.post(Post {
             data: RoutedActorDummy::Control,
@@ -9619,6 +10850,7 @@ mod handle_update_tests {
         let (handle, _safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
 
         for data in [
             RoutedActorDummy::GenesisControl,
@@ -9683,6 +10915,7 @@ mod handle_update_tests {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = || Post {
             data: RoutedActorDummy::GenesisControl,
             peer_id: peer_id.clone(),
@@ -9795,6 +11028,7 @@ mod handle_update_tests {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
             peer_id: peer_id.clone(),
@@ -9857,6 +11091,7 @@ mod handle_update_tests {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
             peer_id: peer_id.clone(),
@@ -9932,6 +11167,10 @@ mod handle_update_tests {
             handle_with_network_receivers::<RoutedActorDummy>();
         let blocked_peer = PeerId::from(KeyPair::random().public_key().clone());
         let responsive_peer = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(
+            &handle,
+            HashSet::from([blocked_peer.clone(), responsive_peer.clone()]),
+        );
         let post = |peer_id| Post {
             data: RoutedActorDummy::GenesisControl,
             peer_id,
@@ -10036,6 +11275,7 @@ mod handle_update_tests {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
             peer_id: peer_id.clone(),
@@ -11294,7 +12534,8 @@ mod accept_stream_tests {
             reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
             reply_route_owner: Arc::new(()),
             reply_route_tenures: HashMap::new(),
-            next_reply_route_generation: 0,
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
@@ -11682,7 +12923,8 @@ mod accept_stream_tests {
             ),
             reply_route_owner: Arc::new(()),
             reply_route_tenures: HashMap::new(),
-            next_reply_route_generation: 0,
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
@@ -11913,7 +13155,8 @@ mod accept_stream_tests {
                 )),
                 reply_route_owner: Arc::new(()),
                 reply_route_tenures: HashMap::new(),
-                next_reply_route_generation: 0,
+                next_reply_connection_ordinal: 0,
+                next_reply_delivery_ordinal: 0,
                 network_actor_progress_budget: test_network_actor_progress_budget(),
                 update_topology_receiver: update_topology_rx,
                 update_peers_receiver: update_peers_rx,
@@ -12163,7 +13406,8 @@ mod accept_stream_tests {
             ),
             reply_route_owner: Arc::new(()),
             reply_route_tenures: HashMap::new(),
-            next_reply_route_generation: 0,
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
@@ -13115,7 +14359,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// mint unforgeable reply routes for inbound semantic origins.
     reply_route_owner: Arc<()>,
     reply_route_tenures: HashMap<ConnectionId, Arc<ReliableReplyRouteTenure>>,
-    next_reply_route_generation: u128,
+    next_reply_connection_ordinal: u128,
+    next_reply_delivery_ordinal: u128,
     /// Shared reliable-progress owner used to cancel waiters whose exact
     /// broadcast membership was removed by an accepted topology transition.
     network_actor_progress_budget: Arc<NetworkActorProgressBudget>,
@@ -13434,6 +14679,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             mut remaining_broadcast_targets,
             mut pending_flush_acks,
             progress_authority,
+            reply_flush_ack,
         ) = admitted.into_dispatch_parts();
         if progress_authority
             .as_ref()
@@ -13585,6 +14831,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if transferred {
             // The actor lease retires only after every target's peer writer
             // confirms a complete write and flush.
+            if let Some(reply_flush_ack) = reply_flush_ack {
+                let _ = reply_flush_ack.send(());
+            }
             drop(actor_lease);
             Ok(())
         } else {
@@ -13594,6 +14843,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 remaining_broadcast_targets,
                 pending_flush_acks,
                 progress_authority,
+                reply_flush_ack,
             ))
         }
     }
@@ -14943,7 +16193,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             .remove(peer_id)
                             .expect("checked peer generation must still exist");
                         removed.handle.request_termination();
-                        self.deferred_send_queue.clear_generation(peer_id, conn_id);
+                        self.deferred_send_queue
+                            .release_retired_tenure_binding(peer_id, conn_id);
                         self.mark_connection_terminating(conn_id);
                         self.peer_reputations.record_disconnected(peer_id);
                         Self::remove_online_peer(
@@ -15140,7 +16391,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             if let Some(ref_peer) = self.peers.remove(peer_id) {
                 ref_peer.handle.request_termination();
                 let _ = self.cancel_reply_route_tenure(ref_peer.conn_id);
-                self.deferred_send_queue.clear_generation(peer_id, conn_id);
+                self.deferred_send_queue
+                    .release_retired_tenure_binding(peer_id, conn_id);
                 self.mark_connection_terminating(conn_id);
                 self.peer_reputations.record_disconnected(peer_id);
             }
@@ -15390,7 +16642,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         peer.handle.request_termination();
         let _ = self.cancel_reply_route_tenure(peer.conn_id);
         self.deferred_send_queue
-            .clear_generation(peer_id, peer.conn_id);
+            .release_retired_tenure_binding(peer_id, peer.conn_id);
         self.mark_connection_terminating(peer.conn_id);
         self.peer_reputations.record_disconnected(peer_id);
         self.last_active.remove(peer_id);
@@ -15624,21 +16876,28 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             replaced.handle.request_termination();
             let _ = self.cancel_reply_route_tenure(replaced.conn_id);
             self.deferred_send_queue
-                .clear_generation(peer.id(), replaced.conn_id);
+                .release_retired_tenure_binding(peer.id(), replaced.conn_id);
             self.mark_connection_terminating(replaced.conn_id);
             self.peer_reputations.record_disconnected(peer.id());
         }
-        let generation = self.next_reply_route_generation;
-        self.next_reply_route_generation = generation
+        let connection_ordinal = self.next_reply_connection_ordinal;
+        self.next_reply_connection_ordinal = connection_ordinal
             .checked_add(1)
-            .expect("reply-route authority generation cannot wrap while the actor is live");
+            .expect("reply-route connection ordinal cannot wrap while the actor is live");
+        let source_capacity = self
+            .max_total_connections
+            .unwrap_or(
+                iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
+            )
+            .max(1);
         let prior = self.reply_route_tenures.insert(
             connection_id,
             Arc::new(ReliableReplyRouteTenure {
                 owner: Arc::clone(&self.reply_route_owner),
                 delivery_peer: peer.id().clone(),
                 connection_id,
-                generation,
+                connection_ordinal,
+                source_capacity,
                 active: AtomicBool::new(true),
             }),
         );
@@ -15679,7 +16938,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         // Natural transport death is the exact cancellation witness for every
         // actor-owned message and caller-held waiter bound to this tenure. A
         // stale predecessor notice cannot affect a replacement because
-        // connection ids and reply-route generations are never reused.
+        // connection ids and reply-route tenure ordinals are never reused.
         let _ = self.cancel_reply_route_tenure(conn_id);
         // If termination happened before handshake, the `peer` is None.
         // In that case use the pending `connecting_peers` map to find which peer failed.
@@ -15690,7 +16949,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     iroha_logger::debug!(conn_id, peer=%peer, "Peer terminated");
                     self.peer_reputations.record_disconnected(peer.id());
                     self.deferred_send_queue
-                        .clear_generation(peer.id(), conn_id);
+                        .release_retired_tenure_binding(peer.id(), conn_id);
                     self.peers.remove(peer.id());
                     self.last_active.remove(peer.id());
                     Self::remove_online_peer(
@@ -16079,7 +17338,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 ref_peer.handle.request_termination();
                 let _ = self.cancel_reply_route_tenure(ref_peer.conn_id);
                 self.deferred_send_queue
-                    .clear_generation(&peer_id, ref_peer.conn_id);
+                    .release_retired_tenure_binding(&peer_id, ref_peer.conn_id);
                 self.mark_connection_terminating(ref_peer.conn_id);
                 self.peer_reputations.record_disconnected(&peer_id);
                 Self::remove_online_peer(
@@ -16209,11 +17468,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
         if deliver_local {
             let origin_peer = self.resolve_origin_peer(&origin, &incoming_peer);
-            let reply_route = msg
+            let reply_tenure = msg
                 .connection_id()
                 .and_then(|connection_id| self.reply_route_tenures.get(&connection_id))
                 .filter(|tenure| tenure.is_active() && tenure.delivery_peer == *incoming_peer.id())
-                .map(|tenure| NetworkReplyRoute::new(origin.clone(), Arc::clone(tenure)));
+                .cloned();
+            let reply_route = reply_tenure.map(|tenure| {
+                let delivery_ordinal = self.next_reply_delivery_ordinal;
+                self.next_reply_delivery_ordinal = delivery_ordinal
+                    .checked_add(1)
+                    .expect("reply-route delivery ordinal cannot wrap while the actor is live");
+                NetworkReplyRoute::new(origin.clone(), tenure, delivery_ordinal)
+            });
             let mut deliver = msg.map_payload(origin_peer, |relay| relay.payload);
             if let Some(reply_route) = reply_route {
                 deliver.set_reply_route(reply_route);
@@ -16713,7 +17979,7 @@ fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeSet, HashSet};
     use std::sync::{Mutex, OnceLock};
 
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
@@ -16805,6 +18071,58 @@ mod tests {
                 Self::Bootstrap => message::ProgressReconstruction::Retransmit,
                 Self::General => message::ProgressReconstruction::Exact,
             }
+        }
+    }
+
+    #[test]
+    fn reliable_progress_class_matches_actor_reservations_exactly() {
+        use message::{SubscriberRoute as Route, Topic};
+
+        for (topic, route, expected) in [
+            (
+                Topic::ConsensusSafety,
+                Route::General,
+                Some(ReliableProgressClass::Safety),
+            ),
+            (
+                Topic::Consensus,
+                Route::General,
+                Some(ReliableProgressClass::Lane),
+            ),
+            (
+                Topic::Control,
+                Route::GenesisBootstrap,
+                Some(ReliableProgressClass::Lane),
+            ),
+            (
+                Topic::ConsensusPayload,
+                Route::General,
+                Some(ReliableProgressClass::Bulk),
+            ),
+            (
+                Topic::ConsensusChunk,
+                Route::General,
+                Some(ReliableProgressClass::Bulk),
+            ),
+            (
+                Topic::BlockSync,
+                Route::General,
+                Some(ReliableProgressClass::Bulk),
+            ),
+            (Topic::Control, Route::General, None),
+            (Topic::Health, Route::General, None),
+            (Topic::Other, Route::General, None),
+        ] {
+            assert_eq!(reliable_progress_class(topic, route), expected);
+            assert_eq!(is_reliable_progress_route(topic, route), expected.is_some());
+            assert_eq!(
+                ActorProgressClass::for_route(topic, route),
+                expected.map(|class| match class {
+                    ReliableProgressClass::Safety => ActorProgressClass::Safety,
+                    ReliableProgressClass::Lane => ActorProgressClass::Lane,
+                    ReliableProgressClass::Bulk => ActorProgressClass::Bulk,
+                })
+            );
         }
     }
 
@@ -17067,6 +18385,1089 @@ mod tests {
     }
 
     #[test]
+    fn reply_route_survives_peer_message_clone_mapping_and_split() {
+        let owner = Arc::new(());
+        let transport = Peer::new(
+            socket_addr!(127.0.0.1:12001),
+            KeyPair::random().public_key().clone(),
+        );
+        let semantic_origin = Peer::new(
+            socket_addr!(127.0.0.1:12002),
+            KeyPair::random().public_key().clone(),
+        );
+        let tenure = test_reply_tenure(&owner, transport.id().clone(), 17, 3);
+        let route = NetworkReplyRoute::new(semantic_origin.id().clone(), tenure, 9);
+        let mut message = PeerMessage::new_for_connection(transport.clone(), DummyMsg, 19, 17);
+        message.set_reply_route(route.clone());
+
+        let cloned = message
+            .try_clone_retained()
+            .expect("an unretained authenticated test message can be cloned");
+        let cloned_route = cloned
+            .reply_route()
+            .expect("subscriber clone preserves the exact reply route");
+        assert!(cloned_route.same_tenure(&route));
+        assert!(cloned_route.same_delivery(&route));
+        assert_eq!(cloned_route.source_key(), route.source_key());
+
+        let mapped = message.map_payload(semantic_origin.clone(), |DummyMsg| DummyMsg);
+        let (mapped_peer, authenticated_via, DummyMsg, payload_bytes, mapped_route, guard) =
+            mapped.into_parts_with_reply_route();
+        assert_eq!(mapped_peer.id(), semantic_origin.id());
+        assert_eq!(&authenticated_via, transport.id());
+        assert_eq!(guard.authenticated_via(), transport.id());
+        assert_eq!(payload_bytes, 19);
+        let mapped_route = mapped_route.expect("payload mapping and split preserve the route");
+        assert!(mapped_route.is_authenticated_via(transport.id()));
+        assert!(!mapped_route.is_authenticated_via(semantic_origin.id()));
+        assert!(mapped_route.same_delivery(&route));
+        assert_eq!(mapped_route.source_key(), route.source_key());
+
+        let mut released = PeerMessage::new(semantic_origin.clone(), DummyMsg, 19);
+        released
+            .reattach_reply_route(mapped_route.clone())
+            .expect("bounded release restores the opaque live route");
+        assert_eq!(released.authenticated_via(), transport.id());
+        mapped_route.tenure.cancel();
+        let mut stale_release = PeerMessage::new(semantic_origin, DummyMsg, 19);
+        assert!(
+            stale_release.reattach_reply_route(mapped_route).is_err(),
+            "a retired transport tenure cannot cross a local hold/release boundary"
+        );
+
+        let synthetic = PeerMessage::new(transport, DummyMsg, 1);
+        assert!(synthetic.reply_route().is_none());
+    }
+
+    #[test]
+    fn reply_source_key_groups_relay_origins_and_orders_actor_instances() {
+        let owner = Arc::new(());
+        let other_owner = Arc::new(());
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let other_delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_a = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_b = PeerId::from(KeyPair::random().public_key().clone());
+        let shared_tenure = test_reply_tenure(&owner, delivery_peer.clone(), 21, 7);
+        let route_a = NetworkReplyRoute::new(origin_a, Arc::clone(&shared_tenure), 0);
+        let route_b = NetworkReplyRoute::new(origin_b, shared_tenure, 1);
+        let other_source = NetworkReplyRoute::new(
+            route_a.semantic_target().clone(),
+            test_reply_tenure(&owner, other_delivery_peer, 22, 8),
+            2,
+        );
+        let other_actor = NetworkReplyRoute::new(
+            route_a.semantic_target().clone(),
+            test_reply_tenure(&other_owner, delivery_peer, 23, 0),
+            0,
+        );
+
+        assert_eq!(
+            route_a.source_key(),
+            route_b.source_key(),
+            "many semantic origins behind one authenticated hub share fairness"
+        );
+        assert!(
+            route_a.same_tenure(&route_b),
+            "one relay tenure may authenticate several semantic origins"
+        );
+        assert_ne!(route_a.source_key(), other_source.source_key());
+        assert_ne!(route_a.source_key(), other_actor.source_key());
+
+        let hash_keys = HashSet::from([
+            route_a.source_key(),
+            route_b.source_key(),
+            other_source.source_key(),
+            other_actor.source_key(),
+        ]);
+        let tree_keys = BTreeSet::from([
+            route_a.source_key(),
+            route_b.source_key(),
+            other_source.source_key(),
+            other_actor.source_key(),
+        ]);
+        assert_eq!(hash_keys.len(), 3);
+        assert_eq!(tree_keys.len(), 3);
+        assert_eq!(
+            format!("{:?}", route_a.source_key()),
+            "NetworkReplySourceKey(..)",
+            "debug output must not reveal actor or connection internals"
+        );
+    }
+
+    #[test]
+    fn reply_route_source_updates_are_ordinal_monotonic_and_target_scoped() {
+        let owner = Arc::new(());
+        let other_owner = Arc::new(());
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let other_target = PeerId::from(KeyPair::random().public_key().clone());
+        let prior = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(&owner, delivery_peer.clone(), 30, 10),
+            10,
+        );
+        let reconnect = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(&owner, delivery_peer.clone(), 31, 11),
+            11,
+        );
+        let equal_but_distinct = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(&owner, delivery_peer.clone(), 32, 12),
+            10,
+        );
+        let retargeted = NetworkReplyRoute::new(
+            other_target,
+            test_reply_tenure(&owner, delivery_peer.clone(), 33, 12),
+            12,
+        );
+        let different_source = NetworkReplyRoute::new(
+            prior.semantic_target.clone(),
+            test_reply_tenure(
+                &owner,
+                PeerId::from(KeyPair::random().public_key().clone()),
+                34,
+                12,
+            ),
+            12,
+        );
+        let foreign = NetworkReplyRoute::new(
+            semantic_target,
+            test_reply_tenure(&other_owner, delivery_peer, 35, 12),
+            12,
+        );
+
+        assert_eq!(
+            prior.clone().source_update_from(&prior),
+            Ok(NetworkReplyRouteSourceUpdate::Exact)
+        );
+        assert!(prior.same_tenure(&prior.clone()));
+        assert!(!reconnect.same_tenure(&prior));
+        assert_eq!(
+            reconnect.source_update_from(&prior),
+            Ok(NetworkReplyRouteSourceUpdate::Reconnected)
+        );
+        assert_eq!(
+            prior.source_update_from(&reconnect),
+            Err(NetworkReplyRouteError::Stale)
+        );
+        assert_eq!(
+            equal_but_distinct.source_update_from(&prior),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        );
+        assert_eq!(
+            retargeted.source_update_from(&prior),
+            Err(NetworkReplyRouteError::Retargeted)
+        );
+        assert_eq!(
+            different_source.source_update_from(&prior),
+            Err(NetworkReplyRouteError::DifferentSource)
+        );
+        assert_eq!(
+            foreign.source_update_from(&prior),
+            Err(NetworkReplyRouteError::ForeignOwner)
+        );
+
+        reconnect.tenure.cancel();
+        assert_eq!(
+            reconnect.source_update_from(&prior),
+            Err(NetworkReplyRouteError::Inactive)
+        );
+    }
+
+    #[test]
+    fn dependent_test_fixture_mints_opaque_tenures_and_delivery_ordinals() {
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let other_target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut fixture = NetworkReplyRouteTestFixture::new(delivery_peer);
+        let prior = fixture.mint(semantic_target.clone());
+        let reconnected = fixture.mint(semantic_target);
+        let retargeted = fixture.mint(other_target);
+
+        assert!(prior.is_active());
+        assert_eq!(
+            reconnected.source_update_from(&prior),
+            Ok(NetworkReplyRouteSourceUpdate::Reconnected)
+        );
+        assert_eq!(reconnected.source_key(), prior.source_key());
+        assert_eq!(
+            retargeted.source_update_from(&reconnected),
+            Err(NetworkReplyRouteError::Retargeted)
+        );
+        assert!(fixture.retire(&prior));
+        assert!(!prior.is_active());
+
+        let foreign_delivery = PeerId::from(KeyPair::random().public_key().clone());
+        let mut foreign_fixture = NetworkReplyRouteTestFixture::new(foreign_delivery);
+        let foreign = foreign_fixture.mint(reconnected.semantic_target().clone());
+        assert!(!fixture.retire(&foreign));
+        assert!(foreign.is_active());
+    }
+
+    #[test]
+    fn cancelled_newer_hub_cannot_erase_older_independent_route_attempt() {
+        let owner = Arc::new(());
+        let older_hub = PeerId::from(KeyPair::random().public_key().clone());
+        let newer_hub = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let older = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(&owner, older_hub, 40, 20),
+            20,
+        );
+        let newer = NetworkReplyRoute::new(
+            semantic_target,
+            test_reply_tenure(&owner, newer_hub, 41, 21),
+            21,
+        );
+
+        assert_ne!(older.source_key(), newer.source_key());
+        let mut routes = NetworkReplyRoutes::try_from_route(older.clone()).expect("older route");
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(newer.clone()).expect("newer route"))
+            .expect("alternate hub owns an independent attempt");
+        assert_eq!(routes.len(), 2);
+        newer.tenure.cancel();
+        assert!(routes.iter().any(|route| route.same_delivery(&older)));
+        assert!(older.is_active());
+    }
+
+    #[test]
+    fn dependent_fixture_models_bounded_actor_global_multi_hub_ownership() {
+        let older_hub = PeerId::from(KeyPair::random().public_key().clone());
+        let newer_hub = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut fixture = NetworkReplyRouteTestFixture::new(older_hub.clone());
+        let older = fixture.mint_via(semantic_target.clone(), older_hub);
+        let newer = fixture.mint_via(semantic_target, newer_hub);
+
+        let mut set = NetworkReplyRoutes::try_from_route(older.clone()).expect("older route");
+        set.merge(&NetworkReplyRoutes::try_from_route(newer.clone()).expect("newer route"))
+            .expect("alternate hub route");
+        assert_eq!(set.len(), 2);
+        assert!(fixture.retire(&newer));
+        assert!(set.iter().any(|route| route.same_delivery(&older)));
+        assert!(older.is_active());
+    }
+
+    #[test]
+    fn reply_route_pruning_retains_equal_ordinal_tenure_tombstone() {
+        let hub = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 2);
+        let retired = fixture.mint_via(target.clone(), hub.clone());
+        let mut routes =
+            NetworkReplyRoutes::try_from_route(retired.clone()).expect("initial live route");
+
+        assert!(fixture.retire(&retired));
+        assert_eq!(routes.retain_active(), 0);
+        let collision = fixture
+            .forge_equal_ordinal_different_tenure(&retired, target.clone(), hub.clone())
+            .expect("forge an active capability with the retired delivery ordinal");
+        assert!(matches!(
+            routes.merge(
+                &NetworkReplyRoutes::try_from_route(collision)
+                    .expect("the forged capability is independently live")
+            ),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+        assert!(routes.is_empty());
+
+        let reconnected = fixture.mint_via(target, hub);
+        routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(reconnected.clone())
+                    .expect("later reconnect route"),
+            )
+            .expect("a genuinely later delivery remains admissible");
+        assert!(routes.iter().any(|route| route.same_delivery(&reconnected)));
+    }
+
+    #[test]
+    fn reply_route_set_isolates_sources_preserves_cursors_and_prunes_retired_capacity() {
+        let hub_a = PeerId::from(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::from(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = fixture.mint_via(target.clone(), hub_a.clone());
+        let route_b = fixture.mint_via(target.clone(), hub_b.clone());
+        let route_c = fixture.mint_via(target.clone(), hub_c);
+        let mut routes =
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("first source route");
+
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(route_a.clone()).expect("exact duplicate"))
+            .expect("an exact duplicate must not consume another source slot");
+        assert_eq!(routes.len(), 1);
+
+        let later_a = fixture
+            .redeliver(&route_a)
+            .expect("same-tenure later delivery");
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later A"))
+            .expect("later delivery updates only source A");
+        assert_eq!(routes.len(), 1);
+        assert!(routes.iter().any(|route| route.same_delivery(&later_a)));
+        assert!(matches!(
+            routes.merge(
+                &NetworkReplyRoutes::try_from_route(route_a.clone()).expect("stale live route")
+            ),
+            Err(NetworkReplyRouteError::Stale)
+        ));
+
+        assert!(fixture.retire(&route_a));
+        let equal_ordinal_different_tenure = fixture
+            .forge_equal_ordinal_different_tenure(&later_a, target.clone(), hub_a.clone())
+            .expect("adversarial fixture reuses an opaque delivery ordinal");
+        assert!(later_a.equal_ordinal_different_tenure(&equal_ordinal_different_tenure));
+        assert!(matches!(
+            routes.merge(
+                &NetworkReplyRoutes::try_from_route(equal_ordinal_different_tenure.clone())
+                    .expect("forged equal-ordinal route is independently live")
+            ),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+        assert_eq!(routes.len(), 1);
+        assert!(routes.iter().any(|route| route.same_delivery(&later_a)));
+
+        let reconnected_a = fixture.mint_via(target.clone(), hub_a);
+        routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(reconnected_a.clone())
+                    .expect("reconnected source A"),
+            )
+            .expect("a reconnect updates only its authenticated source");
+        assert_eq!(routes.len(), 1);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&reconnected_a))
+        );
+
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B"))
+            .expect("alternate source starts an independent attempt");
+        assert_eq!(routes.len(), 2);
+        assert!(matches!(
+            routes.merge(&NetworkReplyRoutes::try_from_route(route_c.clone()).expect("source C")),
+            Err(NetworkReplyRouteError::Capacity)
+        ));
+
+        assert!(fixture.retire(&route_b));
+        assert_eq!(
+            routes.retain_active(),
+            1,
+            "owned maintenance prunes only the retired source tenure"
+        );
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(route_c.clone()).expect("source C"))
+            .expect("retired source capacity is released before adding C");
+        assert_eq!(routes.len(), 2);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&reconnected_a))
+        );
+        assert!(routes.iter().any(|route| route.same_delivery(&route_c)));
+
+        let later_reconnected_a = fixture
+            .redeliver(&reconnected_a)
+            .expect("same-tenure source A redelivery");
+        let foreign_hub = PeerId::from(KeyPair::random().public_key().clone());
+        let mut foreign_fixture = NetworkReplyRouteTestFixture::new(foreign_hub);
+        let foreign = foreign_fixture.mint(target.clone());
+        let mut invalid = NetworkReplyRoutes::try_from_route(later_reconnected_a.clone())
+            .expect("valid member of adversarial candidate");
+        assert!(
+            invalid
+                .attempts
+                .insert(foreign.source_key(), foreign.clone())
+                .is_none()
+        );
+        assert!(matches!(
+            routes.merge(&invalid),
+            Err(NetworkReplyRouteError::ForeignOwner)
+        ));
+        assert_eq!(routes.len(), 2);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&reconnected_a))
+        );
+        assert!(routes.iter().any(|route| route.same_delivery(&route_c)));
+        assert!(
+            !routes
+                .iter()
+                .any(|route| route.same_delivery(&later_reconnected_a)),
+            "an invalid multi-member merge must be atomic"
+        );
+
+        routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(later_reconnected_a.clone())
+                    .expect("later source A delivery"),
+            )
+            .expect("install later source A before observed-history merge");
+        assert!(fixture.retire(&route_c));
+        assert_eq!(routes.retain_active(), 1);
+        let fresh_b = fixture.mint_via(target.clone(), hub_b);
+        let mut mixed_observation = NetworkReplyRoutes::try_from_route(reconnected_a.clone())
+            .expect("stale source A observation remains independently live");
+        assert!(
+            mixed_observation
+                .attempts
+                .insert(fresh_b.source_key(), fresh_b.clone())
+                .is_none()
+        );
+        assert!(
+            mixed_observation
+                .retired_attempts
+                .insert(route_a.source_key(), route_a.clone())
+                .is_none()
+        );
+        routes
+            .merge_observed(&mixed_observation)
+            .expect("stale or inactive A history must not poison fresh sibling B");
+        assert_eq!(routes.len(), 2);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&later_reconnected_a))
+        );
+        assert!(routes.iter().any(|route| route.same_delivery(&fresh_b)));
+        assert!(
+            !routes
+                .iter()
+                .any(|route| route.same_delivery(&reconnected_a)),
+            "observed merging must not roll source A back"
+        );
+
+        let capacity_route = fixture.mint_via(
+            target.clone(),
+            PeerId::from(KeyPair::random().public_key().clone()),
+        );
+        assert!(matches!(
+            routes.merge_observed(
+                &NetworkReplyRoutes::try_from_route(capacity_route.clone())
+                    .expect("third observed source")
+            ),
+            Err(NetworkReplyRouteError::Capacity)
+        ));
+        assert!(
+            !routes
+                .iter()
+                .any(|route| route.same_delivery(&capacity_route)),
+            "observed capacity failure must be atomic"
+        );
+
+        let newer_a = fixture
+            .redeliver(&later_reconnected_a)
+            .expect("newer source A delivery");
+        let mut foreign_observation = NetworkReplyRoutes::try_from_route(newer_a.clone())
+            .expect("valid member before foreign observed member");
+        assert!(
+            foreign_observation
+                .attempts
+                .insert(foreign.source_key(), foreign)
+                .is_none()
+        );
+        assert!(matches!(
+            routes.merge_observed(&foreign_observation),
+            Err(NetworkReplyRouteError::ForeignOwner)
+        ));
+        assert!(
+            !routes.iter().any(|route| route.same_delivery(&newer_a)),
+            "foreign observed member must reject every sibling atomically"
+        );
+
+        let collision = fixture
+            .forge_equal_ordinal_different_tenure(
+                &later_reconnected_a,
+                target,
+                reconnected_a.authenticated_via().clone(),
+            )
+            .expect("forge inactive collision for observed-history preflight");
+        collision.tenure.cancel();
+        let later_b = fixture
+            .redeliver(&fresh_b)
+            .expect("later source B delivery");
+        let mut collision_observation = NetworkReplyRoutes::try_from_route(later_b.clone())
+            .expect("valid member before inactive collision tombstone");
+        assert!(
+            collision_observation
+                .retired_attempts
+                .insert(collision.source_key(), collision)
+                .is_none()
+        );
+        assert!(matches!(
+            routes.merge_observed(&collision_observation),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+        assert!(
+            !routes.iter().any(|route| route.same_delivery(&later_b)),
+            "inactive collision history must reject every sibling atomically"
+        );
+
+        let retired_newer_b = fixture
+            .redeliver(&fresh_b)
+            .expect("newer source B observation later retires live B");
+        let mut retirement_observation =
+            NetworkReplyRoutes::try_from_route(later_reconnected_a.clone())
+                .expect("source A keeps the observed set nonempty");
+        assert!(
+            retirement_observation
+                .attempts
+                .insert(capacity_route.source_key(), capacity_route.clone())
+                .is_none()
+        );
+        assert!(
+            retirement_observation
+                .retired_attempts
+                .insert(retired_newer_b.source_key(), retired_newer_b)
+                .is_none()
+        );
+        let mut strict_reconciliation = routes.clone();
+        strict_reconciliation
+            .merge(&retirement_observation)
+            .expect("strict history merge must release tombstone capacity first");
+        assert!(
+            strict_reconciliation
+                .iter()
+                .any(|route| route.same_delivery(&capacity_route))
+        );
+        assert!(
+            !strict_reconciliation
+                .iter()
+                .any(|route| route.same_delivery(&fresh_b))
+        );
+        routes
+            .merge_observed(&retirement_observation)
+            .expect("tombstone capacity release must precede a fresh sibling");
+        assert_eq!(routes.len(), 2);
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&later_reconnected_a))
+        );
+        assert!(
+            !routes.iter().any(|route| route.same_delivery(&fresh_b)),
+            "a later retired observation must prevent dispatch on stale live B"
+        );
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.same_delivery(&capacity_route)),
+            "fresh sibling must consume capacity released by the tombstone"
+        );
+    }
+
+    #[test]
+    fn route_cancelled_between_preflight_and_admission_retires_without_queue_ownership() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer, 35, 13);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 13);
+        assert!(
+            route.is_active(),
+            "preflight observes the live request tenure"
+        );
+
+        tenure.cancel();
+        assert!(matches!(
+            handle.post_reply_recoverable(
+                Post {
+                    data: DeferredProgressMsg::Lane(7),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            ),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InactiveReplyRoute,
+                ..
+            })
+        ));
+        assert!(
+            progress_rx.try_recv().is_err(),
+            "the canceled occurrence must not consume actor queue or byte ownership"
+        );
+    }
+
+    #[test]
+    fn reply_actor_admission_does_not_complete_writer_flush_ack() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer, 36, 14);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 14);
+
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(8),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("live reply route admits one actor item")
+            .expect("new actor admission returns one completion");
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+
+        let admitted = progress_rx
+            .try_recv()
+            .expect("reply crossed actor admission");
+        assert_eq!(
+            completion.poll(),
+            NetworkReplyFlushAckStatus::Pending,
+            "actor admission is not peer-writer completion"
+        );
+        drop(admitted);
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Closed);
+        assert_eq!(
+            completion.poll(),
+            NetworkReplyFlushAckStatus::Closed,
+            "closed completion is terminal"
+        );
+    }
+
+    #[test]
+    fn reply_flush_identity_binds_ticket_tenure_source_payload_and_delivery_occurrence() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let authenticated_source_a = PeerId::from(KeyPair::random().public_key().clone());
+        let authenticated_source_b = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure_a = test_reply_tenure(
+            &handle.reply_route_owner,
+            authenticated_source_a.clone(),
+            51,
+            31,
+        );
+        let first_route = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            Arc::clone(&tenure_a),
+            70,
+        );
+        let later_route = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            Arc::clone(&tenure_a),
+            71,
+        );
+        let reconnected_route = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(
+                &handle.reply_route_owner,
+                authenticated_source_a.clone(),
+                52,
+                32,
+            ),
+            72,
+        );
+        let other_source_route = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(
+                &handle.reply_route_owner,
+                authenticated_source_b.clone(),
+                53,
+                33,
+            ),
+            73,
+        );
+        let first = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(80),
+                    peer_id: semantic_target.clone(),
+                    priority: Priority::Low,
+                },
+                &first_route,
+                None,
+            )
+            .expect("first reply identity fixture must cross actor admission")
+            .expect("first reply occurrence must mint one flush identity");
+        let first_actor_item = progress_rx
+            .try_recv()
+            .expect("first identity fixture must retain the admitted actor item");
+        let (later_post, later_ticket) = match handle.post_reply_recoverable_with_flush_ack(
+            Post {
+                data: DeferredProgressMsg::Lane(80),
+                peer_id: semantic_target.clone(),
+                priority: Priority::Low,
+            },
+            &first_route,
+            None,
+        ) {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message,
+                ticket: Some(ticket),
+                rank: 1,
+            }) => (message, ticket),
+            other => panic!("same-source reply must retain its rank-one ticket: {other:?}"),
+        };
+        drop(first_actor_item);
+        let later = handle
+            .post_reply_recoverable_with_flush_ack(later_post, &later_route, Some(later_ticket))
+            .expect("same-tenure later delivery must retain the exact admission ticket")
+            .expect("later delivery must mint one distinct flush occurrence");
+        drop(
+            progress_rx
+                .try_recv()
+                .expect("later delivery must retain the admitted actor item"),
+        );
+
+        let mut admit = |route: &NetworkReplyRoute, marker: u8| {
+            let completion = handle
+                .post_reply_recoverable_with_flush_ack(
+                    Post {
+                        data: DeferredProgressMsg::Lane(marker),
+                        peer_id: semantic_target.clone(),
+                        priority: Priority::Low,
+                    },
+                    route,
+                    None,
+                )
+                .expect("live reply identity fixture must cross actor admission")
+                .expect("a fresh reply occurrence must mint one flush identity");
+            drop(
+                progress_rx
+                    .try_recv()
+                    .expect("identity fixture must retain the admitted actor item"),
+            );
+            completion
+        };
+
+        let reconnected = admit(&reconnected_route, 80);
+        let other_source = admit(&other_source_route, 80);
+        let other_payload = admit(
+            &NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure_a), 74),
+            81,
+        );
+        let first_identity = first.identity();
+        let later_identity = later.identity();
+
+        assert_eq!(first_identity.semantic_target(), &semantic_target);
+        assert_eq!(
+            first_identity.authenticated_source_peer(),
+            &authenticated_source_a
+        );
+        assert!(first_identity.is_authenticated_via(&authenticated_source_a));
+        assert_eq!(first_identity.connection_tenure_ordinal(), 31);
+        assert_eq!(first_identity.delivery_ordinal(), 70);
+        assert_eq!(later_identity.delivery_ordinal(), 71);
+        assert_eq!(first_identity.ticket_rank(), 1);
+        assert_eq!(first_identity.ticket_topic(), message::Topic::Consensus);
+        assert!(first_identity.ticket_stream_wire_bytes() > 0);
+        assert!(first_identity.is_bound_to_tenure(&first_route));
+        assert!(first_identity.is_bound_to_delivery(&first_route));
+        assert!(first_identity.is_bound_to_tenure(&later_route));
+        assert!(!first_identity.is_bound_to_delivery(&later_route));
+        assert!(!first_identity.is_bound_to_tenure(&reconnected_route));
+        assert!(!first_identity.is_bound_to_tenure(&other_source_route));
+        assert!(first_identity.is_bound_to_canonical_reply(&Post {
+            data: DeferredProgressMsg::Lane(80),
+            peer_id: semantic_target.clone(),
+            priority: Priority::Low,
+        }));
+        assert!(!first_identity.is_bound_to_canonical_reply(&Post {
+            data: DeferredProgressMsg::Lane(81),
+            peer_id: semantic_target.clone(),
+            priority: Priority::Low,
+        }));
+
+        assert_eq!(first_identity.ticket_id(), later_identity.ticket_id());
+        assert_eq!(
+            first_identity.canonical_request_digest(),
+            later_identity.canonical_request_digest()
+        );
+        assert!(first_identity.same_ticket_identity(later_identity));
+        assert!(later_identity.same_ticket_identity(first_identity));
+        assert!(!first_identity.same_delivery_occurrence(later_identity));
+        assert_eq!(first_identity.source_key(), later_identity.source_key());
+        assert_eq!(
+            first_identity.source_key(),
+            reconnected.identity().source_key(),
+            "a reconnect keeps source fairness identity while changing ticket tenure"
+        );
+        assert!(!first_identity.same_ticket_identity(reconnected.identity()));
+        assert!(!first_identity.same_ticket_identity(other_source.identity()));
+        assert!(!first_identity.same_ticket_identity(other_payload.identity()));
+
+        let mut foreign_budget_only = first_identity.clone();
+        foreign_budget_only.ticket.budget = NetworkActorProgressBudget::new(1, 1, 1)
+            .expect("foreign identity budget geometry must be valid");
+        assert!(foreign_budget_only.is_bound_to_delivery(&first_route));
+        assert_eq!(first_identity.ticket_id(), foreign_budget_only.ticket_id());
+        assert_eq!(
+            first_identity.canonical_request_digest(),
+            foreign_budget_only.canonical_request_digest()
+        );
+        assert!(
+            !first_identity.same_ticket_identity(&foreign_budget_only),
+            "equal ticket facts under another opaque budget owner must not alias"
+        );
+
+        let (
+            foreign_handle,
+            _foreign_safety_rx,
+            mut foreign_progress_rx,
+            _foreign_high_rx,
+            _foreign_low_rx,
+        ) = handle_with_network_receivers::<DeferredProgressMsg>();
+        let foreign_route = NetworkReplyRoute::new(
+            semantic_target.clone(),
+            test_reply_tenure(
+                &foreign_handle.reply_route_owner,
+                authenticated_source_a,
+                51,
+                31,
+            ),
+            70,
+        );
+        let foreign = foreign_handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(80),
+                    peer_id: semantic_target,
+                    priority: Priority::Low,
+                },
+                &foreign_route,
+                None,
+            )
+            .expect("foreign actor admits its own exact reply")
+            .expect("foreign actor mints its own flush identity");
+        drop(
+            foreign_progress_rx
+                .try_recv()
+                .expect("foreign actor retains its admitted reply"),
+        );
+        assert_eq!(first_identity.ticket_id(), foreign.identity().ticket_id());
+        assert_eq!(
+            first_identity.ticket_topic(),
+            foreign.identity().ticket_topic()
+        );
+        assert_eq!(
+            first_identity.ticket_stream_wire_bytes(),
+            foreign.identity().ticket_stream_wire_bytes()
+        );
+        assert_eq!(
+            first_identity.canonical_request_digest(),
+            foreign.identity().canonical_request_digest()
+        );
+        assert!(!first_identity.same_ticket_identity(foreign.identity()));
+        assert!(!first_identity.same_delivery_occurrence(foreign.identity()));
+        assert_ne!(first_identity.source_key(), foreign.identity().source_key());
+    }
+
+    #[test]
+    fn reply_flush_ack_cancellation_between_precheck_and_budget_lock_returns_none() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer, 38, 16);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 16);
+
+        let completion = handle
+            .post_reply_recoverable_with_flush_ack_inner(
+                Post {
+                    data: DeferredProgressMsg::Lane(10),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+                || tenure.cancel(),
+            )
+            .expect("a raced retirement preserves the existing no-op admission behavior");
+        assert!(completion.is_none());
+        assert!(!route.is_active());
+        assert!(
+            progress_rx.try_recv().is_err(),
+            "cancelled occurrence transfers no actor item"
+        );
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[test]
+    fn retired_reply_tenure_closes_flush_ack_without_false_completion() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer, 37, 15);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 15);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(9),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("live reply route admits one actor item")
+            .expect("new actor admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("reply actor item");
+        let mut pending = ReliableActorPending::new(1);
+        pending.push_back(admitted);
+
+        tenure.cancel();
+        assert_eq!(pending.release_cancelled_targets(), 1);
+        assert_eq!(pending.len(), 0);
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Closed);
+        assert_ne!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+    }
+
+    #[test]
+    fn reply_flush_test_fixture_controls_success_and_close_without_false_receipts() {
+        let (mut flushed_control, mut flushed) = NetworkReplyFlushAckTestFixture::new();
+        let flushed_identity = flushed.identity().clone();
+        assert_eq!(flushed.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert!(flushed_control.flush());
+        assert!(!flushed_control.flush());
+        assert_eq!(flushed.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert_eq!(flushed.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(
+            flushed_identity.same_delivery_occurrence(flushed.identity()),
+            "terminal polling must not mutate the immutable completion identity"
+        );
+
+        let (mut closed_control, mut closed) = NetworkReplyFlushAckTestFixture::new();
+        let closed_identity = closed.identity().clone();
+        assert_eq!(closed.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert!(closed_control.close());
+        assert!(!closed_control.close());
+        assert_eq!(closed.poll(), NetworkReplyFlushAckStatus::Closed);
+        assert_eq!(closed.poll(), NetworkReplyFlushAckStatus::Closed);
+        assert!(closed_identity.same_delivery_occurrence(closed.identity()));
+    }
+
+    #[test]
+    fn reply_flush_test_fixture_binds_exact_canonical_post_and_opaque_actor() {
+        let authenticated_source = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_source.clone());
+        let route = routes.mint(semantic_target.clone());
+        let post = Post {
+            data: DeferredProgressMsg::Lane(91),
+            peer_id: semantic_target,
+            priority: Priority::Low,
+        };
+        let (mut first_control, first) =
+            NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
+        let (mut second_control, second) =
+            NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
+
+        assert!(first.identity().is_bound_to_canonical_reply(&post));
+        assert!(first.identity().is_bound_to_delivery(&route));
+        assert!(first.identity().is_authenticated_via(&authenticated_source));
+        assert!(first.identity().ticket_rank() >= 1);
+        assert!(first.identity().ticket_stream_wire_bytes() > 0);
+        assert!(
+            !first.identity().same_ticket_identity(second.identity()),
+            "separate synthetic actors cannot alias an opaque ticket"
+        );
+        assert!(first_control.flush());
+        assert!(second_control.close());
+    }
+
+    #[test]
+    fn reply_admission_rejects_retargeting_foreign_handles_and_wrong_tickets() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let (
+            foreign_handle,
+            _foreign_safety_rx,
+            _foreign_progress_rx,
+            _foreign_high_rx,
+            _foreign_low_rx,
+        ) = handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_a = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_b = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer.clone(), 40, 20);
+        let route_a = NetworkReplyRoute::new(origin_a.clone(), Arc::clone(&tenure), 20);
+        let route_b = NetworkReplyRoute::new(origin_b.clone(), tenure, 21);
+        let reconnected_b = NetworkReplyRoute::new(
+            origin_b.clone(),
+            test_reply_tenure(&handle.reply_route_owner, delivery_peer, 41, 21),
+            22,
+        );
+        let post = |peer_id, marker| Post {
+            data: DeferredProgressMsg::Lane(marker),
+            peer_id,
+            priority: Priority::High,
+        };
+
+        assert!(matches!(
+            handle.post_reply_recoverable(post(origin_b.clone(), 0), &route_a, None),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+        assert!(matches!(
+            foreign_handle.post_reply_recoverable(post(origin_a.clone(), 1), &route_a, None),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+
+        handle
+            .post_reply_recoverable(post(origin_a, 2), &route_a, None)
+            .expect("first relayed origin owns the authenticated source lane");
+        let ticket = match handle.post_reply_recoverable(post(origin_b.clone(), 3), &route_b, None)
+        {
+            Err(NetworkActorAdmissionError::Backpressured {
+                ticket: Some(ticket),
+                rank: 1,
+                ..
+            }) => ticket,
+            other => panic!("second origin behind one hub must wait at rank one: {other:?}"),
+        };
+        assert_eq!(route_a.source_key(), route_b.source_key());
+        assert!(matches!(
+            handle.post_reply_recoverable(post(origin_b.clone(), 3), &reconnected_b, Some(ticket)),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+
+        let request_ticket =
+            match handle.post_reply_recoverable(post(origin_b.clone(), 4), &route_b, None) {
+                Err(NetworkActorAdmissionError::Backpressured {
+                    ticket: Some(ticket),
+                    rank: 1,
+                    ..
+                }) => ticket,
+                other => panic!("same source remains fairly queued: {other:?}"),
+            };
+        assert!(matches!(
+            handle.post_reply_recoverable(post(origin_b, 5), &route_b, Some(request_ticket)),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+        drop(
+            progress_rx
+                .try_recv()
+                .expect("first reply remains actor-owned"),
+        );
+    }
+
+    #[test]
     fn subscribe_with_filter_returns_error_when_closed() {
         let handle =
             NetworkBaseHandle::<DummyMsg, X25519Sha256, ChaCha20Poly1305>::closed_for_tests();
@@ -17234,6 +19635,22 @@ mod tests {
         insert_ref_peer(network, peer_id, peer_addr, conn_id, handle, true);
     }
 
+    fn test_reply_tenure(
+        owner: &Arc<()>,
+        delivery_peer: PeerId,
+        connection_id: ConnectionId,
+        connection_ordinal: u128,
+    ) -> Arc<ReliableReplyRouteTenure> {
+        Arc::new(ReliableReplyRouteTenure {
+            owner: Arc::clone(owner),
+            delivery_peer,
+            connection_id,
+            connection_ordinal,
+            source_capacity: 8,
+            active: AtomicBool::new(true),
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -17312,7 +19729,8 @@ mod tests {
             reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
             reply_route_owner: Arc::new(()),
             reply_route_tenures: HashMap::new(),
-            next_reply_route_generation: 0,
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
@@ -17845,6 +20263,69 @@ mod tests {
         network.incoming_active.insert(old_conn_id);
         network.outbound_connections.insert(old_conn_id);
         network.incoming_pending.insert(new_conn_id);
+        let semantic_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let old_reply_tenure = test_reply_tenure(
+            &network.reply_route_owner,
+            peer.id().clone(),
+            old_conn_id,
+            0,
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(old_conn_id, Arc::clone(&old_reply_tenure))
+                .is_none()
+        );
+        network.next_reply_connection_ordinal = 1;
+        network.next_reply_delivery_ordinal = 1;
+        let old_reply_route = NetworkReplyRoute::new(semantic_origin.clone(), old_reply_tenure, 0);
+        let old_reply_authority = ProgressDeliveryAuthority::Reply(old_reply_route.clone());
+        let old_reply_source = ActorProgressSource {
+            target: Some(peer.id().clone()),
+            class: ActorProgressClass::Lane,
+        };
+        let retained_shape = ProgressTicketShape {
+            topic: message::Topic::Consensus,
+            stream_wire_bytes: 1,
+            broadcast: false,
+            request_digest: Hash::new(b"old-reply-retained"),
+            authority: Some(old_reply_authority.identity()),
+        };
+        let ProgressLeaseAttempt::Ready {
+            lease: old_reply_lease,
+            ticket: mut retained_ticket,
+        } = network
+            .network_actor_progress_budget
+            .try_reserve_for_source(
+                1,
+                retained_shape,
+                old_reply_source.clone(),
+                Some(&old_reply_authority),
+                None,
+            )
+        else {
+            panic!("old reply fixture must retain its source lane");
+        };
+        retained_ticket.commit();
+        let waiting_shape = ProgressTicketShape {
+            request_digest: Hash::new(b"old-reply-waiter"),
+            ..retained_shape
+        };
+        let ProgressLeaseAttempt::Waiting {
+            ticket: Some(old_reply_waiter),
+            rank: 1,
+        } = network
+            .network_actor_progress_budget
+            .try_reserve_for_source(
+                1,
+                waiting_shape,
+                old_reply_source,
+                Some(&old_reply_authority),
+                None,
+            )
+        else {
+            panic!("old reply fixture must retain one exact waiter");
+        };
         let deferred = dummy_relay_frame(network.self_id.clone(), peer.id(), Priority::High);
         let deferred_outcome = network.deferred_send_queue.enqueue(
             peer.id().clone(),
@@ -17870,6 +20351,29 @@ mod tests {
         });
 
         assert_eq!(network.peers[peer.id()].conn_id, new_conn_id);
+        let new_reply_tenure = Arc::clone(
+            network
+                .reply_route_tenures
+                .get(&new_conn_id)
+                .expect("replacement installs its exact reply tenure"),
+        );
+        let new_reply_route = NetworkReplyRoute::new(
+            semantic_origin,
+            new_reply_tenure,
+            network.next_reply_delivery_ordinal,
+        );
+        assert!(!old_reply_route.is_active());
+        assert_eq!(
+            old_reply_waiter.rank(),
+            None,
+            "replacement cancellation removes caller-held old-tenure ranks"
+        );
+        assert!(new_reply_route.is_active());
+        assert_eq!(
+            new_reply_route.source_update_from(&old_reply_route),
+            Ok(NetworkReplyRouteSourceUpdate::Reconnected)
+        );
+        assert_eq!(new_reply_route.source_key(), old_reply_route.source_key());
         assert!(network.terminating_connections.contains(&old_conn_id));
         assert!(
             old_receivers.termination_requested(),
@@ -17881,7 +20385,7 @@ mod tests {
         );
         assert!(
             new_receivers.try_recv_any().is_ok(),
-            "peer-owned deferred progress must reconstruct on the replacement generation"
+            "peer-owned deferred progress must remain queued on the replacement connection"
         );
         assert_eq!(
             network.peer_reputations.score(peer.id()),
@@ -17903,8 +20407,18 @@ mod tests {
             "stale predecessor termination must not remove the replacement"
         );
         assert!(
+            new_reply_route.is_active(),
+            "stale connection termination must not cancel the replacement tenure's reply route"
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .get(&new_conn_id)
+                .is_some_and(|tenure| Arc::ptr_eq(tenure, &new_reply_route.tenure))
+        );
+        assert!(
             network.retry_backoff.is_empty(),
-            "a retired outbound predecessor must not reintroduce backoff while its successor is live"
+            "a retired outbound connection must not reintroduce backoff while its replacement is live"
         );
         assert!(!network.exceeds_caps());
 
@@ -17915,7 +20429,13 @@ mod tests {
         assert!(network.peers.is_empty());
         assert!(network.terminating_connections.is_empty());
         assert!(network.incoming_active.is_empty());
+        assert!(
+            !new_reply_route.is_active(),
+            "replacement-connection termination cancels its exact reply route"
+        );
+        assert!(!network.reply_route_tenures.contains_key(&new_conn_id));
         assert_eq!(network.peer_reputations.score(peer.id()), 0);
+        drop((old_reply_waiter, old_reply_lease));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -20098,6 +22618,78 @@ mod tests {
     }
 
     #[test]
+    fn reply_flush_ack_completes_only_after_peer_writer_flush() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_addr = socket_addr!(127.0.0.1:45718);
+        let connection_id = 138;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            peer_addr,
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 32);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 47);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(77),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission alone cannot complete the reply");
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("peer writer receives and flushes the exact reply")
+                .payload,
+            DeferredProgressMsg::Lane(77)
+        );
+        assert_eq!(
+            completion.poll(),
+            NetworkReplyFlushAckStatus::Pending,
+            "only the network actor may publish its observed writer flush"
+        );
+
+        assert!(
+            network.dispatch_reliable_actor_message(retained).is_ok(),
+            "observed peer-writer flush retires actor ownership"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+    }
+
+    #[test]
     fn actor_progress_lease_survives_topology_transition() {
         let _guard = deferred_send_test_guard();
         let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
@@ -20696,6 +23288,11 @@ mod tests {
         let topology = HashSet::from([target.clone()]);
         let _ = handle
             .reliable_broadcast_topology
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reconcile(&topology, &handle.self_id);
+        let _ = handle
+            .reliable_direct_topology
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reconcile(&topology, &handle.self_id);

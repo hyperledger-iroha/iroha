@@ -14,6 +14,8 @@ use std::{
 
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
+#[cfg(test)]
+use iroha_data_model::transaction::Executable;
 use iroha_data_model::{
     Identifiable,
     account::{AccountAddress, AccountId, rekey::AccountAlias},
@@ -31,7 +33,6 @@ use iroha_data_model::{
         ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
         fixtures,
     },
-    transaction::Executable,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -1122,11 +1123,7 @@ pub fn seed_genesis_alias_bootstrap(
 ) {
     for transaction in block.external_transactions() {
         let authority = transaction.authority();
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            continue;
-        };
-
-        for instruction in instructions {
+        for instruction in transaction.instructions().explicit_instructions() {
             if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
                 match register {
                     RegisterBox::Domain(register) => {
@@ -4195,23 +4192,29 @@ mod tests {
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([
-            InstructionBox::from(ensure_dataspace.clone()),
-            InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-            InstructionBox::from(Register::account(
-                Account::new(account_id.clone()).with_label(Some(label.clone())),
-            )),
-            InstructionBox::from(ensure_alias(
-                "settlement@cbuae.universal",
-                account_id.clone(),
-                AccountAliasRoleV1::Additional,
-            )),
-            InstructionBox::from(ensure_alias(
-                "ops@cbuae.universal",
-                genesis_account.clone(),
-                AccountAliasRoleV1::Primary,
-            )),
-        ])
+        .with_executable(Executable::Batch(
+            [
+                InstructionBox::from(ensure_dataspace.clone()),
+                InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+                InstructionBox::from(Register::account(
+                    Account::new(account_id.clone()).with_label(Some(label.clone())),
+                )),
+                InstructionBox::from(ensure_alias(
+                    "settlement@cbuae.universal",
+                    account_id.clone(),
+                    AccountAliasRoleV1::Additional,
+                )),
+                InstructionBox::from(ensure_alias(
+                    "ops@cbuae.universal",
+                    genesis_account.clone(),
+                    AccountAliasRoleV1::Primary,
+                )),
+            ]
+            .into_iter()
+            .map(iroha_data_model::transaction::ExecutableBatchItem::Instruction)
+            .collect::<Vec<_>>()
+            .into(),
+        ))
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let bootstrap_authority = block

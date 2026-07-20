@@ -16804,10 +16804,35 @@ pub mod message {
             self.reply_route = Some(route);
         }
 
+        /// Reattach a previously minted route after a bounded local hold/release boundary.
+        ///
+        /// The route remains unforgeable and is accepted only when its semantic
+        /// target matches this message's protocol origin. Its authenticated
+        /// delivery identity is restored from the opaque route rather than from
+        /// the semantic origin supplied by the local rehydration boundary.
+        ///
+        /// # Errors
+        ///
+        /// Returns the route unchanged when it belongs to another semantic origin
+        /// or its authenticated connection tenure is no longer active.
+        pub fn reattach_reply_route(
+            &mut self,
+            route: crate::network::NetworkReplyRoute,
+        ) -> Result<(), crate::network::NetworkReplyRoute> {
+            if route.semantic_target() != self.peer.id() || !route.is_active() {
+                return Err(route);
+            }
+            self.authenticated_via = route.authenticated_via().clone();
+            self.reply_route = Some(route);
+            Ok(())
+        }
+
         /// Split the message while preserving its byte-budget ownership.
         ///
         /// The returned guard must remain in scope for as long as the moved
-        /// payload remains queued or is being processed.
+        /// payload remains queued or is being processed. Consumers which may
+        /// produce a protocol reply must use [`Self::into_parts_with_reply_route`]
+        /// so the authenticated return route is not discarded.
         #[must_use]
         pub fn into_parts(self) -> (Peer, PeerId, T, usize, PeerMessageRetentionGuard) {
             let (peer, authenticated_via, payload, payload_bytes, _reply_route, guard) =

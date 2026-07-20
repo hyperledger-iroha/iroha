@@ -330,7 +330,7 @@ def _runner(
         "receipt-wrong-identity": ":",
         "receipt-wrong-trust-policy": ":",
         "receipt-mutual-wrong-signer": ":",
-        "receipt-null-evidence": ":",
+        "receipt-missing-cross-tool-evidence": ":",
         "preexisting-postmarker": ":",
     }
     if action == "trusted-drift":
@@ -362,7 +362,9 @@ def _runner(
             'receipt["authentication"]["release_identity"]["trust_policy"]'
             '["signer_fingerprint"] = wrong'
         ),
-        "receipt-null-evidence": 'receipt["evidence"]["formal_completion"] = None',
+        "receipt-missing-cross-tool-evidence": (
+            'receipt["evidence"].pop("formal_cross_tool_evidence")'
+        ),
     }.get(action, "pass")
     receipt_script = f'''python3 -I -S - <<'PY'
 import hashlib
@@ -436,6 +438,9 @@ completion_records = {{}}
 for label in (
     "corridor_completion",
     "formal_completion",
+    "formal_verus_evidence",
+    "formal_verus_log",
+    "formal_cross_tool_evidence",
     "seed_matrix_completion",
     "chaos_completion",
     "taira_completion",
@@ -536,6 +541,8 @@ receipt = {{
         "formal_toolchain": {{}},
         "seed_matrix_summary": {{}},
         "seed_matrix_run_logs": [],
+        "seed_matrix_localnet_manifest_index": {{}},
+        "seed_matrix_localnet_manifests": [],
         "chaos_log": {{}},
         "taira_evidence": {{}},
         "taira_run_log": {{}},
@@ -841,6 +848,12 @@ def test_success_authenticates_then_launches_exactly_once(release_fixture: Fixtu
         / "release"
         / "RELEASE_COMPLETED.json"
     )
+    terminal_receipt = json.loads(receipt.read_text(encoding="utf-8"))
+    assert {
+        "formal_verus_evidence",
+        "formal_verus_log",
+        "formal_cross_tool_evidence",
+    } <= set(terminal_receipt["evidence"])
     external_marker = release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json"
     external_data = external_marker.read_bytes()
     external = json.loads(external_data)
@@ -1040,7 +1053,7 @@ def test_bootstrap_interruption_preserves_active_runner_and_regular_file_evidenc
         "receipt-wrong-identity",
         "receipt-wrong-trust-policy",
         "receipt-mutual-wrong-signer",
-        "receipt-null-evidence",
+        "receipt-missing-cross-tool-evidence",
         "preexisting-postmarker",
     ],
 )

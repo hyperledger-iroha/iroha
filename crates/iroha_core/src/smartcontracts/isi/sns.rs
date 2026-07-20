@@ -289,11 +289,12 @@ impl Execute for EnsureAlias {
             quote_guard,
         } = self;
         let now_ms = state_transaction.block_unix_timestamp_ms();
-        let disposition = crate::alias_setup::classify_alias_intent(
+        let disposition = crate::alias_setup::classify_alias_intent_with_endorsement_policy(
             state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
             &intent,
             now_ms,
+            state_transaction.nexus.enabled && state_transaction.nexus.endorsement.quorum > 0,
         )
         .map_err(alias_setup_instruction_error)?;
 
@@ -713,8 +714,8 @@ mod tests {
         },
         alias_setup::{
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
-            AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
-            ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+            AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+            AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
         },
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
@@ -740,8 +741,8 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         sns::{
-            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, SnsNamespace, get_name_record,
-            policy_by_id, seed_default_namespace_policies,
+            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+            SnsNamespace, get_name_record, policy_by_id, seed_default_namespace_policies,
         },
         state::{State, StateTransaction, World, WorldReadOnly},
     };
@@ -842,18 +843,26 @@ mod tests {
         );
     }
 
-    fn exact_account_alias_quote_guard(
+    fn exact_alias_quote_guard(
         state_transaction: &StateTransaction<'_, '_>,
+        suffix_id: u16,
         quote: &crate::sns::LeaseQuote,
     ) -> AliasQuoteGuardV1 {
-        let policy = policy_by_id(state_transaction.world(), ACCOUNT_ALIAS_SUFFIX_ID)
-            .expect("account-alias policy");
+        let policy =
+            policy_by_id(state_transaction.world(), suffix_id).expect("fixture namespace policy");
         AliasQuoteGuardV1 {
             expected_policy_version: policy.policy_version,
             expected_payment_asset: quote.payment_asset_definition_id.clone(),
             max_amount: quote.charge_amount.clone(),
             valid_until_ms: u64::MAX,
         }
+    }
+
+    fn exact_account_alias_quote_guard(
+        state_transaction: &StateTransaction<'_, '_>,
+        quote: &crate::sns::LeaseQuote,
+    ) -> AliasQuoteGuardV1 {
+        exact_alias_quote_guard(state_transaction, ACCOUNT_ALIAS_SUFFIX_ID, quote)
     }
 
     fn ensure_account_alias_instruction(
@@ -1367,6 +1376,214 @@ mod tests {
                 .is_none(),
             "authorization failure must not repair the alias binding"
         );
+    }
+
+    #[test]
+    fn ensure_alias_rejects_absent_endorsement_required_domain_before_charge() {
+        let collector = owner();
+        let authority = another_owner();
+        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let payer_asset = Asset::new(
+            AssetId::of(payment_asset.clone(), authority.clone()),
+            Quantity::from(1_000_u64),
+        );
+        let mut world = World::with_assets(
+            [genesis_domain],
+            [authority_account, collector_account],
+            [payment_definition],
+            [payer_asset],
+            [],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        configure_test_fee_asset(&state, &payment_asset);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.endorsement.quorum = 1;
+        }
+
+        let domain_id = DomainId::try_new("protected", "universal").expect("protected domain id");
+        let intent = AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(domain_id.clone(), DataSpaceId::UNIVERSAL),
+            owner: authority.clone(),
+        });
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&intent.target())
+            .expect("protected domain selector");
+        let mut block = state.block(next_header(&state));
+        let mut transaction = block.transaction();
+        seed_test_call_hash(&mut transaction, 0xC1);
+        let quote = crate::sns::quote_resolved_name_registration(
+            transaction.world(),
+            selector.clone(),
+            &authority,
+            1,
+            None,
+            transaction.block_unix_timestamp_ms(),
+        )
+        .expect("exact protected-domain quote");
+        let ensure = EnsureAlias::new(
+            intent,
+            AliasLeaseAcquisitionV1::new(1, None),
+            exact_alias_quote_guard(&transaction, DOMAIN_NAME_SUFFIX_ID, &quote),
+        );
+        let payer_before = asset_balance_in_world(transaction.world(), &payment_asset, &authority);
+        let collector_before =
+            asset_balance_in_world(transaction.world(), &payment_asset, &collector);
+
+        let error = ensure
+            .execute(&authority, &mut transaction)
+            .expect_err("endorsement-free setup must fail before acquisition");
+        assert!(
+            error
+                .to_string()
+                .contains("alias.domain.endorsement_required"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            asset_balance_in_world(transaction.world(), &payment_asset, &authority),
+            payer_before,
+            "endorsement classification must run before any lease debit"
+        );
+        assert_eq!(
+            asset_balance_in_world(transaction.world(), &payment_asset, &collector),
+            collector_before,
+            "endorsement classification must run before any collector credit"
+        );
+        assert!(
+            transaction.world().domains().get(&domain_id).is_none(),
+            "blocked setup must not create the domain"
+        );
+        assert!(
+            crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+            "blocked setup must not acquire the domain lease"
+        );
+    }
+
+    #[test]
+    fn ensure_alias_create_rejects_every_stale_quote_guard_before_charge() {
+        let collector = owner();
+        let authority = another_owner();
+        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let other_asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("different payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let payer_asset = Asset::new(
+            AssetId::of(payment_asset.clone(), authority.clone()),
+            Quantity::from(1_000_u64),
+        );
+        let mut world = World::with_assets(
+            [genesis_domain],
+            [authority_account, collector_account],
+            [payment_definition],
+            [payer_asset],
+            [],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        configure_test_fee_asset(&state, &payment_asset);
+
+        let alias =
+            AccountAlias::domainless("guarded".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let resolved = resolved_account_alias(&alias, &state.nexus.read().dataspace_catalog);
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(
+            &AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: resolved,
+                target_account: authority.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Additional,
+            })
+            .target(),
+        )
+        .expect("guarded account-alias selector");
+
+        for (case, expected_code) in [
+            ("deadline", "alias.quote.expired"),
+            ("asset", "alias.quote.payment_asset_mismatch"),
+            ("cap", "alias.quote.cap_exceeded"),
+            ("policy", "alias.quote.policy_version_mismatch"),
+        ] {
+            let mut block = state.block(next_header_at(&state, 10));
+            let mut transaction = block.transaction();
+            seed_test_call_hash(&mut transaction, 0xC6);
+            let mut ensure = ensure_account_alias_instruction(
+                &transaction,
+                &alias,
+                authority.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            );
+            match case {
+                "deadline" => ensure.quote_guard.valid_until_ms = 9,
+                "asset" => ensure.quote_guard.expected_payment_asset = other_asset.clone(),
+                "cap" => ensure.quote_guard.max_amount = Quantity::zero(),
+                "policy" => {
+                    ensure.quote_guard.expected_policy_version =
+                        ensure.quote_guard.expected_policy_version.saturating_add(1);
+                }
+                _ => unreachable!("all quote-guard cases are enumerated"),
+            }
+            let payer_before =
+                asset_balance_in_world(transaction.world(), &payment_asset, &authority);
+            let collector_before =
+                asset_balance_in_world(transaction.world(), &payment_asset, &collector);
+
+            let error = ensure
+                .execute(&authority, &mut transaction)
+                .expect_err("stale create guard must fail");
+            assert!(
+                error.to_string().contains(expected_code),
+                "unexpected {case} guard error: {error}"
+            );
+            assert_eq!(
+                asset_balance_in_world(transaction.world(), &payment_asset, &authority),
+                payer_before,
+                "{case} guard failure must precede any payer debit"
+            );
+            assert_eq!(
+                asset_balance_in_world(transaction.world(), &payment_asset, &collector),
+                collector_before,
+                "{case} guard failure must precede any collector credit"
+            );
+            assert!(
+                crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+                "{case} guard failure must not acquire the lease"
+            );
+            assert!(
+                transaction.world().account_aliases().get(&alias).is_none(),
+                "{case} guard failure must not create the alias binding"
+            );
+        }
     }
 
     #[test]
@@ -1981,6 +2198,116 @@ mod tests {
         assert!(
             renewed.expires_at_ms > initial_expiry,
             "renewal must extend the alias expiry"
+        );
+    }
+
+    #[test]
+    fn renew_alias_lease_rejects_stale_expiry_cas_before_charge() {
+        let collector = owner();
+        let authority = another_owner();
+        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let payer_asset = Asset::new(
+            AssetId::of(payment_asset.clone(), authority.clone()),
+            Quantity::from(1_000_u64),
+        );
+        let mut world = World::with_assets(
+            [genesis_domain],
+            [authority_account, collector_account],
+            [payment_definition],
+            [payer_asset],
+            [],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        configure_test_fee_asset(&state, &payment_asset);
+
+        let alias = AccountAlias::domainless(
+            "stale-renew".parse().expect("label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        {
+            let mut block = state.block(next_header(&state));
+            let mut transaction = block.transaction();
+            seed_test_call_hash(&mut transaction, 0xC4);
+            ensure_account_alias_instruction(
+                &transaction,
+                &alias,
+                authority.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            )
+            .execute(&authority, &mut transaction)
+            .expect("acquire lease");
+            transaction.apply();
+            block.commit().expect("acquire block commits");
+        }
+
+        let (current_expiry, payer_before, collector_before) = {
+            let view = state.view();
+            let record = get_name_record(
+                view.world(),
+                &view.nexus.dataspace_catalog,
+                SnsNamespace::AccountAlias,
+                "stale-renew@universal",
+                0,
+            )
+            .expect("acquired alias lease");
+            (
+                record.expires_at_ms,
+                asset_balance_in_world(view.world(), &payment_asset, &authority),
+                asset_balance_in_world(view.world(), &payment_asset, &collector),
+            )
+        };
+
+        let mut block = state.block(next_header(&state));
+        let mut transaction = block.transaction();
+        seed_test_call_hash(&mut transaction, 0xC5);
+        let mut renewal = renew_account_alias_instruction(&transaction, &alias, 1);
+        renewal.expected_current_expiry_ms = current_expiry.saturating_add(1);
+        let error = renewal
+            .execute(&authority, &mut transaction)
+            .expect_err("stale expiry CAS must fail");
+        assert!(
+            error.to_string().contains("alias.lease.expiry_conflict"),
+            "unexpected stale CAS error: {error}"
+        );
+        assert_eq!(
+            asset_balance_in_world(transaction.world(), &payment_asset, &authority),
+            payer_before,
+            "expiry CAS must be checked before charging"
+        );
+        assert_eq!(
+            asset_balance_in_world(transaction.world(), &payment_asset, &collector),
+            collector_before,
+            "expiry CAS must be checked before crediting the collector"
+        );
+        let record = get_name_record(
+            transaction.world(),
+            &transaction.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "stale-renew@universal",
+            0,
+        )
+        .expect("lease remains present after rejected renewal");
+        assert_eq!(
+            record.expires_at_ms, current_expiry,
+            "stale renewal must not change the current expiry"
         );
     }
 

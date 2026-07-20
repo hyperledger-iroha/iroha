@@ -110,6 +110,18 @@ and live address/code/alias binding. A revoked permission, deactivated
 contract, or changed binding therefore rejects the overlay without applying
 the affected effect or write.
 
+Transactions and trigger actions may use `Executable::Batch` to interleave
+native ISIs with by-reference `ContractCall` items. The batch is flat and
+non-empty. Items execute sequentially against one live transaction view, so a
+contract call sees earlier native changes and later native ISIs see the call's
+effects. Admission schedules the whole batch as one conservative global
+live-state barrier; a failed item, authorization check, or gas check rolls back
+the entire batch. Transaction batches containing calls bind one gas limit in
+`fee_payment`; all explicit ISI gas and contract-call gas consume that shared
+limit, and fees settle once for the transaction. A trigger invocation likewise
+executes its complete batch atomically and consumes one shared deterministic
+trigger gas budget rather than resetting the cap for each contract-call item.
+
 ## Torii endpoints (feature `app_api`)
 
 - Torii does not expose server-side deployment or deployment-receipt routes.

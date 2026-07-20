@@ -49,6 +49,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingReceiptVerifier
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseVerifier
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.alias.requireOnboardingCredential
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
@@ -473,6 +474,13 @@ class HttpClientTransport(
             buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
             AccountOnboardingJsonParser::parseResponse,
             "sponsored account onboarding apply",
+            responseValidator = { response, statusCode ->
+                AccountOnboardingResponseVerifier.requireValidForReceipt(
+                    receipt,
+                    response,
+                    statusCode,
+                )
+            },
         )
     }
 
@@ -1024,6 +1032,7 @@ class HttpClientTransport(
         parser: Function<ByteArray, T>,
         errorContext: String,
         acceptedStatus: Int? = null,
+        responseValidator: ((T, Int) -> T)? = null,
     ): CompletableFuture<T> {
         notifyRequest(request); val future = CompletableFuture<T>()
         executor.execute(request).whenComplete { response, throwable ->
@@ -1032,7 +1041,12 @@ class HttpClientTransport(
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
             if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
-            try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(parsed) }
+            try {
+                val parsed = parser.apply(response.body)
+                val validated = responseValidator?.invoke(parsed, response.statusCode) ?: parsed
+                notifyResponse(request, clientResponse)
+                future.complete(validated)
+            }
             catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
         }; return future
     }

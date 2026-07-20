@@ -226,7 +226,7 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
 
 DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-DATA_MODEL_VERSION = 2
+DATA_MODEL_VERSION = 3
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
 

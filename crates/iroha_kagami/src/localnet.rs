@@ -1572,8 +1572,11 @@ fn generate_localnet_with_line<T: Write>(
         &alias_setup_intent_path,
     )?;
     if redact_seed_metadata {
-        crate::secure_fs::harden_private_tree(&out_dir)
-            .wrap_err("harden fresh localnet private artifact tree")?;
+        crate::secure_fs::harden_private_tree_with_owner_executables(
+            &out_dir,
+            &[&start_path, &stop_path],
+        )
+        .wrap_err("harden fresh localnet private artifact tree")?;
     }
     tui::success("Localnet ready");
 
@@ -4275,6 +4278,7 @@ fn write_start_script(
     let sora_mode_env = if sora_mode { "1" } else { "0" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
+    writeln!(start_file, "umask 077")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(start_file, "cd \"$DIR\"")?;
     writeln!(start_file, "pid_is_running() {{")?;
@@ -4492,6 +4496,7 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
+    writeln!(stop_file, "umask 077")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(stop_file, "pid_matches_peer() {{")?;
     writeln!(stop_file, "  pid=\"$1\"")?;
@@ -4938,7 +4943,7 @@ fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     use std::{
         env, fs,
         io::BufWriter,
@@ -6021,7 +6026,7 @@ mod tests {
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
             base_p2p_port: 33337,
-            out_dir: temp.path().to_path_buf(),
+            out_dir: temp.path().canonicalize().expect("canonical temp dir"),
             extra_accounts: 0,
             assets: Vec::new(),
             block_cadence_ms: None,
@@ -6029,7 +6034,8 @@ mod tests {
         };
 
         let mut command_output = BufWriter::new(Vec::new());
-        generate_localnet(&opts, &mut command_output).expect("generate localnet files");
+        generate_localnet_with_line(&opts, &mut command_output, true)
+            .expect("generate fresh-custody localnet files");
         let command_output = String::from_utf8(
             command_output
                 .into_inner()
@@ -6245,39 +6251,47 @@ mod tests {
 
         #[cfg(unix)]
         {
-            let runtime = fs::metadata(temp.path().join(LOCALNET_RUNTIME_DIRECTORY))
-                .expect("runtime directory metadata")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(runtime, 0o700);
-            for file in [
-                LOCALNET_OPERATOR_SIGNER_KEY_FILE,
-                LOCALNET_ONBOARDING_SIGNER_KEY_FILE,
-                LOCALNET_ONBOARDING_TOKEN_FILE,
-            ] {
-                let mode = fs::metadata(temp.path().join(LOCALNET_RUNTIME_DIRECTORY).join(file))
-                    .expect("runtime sidecar metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777;
-                assert_eq!(mode, 0o600, "{file} must be owner-only");
+            fn assert_private_tree_modes(root: &Path, path: &Path) {
+                let metadata = fs::symlink_metadata(path).expect("private tree entry metadata");
+                let relative = path.strip_prefix(root).expect("entry below localnet root");
+                if metadata.is_dir() {
+                    assert_eq!(
+                        metadata.permissions().mode() & 0o777,
+                        0o700,
+                        "private directory must be owner-only: {}",
+                        relative.display()
+                    );
+                    for entry in fs::read_dir(path).expect("read private localnet directory") {
+                        let entry = entry.expect("read private localnet entry");
+                        assert_private_tree_modes(root, &entry.path());
+                    }
+                    return;
+                }
+                assert!(
+                    metadata.is_file(),
+                    "fresh localnet must not contain special entries: {}",
+                    relative.display()
+                );
+                assert_eq!(
+                    metadata.nlink(),
+                    1,
+                    "fresh localnet files must be single-link: {}",
+                    relative.display()
+                );
+                let expected_mode = if matches!(relative.to_str(), Some("start.sh" | "stop.sh")) {
+                    0o700
+                } else {
+                    0o600
+                };
+                assert_eq!(
+                    metadata.permissions().mode() & 0o777,
+                    expected_mode,
+                    "fresh localnet entry has the wrong custody mode: {}",
+                    relative.display()
+                );
             }
-            let client_mode = fs::metadata(temp.path().join("client.toml"))
-                .expect("operator client config metadata")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(client_mode, 0o600, "client config must be owner-only");
-            for peer_index in 0..opts.peers.get() {
-                let config = format!("peer{peer_index}.toml");
-                let mode = fs::metadata(temp.path().join(&config))
-                    .expect("validator config metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777;
-                assert_eq!(mode, 0o600, "{config} must be owner-only");
-            }
+
+            assert_private_tree_modes(temp.path(), temp.path());
         }
 
         let settlement_offline = peer_cfg
@@ -8896,7 +8910,7 @@ mod tests {
     }
 
     #[test]
-    fn private_custody_readme_invokes_non_executable_scripts_through_bash() {
+    fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let runtime_bundle = LocalnetRuntimeBundle {
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
@@ -9761,6 +9775,11 @@ mod tests {
         );
 
         let start_contents = fs::read_to_string(&start_path).expect("read start script");
+        assert_eq!(
+            start_contents.lines().take(3).collect::<Vec<_>>(),
+            ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
+            "generated startup must keep logs, pidfiles, and runtime directories owner-only",
+        );
         let (debug_path, release_path) = default_irohad_bin_paths();
         let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
         let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
@@ -9847,6 +9866,11 @@ mod tests {
             "start script should clear stale pidfiles before relaunch"
         );
         let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
+        assert_eq!(
+            stop_contents.lines().take(3).collect::<Vec<_>>(),
+            ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
+            "generated shutdown must preserve owner-only runtime custody",
+        );
         assert!(
             stop_contents.contains("pid_matches_peer()"),
             "stop script should validate pid ownership before signaling"

@@ -16,7 +16,8 @@ use std::{
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
-    queue::{Queue, TransactionGuard},
+    governance::manifest::LaneManifestRegistry,
+    queue::{Queue, RouteLegRole, RoutingDecision, RoutingPlan, TransactionGuard},
     smartcontracts::Execute,
     state::{State, StateBlock, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
@@ -25,7 +26,10 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
     account::AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
+        ExternalExecutionRouteLeg, ExternalExecutionRouteRole, SignedBlock,
+    },
     content::ContentAuthMode,
     domain::DomainId,
     isi::smart_contract_code::{
@@ -33,7 +37,7 @@ use iroha_data_model::{
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
     },
     jurisdiction::JdgSignatureScheme,
-    nexus::DataSpaceId,
+    nexus::{DataSpaceId, LaneId},
     permission,
     prelude::{
         Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, TransactionBuilder,
@@ -97,19 +101,51 @@ pub fn apply_queued_in_one_block(
         return 0;
     }
 
-    let accepted: Vec<_> = guards
+    let mut accepted: Vec<_> = guards
         .iter()
-        .map(TransactionGuard::clone_accepted)
+        .map(|guard| {
+            (
+                guard.clone_accepted(),
+                guard.routing(),
+                guard.routing_plan(),
+            )
+        })
         .collect();
     let applied = accepted.len();
+
+    // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
+    // every explicit test registry, including registries that intentionally omit lane zero, but
+    // bind the live Nexus catalog when the registry is entirely empty so execution-context
+    // validation exercises the same manifest gate as a running node.
+    if state.lane_manifests.read().statuses().is_empty() {
+        let nexus = state.nexus_snapshot();
+        let manifests =
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
+        state.install_lane_manifests(&manifests);
+    }
+
+    // `BlockBuilder::new` canonicalizes transactions by entrypoint hash. Mirror that order before
+    // constructing the explicit fixture context so every context remains aligned with its block
+    // entrypoint. Supplying a non-empty context also bypasses Core's automatic single-height lane
+    // ownership fixture, which is unsuitable for this helper's multi-block synthetic chains.
+    accepted.sort_unstable_by_key(|(tx, _, _)| tx.hash_as_entrypoint());
+    let execution_context = BlockExecutionContextBundle::new(
+        accepted
+            .iter()
+            .map(|(tx, routing, plan)| {
+                execution_context_for_routing_plan(tx.hash_as_entrypoint(), *routing, plan)
+            })
+            .collect(),
+    );
 
     let latest_block = state.view().latest_block();
     let leader = checked_random_keypair_with_algorithm(
         iroha_crypto::Algorithm::BlsNormal,
         "apply queued block leader fixture",
     );
-    let new_block = BlockBuilder::new(accepted)
+    let new_block = BlockBuilder::new(accepted.into_iter().map(|(tx, _, _)| tx).collect())
         .chain(0, latest_block.as_deref())
+        .with_execution_context(Some(execution_context))
         .sign(leader.private_key())
         .unpack(|_| {});
 
@@ -139,6 +175,33 @@ pub fn apply_queued_in_one_block(
     finalize_committed_block(state, state_block, committed_block);
 
     applied
+}
+
+fn execution_context_for_routing_plan(
+    entrypoint_hash: iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
+    routing: RoutingDecision,
+    plan: &RoutingPlan,
+) -> ExternalExecutionContext {
+    debug_assert_eq!(routing, plan.coordinator_route());
+    let legs = plan
+        .legs()
+        .into_iter()
+        .map(|leg| {
+            let role = match leg.role {
+                RouteLegRole::Coordinator => ExternalExecutionRouteRole::Coordinator,
+                RouteLegRole::Participant => ExternalExecutionRouteRole::Participant,
+            };
+            ExternalExecutionRouteLeg::new(leg.route.lane_id, leg.route.dataspace_id, role)
+        })
+        .collect();
+
+    ExternalExecutionContext::with_routing_plan(
+        entrypoint_hash,
+        routing.lane_id,
+        routing.dataspace_id,
+        plan.digest(),
+        legs,
+    )
 }
 
 /// Repeatedly drain and apply queued transactions, incrementing block height
@@ -1393,18 +1456,24 @@ mod tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::Queue,
+        queue::{Queue, RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
         state::{State, StateReadOnly, World},
         tx::AcceptedTransaction,
     };
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         ChainId, Level, Registrable,
         account::{Account, AccountId},
+        block::ExternalExecutionRouteRole,
         isi::Log,
-        transaction::TransactionBuilder,
+        nexus::{DataSpaceId, LaneId},
+        transaction::{TransactionBuilder, TransactionEntrypoint},
     };
 
-    use super::{apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program};
+    use super::{
+        apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
+        minimal_ivm_program,
+    };
 
     #[test]
     fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
@@ -1429,6 +1498,40 @@ mod tests {
         assert_eq!(
             cfg.genesis.public_key.algorithm(),
             iroha_crypto::Algorithm::default()
+        );
+    }
+
+    #[test]
+    fn fixture_execution_context_preserves_full_routing_plan() {
+        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20));
+        let participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(30));
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
+        );
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"torii fixture routed transaction",
+        ));
+
+        let context = execution_context_for_routing_plan(entrypoint_hash, coordinator, &plan);
+
+        assert_eq!(context.entrypoint_hash, entrypoint_hash);
+        assert_eq!(context.lane_id, coordinator.lane_id);
+        assert_eq!(context.dataspace_id, coordinator.dataspace_id);
+        assert_eq!(context.routing_plan_digest, plan.digest());
+        assert_eq!(context.routing_plan_legs.len(), 2);
+        assert_eq!(
+            context.routing_plan_legs[0].role,
+            ExternalExecutionRouteRole::Coordinator
+        );
+        assert_eq!(
+            context.routing_plan_legs[1].role,
+            ExternalExecutionRouteRole::Participant
+        );
+        assert_eq!(context.routing_plan_legs[1].lane_id, participant.lane_id);
+        assert_eq!(
+            context.routing_plan_legs[1].dataspace_id,
+            participant.dataspace_id
         );
     }
 

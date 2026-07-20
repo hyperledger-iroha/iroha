@@ -21,7 +21,14 @@ use std::{
 
 #[cfg(test)]
 use super::v2_core::Generation;
-use super::v2_core::{EquivocationKind, EventTag};
+use super::v2_core::{
+    CanonicalIdentityProjection, EquivocationKind, EventTag, IDENTITY_DOMAIN_PAYLOAD,
+    IDENTITY_DOMAIN_PEER, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
+    IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
+    IDENTITY_KIND_SIDECAR_RESPONSE, ProductionReliableFlushTraceProjection,
+    production_reliable_flush_trace_refines_outbound_ownership_kernel,
+};
 #[cfg(test)]
 use super::v2_runtime::RuntimeQueueSnapshot;
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -35,15 +42,22 @@ use iroha_data_model::{
     nexus::LaneId,
     peer::PeerId,
 };
+#[cfg(test)]
+use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
 use iroha_p2p::{
     Post, Priority,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyRoute,
-        message::{ClassifyTopic as _, ProgressReconstruction},
+        NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
+        NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
+        NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
+        NetworkReplySourceKey, ReliableProgressClass,
+        message::{ClassifyTopic as _, ProgressReconstruction, Topic},
+        reliable_progress_class,
     },
 };
 
 use super::{
+    FairV2IngressOwnershipEvidence,
     message::{BlockMessage, BlockMessageWire},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::V2ApplyService,
@@ -57,7 +71,7 @@ use super::{
         EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
         PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
-    v2_lane_work::DurableLaneRolloverAuthority,
+    v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect},
     v2_runtime::RuntimeQueueLaneSnapshot,
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
@@ -65,11 +79,161 @@ use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
     kura::{Kura, KuraV2CommitReceipt},
     merge_sidecar::{
-        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
+        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+        MergeSidecarError,
     },
     native_amx::NativeAmxMessage,
 };
+
+fn reliable_flush_typed_identity<T>(
+    domain: u8,
+    kind: u8,
+    hash: HashOf<T>,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn reliable_flush_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn reliable_flush_peer_identity(peer: &PeerId) -> CanonicalIdentityProjection {
+    reliable_flush_typed_identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, HashOf::new(peer))
+}
+
+fn reliable_flush_ordinal_halves(ordinal: u128) -> (u64, u64) {
+    let high = u64::try_from(ordinal >> u64::BITS)
+        .expect("high half of a u128 actor ordinal is representable as u64");
+    let low = u64::try_from(ordinal & u128::from(u64::MAX))
+        .expect("low half of a u128 actor ordinal is representable as u64");
+    (high, low)
+}
+
+const fn reliable_flush_topic_tag(topic: Topic) -> u8 {
+    match topic {
+        Topic::ConsensusSafety => 1,
+        Topic::Consensus => 2,
+        Topic::ConsensusChunk => 3,
+        Topic::ConsensusPayload => 4,
+        Topic::Control => 5,
+        Topic::BlockSync => 6,
+        Topic::TxGossip => 7,
+        Topic::TxGossipRestricted => 8,
+        Topic::PeerGossip => 9,
+        Topic::TrustGossip => 10,
+        Topic::Health => 11,
+        Topic::Other => 12,
+    }
+}
+
+fn reliable_flush_usize(value: usize) -> Result<u64, MergeSidecarError> {
+    u64::try_from(value).map_err(|_| {
+        MergeSidecarError::FlushIdentityMismatch(
+            "sidecar flush identity field is not representable as u64",
+        )
+    })
+}
+
+fn reliable_flush_trace_projection(
+    admission: &CertifiedMergeSidecarChunkAdmission,
+    status: NetworkReplyFlushAckStatus,
+    flushing_before: u64,
+    flushing_after: u64,
+    admitted_before: u64,
+    admitted_after: u64,
+    capacity: usize,
+) -> Result<ProductionReliableFlushTraceProjection, MergeSidecarError> {
+    let evidence = admission.projection();
+    let (connection_tenure_ordinal_high, connection_tenure_ordinal_low) =
+        reliable_flush_ordinal_halves(evidence.connection_tenure_ordinal);
+    let (delivery_ordinal_high, delivery_ordinal_low) =
+        reliable_flush_ordinal_halves(evidence.delivery_ordinal);
+    let message_cursor_before = reliable_flush_usize(evidence.message_cursor_before)?;
+    let chunk_cursor_before = reliable_flush_usize(evidence.chunk_cursor_before)?;
+    let (message_cursor_after, chunk_cursor_after) =
+        if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
+            (
+                reliable_flush_usize(evidence.message_cursor_after)?,
+                reliable_flush_usize(evidence.chunk_cursor_after)?,
+            )
+        } else {
+            (message_cursor_before, chunk_cursor_before)
+        };
+
+    Ok(ProductionReliableFlushTraceProjection {
+        status: match status {
+            NetworkReplyFlushAckStatus::Pending => 1,
+            NetworkReplyFlushAckStatus::Flushed => 2,
+            NetworkReplyFlushAckStatus::Closed => 3,
+        },
+        semantic_target: reliable_flush_peer_identity(&evidence.semantic_target),
+        authenticated_source: reliable_flush_peer_identity(&evidence.authenticated_source),
+        requester: reliable_flush_peer_identity(&evidence.requester),
+        responder: reliable_flush_peer_identity(&evidence.responder),
+        connection_tenure_ordinal_high,
+        connection_tenure_ordinal_low,
+        delivery_ordinal_high,
+        delivery_ordinal_low,
+        ticket_id: evidence.ticket_id,
+        ticket_rank: reliable_flush_usize(evidence.ticket_rank)?,
+        ticket_topic: reliable_flush_topic_tag(evidence.ticket_topic),
+        canonical_request_digest: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_REPLY_PAYLOAD,
+            evidence.canonical_request_digest,
+        ),
+        stream_wire_bytes: reliable_flush_usize(evidence.stream_wire_bytes)?,
+        request_id: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_SIDECAR_REQUEST,
+            evidence.request_id,
+        ),
+        entry_hash: reliable_flush_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_MERGE_ENTRY,
+            evidence.entry_hash,
+        ),
+        encoded_len: evidence.encoded_len,
+        epoch_id: evidence.epoch_id,
+        reference_digest: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_REFERENCE_DIGEST,
+            evidence.reference_digest,
+        ),
+        canonical_response_hash: reliable_flush_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_NETWORK_RESPONSE,
+            evidence.canonical_response_hash,
+        ),
+        sidecar_response_hash: reliable_flush_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_SIDECAR_RESPONSE,
+            evidence.sidecar_response_hash,
+        ),
+        chunk_hash: reliable_flush_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_SIDECAR_CHUNK,
+            evidence.chunk_hash,
+        ),
+        payload_digest: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_SIDECAR_PAYLOAD,
+            evidence.payload_digest,
+        ),
+        chunk_index: u64::from(evidence.chunk_index),
+        chunk_count: u64::from(evidence.chunk_count),
+        message_cursor_before,
+        message_cursor_after,
+        chunk_cursor_before,
+        chunk_cursor_after,
+        flushing_before,
+        flushing_after,
+        admitted_before,
+        admitted_after,
+        capacity: reliable_flush_usize(capacity)?,
+    })
+}
 
 enum V2IoCommand {
     Sign {
@@ -81,7 +245,8 @@ enum V2IoCommand {
     Apply(ApplyTask),
     Serve {
         request: AuthenticatedCertifiedBodyRequest,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
     },
     LoadCandidate {
         acquisition_id: LockedCandidateAcquisitionId,
@@ -119,10 +284,9 @@ impl V2IoCommand {
             Self::Store(task) => Some(task.id()),
             Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
-            Self::Serve { .. }
-            | Self::LoadCandidate { .. }
-            | Self::Retire(_)
-            | Self::Shutdown => None,
+            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
+                None
+            }
         }
     }
 
@@ -176,10 +340,9 @@ impl V2IoCommand {
                     validated_receipt: task.validated_receipt().clone(),
                 },
             )),
-            Self::Serve { .. }
-            | Self::LoadCandidate { .. }
-            | Self::Retire(_)
-            | Self::Shutdown => None,
+            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
+                None
+            }
         }
     }
 }
@@ -746,14 +909,15 @@ enum V2IoCompletion {
     },
     Stored(BodyStoreCompletion),
     Validated(BodyValidationCompletion),
-    Applied(DurableApplyCompletion),
+    Applied(Box<DurableApplyCompletion>),
     ApplyDeferred {
         work_id: EffectWorkId,
         reference: CertifiedMergeLedgerReference,
     },
     CertifiedResponse {
         recipient: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
         response: wire::CertifiedBodyResponse,
     },
     CertifiedRequestIgnored,
@@ -1033,7 +1197,9 @@ impl V2IoHandle {
                                         &mut body_store,
                                         &task,
                                     ) {
-                                        Ok(completion) => Ok(V2IoCompletion::Applied(completion)),
+                                        Ok(completion) => {
+                                            Ok(V2IoCompletion::Applied(Box::new(completion)))
+                                        }
                                         Err(
                                             super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
                                                 reference,
@@ -1049,13 +1215,15 @@ impl V2IoHandle {
                                     },
                                     V2IoCommand::Serve {
                                         request,
-                                        reply_route,
+                                        reply_routes,
+                                        ingress_ownership,
                                     } => serve_certified_body(
                                         &body_store,
                                         &key_pair,
                                         local_validator,
                                         request,
-                                        reply_route,
+                                        reply_routes,
+                                        ingress_ownership,
                                     ),
                                     V2IoCommand::LoadCandidate { .. }
                                     | V2IoCommand::Retire(_)
@@ -1373,7 +1541,8 @@ fn serve_certified_body(
     key_pair: &KeyPair,
     local_validator: Option<wire::ValidatorIndex>,
     authenticated: AuthenticatedCertifiedBodyRequest,
-    reply_route: Option<NetworkReplyRoute>,
+    reply_routes: NetworkReplyRoutes,
+    ingress_ownership: FairV2IngressOwnershipEvidence,
 ) -> Result<V2IoCompletion, String> {
     let request = authenticated.request();
     let Some(responder) = local_validator else {
@@ -1411,7 +1580,8 @@ fn serve_certified_body(
         .to_vec();
     Ok(V2IoCompletion::CertifiedResponse {
         recipient: request.requester.clone(),
-        reply_route,
+        reply_routes,
+        ingress_ownership,
         response,
     })
 }
@@ -1459,6 +1629,7 @@ struct FetchSession {
 struct BufferedPayloadChunk {
     sender: PeerId,
     chunk: wire::PayloadChunk,
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
 
 /// Result of routing one payload chunk through the bounded reorder buffer.
@@ -1943,12 +2114,136 @@ enum ExactTargetRoute {
     Reply(NetworkReplyRoute),
 }
 
+type ExactOutputClass = ReliableProgressClass;
+type ExactOutputClassMask = u8;
+type ExactFanoutFifoId = u64;
+
+const EXACT_OUTPUT_CLASSES: [ExactOutputClass; 3] = [
+    ExactOutputClass::Safety,
+    ExactOutputClass::Lane,
+    ExactOutputClass::Bulk,
+];
+
+const fn exact_output_class_bit(class: ExactOutputClass) -> ExactOutputClassMask {
+    match class {
+        ExactOutputClass::Safety => 1 << 0,
+        ExactOutputClass::Lane => 1 << 1,
+        ExactOutputClass::Bulk => 1 << 2,
+    }
+}
+
+const fn exact_output_class_priority(class: ExactOutputClass) -> u8 {
+    match class {
+        ExactOutputClass::Safety => 3,
+        ExactOutputClass::Lane => 2,
+        ExactOutputClass::Bulk => 1,
+    }
+}
+
+fn exact_output_classes(mask: ExactOutputClassMask) -> impl Iterator<Item = ExactOutputClass> {
+    EXACT_OUTPUT_CLASSES
+        .into_iter()
+        .filter(move |class| mask & exact_output_class_bit(*class) != 0)
+}
+
+fn validate_shared_ownership_geometry(
+    shared_ownership_unit_capacity: usize,
+    max_peers_per_fanout: usize,
+) -> Result<(), String> {
+    let maximum_fanout_ownership_units = max_peers_per_fanout
+        .checked_mul(EXACT_OUTPUT_CLASSES.len())
+        .ok_or_else(|| "Sumeragi v2 maximum fanout ownership overflowed".to_owned())?;
+    if shared_ownership_unit_capacity < maximum_fanout_ownership_units {
+        return Err(format!(
+            "Sumeragi v2 outbound shared ownership capacity {shared_ownership_unit_capacity} is below one maximum fanout {maximum_fanout_ownership_units}"
+        ));
+    }
+    Ok(())
+}
+
+fn exact_output_class(message: &NetworkMessage) -> Result<ExactOutputClass, String> {
+    let topic = message.topic();
+    reliable_progress_class(topic, message.subscriber_route()).ok_or_else(|| {
+        format!("Sumeragi v2 exact output has no reliable progress class: {topic:?}")
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ExactTargetAuthority {
+    Topology(PeerId),
+    Reply(NetworkReplySourceKey),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExactTargetSource {
+    authority: ExactTargetAuthority,
+    class: ExactOutputClass,
+}
+
+/// One bounded semantic ownership unit for a target and reliable class.
+///
+/// FIFO and backpressure follow the authenticated transport source, but
+/// reservation geometry follows the frozen semantic target set. Every
+/// target/class occurrence is charged independently, preventing one relay from
+/// multiplying credits and one multi-target fanout from being undercounted.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExactTargetReservation {
+    semantic_target: PeerId,
+    class: ExactOutputClass,
+}
+
+impl ExactTargetRoute {
+    fn source(&self, semantic_peer: &PeerId, class: ExactOutputClass) -> ExactTargetSource {
+        let authority = match self {
+            Self::Topology => ExactTargetAuthority::Topology(semantic_peer.clone()),
+            Self::Reply(route) => ExactTargetAuthority::Reply(route.source_key()),
+        };
+        ExactTargetSource { authority, class }
+    }
+}
+
 #[derive(Debug, Default)]
 struct PendingExactTarget {
     route: ExactTargetRoute,
     message_index: usize,
     current: Option<Post<NetworkMessage>>,
     ticket: Option<NetworkActorAdmissionTicket>,
+    /// The authenticated source is temporarily unavailable.
+    ///
+    /// Immutable payload, the non-regressing cursor, stable fanout age, FIFO
+    /// ownership, and reservation ownership remain retained. Only tenure-bound
+    /// actor state is discarded until an authenticated reconnect supplies a
+    /// new live writer.
+    parked: bool,
+}
+
+impl PendingExactTarget {
+    /// Commit one already-preflighted authenticated-source update.
+    fn apply_reply_route_update(
+        &mut self,
+        candidate: &NetworkReplyRoute,
+        update: NetworkReplyRouteSourceUpdate,
+    ) {
+        debug_assert!(matches!(self.route, ExactTargetRoute::Reply(_)));
+        match update {
+            NetworkReplyRouteSourceUpdate::Exact => {}
+            NetworkReplyRouteSourceUpdate::LaterDelivery => {
+                // Admission tickets are bound to connection tenure and the
+                // canonical payload, not to a local delivery ordinal.
+                self.route = ExactTargetRoute::Reply(candidate.clone());
+            }
+            NetworkReplyRouteSourceUpdate::Reconnected => {
+                // Admission state belongs to the retired connection tenure,
+                // but the semantic request's exact-output cursor belongs to
+                // this authenticated source attempt. Retry the current item
+                // through the replacement writer without regressing rank.
+                self.current = None;
+                self.ticket = None;
+                self.parked = false;
+                self.route = ExactTargetRoute::Reply(candidate.clone());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2300,28 +2595,163 @@ impl ExactOutputRolloverClaim {
 struct PendingExactFanout {
     messages: Vec<NetworkMessage>,
     message_hashes: Vec<HashOf<NetworkMessage>>,
+    /// Reliable class for each immutable message occurrence.
+    message_classes: Vec<ExactOutputClass>,
+    /// Three-bit reliable-class mask for each message suffix, including the empty suffix.
+    message_class_suffixes: Vec<ExactOutputClassMask>,
     peers: Vec<PeerId>,
     targets: Vec<PendingExactTarget>,
+    /// Bounded live attempts and retired-delivery tombstones for a reply fanout.
+    ///
+    /// Targets retain independent cursors, while this set remains the
+    /// authoritative capability history across pruning and coalescing.
+    reply_routes: Option<NetworkReplyRoutes>,
+    /// Exact fair-ingress owner whose immutable request materialized this
+    /// reply fanout. It is merged and pruned atomically with `reply_routes`.
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+    /// Current per-source target positions; the first position is the local FIFO head.
+    current_source_targets: BTreeMap<ExactTargetSource, BTreeSet<usize>>,
     next_target_index: usize,
+    /// Stable enqueue order used by the global per-source FIFO index.
+    fifo_id: Option<ExactFanoutFifoId>,
     rollover_claim: ExactOutputRolloverClaim,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplyTargetMerge {
+    Update {
+        prior_index: usize,
+        candidate_index: usize,
+        update: NetworkReplyRouteSourceUpdate,
+    },
+    Append {
+        candidate_index: usize,
+    },
+}
+
+#[derive(Debug)]
+struct ReplyTargetMergePlan {
+    targets: Vec<ReplyTargetMerge>,
+    reply_routes: NetworkReplyRoutes,
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+}
+
+#[derive(Debug)]
+struct ReplyTargetMergePreview {
+    current_source_targets: BTreeMap<ExactTargetSource, BTreeSet<usize>>,
+    outstanding_sources: BTreeSet<ExactTargetSource>,
+}
+
 impl PendingExactFanout {
+    fn semantic_peers(&self) -> Vec<PeerId> {
+        let mut seen = BTreeSet::new();
+        self.peers
+            .iter()
+            .filter(|peer| seen.insert((*peer).clone()))
+            .cloned()
+            .collect()
+    }
+
+    #[cfg(test)]
     fn new(messages: Vec<NetworkMessage>, peers: Vec<PeerId>) -> Option<Self> {
         let routes = vec![ExactTargetRoute::Topology; peers.len()];
         Self::new_with_routes(messages, peers, routes)
     }
 
+    #[cfg(test)]
     fn new_with_routes(
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
         routes: Vec<ExactTargetRoute>,
     ) -> Option<Self> {
+        Self::classified_with_routes(messages, peers, routes)
+            .ok()
+            .flatten()
+    }
+
+    #[cfg(test)]
+    fn new_with_reply_routes(
+        messages: Vec<NetworkMessage>,
+        peer: PeerId,
+        reply_routes: NetworkReplyRoutes,
+    ) -> Option<Self> {
+        Self::classified_with_reply_routes(messages, peer, reply_routes)
+            .ok()
+            .flatten()
+    }
+
+    fn synthesized_reply_routes(routes: &[ExactTargetRoute]) -> Option<NetworkReplyRoutes> {
+        let mut history: Option<NetworkReplyRoutes> = None;
+        for route in routes {
+            let ExactTargetRoute::Reply(route) = route else {
+                return None;
+            };
+            let singleton = NetworkReplyRoutes::try_from_route(route.clone()).ok()?;
+            if let Some(history) = history.as_mut() {
+                history.merge(&singleton).ok()?;
+            } else {
+                history = Some(singleton);
+            }
+        }
+        history
+    }
+
+    fn classified_with_routes(
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        routes: Vec<ExactTargetRoute>,
+    ) -> Result<Option<Self>, String> {
+        let reply_routes = Self::synthesized_reply_routes(&routes);
+        Self::classified_with_route_history(messages, peers, routes, reply_routes)
+    }
+
+    fn classified_with_reply_routes(
+        messages: Vec<NetworkMessage>,
+        peer: PeerId,
+        reply_routes: NetworkReplyRoutes,
+    ) -> Result<Option<Self>, String> {
+        if reply_routes.semantic_target() != &peer || reply_routes.is_empty() {
+            return Err(
+                "Sumeragi v2 exact-output reply history changed target geometry".to_owned(),
+            );
+        }
+        let routes = reply_routes
+            .iter()
+            .cloned()
+            .map(ExactTargetRoute::Reply)
+            .collect::<Vec<_>>();
+        let peers = vec![peer; routes.len()];
+        Self::classified_with_route_history(messages, peers, routes, Some(reply_routes))
+    }
+
+    fn classified_with_route_history(
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        routes: Vec<ExactTargetRoute>,
+        reply_routes: Option<NetworkReplyRoutes>,
+    ) -> Result<Option<Self>, String> {
         if messages.is_empty() || peers.is_empty() {
-            return None;
+            return Ok(None);
         }
         if routes.len() != peers.len() {
-            return None;
+            return Err("Sumeragi v2 exact-output route count changed target geometry".to_owned());
+        }
+        let message_classes = messages
+            .iter()
+            .map(exact_output_class)
+            .collect::<Result<Vec<_>, _>>()?;
+        if message_classes.windows(2).any(|classes| {
+            exact_output_class_priority(classes[0]) < exact_output_class_priority(classes[1])
+        }) {
+            return Err(
+                "Sumeragi v2 exact-output fanout raises priority after an earlier message"
+                    .to_owned(),
+            );
+        }
+        let mut message_class_suffixes = vec![0; message_classes.len() + 1];
+        for message_index in (0..message_classes.len()).rev() {
+            message_class_suffixes[message_index] = message_class_suffixes[message_index + 1]
+                | exact_output_class_bit(message_classes[message_index]);
         }
         let message_hashes = messages.iter().map(HashOf::new).collect();
         let targets = routes
@@ -2331,14 +2761,22 @@ impl PendingExactFanout {
                 ..PendingExactTarget::default()
             })
             .collect();
-        Some(Self {
+        let mut fanout = Self {
             messages,
             message_hashes,
+            message_classes,
+            message_class_suffixes,
             peers,
             targets,
+            reply_routes,
+            ingress_ownership: None,
+            current_source_targets: BTreeMap::new(),
             next_target_index: 0,
+            fifo_id: None,
             rollover_claim: ExactOutputRolloverClaim::Exact,
-        })
+        };
+        fanout.rebuild_current_source_targets()?;
+        Ok(Some(fanout))
     }
 
     fn claimed(
@@ -2356,14 +2794,50 @@ impl PendingExactFanout {
         routes: Vec<ExactTargetRoute>,
         rollover_claim: ExactOutputRolloverClaim,
     ) -> Result<Option<Self>, String> {
-        if routes.len() != peers.len() {
-            return Err("Sumeragi v2 exact-output route count changed target geometry".to_owned());
-        }
-        let Some(mut fanout) = Self::new_with_routes(messages, peers, routes) else {
+        let Some(mut fanout) = Self::classified_with_routes(messages, peers, routes)? else {
             return Ok(None);
         };
-        rollover_claim.validate_fanout(&fanout.messages, &fanout.peers)?;
+        rollover_claim.validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
         fanout.rollover_claim = rollover_claim;
+        Ok(Some(fanout))
+    }
+
+    fn claimed_with_reply_routes(
+        messages: Vec<NetworkMessage>,
+        peer: PeerId,
+        reply_routes: NetworkReplyRoutes,
+        rollover_claim: ExactOutputRolloverClaim,
+    ) -> Result<Option<Self>, String> {
+        let Some(mut fanout) = Self::classified_with_reply_routes(messages, peer, reply_routes)?
+        else {
+            return Ok(None);
+        };
+        rollover_claim.validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
+        fanout.rollover_claim = rollover_claim;
+        Ok(Some(fanout))
+    }
+
+    fn claimed_with_reply_routes_and_ingress_ownership(
+        messages: Vec<NetworkMessage>,
+        peer: PeerId,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+        rollover_claim: ExactOutputRolloverClaim,
+    ) -> Result<Option<Self>, String> {
+        let Some(mut fanout) =
+            Self::claimed_with_reply_routes(messages, peer, reply_routes, rollover_claim)?
+        else {
+            return Ok(None);
+        };
+        if let Some(ownership) = ingress_ownership {
+            let routes = fanout.reply_routes.as_ref().ok_or_else(|| {
+                "Sumeragi v2 ingress-owned reply lost its bounded route history".to_owned()
+            })?;
+            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
+                return Err("Sumeragi v2 reply carried altered fair-ingress ownership".to_owned());
+            }
+            fanout.ingress_ownership = Some(ownership);
+        }
         Ok(Some(fanout))
     }
 
@@ -2376,6 +2850,9 @@ impl PendingExactFanout {
         ExactTargetRoute,
     )> {
         let target = self.targets.get_mut(target_index)?;
+        if target.parked {
+            return None;
+        }
         if let Some(post) = target.current.take() {
             return Some((post, target.ticket.take(), target.route.clone()));
         }
@@ -2392,15 +2869,181 @@ impl PendingExactFanout {
         ))
     }
 
-    fn mark_admitted(&mut self, target_index: usize) {
+    fn expected_current_source_targets(
+        &self,
+    ) -> Result<BTreeMap<ExactTargetSource, BTreeSet<usize>>, String> {
+        self.expected_current_source_targets_excluding(None)
+    }
+
+    fn expected_current_source_targets_excluding(
+        &self,
+        excluded_target: Option<usize>,
+    ) -> Result<BTreeMap<ExactTargetSource, BTreeSet<usize>>, String> {
+        let mut expected = BTreeMap::<ExactTargetSource, BTreeSet<usize>>::new();
+        for target_index in 0..self.targets.len() {
+            if excluded_target == Some(target_index) || self.target_is_complete(target_index) {
+                continue;
+            }
+            expected
+                .entry(self.current_target_source(target_index)?)
+                .or_default()
+                .insert(target_index);
+        }
+        Ok(expected)
+    }
+
+    fn rebuild_current_source_targets(&mut self) -> Result<(), String> {
+        self.current_source_targets = self.expected_current_source_targets()?;
+        Ok(())
+    }
+
+    /// Prune retired routes while transferring an already-owned lane-work effect.
+    ///
+    /// This is deliberately separate from candidate admission: a newly
+    /// observed capability is rejected if it is inactive, while semantic work
+    /// which was already accepted by the lane adapter may discard only the
+    /// retired source occurrence and preserve every live sibling.
+    fn retain_active_unowned_reply_targets(&mut self) -> Result<usize, String> {
+        if self.fifo_id.is_some()
+            || self
+                .targets
+                .iter()
+                .any(|target| target.current.is_some() || target.ticket.is_some())
+        {
+            return Err(
+                "Sumeragi v2 cannot prune reply routes after exact-output ownership".to_owned(),
+            );
+        }
+        if self.targets.len() != self.peers.len()
+            || self
+                .targets
+                .iter()
+                .any(|target| matches!(target.route, ExactTargetRoute::Topology))
+        {
+            return Err("Sumeragi v2 owned reply transfer has invalid target geometry".to_owned());
+        }
+        let reply_routes = self.reply_routes.as_mut().ok_or_else(|| {
+            "Sumeragi v2 owned reply transfer lost its bounded route history".to_owned()
+        })?;
+        reply_routes.retain_active();
+        if let Some(ownership) = self.ingress_ownership.as_mut() {
+            ownership.retain_active_reply_routes();
+            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
+                return Err(
+                    "Sumeragi v2 owned reply pruning lost fair-ingress ownership".to_owned(),
+                );
+            }
+        }
+        let mut retained_targets = Vec::with_capacity(self.targets.len());
+        let mut retained_peers = Vec::with_capacity(self.peers.len());
+        for (target, peer) in self.targets.drain(..).zip(self.peers.drain(..)) {
+            if matches!(&target.route, ExactTargetRoute::Reply(route) if route.is_active()) {
+                retained_targets.push(target);
+                retained_peers.push(peer);
+            }
+        }
+        self.targets = retained_targets;
+        self.peers = retained_peers;
+        self.next_target_index = 0;
+        // Close the monotonic race where a target retired after the first
+        // history prune but before its target entry was inspected. If it
+        // retired later still, strict validation below observes the inactive
+        // target and repeats this bounded pruning pass.
+        reply_routes.retain_active();
+        if let Some(ownership) = self.ingress_ownership.as_mut() {
+            ownership.retain_active_reply_routes();
+            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
+                return Err(
+                    "Sumeragi v2 owned reply race pruning lost fair-ingress ownership".to_owned(),
+                );
+            }
+        }
+        self.rebuild_current_source_targets()?;
+        Ok(self.targets.len())
+    }
+
+    fn mark_admitted(&mut self, target_index: usize) -> Result<(), String> {
+        if self
+            .targets
+            .get(target_index)
+            .is_some_and(|target| target.parked)
+        {
+            return Err("Sumeragi v2 admitted a parked reply source".to_owned());
+        }
+        let prior_source = self.current_target_source(target_index)?;
+        if self
+            .current_source_targets
+            .get(&prior_source)
+            .is_none_or(|targets| !targets.contains(&target_index))
+        {
+            return Err("Sumeragi v2 local output FIFO lost its current target".to_owned());
+        }
+        let next_message_index = self
+            .targets
+            .get(target_index)
+            .expect("selected exact-output target must remain present")
+            .message_index
+            .checked_add(1)
+            .ok_or_else(|| "Sumeragi v2 exact-output message cursor overflowed".to_owned())?;
+        let next_ingress_ownership = match &self.ingress_ownership {
+            Some(ownership) => {
+                let ExactTargetRoute::Reply(route) = &self
+                    .targets
+                    .get(target_index)
+                    .expect("selected exact-output target must remain present")
+                    .route
+                else {
+                    return Err(
+                        "Sumeragi v2 ingress-owned output changed to a topology route".to_owned(),
+                    );
+                };
+                let message_cursor = u64::try_from(next_message_index).map_err(|_| {
+                    "Sumeragi v2 ingress-owned message cursor exceeded u64".to_owned()
+                })?;
+                let mut next = ownership.clone();
+                if !next.advance_reply_cursors(route, message_cursor, 0) {
+                    return Err(
+                        "Sumeragi v2 exact-output admission regressed ingress ownership".to_owned(),
+                    );
+                }
+                Some(next)
+            }
+            None => None,
+        };
         let target = self
             .targets
             .get_mut(target_index)
             .expect("selected exact-output target must remain present");
-        target.message_index = target
-            .message_index
-            .checked_add(1)
-            .expect("bounded exact-output message index cannot overflow");
+        target.message_index = next_message_index;
+        self.ingress_ownership = next_ingress_ownership;
+        let next_source = (!self.target_is_complete(target_index))
+            .then(|| self.current_target_source(target_index))
+            .transpose()?;
+        if next_source.as_ref() == Some(&prior_source) {
+            return Ok(());
+        }
+        let remove_prior_source = {
+            let targets = self
+                .current_source_targets
+                .get_mut(&prior_source)
+                .expect("preflighted local output source must remain present");
+            let removed = targets.remove(&target_index);
+            debug_assert!(removed);
+            targets.is_empty()
+        };
+        if remove_prior_source {
+            self.current_source_targets.remove(&prior_source);
+        }
+        if let Some(next_source) = next_source
+            && !self
+                .current_source_targets
+                .entry(next_source)
+                .or_default()
+                .insert(target_index)
+        {
+            return Err("Sumeragi v2 local output FIFO registered one target twice".to_owned());
+        }
+        Ok(())
     }
 
     fn retain_returned(
@@ -2413,6 +3056,9 @@ impl PendingExactFanout {
             .targets
             .get_mut(target_index)
             .expect("selected exact-output target must remain present");
+        if target.parked {
+            return Err("Sumeragi v2 returned output to a parked reply source".to_owned());
+        }
         let expected_hash = self
             .message_hashes
             .get(target.message_index)
@@ -2435,23 +3081,530 @@ impl PendingExactFanout {
             .is_some_and(|target| target.message_index == self.messages.len())
     }
 
-    fn owns_peer(&self, peer: &PeerId) -> bool {
-        self.peers
-            .iter()
-            .enumerate()
-            .any(|(index, candidate)| candidate == peer && !self.target_is_complete(index))
+    fn target_source_at(
+        &self,
+        target_index: usize,
+        message_index: usize,
+    ) -> Result<ExactTargetSource, String> {
+        let peer = self
+            .peers
+            .get(target_index)
+            .ok_or_else(|| "Sumeragi v2 exact-output target lost its peer".to_owned())?;
+        let target = self
+            .targets
+            .get(target_index)
+            .ok_or_else(|| "Sumeragi v2 exact-output target disappeared".to_owned())?;
+        let class = self
+            .message_classes
+            .get(message_index)
+            .ok_or_else(|| "Sumeragi v2 exact-output target lost its current message".to_owned())?;
+        Ok(target.route.source(peer, *class))
     }
 
-    fn target_is_local_head(&self, target_index: usize) -> bool {
-        let Some(peer) = self.peers.get(target_index) else {
-            return false;
+    fn current_target_source(&self, target_index: usize) -> Result<ExactTargetSource, String> {
+        let message_index = self
+            .targets
+            .get(target_index)
+            .ok_or_else(|| "Sumeragi v2 exact-output target disappeared".to_owned())?
+            .message_index;
+        self.target_source_at(target_index, message_index)
+    }
+
+    fn outstanding_sources(&self) -> Result<BTreeSet<ExactTargetSource>, String> {
+        self.outstanding_sources_excluding(None)
+    }
+
+    fn outstanding_sources_excluding(
+        &self,
+        excluded_target: Option<usize>,
+    ) -> Result<BTreeSet<ExactTargetSource>, String> {
+        let mut sources = BTreeSet::new();
+        for (target_index, target) in self.targets.iter().enumerate() {
+            if excluded_target == Some(target_index) {
+                continue;
+            }
+            let peer = self
+                .peers
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 exact-output target lost its peer".to_owned())?;
+            let classes = self
+                .message_class_suffixes
+                .get(target.message_index)
+                .ok_or_else(|| {
+                    "Sumeragi v2 exact-output target advanced beyond its class suffix".to_owned()
+                })?;
+            for class in exact_output_classes(*classes) {
+                sources.insert(target.route.source(peer, class));
+            }
+        }
+        Ok(sources)
+    }
+
+    fn outstanding_reservation_counts(
+        &self,
+    ) -> Result<BTreeMap<ExactTargetReservation, usize>, String> {
+        let mut reservations = BTreeMap::<ExactTargetReservation, usize>::new();
+        for (target_index, target) in self.targets.iter().enumerate() {
+            let semantic_target = self
+                .peers
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 exact-output target lost its peer".to_owned())?;
+            let classes = self
+                .message_class_suffixes
+                .get(target.message_index)
+                .ok_or_else(|| {
+                    "Sumeragi v2 exact-output target advanced beyond its class suffix".to_owned()
+                })?;
+            for class in exact_output_classes(*classes) {
+                let reservation = ExactTargetReservation {
+                    semantic_target: semantic_target.clone(),
+                    class,
+                };
+                let count = reservations.entry(reservation).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    "Sumeragi v2 outbound target/class ownership overflowed".to_owned()
+                })?;
+            }
+        }
+        Ok(reservations)
+    }
+
+    /// Reservation demand visible to read-only admission checks.
+    fn admission_reservation_counts(
+        &self,
+    ) -> Result<BTreeMap<ExactTargetReservation, usize>, String> {
+        let mut reservations = BTreeMap::<ExactTargetReservation, usize>::new();
+        for (target_index, target) in self.targets.iter().enumerate() {
+            let semantic_target = self
+                .peers
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 exact-output target lost its peer".to_owned())?;
+            let classes = self
+                .message_class_suffixes
+                .get(target.message_index)
+                .ok_or_else(|| {
+                    "Sumeragi v2 exact-output target advanced beyond its class suffix".to_owned()
+                })?;
+            for class in exact_output_classes(*classes) {
+                let reservation = ExactTargetReservation {
+                    semantic_target: semantic_target.clone(),
+                    class,
+                };
+                let count = reservations.entry(reservation).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    "Sumeragi v2 outbound admission ownership overflowed".to_owned()
+                })?;
+            }
+        }
+        Ok(reservations)
+    }
+
+    fn reply_target_merge_plan(&self, candidate: &Self) -> Result<ReplyTargetMergePlan, String> {
+        self.reply_target_merge_plan_after_candidate_prune(candidate, |_| {})
+    }
+
+    fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(
+        &self,
+        candidate: &Self,
+        mut after_candidate_prune: AfterCandidatePrune,
+    ) -> Result<ReplyTargetMergePlan, String>
+    where
+        AfterCandidatePrune: FnMut(usize),
+    {
+        if !self.can_coalesce_retry(candidate) {
+            return Err("Sumeragi v2 exact-output request changed semantic identity".to_owned());
+        }
+        let Some(authority_route) = self.targets.iter().find_map(|target| match &target.route {
+            ExactTargetRoute::Reply(route) => Some(route),
+            ExactTargetRoute::Topology => None,
+        }) else {
+            return Err("Sumeragi v2 reply fanout lost its authenticated authority".to_owned());
         };
-        !self
-            .peers
+
+        // Preserve and consult the actor-owned bounded route history as one
+        // atomic capability operation. Pruning records tombstones before the
+        // candidate is merged, so a retired target cannot hide a forged
+        // cross-source ordinal collision at this seam.
+        let retained_routes = self.reply_routes.clone().ok_or_else(|| {
+            "Sumeragi v2 retained reply fanout lost its bounded route history".to_owned()
+        })?;
+        let mut candidate_routes = candidate
+            .reply_routes
+            .clone()
+            .ok_or_else(|| "Sumeragi v2 reply retry lost its bounded route history".to_owned())?;
+        let mut merge_attempt = 0usize;
+        let merged_routes = loop {
+            candidate_routes.retain_active();
+            let live_before_merge = candidate_routes.len();
+            after_candidate_prune(merge_attempt);
+
+            let mut merged_routes = retained_routes.clone();
+            merged_routes.retain_active();
+            match merged_routes.merge(&candidate_routes) {
+                Ok(()) => break merged_routes,
+                Err(NetworkReplyRouteError::Inactive) => {
+                    // A candidate tenure may retire after the owned-transfer
+                    // prune but before strict history merge reaches that member.
+                    // Activity is monotonic, so the next prune must remove at
+                    // least that raced occurrence; otherwise retrying could hide
+                    // an invariant violation behind an unbounded loop.
+                    candidate_routes.retain_active();
+                    if candidate_routes.len() >= live_before_merge {
+                        return Err(
+                            "Sumeragi v2 inactive reply-history retry made no progress".to_owned()
+                        );
+                    }
+                    merge_attempt = merge_attempt.checked_add(1).ok_or_else(|| {
+                        "Sumeragi v2 reply-history retry count overflowed".to_owned()
+                    })?;
+                }
+                Err(NetworkReplyRouteError::Stale) => {
+                    return Err(
+                        "Sumeragi v2 outbound reply fanout contains a stale capability".to_owned(),
+                    );
+                }
+                Err(error) => {
+                    return Err(format!("invalid Sumeragi v2 reply route history: {error}"));
+                }
+            }
+        };
+
+        let mut retained_sources = BTreeSet::new();
+        for target in &self.targets {
+            let ExactTargetRoute::Reply(route) = &target.route else {
+                return Err("Sumeragi v2 retained reply fanout changed route kind".to_owned());
+            };
+            if !route.same_request_authority(authority_route) {
+                return Err("Sumeragi v2 reply capability changed actor or target".to_owned());
+            }
+            if !retained_sources.insert(route.source_key()) {
+                return Err("Sumeragi v2 retained two attempts for one reply source".to_owned());
+            }
+        }
+
+        let mut plan = Vec::with_capacity(candidate.targets.len());
+        let mut used_prior = BTreeSet::new();
+        let mut unmatched = Vec::new();
+        let mut candidate_sources = BTreeSet::new();
+        for (candidate_index, candidate_target) in candidate.targets.iter().enumerate() {
+            let ExactTargetRoute::Reply(candidate_route) = &candidate_target.route else {
+                return Err("Sumeragi v2 reply retry changed route kind".to_owned());
+            };
+            if candidate.target_is_complete(candidate_index) {
+                continue;
+            }
+            if !candidate_route.is_active() {
+                // Strict preflight rejected routes which were inactive when
+                // observed. A later retirement racing owned coalescing drops
+                // only this source occurrence.
+                continue;
+            }
+            if !candidate_route.same_request_authority(authority_route) {
+                return Err("Sumeragi v2 reply capability changed actor or target".to_owned());
+            }
+            if !candidate_sources.insert(candidate_route.source_key()) {
+                return Err("Sumeragi v2 retry carried one reply source twice".to_owned());
+            }
+            let prior_index = self.targets.iter().position(|prior| {
+                matches!(
+                    &prior.route,
+                    ExactTargetRoute::Reply(prior_route)
+                        if prior_route.same_source(candidate_route)
+                )
+            });
+            if let Some(prior_index) = prior_index {
+                let ExactTargetRoute::Reply(prior_route) = &self.targets[prior_index].route else {
+                    unreachable!("located reply target must retain its route kind");
+                };
+                let update = match candidate_route.source_update_from(prior_route) {
+                    Ok(update) => update,
+                    Err(NetworkReplyRouteError::Inactive) => continue,
+                    Err(NetworkReplyRouteError::Stale) => {
+                        return Err(
+                            "Sumeragi v2 outbound reply fanout contains a stale capability"
+                                .to_owned(),
+                        );
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "invalid Sumeragi v2 per-source reply update: {error}"
+                        ));
+                    }
+                };
+                if !used_prior.insert(prior_index) {
+                    return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
+                }
+                plan.push(ReplyTargetMerge::Update {
+                    prior_index,
+                    candidate_index,
+                    update,
+                });
+            } else {
+                unmatched.push(candidate_index);
+            }
+        }
+        for candidate_index in unmatched {
+            // An inactive source still owns its non-regressing cursor. A newly
+            // observed authenticated source must receive a distinct bounded
+            // attempt and can never reuse or erase that parked source's slot.
+            plan.push(ReplyTargetMerge::Append { candidate_index });
+        }
+        let ingress_ownership = match (&self.ingress_ownership, &candidate.ingress_ownership) {
+            (Some(retained), Some(candidate)) => {
+                let mut retained = retained.clone();
+                let mut candidate = candidate.clone();
+                retained.retain_active_reply_routes();
+                candidate.retain_active_reply_routes();
+                if !retained.merge_downstream(candidate)
+                    || !retained.matches_reply_routes(Some(&merged_routes))
+                {
+                    return Err(
+                        "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
+                            .to_owned(),
+                    );
+                }
+                Some(retained)
+            }
+            (None, None) => None,
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(
+                    "Sumeragi v2 exact-output retry changed fair-ingress ownership shape"
+                        .to_owned(),
+                );
+            }
+        };
+        Ok(ReplyTargetMergePlan {
+            targets: plan,
+            reply_routes: merged_routes,
+            ingress_ownership,
+        })
+    }
+
+    fn coalesce_reservation_additions_for_plan(
+        &self,
+        candidate: &Self,
+        plan: &[ReplyTargetMerge],
+    ) -> Result<BTreeMap<ExactTargetReservation, usize>, String> {
+        let full_mask = *self
+            .message_class_suffixes
+            .first()
+            .ok_or_else(|| "Sumeragi v2 exact-output fanout lost its full class mask".to_owned())?;
+        let semantic_target = candidate
+            .semantic_peers()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Sumeragi v2 reply fanout lost its semantic target".to_owned())?;
+        let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
+        for merge in plan {
+            let added_mask = match *merge {
+                ReplyTargetMerge::Update { .. } => 0,
+                ReplyTargetMerge::Append { .. } => full_mask,
+            };
+            for class in exact_output_classes(added_mask) {
+                let count = additions
+                    .entry(ExactTargetReservation {
+                        semantic_target: semantic_target.clone(),
+                        class,
+                    })
+                    .or_default();
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| "Sumeragi v2 alternate-route ownership overflowed".to_owned())?;
+            }
+        }
+        Ok(additions)
+    }
+
+    fn preview_coalesce_plan(
+        &self,
+        candidate: &Self,
+        plan: &ReplyTargetMergePlan,
+    ) -> Result<ReplyTargetMergePreview, String> {
+        if self.targets.len() != self.peers.len()
+            || candidate.targets.len() != candidate.peers.len()
+        {
+            return Err("Sumeragi v2 reply fanout changed target geometry".to_owned());
+        }
+        let mut targets = self
+            .targets
             .iter()
-            .enumerate()
-            .take(target_index)
-            .any(|(index, candidate)| candidate == peer && !self.target_is_complete(index))
+            .zip(&self.peers)
+            .map(|(target, peer)| {
+                (
+                    target.route.clone(),
+                    target.message_index,
+                    target.parked,
+                    peer.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for merge in &plan.targets {
+            match *merge {
+                ReplyTargetMerge::Update {
+                    prior_index,
+                    candidate_index,
+                    update,
+                } => {
+                    let target = targets.get_mut(prior_index).ok_or_else(|| {
+                        "Sumeragi v2 retry update target disappeared before commit".to_owned()
+                    })?;
+                    if !matches!(target.0, ExactTargetRoute::Reply(_)) {
+                        return Err(
+                            "Sumeragi v2 reply update targeted a topology attempt".to_owned()
+                        );
+                    }
+                    let candidate_target =
+                        candidate.targets.get(candidate_index).ok_or_else(|| {
+                            "Sumeragi v2 retry candidate disappeared before commit".to_owned()
+                        })?;
+                    let ExactTargetRoute::Reply(candidate_route) = &candidate_target.route else {
+                        return Err("Sumeragi v2 retry candidate changed route kind".to_owned());
+                    };
+                    match update {
+                        NetworkReplyRouteSourceUpdate::Exact => {}
+                        NetworkReplyRouteSourceUpdate::LaterDelivery => {
+                            target.0 = ExactTargetRoute::Reply(candidate_route.clone());
+                        }
+                        NetworkReplyRouteSourceUpdate::Reconnected => {
+                            target.0 = ExactTargetRoute::Reply(candidate_route.clone());
+                            target.2 = false;
+                        }
+                    }
+                }
+                ReplyTargetMerge::Append { candidate_index } => {
+                    let candidate_target =
+                        candidate.targets.get(candidate_index).ok_or_else(|| {
+                            "Sumeragi v2 retry candidate disappeared before commit".to_owned()
+                        })?;
+                    if !matches!(candidate_target.route, ExactTargetRoute::Reply(_)) {
+                        return Err("Sumeragi v2 retry candidate changed route kind".to_owned());
+                    }
+                    let candidate_peer = candidate.peers.get(candidate_index).ok_or_else(|| {
+                        "Sumeragi v2 retry candidate lost its peer before commit".to_owned()
+                    })?;
+                    targets.push((
+                        candidate_target.route.clone(),
+                        0,
+                        false,
+                        candidate_peer.clone(),
+                    ));
+                }
+            }
+        }
+        let mut current_source_targets = BTreeMap::<ExactTargetSource, BTreeSet<usize>>::new();
+        let mut outstanding_sources = BTreeSet::new();
+        for (target_index, (route, message_index, _parked, peer)) in targets.into_iter().enumerate()
+        {
+            let suffix = *self
+                .message_class_suffixes
+                .get(message_index)
+                .ok_or_else(|| {
+                    "Sumeragi v2 retry cursor advanced beyond its class suffix".to_owned()
+                })?;
+            for class in exact_output_classes(suffix) {
+                outstanding_sources.insert(route.source(&peer, class));
+            }
+            if let Some(class) = self.message_classes.get(message_index) {
+                current_source_targets
+                    .entry(route.source(&peer, *class))
+                    .or_default()
+                    .insert(target_index);
+            } else if message_index != self.messages.len() {
+                return Err("Sumeragi v2 retry cursor advanced beyond its messages".to_owned());
+            }
+        }
+        Ok(ReplyTargetMergePreview {
+            current_source_targets,
+            outstanding_sources,
+        })
+    }
+
+    fn commit_coalesce_plan(
+        &mut self,
+        candidate: &Self,
+        plan: &ReplyTargetMergePlan,
+        current_source_targets: BTreeMap<ExactTargetSource, BTreeSet<usize>>,
+    ) {
+        for merge in &plan.targets {
+            match *merge {
+                ReplyTargetMerge::Update {
+                    prior_index,
+                    candidate_index,
+                    update,
+                } => {
+                    let ExactTargetRoute::Reply(candidate_route) =
+                        &candidate.targets[candidate_index].route
+                    else {
+                        unreachable!("preflighted reply candidate must retain its route kind");
+                    };
+                    let target = &mut self.targets[prior_index];
+                    target.apply_reply_route_update(candidate_route, update);
+                }
+                ReplyTargetMerge::Append { candidate_index } => {
+                    self.targets.push(PendingExactTarget {
+                        route: candidate.targets[candidate_index].route.clone(),
+                        ..PendingExactTarget::default()
+                    });
+                    self.peers.push(candidate.peers[candidate_index].clone());
+                }
+            }
+        }
+        self.reply_routes = Some(plan.reply_routes.clone());
+        self.ingress_ownership = plan.ingress_ownership.clone();
+        self.current_source_targets = current_source_targets;
+    }
+
+    #[cfg(test)]
+    fn coalesce_retry(&mut self, candidate: &Self) -> Result<bool, String> {
+        if !self.can_coalesce_retry(candidate) {
+            return Ok(false);
+        }
+        let plan = self.reply_target_merge_plan(candidate)?;
+        let preview = self.preview_coalesce_plan(candidate, &plan)?;
+        self.commit_coalesce_plan(candidate, &plan, preview.current_source_targets);
+        Ok(true)
+    }
+
+    fn can_coalesce_retry(&self, candidate: &Self) -> bool {
+        self.message_hashes == candidate.message_hashes
+            && self.semantic_peers() == candidate.semantic_peers()
+            && self.rollover_claim == candidate.rollover_claim
+            && self
+                .targets
+                .iter()
+                .chain(&candidate.targets)
+                .all(|target| matches!(&target.route, ExactTargetRoute::Reply(_)))
+    }
+
+    fn owns_source(&self, source: &ExactTargetSource) -> Result<bool, String> {
+        for (target_index, target) in self.targets.iter().enumerate() {
+            let peer = self
+                .peers
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 exact-output target lost its peer".to_owned())?;
+            let classes = self
+                .message_class_suffixes
+                .get(target.message_index)
+                .ok_or_else(|| {
+                    "Sumeragi v2 exact-output target advanced beyond its class suffix".to_owned()
+                })?;
+            if exact_output_classes(*classes)
+                .any(|class| target.route.source(peer, class) == *source)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn target_is_local_head(&self, target_index: usize) -> Result<bool, String> {
+        let source = self.current_target_source(target_index)?;
+        let local_head = self
+            .current_source_targets
+            .get(&source)
+            .and_then(BTreeSet::first)
+            .ok_or_else(|| "Sumeragi v2 local output FIFO lost its current source".to_owned())?;
+        Ok(*local_head == target_index)
     }
 
     fn advance_target_cursor(&mut self, target_index: usize) {
@@ -2463,6 +3616,13 @@ impl PendingExactFanout {
             .iter()
             .all(|target| target.message_index == self.messages.len())
     }
+
+    fn has_dispatchable_target(&self) -> bool {
+        self.targets
+            .iter()
+            .enumerate()
+            .any(|(index, target)| !target.parked && !self.target_is_complete(index))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2473,51 +3633,763 @@ enum ExactFanoutOwnership {
     SourceRetained,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExactOutputDriveOutcome {
+    Drained,
+    ReceiptBackpressured,
+    Backpressured {
+        closest_rank: usize,
+    },
+    BudgetExhausted {
+        closest_backpressure_rank: Option<usize>,
+    },
+}
+
+enum ExactOutputAttemptOutcome {
+    Admitted,
+    SidecarFlush(NetworkReplyFlushAck),
+    Retired,
+}
+
+#[derive(Debug)]
+struct PendingCertifiedMergeSidecarChunkFlush {
+    admission: CertifiedMergeSidecarChunkAdmission,
+    flush_ack: NetworkReplyFlushAck,
+}
+
 /// Bounded per-target FIFO owner for semantic network output awaiting actor admission.
 #[derive(Debug)]
 struct PendingExactOutput {
     fanouts: VecDeque<PendingExactFanout>,
+    /// Sidecar chunks admitted by the actor and awaiting exact writer flush.
+    flushing_sidecar_chunks: VecDeque<PendingCertifiedMergeSidecarChunkFlush>,
+    /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
+    admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
+    /// Separate byte-free control-queue bound for sidecar admission receipts.
+    sidecar_admission_capacity: usize,
     next_fanout_index: usize,
-    fanout_capacity: usize,
+    /// Next stable enqueue sequence between deterministic overflow rebases.
+    next_fanout_fifo_id: ExactFanoutFifoId,
+    /// Every outstanding authenticated source mapped to its FIFO-ordered owners.
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    /// Ownership-unit bound: shared units plus one unit for every frozen target/class pair.
+    ownership_unit_capacity: usize,
+    /// Units available to duplicate or non-frozen target/class ownership.
+    shared_ownership_unit_capacity: usize,
+    /// Immutable validator reservation geometry for this height context.
+    reserved_target_classes: BTreeSet<ExactTargetReservation>,
+    /// Aggregate outstanding multiplicity for each semantic target/class unit.
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    /// Total outstanding target/class ownership units in retained fanouts.
+    ownership_units: usize,
+    /// Outstanding units not covered by the first frozen target/class credit.
+    shared_ownership_units: usize,
+    /// Deterministic actor-admission attempts before yielding to the runner.
+    drive_attempt_budget: usize,
     max_messages_per_fanout: usize,
     max_peers_per_fanout: usize,
 }
 
 impl PendingExactOutput {
     fn new(
-        fanout_capacity: usize,
+        shared_ownership_unit_capacity: usize,
         max_messages_per_fanout: usize,
         max_peers_per_fanout: usize,
+        frozen_semantic_targets: &[PeerId],
     ) -> Result<Self, String> {
-        if fanout_capacity == 0 || max_messages_per_fanout == 0 || max_peers_per_fanout == 0 {
+        if shared_ownership_unit_capacity == 0
+            || max_messages_per_fanout == 0
+            || max_peers_per_fanout == 0
+        {
             return Err("Sumeragi v2 outbound corridor bounds must be non-zero".to_owned());
         }
+        let reserved_target_classes = frozen_semantic_targets
+            .iter()
+            .flat_map(|semantic_target| {
+                EXACT_OUTPUT_CLASSES.map(|class| ExactTargetReservation {
+                    semantic_target: semantic_target.clone(),
+                    class,
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        let ownership_unit_capacity = shared_ownership_unit_capacity
+            .checked_add(reserved_target_classes.len())
+            .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
         Ok(Self {
             fanouts: VecDeque::new(),
+            flushing_sidecar_chunks: VecDeque::new(),
+            admitted_sidecar_chunks: VecDeque::new(),
+            sidecar_admission_capacity: ownership_unit_capacity,
             next_fanout_index: 0,
-            fanout_capacity,
+            next_fanout_fifo_id: 0,
+            source_fifo_owners: BTreeMap::new(),
+            ownership_unit_capacity,
+            shared_ownership_unit_capacity,
+            reserved_target_classes,
+            reservation_owner_counts: BTreeMap::new(),
+            ownership_units: 0,
+            shared_ownership_units: 0,
+            drive_attempt_budget: max_peers_per_fanout.max(super::v2_core::MAX_EFFECTS_PER_STEP),
             max_messages_per_fanout,
             max_peers_per_fanout,
         })
     }
 
-    fn has_capacity(&self) -> bool {
-        self.fanouts.len() < self.fanout_capacity
-    }
-
     fn is_pending(&self) -> bool {
-        !self.fanouts.is_empty()
+        self.fanouts
+            .iter()
+            .any(PendingExactFanout::has_dispatchable_target)
+            || !self.flushing_sidecar_chunks.is_empty()
+            || !self.admitted_sidecar_chunks.is_empty()
     }
 
-    fn enqueue(&mut self, fanout: PendingExactFanout) -> Result<ExactFanoutOwnership, String> {
+    fn sidecar_control_units(&self) -> usize {
+        self.flushing_sidecar_chunks
+            .len()
+            .saturating_add(self.admitted_sidecar_chunks.len())
+    }
+
+    fn poll_sidecar_flushes(&mut self) -> Result<(), MergeSidecarError> {
+        if self.flushing_sidecar_chunks.iter().any(|completion| {
+            !completion
+                .admission
+                .matches_ack_identity(completion.flush_ack.identity())
+        }) {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "queued admission and writer acknowledgement identify different actor output",
+            ));
+        }
+        let pending = self.flushing_sidecar_chunks.len();
+        for _ in 0..pending {
+            let flushing_before = u64::try_from(self.flushing_sidecar_chunks.len())
+                .expect("bounded sidecar flush count is representable as u64");
+            let admitted_before = u64::try_from(self.admitted_sidecar_chunks.len())
+                .expect("bounded sidecar admission count is representable as u64");
+            let mut completion = self
+                .flushing_sidecar_chunks
+                .pop_front()
+                .expect("bounded sidecar flush count remains stable while polling");
+            let status = completion.flush_ack.poll();
+            let terminal = !matches!(status, NetworkReplyFlushAckStatus::Pending);
+            let flushing_after = if terminal {
+                flushing_before
+                    .checked_sub(1)
+                    .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                        "sidecar flushing-owner count underflowed",
+                    ))?
+            } else {
+                flushing_before
+            };
+            let admitted_after = if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
+                admitted_before
+                    .checked_add(1)
+                    .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                        "sidecar admitted-owner count overflowed",
+                    ))?
+            } else {
+                admitted_before
+            };
+            let flush_trace = match reliable_flush_trace_projection(
+                &completion.admission,
+                status,
+                flushing_before,
+                flushing_after,
+                admitted_before,
+                admitted_after,
+                self.sidecar_admission_capacity,
+            ) {
+                Ok(flush_trace) => flush_trace,
+                Err(error) => {
+                    self.flushing_sidecar_chunks.push_front(completion);
+                    return Err(error);
+                }
+            };
+            if !production_reliable_flush_trace_refines_outbound_ownership_kernel(flush_trace) {
+                self.flushing_sidecar_chunks.push_front(completion);
+                return Err(MergeSidecarError::FlushIdentityMismatch(
+                    "sidecar flush transition failed its exact ownership kernel",
+                ));
+            }
+            match status {
+                NetworkReplyFlushAckStatus::Pending => {
+                    self.flushing_sidecar_chunks.push_back(completion);
+                }
+                NetworkReplyFlushAckStatus::Flushed => {
+                    self.admitted_sidecar_chunks.push_back(completion.admission);
+                }
+                NetworkReplyFlushAckStatus::Closed => {
+                    // The sidecar transport still owns this unacknowledged
+                    // source cursor and will re-emit it on a live route.
+                }
+            }
+        }
+        debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
+        Ok(())
+    }
+
+    fn rebase_source_fifo(&mut self) -> Result<(), String> {
+        let mut rebuilt = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+        let mut rebased_ids = Vec::with_capacity(self.fanouts.len());
+        for (fanout_index, fanout) in self.fanouts.iter().enumerate() {
+            let fifo_id = ExactFanoutFifoId::try_from(fanout_index)
+                .map_err(|_| "Sumeragi v2 outbound FIFO index is not representable".to_owned())?;
+            rebased_ids.push(fifo_id);
+            for source in fanout.outstanding_sources()? {
+                rebuilt.entry(source).or_default().insert(fifo_id);
+            }
+        }
+        let next_fanout_fifo_id = ExactFanoutFifoId::try_from(self.fanouts.len())
+            .map_err(|_| "Sumeragi v2 outbound FIFO sequence is not representable".to_owned())?;
+        if next_fanout_fifo_id == ExactFanoutFifoId::MAX {
+            return Err("Sumeragi v2 outbound FIFO sequence exhausted".to_owned());
+        }
+        for (fanout, fifo_id) in self.fanouts.iter_mut().zip(rebased_ids) {
+            fanout.fifo_id = Some(fifo_id);
+        }
+        self.next_fanout_fifo_id = next_fanout_fifo_id;
+        self.source_fifo_owners = rebuilt;
+        Ok(())
+    }
+
+    fn allocate_fanout_fifo_id(&mut self) -> Result<ExactFanoutFifoId, String> {
+        if self.next_fanout_fifo_id == ExactFanoutFifoId::MAX {
+            self.rebase_source_fifo()?;
+        }
+        let fifo_id = self.next_fanout_fifo_id;
+        if self
+            .source_fifo_owners
+            .values()
+            .any(|owners| owners.contains(&fifo_id))
+        {
+            return Err("Sumeragi v2 outbound FIFO sequence reused a live identity".to_owned());
+        }
+        self.next_fanout_fifo_id = fifo_id
+            .checked_add(1)
+            .ok_or_else(|| "Sumeragi v2 outbound FIFO sequence exhausted".to_owned())?;
+        Ok(fifo_id)
+    }
+
+    fn unregister_source_fifo_owner(
+        &mut self,
+        fifo_id: ExactFanoutFifoId,
+        source: &ExactTargetSource,
+    ) -> Result<(), String> {
+        let remove_source = {
+            let owners = self
+                .source_fifo_owners
+                .get_mut(source)
+                .ok_or_else(|| "Sumeragi v2 outbound FIFO lost a registered source".to_owned())?;
+            if !owners.remove(&fifo_id) {
+                return Err("Sumeragi v2 outbound FIFO lost a registered owner".to_owned());
+            }
+            owners.is_empty()
+        };
+        if remove_source {
+            self.source_fifo_owners.remove(source);
+        }
+        Ok(())
+    }
+
+    fn source_fifo_owners_after_fanout_replacement(
+        &self,
+        fifo_id: ExactFanoutFifoId,
+        prior_sources: &BTreeSet<ExactTargetSource>,
+        updated_sources: &BTreeSet<ExactTargetSource>,
+    ) -> Result<BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>, String> {
+        let indexed_sources = self
+            .source_fifo_owners
+            .iter()
+            .filter_map(|(source, owners)| owners.contains(&fifo_id).then_some(source.clone()))
+            .collect::<BTreeSet<_>>();
+        if indexed_sources != *prior_sources {
+            return Err("Sumeragi v2 outbound FIFO index changed before fanout update".to_owned());
+        }
+        let mut next = self.source_fifo_owners.clone();
+        for source in prior_sources {
+            let remove_source = {
+                let owners = next
+                    .get_mut(source)
+                    .expect("preflighted exact-output source owner must remain present");
+                let removed = owners.remove(&fifo_id);
+                debug_assert!(removed);
+                owners.is_empty()
+            };
+            if remove_source {
+                next.remove(source);
+            }
+        }
+        if updated_sources.iter().any(|source| {
+            next.get(source)
+                .is_some_and(|owners| owners.contains(&fifo_id))
+        }) {
+            return Err("Sumeragi v2 outbound FIFO registered one owner twice".to_owned());
+        }
+        for source in updated_sources {
+            next.entry(source.clone()).or_default().insert(fifo_id);
+        }
+        Ok(next)
+    }
+
+    fn ownership_addition_load(
+        &self,
+        additions: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<(usize, usize), String> {
+        let mut added_units = 0usize;
+        let mut added_shared_units = 0usize;
+        for (reservation, added) in additions {
+            if *added == 0 {
+                return Err("Sumeragi v2 outbound ownership added an empty unit".to_owned());
+            }
+            added_units = added_units
+                .checked_add(*added)
+                .ok_or_else(|| "Sumeragi v2 outbound ownership units overflowed".to_owned())?;
+            let current = self
+                .reservation_owner_counts
+                .get(reservation)
+                .copied()
+                .unwrap_or(0);
+            let frozen_credit =
+                usize::from(current == 0 && self.reserved_target_classes.contains(reservation));
+            added_shared_units = added_shared_units
+                .checked_add(added.checked_sub(frozen_credit).ok_or_else(|| {
+                    "Sumeragi v2 outbound frozen credit exceeded its ownership".to_owned()
+                })?)
+                .ok_or_else(|| {
+                    "Sumeragi v2 outbound shared ownership units overflowed".to_owned()
+                })?;
+        }
+        Ok((added_units, added_shared_units))
+    }
+
+    fn ownership_capacity_available(
+        &self,
+        additions: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<bool, String> {
+        let (added_units, added_shared_units) = self.ownership_addition_load(additions)?;
+        Ok(self
+            .ownership_units
+            .checked_add(added_units)
+            .is_some_and(|units| units <= self.ownership_unit_capacity)
+            && self
+                .shared_ownership_units
+                .checked_add(added_shared_units)
+                .is_some_and(|units| units <= self.shared_ownership_unit_capacity))
+    }
+
+    fn ownership_state_after_additions(
+        &self,
+        additions: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<(BTreeMap<ExactTargetReservation, usize>, usize, usize), String> {
+        let (added_units, added_shared_units) = self.ownership_addition_load(additions)?;
+        let next_ownership_units = self
+            .ownership_units
+            .checked_add(added_units)
+            .filter(|units| *units <= self.ownership_unit_capacity)
+            .ok_or_else(|| {
+                "Sumeragi v2 outbound ownership exceeded its reserved geometry".to_owned()
+            })?;
+        let next_shared_ownership_units = self
+            .shared_ownership_units
+            .checked_add(added_shared_units)
+            .filter(|units| *units <= self.shared_ownership_unit_capacity)
+            .ok_or_else(|| {
+                "Sumeragi v2 outbound ownership exceeded its reserved geometry".to_owned()
+            })?;
+        let mut next_reservation_owner_counts = self.reservation_owner_counts.clone();
+        for (reservation, added) in additions {
+            let count = next_reservation_owner_counts
+                .entry(reservation.clone())
+                .or_default();
+            *count = count.checked_add(*added).ok_or_else(|| {
+                "Sumeragi v2 outbound target/class multiplicity overflowed".to_owned()
+            })?;
+        }
+        Ok((
+            next_reservation_owner_counts,
+            next_ownership_units,
+            next_shared_ownership_units,
+        ))
+    }
+
+    fn ownership_state_after_removals(
+        &self,
+        removals: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<(BTreeMap<ExactTargetReservation, usize>, usize, usize), String> {
+        let mut next_reservation_owner_counts = self.reservation_owner_counts.clone();
+        let mut removed_units = 0usize;
+        let mut removed_shared_units = 0usize;
+        for (reservation, removed) in removals {
+            if *removed == 0 {
+                return Err("Sumeragi v2 outbound ownership removed an empty unit".to_owned());
+            }
+            let current = next_reservation_owner_counts
+                .get(reservation)
+                .copied()
+                .ok_or_else(|| "Sumeragi v2 outbound ownership lost its target/class".to_owned())?;
+            let remaining = current.checked_sub(*removed).ok_or_else(|| {
+                "Sumeragi v2 outbound ownership removed too many target/class units".to_owned()
+            })?;
+            removed_units = removed_units
+                .checked_add(*removed)
+                .ok_or_else(|| "Sumeragi v2 outbound ownership removal overflowed".to_owned())?;
+            let frozen_credit_removed =
+                usize::from(remaining == 0 && self.reserved_target_classes.contains(reservation));
+            removed_shared_units = removed_shared_units
+                .checked_add(removed.checked_sub(frozen_credit_removed).ok_or_else(|| {
+                    "Sumeragi v2 outbound frozen credit exceeded its removal".to_owned()
+                })?)
+                .ok_or_else(|| {
+                    "Sumeragi v2 outbound shared ownership removal overflowed".to_owned()
+                })?;
+            if remaining == 0 {
+                next_reservation_owner_counts.remove(reservation);
+            } else {
+                next_reservation_owner_counts.insert(reservation.clone(), remaining);
+            }
+        }
+        let next_ownership_units = self
+            .ownership_units
+            .checked_sub(removed_units)
+            .ok_or_else(|| "Sumeragi v2 outbound ownership total underflowed".to_owned())?;
+        let next_shared_ownership_units = self
+            .shared_ownership_units
+            .checked_sub(removed_shared_units)
+            .ok_or_else(|| "Sumeragi v2 outbound shared ownership underflowed".to_owned())?;
+        Ok((
+            next_reservation_owner_counts,
+            next_ownership_units,
+            next_shared_ownership_units,
+        ))
+    }
+
+    fn remove_ownership_units(
+        &mut self,
+        removals: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<(), String> {
+        let (counts, units, shared_units) = self.ownership_state_after_removals(removals)?;
+        self.reservation_owner_counts = counts;
+        self.ownership_units = units;
+        self.shared_ownership_units = shared_units;
+        Ok(())
+    }
+
+    fn validate_fanout_bounds(&self, fanout: &PendingExactFanout) -> Result<(), String> {
+        if fanout.fifo_id.is_some() {
+            return Err("Sumeragi v2 outbound fanout already owns a FIFO identity".to_owned());
+        }
         if fanout.messages.len() > self.max_messages_per_fanout
             || fanout.peers.len() > self.max_peers_per_fanout
         {
             return Err("Sumeragi v2 outbound fanout exceeds its protocol bound".to_owned());
         }
-        if !self.has_capacity() {
+        if fanout.targets.iter().any(|target| target.parked) {
+            return Err("Sumeragi v2 new outbound fanout contains a parked source".to_owned());
+        }
+        let reply_routes = fanout
+            .targets
+            .iter()
+            .filter_map(|target| match &target.route {
+                ExactTargetRoute::Reply(route) => Some(route),
+                ExactTargetRoute::Topology => None,
+            })
+            .collect::<Vec<_>>();
+        if !reply_routes.is_empty() {
+            if reply_routes.len() != fanout.targets.len() {
+                return Err(
+                    "Sumeragi v2 outbound fanout mixed topology and reply routes".to_owned(),
+                );
+            }
+            let mut authority = None;
+            let mut sources = BTreeSet::new();
+            for (route, peer) in reply_routes.iter().copied().zip(&fanout.peers) {
+                if !route.is_active() {
+                    return Err(
+                        "Sumeragi v2 outbound reply fanout contains an inactive capability"
+                            .to_owned(),
+                    );
+                }
+                if route.semantic_target() != peer
+                    || authority.is_some_and(|prior| !route.same_request_authority(prior))
+                {
+                    return Err(
+                        "Sumeragi v2 outbound reply fanout changed actor or semantic target"
+                            .to_owned(),
+                    );
+                }
+                authority.get_or_insert(route);
+                if !sources.insert(route.source_key()) {
+                    return Err(
+                        "Sumeragi v2 outbound reply fanout duplicated an authenticated source"
+                            .to_owned(),
+                    );
+                }
+            }
+            let history = fanout.reply_routes.as_ref().ok_or_else(|| {
+                "Sumeragi v2 outbound reply fanout lost its bounded route history".to_owned()
+            })?;
+            if history.semantic_target()
+                != authority
+                    .expect("reply routes established authority")
+                    .semantic_target()
+                || history.len() != reply_routes.len()
+                || history.iter().any(|historical| {
+                    !reply_routes
+                        .iter()
+                        .any(|target| target.same_delivery(historical))
+                })
+            {
+                return Err(
+                    "Sumeragi v2 outbound reply fanout route history changed live targets"
+                        .to_owned(),
+                );
+            }
+            if let Some(ownership) = &fanout.ingress_ownership
+                && (!ownership.validate_exact() || !ownership.matches_reply_routes(Some(history)))
+            {
+                return Err(
+                    "Sumeragi v2 outbound reply fanout changed fair-ingress ownership".to_owned(),
+                );
+            }
+        } else if fanout.reply_routes.is_some() {
+            return Err("Sumeragi v2 topology fanout retained reply-route history".to_owned());
+        } else if fanout.ingress_ownership.is_some() {
+            return Err("Sumeragi v2 topology fanout retained ingress ownership".to_owned());
+        }
+        if fanout.message_hashes.len() != fanout.messages.len()
+            || fanout.message_classes.len() != fanout.messages.len()
+            || fanout.message_class_suffixes.len().checked_sub(1) != Some(fanout.messages.len())
+        {
+            return Err("Sumeragi v2 outbound fanout lost its immutable message index".to_owned());
+        }
+        if fanout
+            .messages
+            .iter()
+            .zip(&fanout.message_hashes)
+            .zip(&fanout.message_classes)
+            .any(|((message, expected_hash), expected_class)| {
+                HashOf::new(message) != *expected_hash
+                    || exact_output_class(message).as_ref() != Ok(expected_class)
+            })
+        {
+            return Err("Sumeragi v2 outbound fanout changed its immutable messages".to_owned());
+        }
+        if fanout
+            .message_class_suffixes
+            .last()
+            .is_none_or(|suffix| *suffix != 0)
+            || fanout
+                .message_classes
+                .iter()
+                .enumerate()
+                .any(|(message_index, class)| {
+                    let Some(expected_tail) = fanout.message_class_suffixes.get(message_index + 1)
+                    else {
+                        return true;
+                    };
+                    let expected_suffix = *expected_tail | exact_output_class_bit(*class);
+                    fanout.message_class_suffixes.get(message_index) != Some(&expected_suffix)
+                })
+        {
+            return Err(
+                "Sumeragi v2 outbound fanout changed its reliable-class suffixes".to_owned(),
+            );
+        }
+        if fanout.current_source_targets != fanout.expected_current_source_targets()? {
+            return Err("Sumeragi v2 outbound fanout changed its local FIFO index".to_owned());
+        }
+        // Validate every future message class before consulting capacity. An
+        // invalid route must never be disguised as temporary backpressure by
+        // an already-full corridor.
+        let _ = fanout.outstanding_sources()?;
+        Ok(())
+    }
+
+    fn capacity_available_for(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
+        if let Some(pending) = self
+            .fanouts
+            .iter()
+            .find(|pending| pending.can_coalesce_retry(fanout))
+        {
+            let plan = pending.reply_target_merge_plan(fanout)?;
+            if !self.coalesced_target_geometry_available(pending, &plan)? {
+                return Ok(false);
+            }
+            let additions =
+                pending.coalesce_reservation_additions_for_plan(fanout, &plan.targets)?;
+            return self.ownership_capacity_available(&additions);
+        }
+        self.ownership_capacity_available(&fanout.admission_reservation_counts()?)
+    }
+
+    fn coalesced_target_geometry_available(
+        &self,
+        pending: &PendingExactFanout,
+        plan: &ReplyTargetMergePlan,
+    ) -> Result<bool, String> {
+        let appended = plan
+            .targets
+            .iter()
+            .filter(|merge| matches!(merge, ReplyTargetMerge::Append { .. }))
+            .count();
+        let target_count = pending
+            .targets
+            .len()
+            .checked_add(appended)
+            .ok_or_else(|| "Sumeragi v2 reply target geometry overflowed".to_owned())?;
+        Ok(target_count <= self.max_peers_per_fanout
+            && target_count <= plan.reply_routes.source_capacity())
+    }
+
+    fn can_enqueue(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
+        self.validate_fanout_bounds(fanout)?;
+        self.capacity_available_for(fanout)
+    }
+
+    fn validate_owned_reply_transfer(
+        &self,
+        fanout: &mut PendingExactFanout,
+    ) -> Result<bool, String> {
+        loop {
+            if fanout.retain_active_unowned_reply_targets()? == 0 {
+                return Ok(false);
+            }
+            match self.validate_fanout_bounds(fanout) {
+                Ok(()) => return Ok(true),
+                Err(error)
+                    if fanout.targets.iter().any(
+                        |target| matches!(&target.route, ExactTargetRoute::Reply(route) if !route.is_active()),
+                    ) =>
+                {
+                    // A tenure retired between pruning and validation. Active
+                    // is monotonic, so each retry removes at least one route.
+                    drop(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn can_enqueue_owned_reply_transfer(
+        &self,
+        mut fanout: PendingExactFanout,
+    ) -> Result<bool, String> {
+        if !self.validate_owned_reply_transfer(&mut fanout)? {
+            return Ok(true);
+        }
+        self.capacity_available_for(&fanout)
+    }
+
+    fn enqueue(&mut self, fanout: PendingExactFanout) -> Result<ExactFanoutOwnership, String> {
+        self.validate_fanout_bounds(&fanout)?;
+        self.enqueue_validated(fanout)
+    }
+
+    fn enqueue_owned_reply_transfer(
+        &mut self,
+        mut fanout: PendingExactFanout,
+    ) -> Result<ExactFanoutOwnership, String> {
+        if !self.validate_owned_reply_transfer(&mut fanout)? {
+            return Ok(ExactFanoutOwnership::Owned);
+        }
+        self.enqueue_validated(fanout)
+    }
+
+    fn enqueue_validated(
+        &mut self,
+        mut fanout: PendingExactFanout,
+    ) -> Result<ExactFanoutOwnership, String> {
+        if fanout.is_complete() {
+            return Ok(ExactFanoutOwnership::Owned);
+        }
+        if let Some(index) = self
+            .fanouts
+            .iter()
+            .position(|pending| pending.can_coalesce_retry(&fanout))
+        {
+            let (fifo_id, prior_sources, plan, preview, ownership_additions) = {
+                let pending = self
+                    .fanouts
+                    .get(index)
+                    .expect("located exact-output retry must remain present");
+                if pending.current_source_targets != pending.expected_current_source_targets()? {
+                    return Err(
+                        "Sumeragi v2 retained fanout changed its local FIFO index".to_owned()
+                    );
+                }
+                let fifo_id = pending.fifo_id.ok_or_else(|| {
+                    "Sumeragi v2 retained fanout lost its FIFO identity".to_owned()
+                })?;
+                let plan = pending.reply_target_merge_plan(&fanout)?;
+                let preview = pending.preview_coalesce_plan(&fanout, &plan)?;
+                let ownership_additions =
+                    pending.coalesce_reservation_additions_for_plan(&fanout, &plan.targets)?;
+                (
+                    fifo_id,
+                    pending.outstanding_sources()?,
+                    plan,
+                    preview,
+                    ownership_additions,
+                )
+            };
+            let next_source_fifo_owners = self.source_fifo_owners_after_fanout_replacement(
+                fifo_id,
+                &prior_sources,
+                &preview.outstanding_sources,
+            )?;
+            if plan.targets.is_empty() {
+                self.fanouts
+                    .get_mut(index)
+                    .expect("located exact-output retry must remain present")
+                    .commit_coalesce_plan(&fanout, &plan, preview.current_source_targets);
+                self.source_fifo_owners = next_source_fifo_owners;
+                return Ok(ExactFanoutOwnership::Owned);
+            }
+            if !self.coalesced_target_geometry_available(
+                self.fanouts
+                    .get(index)
+                    .expect("located exact-output retry must remain present"),
+                &plan,
+            )? || !self.ownership_capacity_available(&ownership_additions)?
+            {
+                return Ok(ExactFanoutOwnership::SourceRetained);
+            }
+            let (next_reservation_owner_counts, next_ownership_units, next_shared_ownership_units) =
+                self.ownership_state_after_additions(&ownership_additions)?;
+            self.fanouts
+                .get_mut(index)
+                .expect("located exact-output retry must remain present")
+                .commit_coalesce_plan(&fanout, &plan, preview.current_source_targets);
+            self.source_fifo_owners = next_source_fifo_owners;
+            self.reservation_owner_counts = next_reservation_owner_counts;
+            self.ownership_units = next_ownership_units;
+            self.shared_ownership_units = next_shared_ownership_units;
+            return Ok(ExactFanoutOwnership::Owned);
+        }
+        let ownership_additions = fanout.outstanding_reservation_counts()?;
+        if !self.ownership_capacity_available(&ownership_additions)? {
             return Ok(ExactFanoutOwnership::SourceRetained);
         }
+        let (next_reservation_owner_counts, next_ownership_units, next_shared_ownership_units) =
+            self.ownership_state_after_additions(&ownership_additions)?;
+        let sources = fanout.outstanding_sources()?;
+        let fifo_id = self.allocate_fanout_fifo_id()?;
+        let mut next_source_fifo_owners = self.source_fifo_owners.clone();
+        debug_assert!(
+            next_source_fifo_owners
+                .values()
+                .all(|owners| !owners.contains(&fifo_id))
+        );
+        for source in sources {
+            next_source_fifo_owners
+                .entry(source)
+                .or_default()
+                .insert(fifo_id);
+        }
+        fanout.fifo_id = Some(fifo_id);
+        self.source_fifo_owners = next_source_fifo_owners;
+        self.reservation_owner_counts = next_reservation_owner_counts;
+        self.ownership_units = next_ownership_units;
+        self.shared_ownership_units = next_shared_ownership_units;
         self.fanouts.push_back(fanout);
         Ok(ExactFanoutOwnership::Owned)
     }
@@ -2529,7 +4401,22 @@ impl PendingExactOutput {
         durable_history: Option<&Kura>,
     ) -> Result<usize, String> {
         let mut remaining_posts = 0usize;
+        let mut expected_source_fifo_owners =
+            BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+        let mut expected_reservation_owner_counts =
+            BTreeMap::<ExactTargetReservation, usize>::new();
         for fanout in &self.fanouts {
+            if let Some(ownership) = &fanout.ingress_ownership
+                && (fanout
+                    .reply_routes
+                    .as_ref()
+                    .is_none_or(|routes| !ownership.matches_reply_routes(Some(routes)))
+                    || !ownership.validate_exact())
+            {
+                return Err(
+                    "Sumeragi v2 finalized output changed fair-ingress ownership".to_owned(),
+                );
+            }
             if fanout.message_hashes.len() != fanout.messages.len()
                 || fanout
                     .messages
@@ -2541,9 +4428,27 @@ impl PendingExactOutput {
                     "Sumeragi v2 retained output changed before finality handoff".to_owned(),
                 );
             }
+            let fifo_id = fanout.fifo_id.ok_or_else(|| {
+                "Sumeragi v2 retained fanout lost its FIFO identity before finality handoff"
+                    .to_owned()
+            })?;
+            for source in fanout.outstanding_sources()? {
+                expected_source_fifo_owners
+                    .entry(source)
+                    .or_default()
+                    .insert(fifo_id);
+            }
+            for (reservation, count) in fanout.outstanding_reservation_counts()? {
+                let aggregate = expected_reservation_owner_counts
+                    .entry(reservation)
+                    .or_default();
+                *aggregate = aggregate.checked_add(count).ok_or_else(|| {
+                    "Sumeragi v2 outbound handoff ownership count overflowed".to_owned()
+                })?;
+            }
             applied_height_reconstruction_covers(
                 &fanout.messages,
-                &fanout.peers,
+                &fanout.semantic_peers(),
                 &fanout.rollover_claim,
                 artifact,
                 durable_lane_authority,
@@ -2557,6 +4462,19 @@ impl PendingExactOutput {
                 }
                 if target.ticket.is_some() && target.current.is_none() {
                     return Err("Sumeragi v2 exact-output ticket lost its returned post".to_owned());
+                }
+                if target.parked
+                    && (!matches!(
+                        &target.route,
+                        ExactTargetRoute::Reply(route) if !route.is_active()
+                    ) || target.current.is_some()
+                        || target.ticket.is_some()
+                        || fanout.target_is_complete(target_index))
+                {
+                    return Err(
+                        "Sumeragi v2 parked reply source changed before finality handoff"
+                            .to_owned(),
+                    );
                 }
                 if let Some(current) = &target.current {
                     if fanout.peers.get(target_index) != Some(&current.peer_id) {
@@ -2586,27 +4504,95 @@ impl PendingExactOutput {
                 }
             }
         }
+        if self.source_fifo_owners != expected_source_fifo_owners {
+            return Err(
+                "Sumeragi v2 outbound FIFO index changed before finality handoff".to_owned(),
+            );
+        }
+        if self.reservation_owner_counts != expected_reservation_owner_counts {
+            return Err(
+                "Sumeragi v2 outbound ownership index changed before finality handoff".to_owned(),
+            );
+        }
+        let mut expected_ownership_units = 0usize;
+        let mut expected_shared_ownership_units = 0usize;
+        for (reservation, count) in &expected_reservation_owner_counts {
+            expected_ownership_units = expected_ownership_units
+                .checked_add(*count)
+                .ok_or_else(|| "Sumeragi v2 outbound handoff units overflowed".to_owned())?;
+            let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
+            expected_shared_ownership_units = expected_shared_ownership_units
+                .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
+                    "Sumeragi v2 outbound handoff lost its frozen ownership credit".to_owned()
+                })?)
+                .ok_or_else(|| "Sumeragi v2 outbound handoff shared units overflowed".to_owned())?;
+        }
+        if self.ownership_units != expected_ownership_units
+            || self.shared_ownership_units != expected_shared_ownership_units
+        {
+            return Err(
+                "Sumeragi v2 outbound ownership totals changed before finality handoff".to_owned(),
+            );
+        }
+        let sidecar_completions = self
+            .flushing_sidecar_chunks
+            .len()
+            .checked_add(self.admitted_sidecar_chunks.len())
+            .ok_or_else(|| "Sumeragi v2 sidecar completion count overflowed".to_owned())?;
+        remaining_posts = remaining_posts
+            .checked_add(sidecar_completions)
+            .ok_or_else(|| "Sumeragi v2 applied-height output count overflowed".to_owned())?;
         self.fanouts.clear();
+        // The per-height lane transport and worker are dropped together. A
+        // pending/closed completion has no writer-flush witness, while a
+        // flushed-but-unapplied receipt has no durable local cursor update.
+        // Both are safely superseded by the typed Kura reconstruction claim;
+        // retaining either here would let an unresponsive requester block the
+        // decided height's successor activation.
+        self.flushing_sidecar_chunks.clear();
+        self.admitted_sidecar_chunks.clear();
         self.next_fanout_index = 0;
+        self.next_fanout_fifo_id = 0;
+        self.source_fifo_owners.clear();
+        self.reservation_owner_counts.clear();
+        self.ownership_units = 0;
+        self.shared_ownership_units = 0;
         Ok(remaining_posts)
     }
 
-    fn target_is_global_head(&self, fanout_index: usize, target_index: usize) -> bool {
-        let Some(fanout) = self.fanouts.get(fanout_index) else {
-            return false;
-        };
-        let Some(peer) = fanout.peers.get(target_index) else {
-            return false;
-        };
-        fanout.target_is_local_head(target_index)
-            && !self
-                .fanouts
-                .iter()
-                .take(fanout_index)
-                .any(|older| older.owns_peer(peer))
+    fn target_is_global_head(
+        &self,
+        fanout_index: usize,
+        target_index: usize,
+    ) -> Result<bool, String> {
+        let fanout = self
+            .fanouts
+            .get(fanout_index)
+            .ok_or_else(|| "Sumeragi v2 exact-output fanout disappeared".to_owned())?;
+        if !fanout.target_is_local_head(target_index)? {
+            return Ok(false);
+        }
+        let source = fanout.current_target_source(target_index)?;
+        let fifo_id = fanout
+            .fifo_id
+            .ok_or_else(|| "Sumeragi v2 retained fanout lost its FIFO identity".to_owned())?;
+        let owners = self
+            .source_fifo_owners
+            .get(&source)
+            .ok_or_else(|| "Sumeragi v2 outbound FIFO lost its current source".to_owned())?;
+        if !owners.contains(&fifo_id) {
+            return Err("Sumeragi v2 outbound FIFO lost its current owner".to_owned());
+        }
+        let oldest_owner = owners
+            .first()
+            .expect("non-empty exact-output source owner set has a first entry");
+        Ok(*oldest_owner == fifo_id)
     }
 
-    fn next_schedulable_target(&self, blocked_peers: &BTreeSet<PeerId>) -> Option<(usize, usize)> {
+    fn next_schedulable_target(
+        &self,
+        blocked_sources: &BTreeSet<ExactTargetSource>,
+    ) -> Result<Option<(usize, usize)>, String> {
         let fanout_count = self.fanouts.len();
         for fanout_offset in 0..fanout_count {
             let fanout_index = (self.next_fanout_index + fanout_offset) % fanout_count;
@@ -2617,11 +4603,41 @@ impl PendingExactOutput {
             for target_offset in 0..fanout.targets.len() {
                 let target_index =
                     (fanout.next_target_index + target_offset) % fanout.targets.len();
-                let peer = &fanout.peers[target_index];
-                if !fanout.target_is_complete(target_index)
-                    && !blocked_peers.contains(peer)
-                    && self.target_is_global_head(fanout_index, target_index)
+                if fanout.target_is_complete(target_index) {
+                    continue;
+                }
+                if fanout.targets[target_index].parked {
+                    continue;
+                }
+                let source = fanout.current_target_source(target_index)?;
+                if !blocked_sources.contains(&source)
+                    && self.target_is_global_head(fanout_index, target_index)?
                 {
+                    return Ok(Some((fanout_index, target_index)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn next_inactive_reply_target(&self) -> Option<(usize, usize)> {
+        let fanout_count = self.fanouts.len();
+        for fanout_offset in 0..fanout_count {
+            let fanout_index = (self.next_fanout_index + fanout_offset) % fanout_count;
+            let fanout = self
+                .fanouts
+                .get(fanout_index)
+                .expect("round-robin exact fanout index must be present");
+            for target_offset in 0..fanout.targets.len() {
+                let target_index =
+                    (fanout.next_target_index + target_offset) % fanout.targets.len();
+                if fanout.target_is_complete(target_index) || fanout.targets[target_index].parked {
+                    continue;
+                }
+                if matches!(
+                    &fanout.targets[target_index].route,
+                    ExactTargetRoute::Reply(route) if !route.is_active()
+                ) {
                     return Some((fanout_index, target_index));
                 }
             }
@@ -2629,16 +4645,76 @@ impl PendingExactOutput {
         None
     }
 
-    fn advance_after_attempt(&mut self, fanout_index: usize, target_index: usize) {
-        let fanout_complete = {
+    fn advance_after_attempt(
+        &mut self,
+        fanout_index: usize,
+        target_index: usize,
+        admitted_source: Option<&ExactTargetSource>,
+    ) -> Result<(), String> {
+        let (fanout_complete, released_reservation, released_source_owner) = {
             let fanout = self
                 .fanouts
                 .get_mut(fanout_index)
                 .expect("attempted exact fanout must remain present");
             fanout.advance_target_cursor(target_index);
-            fanout.is_complete()
-        };
+            let fanout_complete = fanout.is_complete();
+            let released_reservation = if let Some(source) = admitted_source {
+                let target = fanout
+                    .targets
+                    .get(target_index)
+                    .ok_or_else(|| "Sumeragi v2 exact-output target disappeared".to_owned())?;
+                let remaining_mask = *fanout
+                    .message_class_suffixes
+                    .get(target.message_index)
+                    .ok_or_else(|| {
+                        "Sumeragi v2 exact-output target advanced beyond its class suffix"
+                            .to_owned()
+                    })?;
+                (remaining_mask & exact_output_class_bit(source.class) == 0).then(|| {
+                    ExactTargetReservation {
+                        semantic_target: fanout
+                            .peers
+                            .get(target_index)
+                            .expect("selected exact-output target must retain its peer")
+                            .clone(),
+                        class: source.class,
+                    }
+                })
+            } else {
+                None
+            };
+            let released_source_owner = if let Some(source) = admitted_source {
+                if fanout.owns_source(source)? {
+                    None
+                } else {
+                    Some(fanout.fifo_id.ok_or_else(|| {
+                        "Sumeragi v2 retained fanout lost its FIFO identity".to_owned()
+                    })?)
+                }
+            } else {
+                None
+            };
+            Ok::<_, String>((fanout_complete, released_reservation, released_source_owner))
+        }?;
+        if let Some(reservation) = released_reservation {
+            self.remove_ownership_units(&BTreeMap::from([(reservation, 1)]))?;
+        }
+        if let (Some(fifo_id), Some(source)) = (released_source_owner, admitted_source) {
+            self.unregister_source_fifo_owner(fifo_id, source)?;
+        }
         if fanout_complete {
+            let fifo_id = self
+                .fanouts
+                .get(fanout_index)
+                .and_then(|fanout| fanout.fifo_id)
+                .ok_or_else(|| "Sumeragi v2 completed fanout lost its FIFO identity".to_owned())?;
+            if self
+                .source_fifo_owners
+                .values()
+                .any(|owners| owners.contains(&fifo_id))
+            {
+                return Err("Sumeragi v2 completed fanout retained a FIFO source".to_owned());
+            }
             self.fanouts
                 .remove(fanout_index)
                 .expect("completed exact fanout must remain present");
@@ -2650,40 +4726,283 @@ impl PendingExactOutput {
         } else {
             self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
         }
+        Ok(())
     }
 
-    /// Drive exact output fairly until empty or every remaining target is backpressured.
-    fn drive_with<Attempt>(&mut self, mut attempt: Attempt) -> Result<Option<usize>, String>
+    fn retire_inactive_reply_target(
+        &mut self,
+        fanout_index: usize,
+        target_index: usize,
+    ) -> Result<(), String> {
+        {
+            let fanout = self
+                .fanouts
+                .get(fanout_index)
+                .ok_or_else(|| "Sumeragi v2 retired fanout disappeared".to_owned())?;
+            let target = fanout
+                .targets
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 retired reply target disappeared".to_owned())?;
+            match &target.route {
+                ExactTargetRoute::Reply(route) if !route.is_active() => {}
+                ExactTargetRoute::Reply(_) => {
+                    return Err("Sumeragi v2 attempted to retire an active reply route".to_owned());
+                }
+                ExactTargetRoute::Topology => {
+                    return Err("Sumeragi v2 attempted to retire a topology target".to_owned());
+                }
+            }
+            if target.parked {
+                return Err("Sumeragi v2 attempted to park one reply target twice".to_owned());
+            }
+            if fanout.reply_routes.is_none() {
+                return Err(
+                    "Sumeragi v2 retired reply fanout lost its bounded route history".to_owned(),
+                );
+            }
+            if fanout.current_source_targets != fanout.expected_current_source_targets()? {
+                return Err(
+                    "Sumeragi v2 retired reply fanout changed its local FIFO index".to_owned(),
+                );
+            }
+            if fanout.target_is_complete(target_index) {
+                return Err("Sumeragi v2 attempted to park a completed reply source".to_owned());
+            }
+            if fanout.fifo_id.is_none() {
+                return Err("Sumeragi v2 retired fanout lost its FIFO identity".to_owned());
+            }
+            // Validate the retained source and reservation projections before
+            // changing tenure-bound state. Parking preserves both projections.
+            let _ = fanout.outstanding_sources()?;
+            let _ = fanout.outstanding_reservation_counts()?;
+        }
+
+        let fanout = self
+            .fanouts
+            .get_mut(fanout_index)
+            .expect("retired exact fanout must remain present");
+        fanout
+            .reply_routes
+            .as_mut()
+            .expect("preflighted reply fanout must retain its route history")
+            .retain_active();
+        if let Some(ownership) = fanout.ingress_ownership.as_mut() {
+            ownership.retain_active_reply_routes();
+            let routes = fanout
+                .reply_routes
+                .as_ref()
+                .expect("preflighted reply fanout must retain its route history");
+            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
+                return Err(
+                    "Sumeragi v2 retired reply target lost fair-ingress ownership".to_owned(),
+                );
+            }
+        }
+        let target = fanout
+            .targets
+            .get_mut(target_index)
+            .expect("retired exact target must remain present");
+        target.current = None;
+        target.ticket = None;
+        target.parked = true;
+        // Only the scheduling cursor advances. The message cursor, local/global
+        // source FIFO ownership, and reservation ownership stay unchanged so a
+        // reconnect retries this exact current item.
+        fanout.advance_target_cursor(target_index);
+        self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
+        Ok(())
+    }
+
+    /// Drive exact output fairly until drained, blocked, or the deterministic budget is spent.
+    fn drive_with_budget_ack<Attempt>(
+        &mut self,
+        attempt_budget: usize,
+        mut attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
     where
         Attempt: FnMut(
             Post<NetworkMessage>,
             Option<NetworkActorAdmissionTicket>,
             &ExactTargetRoute,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
+        ) -> Result<
+            ExactOutputAttemptOutcome,
+            NetworkActorAdmissionError<Post<NetworkMessage>>,
+        >,
     {
-        let mut blocked_peers = BTreeSet::new();
+        if attempt_budget == 0 {
+            return Err("Sumeragi v2 exact-output drive budget must be non-zero".to_owned());
+        }
+        let mut blocked_sources = BTreeSet::new();
         let mut closest_backpressure_rank: Option<usize> = None;
+        let mut attempts = 0usize;
         while !self.fanouts.is_empty() {
-            let Some((fanout_index, target_index)) = self.next_schedulable_target(&blocked_peers)
-            else {
-                return closest_backpressure_rank.map(Some).ok_or_else(|| {
-                    "Sumeragi v2 exact-output scheduler found no per-target FIFO head".to_owned()
+            if attempts == attempt_budget {
+                return Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                    closest_backpressure_rank,
                 });
+            }
+            if let Some((fanout_index, target_index)) = self.next_inactive_reply_target() {
+                attempts = attempts
+                    .checked_add(1)
+                    .expect("bounded exact-output retirement count cannot overflow");
+                self.retire_inactive_reply_target(fanout_index, target_index)?;
+                continue;
+            }
+            let Some((fanout_index, target_index)) =
+                self.next_schedulable_target(&blocked_sources)?
+            else {
+                if !self
+                    .fanouts
+                    .iter()
+                    .any(PendingExactFanout::has_dispatchable_target)
+                {
+                    return Ok(ExactOutputDriveOutcome::Drained);
+                }
+                return closest_backpressure_rank
+                    .map(|closest_rank| ExactOutputDriveOutcome::Backpressured { closest_rank })
+                    .ok_or_else(|| {
+                        "Sumeragi v2 exact-output scheduler found no per-target FIFO head"
+                            .to_owned()
+                    });
             };
+            let inactive_reply = self
+                .fanouts
+                .get(fanout_index)
+                .and_then(|fanout| fanout.targets.get(target_index))
+                .is_some_and(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(route) if !route.is_active())
+                });
+            if inactive_reply {
+                attempts = attempts
+                    .checked_add(1)
+                    .expect("bounded exact-output retirement count cannot overflow");
+                self.retire_inactive_reply_target(fanout_index, target_index)?;
+                continue;
+            }
+            let message_cursor_before = self
+                .fanouts
+                .get(fanout_index)
+                .and_then(|fanout| fanout.targets.get(target_index))
+                .ok_or_else(|| "Sumeragi v2 selected sidecar output target disappeared".to_owned())?
+                .message_index;
+            let message_cursor_after = message_cursor_before
+                .checked_add(1)
+                .ok_or_else(|| "Sumeragi v2 exact-output message cursor overflowed".to_owned())?;
             let (post, ticket, route) = self
                 .fanouts
                 .get_mut(fanout_index)
                 .expect("selected exact fanout must remain present")
                 .take_attempt(target_index)
                 .expect("selected exact-output target must own an attempt");
+            if matches!(&route, ExactTargetRoute::Reply(reply_route) if !reply_route.is_active()) {
+                drop(post);
+                drop(ticket);
+                attempts = attempts
+                    .checked_add(1)
+                    .expect("bounded exact-output retirement count cannot overflow");
+                self.retire_inactive_reply_target(fanout_index, target_index)?;
+                continue;
+            }
             let attempted_peer = post.peer_id.clone();
+            let attempted_source = route.source(&attempted_peer, exact_output_class(&post.data)?);
+            let sidecar_reply = match (&post.data, &route) {
+                (
+                    NetworkMessage::CertifiedMergeSidecar(message),
+                    ExactTargetRoute::Reply(reply_route),
+                ) => match message.as_ref() {
+                    CertifiedMergeSidecarMessage::Chunk(_) => Some((
+                        post.clone(),
+                        reply_route.clone(),
+                        message_cursor_before,
+                        message_cursor_after,
+                    )),
+                    CertifiedMergeSidecarMessage::Request(_) => None,
+                },
+                _ => None,
+            };
+            if sidecar_reply.is_some()
+                && self.sidecar_control_units() >= self.sidecar_admission_capacity
+            {
+                self.fanouts
+                    .get_mut(fanout_index)
+                    .expect("receipt-backpressured exact fanout must remain present")
+                    .retain_returned(target_index, post, ticket)?;
+                return Ok(ExactOutputDriveOutcome::ReceiptBackpressured);
+            }
+            attempts = attempts
+                .checked_add(1)
+                .expect("bounded exact-output attempt count cannot overflow");
             match attempt(post, ticket, &route) {
-                Ok(()) => {
+                Ok(ExactOutputAttemptOutcome::Admitted) => {
+                    if sidecar_reply.is_some() {
+                        return Err(
+                            "Sumeragi v2 admitted a sidecar response without its exact writer-flush witness"
+                                .to_owned(),
+                        );
+                    }
                     self.fanouts
                         .get_mut(fanout_index)
                         .expect("admitted exact fanout must remain present")
-                        .mark_admitted(target_index);
-                    self.advance_after_attempt(fanout_index, target_index);
+                        .mark_admitted(target_index)?;
+                    self.advance_after_attempt(
+                        fanout_index,
+                        target_index,
+                        Some(&attempted_source),
+                    )?;
+                }
+                Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack)) => {
+                    let (canonical_post, reply_route, message_cursor_before, message_cursor_after) =
+                        sidecar_reply.ok_or_else(|| {
+                            "Sumeragi v2 attached a sidecar flush witness to non-sidecar output"
+                                .to_owned()
+                        })?;
+                    let admission = CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
+                        &canonical_post,
+                        &reply_route,
+                        message_cursor_before,
+                        message_cursor_after,
+                        flush_ack.identity(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("admitted exact fanout must remain present")
+                        .mark_admitted(target_index)?;
+                    let actual_message_cursor_after = self
+                        .fanouts
+                        .get(fanout_index)
+                        .and_then(|fanout| fanout.targets.get(target_index))
+                        .ok_or_else(|| {
+                            "Sumeragi v2 admitted sidecar output target disappeared".to_owned()
+                        })?
+                        .message_index;
+                    if actual_message_cursor_after != message_cursor_after {
+                        return Err(
+                            "Sumeragi v2 sidecar output message cursor changed during admission"
+                                .to_owned(),
+                        );
+                    }
+                    self.flushing_sidecar_chunks.push_back(
+                        PendingCertifiedMergeSidecarChunkFlush {
+                            admission,
+                            flush_ack,
+                        },
+                    );
+                    self.advance_after_attempt(
+                        fanout_index,
+                        target_index,
+                        Some(&attempted_source),
+                    )?;
+                }
+                Ok(ExactOutputAttemptOutcome::Retired) => {
+                    if !matches!(&route, ExactTargetRoute::Reply(reply_route) if !reply_route.is_active())
+                    {
+                        return Err(
+                            "Sumeragi v2 network actor retired a live exact output route"
+                                .to_owned(),
+                        );
+                    }
+                    self.retire_inactive_reply_target(fanout_index, target_index)?;
                 }
                 Err(NetworkActorAdmissionError::Backpressured {
                     message,
@@ -2703,10 +5022,10 @@ impl PendingExactOutput {
                         .get_mut(fanout_index)
                         .expect("backpressured exact fanout must remain present")
                         .retain_returned(target_index, message, ticket)?;
-                    blocked_peers.insert(attempted_peer);
+                    blocked_sources.insert(attempted_source);
                     closest_backpressure_rank =
                         Some(closest_backpressure_rank.map_or(rank, |current| current.min(rank)));
-                    self.advance_after_attempt(fanout_index, target_index);
+                    self.advance_after_attempt(fanout_index, target_index, None)?;
                 }
                 Err(NetworkActorAdmissionError::Closed { message }) => {
                     self.fanouts
@@ -2716,6 +5035,13 @@ impl PendingExactOutput {
                     return Err(
                         "Sumeragi v2 network actor closed during output admission".to_owned()
                     );
+                }
+                Err(NetworkActorAdmissionError::Rejected {
+                    message,
+                    reason: NetworkActorAdmissionRejection::InactiveReplyRoute,
+                }) => {
+                    drop(message);
+                    self.retire_inactive_reply_target(fanout_index, target_index)?;
                 }
                 Err(NetworkActorAdmissionError::Rejected { message, reason }) => {
                     self.fanouts
@@ -2728,7 +5054,78 @@ impl PendingExactOutput {
                 }
             }
         }
-        Ok(None)
+        Ok(ExactOutputDriveOutcome::Drained)
+    }
+
+    #[cfg(test)]
+    fn drive_with_budget<Attempt>(
+        &mut self,
+        attempt_budget: usize,
+        mut attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
+    {
+        self.drive_with_budget_ack(attempt_budget, |post, ticket, route| {
+            attempt(post, ticket, route).map(|()| ExactOutputAttemptOutcome::Admitted)
+        })
+    }
+
+    #[cfg(test)]
+    fn drive_bounded_with<Attempt>(
+        &mut self,
+        attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
+    {
+        self.drive_with_budget(self.drive_attempt_budget, attempt)
+    }
+
+    fn drive_bounded_with_ack<Attempt>(
+        &mut self,
+        attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+        ) -> Result<
+            ExactOutputAttemptOutcome,
+            NetworkActorAdmissionError<Post<NetworkMessage>>,
+        >,
+    {
+        self.drive_with_budget_ack(self.drive_attempt_budget, attempt)
+    }
+
+    #[cfg(test)]
+    fn drive_with<Attempt>(&mut self, attempt: Attempt) -> Result<Option<usize>, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
+    {
+        match self.drive_with_budget(usize::MAX, attempt)? {
+            ExactOutputDriveOutcome::Drained => Ok(None),
+            ExactOutputDriveOutcome::ReceiptBackpressured => Err(
+                "unbounded exact-output test drive requires sidecar receipt drainage".to_owned(),
+            ),
+            ExactOutputDriveOutcome::Backpressured { closest_rank } => Ok(Some(closest_rank)),
+            ExactOutputDriveOutcome::BudgetExhausted { .. } => Err(
+                "unbounded exact-output test drive unexpectedly exhausted its budget".to_owned(),
+            ),
+        }
     }
 }
 
@@ -3078,11 +5475,22 @@ fn applied_height_reconstruction_covers(
 }
 
 #[cfg(test)]
+pub(in crate::sumeragi) enum ExactOutputTestAdmission {
+    /// Simulate a completed non-sidecar actor transfer.
+    Admitted,
+    /// Retain a sidecar response until the supplied writer completion resolves.
+    SidecarFlush(NetworkReplyFlushAck),
+    /// Simulate the tenure-cancellation race with no actor ownership.
+    Retired,
+}
+
+#[cfg(test)]
 type ExactOutputAdmissionHook = Box<
     dyn FnMut(
             Post<NetworkMessage>,
             Option<NetworkActorAdmissionTicket>,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>
+        )
+            -> Result<ExactOutputTestAdmission, NetworkActorAdmissionError<Post<NetworkMessage>>>
         + Send,
 >;
 
@@ -3169,18 +5577,35 @@ impl ProductionV2Services {
             .map_err(|_| "Sumeragi v2 outbound chunk count is not representable".to_owned())?
             .checked_add(1)
             .ok_or_else(|| "Sumeragi v2 outbound fanout message bound overflowed".to_owned())?;
-        let max_peers_per_fanout = context.roster.len().max(1);
-        // Every asynchronous completion can produce at most one response fanout,
-        // while one reducer macro-step contributes at most MAX_EFFECTS_PER_STEP
-        // additional semantic effects before the runner regains control.
-        let pending_fanout_capacity = consensus_io_capacity
+        let max_peers_per_fanout = context
+            .roster
+            .len()
+            .max(network.reply_route_source_capacity())
+            .max(1);
+        // Capacity is charged per outstanding target/class ownership unit, not
+        // per container fanout. Async producers and one reducer macro-step bound
+        // the shared unit pool; frozen validator target/classes are checked-added
+        // separately so duplicate or observer traffic cannot consume their first
+        // unit. Require the shared pool to fit one worst-case entirely non-frozen
+        // fanout, preventing a valid producer from being permanently too large.
+        let shared_pending_ownership_unit_capacity = consensus_io_capacity
             .checked_add(auxiliary_io_capacity)
             .and_then(|capacity| capacity.checked_add(super::v2_core::MAX_EFFECTS_PER_STEP))
-            .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
+            .ok_or_else(|| "Sumeragi v2 outbound shared capacity overflowed".to_owned())?;
+        validate_shared_ownership_geometry(
+            shared_pending_ownership_unit_capacity,
+            max_peers_per_fanout,
+        )?;
+        let frozen_semantic_targets = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
         let pending_exact_output = PendingExactOutput::new(
-            pending_fanout_capacity,
+            shared_pending_ownership_unit_capacity,
             max_messages_per_fanout,
             max_peers_per_fanout,
+            &frozen_semantic_targets,
         )?;
         std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
@@ -3500,26 +5925,28 @@ impl ProductionV2Services {
             .is_none_or(|io| io.can_enqueue_as(V2IoAdmissionClass::Auxiliary))
     }
 
-    /// Queue a previously authenticated certified-body request for service.
-    pub(crate) fn serve_certified_request(
+    /// Queue an authenticated certified-body request with every independent return route.
+    pub(crate) fn serve_certified_request_on_routes(
         &mut self,
         request: AuthenticatedCertifiedBodyRequest,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<(), String> {
+        let request_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.request().clone()),
+        ));
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(&request_message)
+            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+        {
+            return Err(
+                "certified-body service request carried altered fair-ingress ownership".to_owned(),
+            );
+        }
         self.enqueue_io(V2IoCommand::Serve {
             request,
-            reply_route: None,
-        })
-    }
-
-    /// Queue an authenticated certified-body request with its exact return route.
-    pub(crate) fn serve_certified_request_on_route(
-        &mut self,
-        request: AuthenticatedCertifiedBodyRequest,
-        reply_route: NetworkReplyRoute,
-    ) -> Result<(), String> {
-        self.enqueue_io(V2IoCommand::Serve {
-            request,
-            reply_route: Some(reply_route),
+            reply_routes,
+            ingress_ownership,
         })
     }
 
@@ -3801,23 +6228,50 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor,
         sender: PeerId,
         chunk: wire::PayloadChunk,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<PayloadChunkDisposition, String> {
+        let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+        ));
+        if !ingress_ownership.validate_exact() || !ingress_ownership.matches_message(&chunk_message)
+        {
+            return Err("payload chunk carried altered fair-ingress ownership".to_owned());
+        }
         let manifest_hash = chunk.manifest_hash;
         if let Some(work_id) = self.fetch_work_for_manifest(manifest_hash) {
-            return self.deliver_payload_chunk(executor, work_id, sender, chunk);
+            return self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership);
         }
 
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        Ok(self.buffer_orphan_payload_chunk(sender, chunk))
+        Ok(self.buffer_orphan_payload_chunk_owned(sender, chunk, ingress_ownership))
     }
 
+    fn buffer_orphan_payload_chunk_owned(
+        &mut self,
+        sender: PeerId,
+        chunk: wire::PayloadChunk,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> PayloadChunkDisposition {
+        self.buffer_orphan_payload_chunk_inner(sender, chunk, Some(ingress_ownership))
+    }
+
+    #[cfg(test)]
     fn buffer_orphan_payload_chunk(
         &mut self,
         sender: PeerId,
         chunk: wire::PayloadChunk,
+    ) -> PayloadChunkDisposition {
+        self.buffer_orphan_payload_chunk_inner(sender, chunk, None)
+    }
+
+    fn buffer_orphan_payload_chunk_inner(
+        &mut self,
+        sender: PeerId,
+        chunk: wire::PayloadChunk,
+        ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
     ) -> PayloadChunkDisposition {
         let manifest_hash = chunk.manifest_hash;
         let sender_index = usize::try_from(chunk.sender).ok();
@@ -3837,12 +6291,23 @@ impl ProductionV2Services {
         {
             return PayloadChunkDisposition::Rejected;
         }
-        if let Some(buffered) = self.orphan_chunks.get(&manifest_hash) {
-            if buffered.iter().any(|existing| {
+        if let Some(buffered) = self.orphan_chunks.get_mut(&manifest_hash) {
+            if let Some(existing) = buffered.iter_mut().find(|existing| {
                 existing.sender == sender
                     && existing.chunk.index == chunk.index
                     && existing.chunk == chunk
             }) {
+                match (&mut existing.ingress_ownership, ingress_ownership) {
+                    (Some(retained), Some(candidate)) => {
+                        if !retained.merge_downstream(candidate) {
+                            return PayloadChunkDisposition::Rejected;
+                        }
+                    }
+                    (None, None) if cfg!(test) => {}
+                    (Some(_), None) | (None, Some(_)) | (None, None) => {
+                        return PayloadChunkDisposition::Rejected;
+                    }
+                }
                 return PayloadChunkDisposition::Duplicate;
             }
             // Retain at most one claim per authenticated outer sender/index. A
@@ -3861,7 +6326,11 @@ impl ProductionV2Services {
             return PayloadChunkDisposition::Rejected;
         }
         let buffered = self.orphan_chunks.entry(manifest_hash).or_default();
-        buffered.push_back(BufferedPayloadChunk { sender, chunk });
+        buffered.push_back(BufferedPayloadChunk {
+            sender,
+            chunk,
+            ingress_ownership,
+        });
         self.orphan_chunk_count = self.orphan_chunk_count.saturating_add(1);
         self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_add(chunk_len);
         PayloadChunkDisposition::Buffered
@@ -3895,8 +6364,15 @@ impl ProductionV2Services {
                 if self.fetch_work_for_manifest(manifest_hash) != Some(work_id) {
                     continue;
                 }
-                if self.deliver_payload_chunk(executor, work_id, buffered.sender, buffered.chunk)?
-                    == PayloadChunkDisposition::Delivered
+                if self.deliver_payload_chunk(
+                    executor,
+                    work_id,
+                    buffered.sender,
+                    buffered.chunk,
+                    buffered.ingress_ownership.ok_or_else(|| {
+                        "buffered payload chunk lost fair-ingress ownership".to_owned()
+                    })?,
+                )? == PayloadChunkDisposition::Delivered
                 {
                     delivered = delivered.saturating_add(1);
                 }
@@ -4093,7 +6569,7 @@ impl ProductionV2Services {
                         completion: V2IoCompletion::Applied(completion),
                         ..
                     } => {
-                        let _ = executor.complete_application(completion, self)?;
+                        let _ = executor.complete_application(*completion, self)?;
                     }
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::ApplyDeferred { work_id, reference },
@@ -4106,7 +6582,8 @@ impl ProductionV2Services {
                         completion:
                             V2IoCompletion::CertifiedResponse {
                                 recipient,
-                                reply_route,
+                                reply_routes,
+                                ingress_ownership,
                                 response,
                             },
                         ..
@@ -4114,14 +6591,12 @@ impl ProductionV2Services {
                         let message = wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
                         );
-                        let result = match reply_route {
-                            Some(reply_route) => self.post_to_peer_on_reply_route(
-                                recipient,
-                                reply_route,
-                                message,
-                            ),
-                            None => self.post_to_peer(recipient, message),
-                        };
+                        let result = self.post_to_peer_on_reply_routes(
+                            recipient,
+                            reply_routes,
+                            ingress_ownership,
+                            message,
+                        );
                         if let Err(reason) = result {
                             return Err(executor.external_service_failed(reason, self));
                         }
@@ -4504,57 +6979,198 @@ impl ProductionV2Services {
             .map_err(|_| "Sumeragi v2 outbound corridor lock was poisoned".to_owned())
     }
 
+    /// Replace actor admission with a deterministic recoverable test boundary.
     #[cfg(test)]
-    fn set_exact_output_admission_hook(
+    pub(in crate::sumeragi) fn set_exact_output_admission_hook(
         &mut self,
-        hook: impl FnMut(
+        mut hook: impl FnMut(
             Post<NetworkMessage>,
             Option<NetworkActorAdmissionTicket>,
         ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>
         + Send
         + 'static,
     ) {
+        self.exact_output_admission_hook = Some(Mutex::new(Box::new(move |post, ticket| {
+            hook(post, ticket).map(|()| ExactOutputTestAdmission::Admitted)
+        })));
+    }
+
+    /// Replace reply admission with a controllable writer-flush test boundary.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn set_exact_output_flush_admission_hook(
+        &mut self,
+        hook: impl FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+        ) -> Result<
+            ExactOutputTestAdmission,
+            NetworkActorAdmissionError<Post<NetworkMessage>>,
+        > + Send
+        + 'static,
+    ) {
         self.exact_output_admission_hook = Some(Mutex::new(Box::new(hook)));
     }
 
+    /// Replace an empty exact-output corridor with a small production-shaped test geometry.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn set_exact_output_shared_unit_capacity_for_test(
+        &self,
+        shared_ownership_unit_capacity: usize,
+    ) -> Result<(), String> {
+        let max_messages_per_fanout = usize::try_from(self.context.da_layout.max_chunk_count)
+            .map_err(|_| "Sumeragi v2 test outbound chunk count is not representable".to_owned())?
+            .checked_add(1)
+            .ok_or_else(|| "Sumeragi v2 test outbound fanout bound overflowed".to_owned())?;
+        let max_peers_per_fanout = self
+            .context
+            .roster
+            .len()
+            .max(self.network.reply_route_source_capacity())
+            .max(1);
+        let frozen_semantic_targets = self
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let replacement = PendingExactOutput::new(
+            shared_ownership_unit_capacity,
+            max_messages_per_fanout,
+            max_peers_per_fanout,
+            &frozen_semantic_targets,
+        )?;
+        let mut pending = self.lock_pending_exact_output()?;
+        if !pending.fanouts.is_empty()
+            || !pending.flushing_sidecar_chunks.is_empty()
+            || !pending.admitted_sidecar_chunks.is_empty()
+        {
+            return Err("cannot replace a non-empty Sumeragi v2 exact-output corridor".to_owned());
+        }
+        *pending = replacement;
+        Ok(())
+    }
+
+    /// Test whether the exact-output corridor retained a particular opaque
+    /// reply tenure after a production service handoff.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn retains_reply_route_for_test(
+        &self,
+        expected: &NetworkReplyRoute,
+    ) -> Result<bool, String> {
+        self.lock_pending_exact_output().map(|pending| {
+            pending.fanouts.iter().any(|fanout| {
+                fanout.targets.iter().any(|target| {
+                    matches!(
+                        &target.route,
+                        ExactTargetRoute::Reply(route) if route.same_tenure(expected)
+                    )
+                })
+            })
+        })
+    }
+
+    fn admit_network_exact_output(
+        &self,
+        post: Post<NetworkMessage>,
+        ticket: Option<NetworkActorAdmissionTicket>,
+        route: &ExactTargetRoute,
+    ) -> Result<ExactOutputAttemptOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        match route {
+            ExactTargetRoute::Topology => self
+                .network
+                .post_recoverable(post, ticket)
+                .map(|()| ExactOutputAttemptOutcome::Admitted),
+            ExactTargetRoute::Reply(reply_route) => {
+                let requires_sidecar_flush = matches!(
+                    &post.data,
+                    NetworkMessage::CertifiedMergeSidecar(message)
+                        if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_))
+                );
+                match self.network.post_reply_recoverable_with_flush_ack(
+                    post,
+                    reply_route,
+                    ticket,
+                )? {
+                    Some(flush_ack) if requires_sidecar_flush => {
+                        Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack))
+                    }
+                    Some(flush_ack) => {
+                        drop(flush_ack);
+                        Ok(ExactOutputAttemptOutcome::Admitted)
+                    }
+                    None => Ok(ExactOutputAttemptOutcome::Retired),
+                }
+            }
+        }
+    }
+
     fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
-        let rank = {
+        pending
+            .poll_sidecar_flushes()
+            .map_err(|error| error.to_string())?;
+        let outcome = {
             #[cfg(test)]
             {
                 if let Some(hook) = &self.exact_output_admission_hook {
                     let mut hook = hook.lock().map_err(|_| {
                         "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
                     })?;
-                    pending.drive_with(|post, ticket, _route| hook(post, ticket))?
+                    pending.drive_bounded_with_ack(|post, ticket, _route| {
+                        hook(post, ticket).map(|outcome| match outcome {
+                            ExactOutputTestAdmission::Admitted => {
+                                ExactOutputAttemptOutcome::Admitted
+                            }
+                            ExactOutputTestAdmission::SidecarFlush(flush_ack) => {
+                                ExactOutputAttemptOutcome::SidecarFlush(flush_ack)
+                            }
+                            ExactOutputTestAdmission::Retired => ExactOutputAttemptOutcome::Retired,
+                        })
+                    })?
                 } else {
-                    pending.drive_with(|post, ticket, route| match route {
-                        ExactTargetRoute::Topology => {
-                            self.network.post_recoverable(post, ticket)
-                        }
-                        ExactTargetRoute::Reply(reply_route) => self
-                            .network
-                            .post_reply_recoverable(post, reply_route, ticket),
+                    pending.drive_bounded_with_ack(|post, ticket, route| {
+                        self.admit_network_exact_output(post, ticket, route)
                     })?
                 }
             }
             #[cfg(not(test))]
             {
-                pending.drive_with(|post, ticket, route| match route {
-                    ExactTargetRoute::Topology => self.network.post_recoverable(post, ticket),
-                    ExactTargetRoute::Reply(reply_route) => self
-                        .network
-                        .post_reply_recoverable(post, reply_route, ticket),
+                pending.drive_bounded_with_ack(|post, ticket, route| {
+                    self.admit_network_exact_output(post, ticket, route)
                 })?
             }
         };
-        if let Some(rank) = rank {
-            iroha_logger::debug!(
-                rank,
-                pending_fanouts = pending.fanouts.len(),
-                "retained exact Sumeragi v2 output behind network-actor backpressure"
-            );
+        pending
+            .poll_sidecar_flushes()
+            .map_err(|error| error.to_string())?;
+        match outcome {
+            ExactOutputDriveOutcome::Drained => {}
+            ExactOutputDriveOutcome::ReceiptBackpressured => {
+                iroha_logger::debug!(
+                    pending_receipts = pending.sidecar_control_units(),
+                    pending_flushes = pending.flushing_sidecar_chunks.len(),
+                    receipt_capacity = pending.sidecar_admission_capacity,
+                    "retained exact Sumeragi v2 output behind sidecar receipt backpressure"
+                );
+            }
+            ExactOutputDriveOutcome::Backpressured { closest_rank } => {
+                iroha_logger::debug!(
+                    rank = closest_rank,
+                    pending_fanouts = pending.fanouts.len(),
+                    "retained exact Sumeragi v2 output behind network-actor backpressure"
+                );
+            }
+            ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank,
+            } => {
+                iroha_logger::debug!(
+                    rank = ?closest_backpressure_rank,
+                    pending_fanouts = pending.fanouts.len(),
+                    attempt_budget = pending.drive_attempt_budget,
+                    "yielded a bounded exact Sumeragi v2 output admission slice"
+                );
+            }
         }
-        Ok(rank.is_some())
+        Ok(pending.is_pending())
     }
 
     fn enqueue_exact_fanout_while_guarded(
@@ -4575,25 +7191,32 @@ impl ProductionV2Services {
         Ok(ownership)
     }
 
-    fn enqueue_exact_reply_while_guarded(
+    fn enqueue_owned_exact_reply_routes_while_guarded(
         &self,
         message: NetworkMessage,
         peer: PeerId,
-        reply_route: NetworkReplyRoute,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
         rollover_claim: ExactOutputRolloverClaim,
         _permit: &ConsensusOutputPermit<'_>,
     ) -> Result<ExactFanoutOwnership, String> {
-        let Some(fanout) = PendingExactFanout::claimed_with_routes(
+        if reply_routes.semantic_target() != &peer {
+            return Err(
+                "Sumeragi v2 reply route does not match its semantic output target".to_owned(),
+            );
+        }
+        let Some(fanout) = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
             vec![message],
-            vec![peer],
-            vec![ExactTargetRoute::Reply(reply_route)],
+            peer,
+            reply_routes,
+            ingress_ownership,
             rollover_claim,
         )?
         else {
             return Ok(ExactFanoutOwnership::Owned);
         };
         let mut pending = self.lock_pending_exact_output()?;
-        let ownership = pending.enqueue(fanout)?;
+        let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
         if ownership == ExactFanoutOwnership::Owned {
             let _ = self.drive_pending_exact_output(&mut pending)?;
         }
@@ -4674,16 +7297,262 @@ impl ProductionV2Services {
         Ok(retired)
     }
 
-    /// Return whether the bounded corridor owns an unadmitted exact fanout.
+    /// Return whether the bounded corridor has dispatchable fanout work, a
+    /// pending writer-flush witness, or an admitted sidecar receipt awaiting
+    /// delivery to the lane. Parked retained payload is intentionally
+    /// non-spinning and becomes dispatchable only after reconnect atomically
+    /// reuses its retained FIFO and reservation ownership.
     pub(crate) fn has_pending_exact_output(&self) -> Result<bool, String> {
         self.lock_pending_exact_output()
             .map(|pending| pending.is_pending())
     }
 
-    /// Return whether one complete semantic fanout can transfer into the corridor.
-    pub(crate) fn can_retain_exact_fanout(&self) -> Result<bool, String> {
-        self.lock_pending_exact_output()
-            .map(|pending| pending.has_capacity())
+    /// Drain process-local sidecar receipts after the exact peer writer flushes
+    /// their response chunks.
+    pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CertifiedMergeSidecarChunkAdmission>, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        pending
+            .poll_sidecar_flushes()
+            .map_err(|error| error.to_string())?;
+        let count = limit.min(pending.admitted_sidecar_chunks.len());
+        Ok(pending.admitted_sidecar_chunks.drain(..count).collect())
+    }
+
+    fn exact_target_geometry(
+        peer: &PeerId,
+        reply_routes: Option<&NetworkReplyRoutes>,
+    ) -> Result<
+        (
+            Vec<PeerId>,
+            Vec<ExactTargetRoute>,
+            Option<NetworkReplyRoutes>,
+        ),
+        String,
+    > {
+        let Some(reply_routes) = reply_routes else {
+            return Ok((vec![peer.clone()], vec![ExactTargetRoute::Topology], None));
+        };
+        if reply_routes.semantic_target() != peer || reply_routes.is_empty() {
+            return Err("Sumeragi v2 effect has invalid reply-route ownership".to_owned());
+        }
+        let routes = reply_routes
+            .iter()
+            .cloned()
+            .map(ExactTargetRoute::Reply)
+            .collect::<Vec<_>>();
+        Ok((
+            vec![peer.clone(); routes.len()],
+            routes,
+            Some(reply_routes.clone()),
+        ))
+    }
+
+    /// Check the exact target/class reservation for the next lane-work effect.
+    pub(crate) fn can_retain_lane_work_effect(
+        &self,
+        effect: &V2LaneWorkEffect,
+    ) -> Result<bool, String> {
+        let (messages, peers, routes, reply_route_history, ingress_ownership, rollover_claim) =
+            match effect {
+                V2LaneWorkEffect::PostLaneBlock { peer, message } => {
+                    let wire = BlockMessageWire::try_preencoded(Arc::new(message.clone()))
+                        .map_err(|error| error.to_string())?;
+                    (
+                        vec![NetworkMessage::SumeragiBlock(Box::new(wire))],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Topology],
+                        None,
+                        None,
+                        ExactOutputRolloverClaim::Lane(self.exact_output_scope()),
+                    )
+                }
+                V2LaneWorkEffect::PostDurableLaneCertificate {
+                    peer,
+                    reply_routes,
+                    ingress_ownership,
+                    certificate,
+                } => {
+                    let reply_routes = reply_routes.as_ref().ok_or_else(|| {
+                        "durable lane-certificate response lost its authenticated reply routes"
+                            .to_owned()
+                    })?;
+                    let ingress_ownership = ingress_ownership.as_ref().ok_or_else(|| {
+                        "durable lane-certificate response lost its fair-ingress ownership"
+                            .to_owned()
+                    })?;
+                    if !ingress_ownership.validate_exact()
+                        || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+                    {
+                        return Err(
+                            "durable lane-certificate response has altered fair-ingress ownership"
+                                .to_owned(),
+                        );
+                    }
+                    let (peers, routes, reply_route_history) =
+                        Self::exact_target_geometry(peer, Some(reply_routes))?;
+                    let wire = BlockMessageWire::try_preencoded(Arc::new(
+                        BlockMessage::LaneBlockCertificate(Box::new(certificate.clone())),
+                    ))
+                    .map_err(|error| error.to_string())?;
+                    let descriptor = &certificate.proposal.descriptor;
+                    (
+                        vec![NetworkMessage::SumeragiBlock(Box::new(wire))],
+                        peers,
+                        routes,
+                        reply_route_history,
+                        Some(ingress_ownership.clone()),
+                        ExactOutputRolloverClaim::DurableLaneCertificateResponse {
+                            scope: self.exact_output_scope(),
+                            target: peer.clone(),
+                            lane_id: descriptor.lane_id,
+                            lane_block_height: descriptor.lane_block_height,
+                            proposal_height: descriptor.proposal_height,
+                            proposal_hash: certificate.proposal.proposal_hash,
+                            certificate_hash: HashOf::new(certificate),
+                        },
+                    )
+                }
+                V2LaneWorkEffect::PostNativeAmx {
+                    peer,
+                    reply_routes,
+                    message,
+                } => {
+                    let valid = match message {
+                        NativeAmxMessage::PrepareRequest(_)
+                        | NativeAmxMessage::CommitRequest(_) => reply_routes.is_none(),
+                        NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_) => {
+                            reply_routes.is_some()
+                        }
+                    };
+                    if !valid {
+                        return Err(
+                            "Native AMX effect has invalid reply-route ownership".to_owned()
+                        );
+                    }
+                    let body = native_amx_message_body(message)?;
+                    let (peers, routes, reply_route_history) =
+                        Self::exact_target_geometry(peer, reply_routes.as_ref())?;
+                    (
+                        vec![NetworkMessage::NativeAmx(Box::new(message.clone()))],
+                        peers,
+                        routes,
+                        reply_route_history,
+                        None,
+                        ExactOutputRolloverClaim::NativeAmx {
+                            scope: self.exact_output_scope(),
+                            round: body.round,
+                            message_hash: HashOf::new(message),
+                        },
+                    )
+                }
+                V2LaneWorkEffect::BroadcastMerge(signature) => {
+                    let peers = self.remote_voters();
+                    let routes = vec![ExactTargetRoute::Topology; peers.len()];
+                    (
+                        vec![NetworkMessage::MergeCommitteeSignature(Box::new(
+                            signature.clone(),
+                        ))],
+                        peers,
+                        routes,
+                        None,
+                        None,
+                        ExactOutputRolloverClaim::MergeShare {
+                            scope: self.exact_output_scope(),
+                            share_hash: HashOf::new(signature),
+                        },
+                    )
+                }
+                V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                    peer,
+                    reply_routes,
+                    message,
+                } => {
+                    let valid = match message {
+                        CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+                        CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
+                    };
+                    if !valid {
+                        return Err(
+                            "certified merge-sidecar effect has invalid reply-route ownership"
+                                .to_owned(),
+                        );
+                    }
+                    let rollover_claim = match message {
+                        CertifiedMergeSidecarMessage::Request(request)
+                            if request.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                                && request.requester == self.local_peer
+                                && request.responder == *peer =>
+                        {
+                            ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                transfer: CertifiedSidecarTransferIdentity::from_request(request),
+                                request_hash: HashOf::new(request),
+                            }
+                        }
+                        CertifiedMergeSidecarMessage::Chunk(chunk)
+                            if chunk.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                                && chunk.responder == self.local_peer
+                                && chunk.requester == *peer
+                                && chunk.chunk_count != 0
+                                && chunk.chunk_index < chunk.chunk_count =>
+                        {
+                            ExactOutputRolloverClaim::CertifiedSidecarChunk {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                transfer: CertifiedSidecarTransferIdentity::from_chunk(chunk),
+                                chunk_index: chunk.chunk_index,
+                                chunk_count: chunk.chunk_count,
+                                response_hash: HashOf::new(chunk),
+                            }
+                        }
+                        _ => {
+                            return Err(
+                                "certified merge-sidecar effect has no valid rollover claim"
+                                    .to_owned(),
+                            );
+                        }
+                    };
+                    let (peers, routes, reply_route_history) =
+                        Self::exact_target_geometry(peer, reply_routes.as_ref())?;
+                    (
+                        vec![NetworkMessage::CertifiedMergeSidecar(Box::new(
+                            message.clone(),
+                        ))],
+                        peers,
+                        routes,
+                        reply_route_history,
+                        None,
+                        rollover_claim,
+                    )
+                }
+            };
+        let Some(fanout) = PendingExactFanout::classified_with_route_history(
+            messages,
+            peers,
+            routes,
+            reply_route_history,
+        )?
+        else {
+            return Ok(true);
+        };
+        rollover_claim.validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
+        let mut fanout = fanout;
+        fanout.ingress_ownership = ingress_ownership;
+        fanout.rollover_claim = rollover_claim;
+        let pending = self.lock_pending_exact_output()?;
+        if fanout
+            .targets
+            .iter()
+            .all(|target| matches!(&target.route, ExactTargetRoute::Reply(_)))
+        {
+            pending.can_enqueue_owned_reply_transfer(fanout)
+        } else {
+            pending.can_enqueue(&fanout)
+        }
     }
 
     fn remote_voters(&self) -> Vec<PeerId> {
@@ -4724,8 +7593,15 @@ impl ProductionV2Services {
         work_id: EffectWorkId,
         sender: PeerId,
         chunk: wire::PayloadChunk,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<PayloadChunkDisposition, String> {
-        match executor.accept_payload_chunk(work_id, chunk, &sender, self) {
+        match executor.accept_payload_chunk_with_ingress_ownership(
+            work_id,
+            chunk,
+            &sender,
+            ingress_ownership,
+            self,
+        ) {
             Ok(()) => Ok(PayloadChunkDisposition::Delivered),
             Err(EffectTransportError::FailClosed(reason)) => Err(reason),
             Err(error) => {
@@ -4735,48 +7611,32 @@ impl ProductionV2Services {
         }
     }
 
-    /// Send one already-versioned v2 transport envelope to a specific peer.
-    pub(crate) fn post_to_peer(
+    /// Send one response through every retained authenticated source route.
+    pub(crate) fn post_to_peer_on_reply_routes(
         &self,
         peer: PeerId,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
         message: wire::ConsensusMessageV2,
     ) -> Result<(), String> {
-        self.post_to_peer_with_route(peer, None, message)
-    }
-
-    /// Send one response through the exact authenticated request route.
-    pub(crate) fn post_to_peer_on_reply_route(
-        &self,
-        peer: PeerId,
-        reply_route: NetworkReplyRoute,
-        message: wire::ConsensusMessageV2,
-    ) -> Result<(), String> {
-        self.post_to_peer_with_route(peer, Some(reply_route), message)
-    }
-
-    fn post_to_peer_with_route(
-        &self,
-        peer: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
-        message: wire::ConsensusMessageV2,
-    ) -> Result<(), String> {
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+        {
+            return Err(
+                "certified-body response carried altered fair-ingress ownership".to_owned(),
+            );
+        }
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let ownership = match reply_route {
-            Some(reply_route) => self.post_block_message_on_reply_route_while_guarded(
-                peer,
-                reply_route,
-                BlockMessage::V2(message),
-                operation.permit(),
-            )?,
-            None => self.post_block_message_while_guarded(
-                peer,
-                BlockMessage::V2(message),
-                operation.permit(),
-            )?,
-        };
+        let ownership = self.post_block_message_on_reply_routes_while_guarded(
+            peer,
+            reply_routes,
+            ingress_ownership,
+            BlockMessage::V2(message),
+            operation.permit(),
+        )?;
         if ownership == ExactFanoutOwnership::SourceRetained {
             iroha_logger::debug!(
                 "deferred certified Sumeragi v2 response to requester reconstruction"
@@ -4787,33 +7647,55 @@ impl ProductionV2Services {
     }
 
     /// Send one response whose exact payload can be rebuilt from immutable Kura history.
+    #[cfg(test)]
     pub(crate) fn post_durable_history_response_with_permit(
         &self,
         peer: PeerId,
         message: wire::ConsensusMessageV2,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
-        self.post_durable_history_response_with_route(peer, None, message, permit)
+        self.post_durable_history_response_with_routes(peer, None, None, message, permit)
     }
 
-    /// Send a durable historical response through an exact authenticated route.
-    pub(crate) fn post_durable_history_response_on_reply_route_with_permit(
+    /// Send a durable historical response through all authenticated source routes.
+    pub(crate) fn post_durable_history_response_on_reply_routes_with_permit(
         &self,
         peer: PeerId,
-        reply_route: NetworkReplyRoute,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
         message: wire::ConsensusMessageV2,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
-        self.post_durable_history_response_with_route(peer, Some(reply_route), message, permit)
+        self.post_durable_history_response_with_routes(
+            peer,
+            Some(reply_routes),
+            Some(ingress_ownership),
+            message,
+            permit,
+        )
     }
 
-    fn post_durable_history_response_with_route(
+    fn post_durable_history_response_with_routes(
         &self,
         peer: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: Option<NetworkReplyRoutes>,
+        ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
         message: wire::ConsensusMessageV2,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<(), String> {
+        match (&reply_routes, &ingress_ownership) {
+            (Some(routes), Some(ownership))
+                if ownership.validate_exact() && ownership.matches_reply_routes(Some(routes)) => {}
+            (None, None) => {}
+            (Some(_), Some(_)) => {
+                return Err(
+                    "durable history response carried altered fair-ingress ownership".to_owned(),
+                );
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err("durable history response lost its fair-ingress ownership".to_owned());
+            }
+        }
         message
             .validate_version()
             .map_err(|error| error.to_string())?;
@@ -4863,8 +7745,8 @@ impl ProductionV2Services {
             self.context.height,
             self.kura.as_ref(),
         )?;
-        let ownership = match reply_route {
-            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+        let ownership = match reply_routes {
+            Some(reply_routes) => self.enqueue_owned_exact_reply_routes_while_guarded(
                 messages
                     .into_iter()
                     .next()
@@ -4873,7 +7755,8 @@ impl ProductionV2Services {
                     .into_iter()
                     .next()
                     .expect("durable response has one target"),
-                reply_route,
+                reply_routes,
+                ingress_ownership,
                 rollover_claim,
                 permit,
             )?,
@@ -4920,34 +7803,55 @@ impl ProductionV2Services {
     }
 
     /// Send one exact lane certificate reconstructed from its certified Kura artifact.
+    #[cfg(test)]
     pub(crate) fn post_durable_lane_certificate(
         &self,
         peer: PeerId,
         certificate: LaneBlockCertificateV1,
     ) -> Result<(), String> {
-        self.post_durable_lane_certificate_with_route(peer, None, certificate)
+        self.post_durable_lane_certificate_with_routes(peer, None, None, certificate)
     }
 
-    /// Send a Kura-backed lane certificate through its request's exact route.
-    pub(crate) fn post_durable_lane_certificate_on_reply_route(
+    /// Send a Kura-backed lane certificate through every retained source route.
+    pub(crate) fn post_durable_lane_certificate_on_reply_routes(
         &self,
         peer: PeerId,
-        reply_route: NetworkReplyRoute,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
         certificate: LaneBlockCertificateV1,
     ) -> Result<(), String> {
-        self.post_durable_lane_certificate_with_route(peer, Some(reply_route), certificate)
+        self.post_durable_lane_certificate_with_routes(
+            peer,
+            Some(reply_routes),
+            Some(ingress_ownership),
+            certificate,
+        )
     }
 
-    fn post_durable_lane_certificate_with_route(
+    fn post_durable_lane_certificate_with_routes(
         &self,
         peer: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: Option<NetworkReplyRoutes>,
+        ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
         certificate: LaneBlockCertificateV1,
     ) -> Result<(), String> {
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        match (&reply_routes, &ingress_ownership) {
+            (Some(routes), Some(ownership))
+                if ownership.validate_exact() && ownership.matches_reply_routes(Some(routes)) => {}
+            (None, None) => {}
+            (Some(_), Some(_)) => {
+                return Err(
+                    "durable lane certificate carried altered fair-ingress ownership".to_owned(),
+                );
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err("durable lane certificate lost its fair-ingress ownership".to_owned());
+            }
+        }
         let descriptor = &certificate.proposal.descriptor;
         if descriptor.proposal_height > self.context.height {
             return Err("durable lane certificate belongs to a future global height".to_owned());
@@ -4975,8 +7879,8 @@ impl ProductionV2Services {
             self.context.height,
             self.kura.as_ref(),
         )?;
-        let ownership = match reply_route {
-            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+        let ownership = match reply_routes {
+            Some(reply_routes) => self.enqueue_owned_exact_reply_routes_while_guarded(
                 messages
                     .into_iter()
                     .next()
@@ -4985,7 +7889,8 @@ impl ProductionV2Services {
                     .into_iter()
                     .next()
                     .expect("durable lane response has one target"),
-                reply_route,
+                reply_routes,
+                ingress_ownership,
                 rollover_claim,
                 operation.permit(),
             )?,
@@ -5007,25 +7912,36 @@ impl ProductionV2Services {
 
     /// Send one bounded certified merge-sidecar request or response through
     /// the dedicated authenticated network envelope.
+    #[cfg(test)]
     pub(crate) fn post_certified_merge_sidecar(
         &self,
         peer: PeerId,
         message: CertifiedMergeSidecarMessage,
     ) {
-        self.post_certified_merge_sidecar_with_reply_route(peer, None, message);
+        self.post_certified_merge_sidecar_with_reply_routes(peer, None, message);
     }
 
     /// Send a sidecar request normally or a response on its exact request route.
-    pub(crate) fn post_certified_merge_sidecar_with_reply_route(
+    pub(crate) fn post_certified_merge_sidecar_with_reply_routes(
         &self,
         peer: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: Option<NetworkReplyRoutes>,
         message: CertifiedMergeSidecarMessage,
     ) {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
         };
+        let route_shape_is_valid = match &message {
+            CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+            CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
+        };
+        if !route_shape_is_valid {
+            iroha_logger::error!(
+                "certified merge-sidecar request/response has invalid reply-route ownership"
+            );
+            return;
+        }
         let rollover_claim = match &message {
             CertifiedMergeSidecarMessage::Request(request)
                 if request.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
@@ -5063,11 +7979,12 @@ impl ProductionV2Services {
             }
         };
         let data = NetworkMessage::CertifiedMergeSidecar(Box::new(message));
-        let result = match reply_route {
-            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+        let result = match reply_routes {
+            Some(reply_routes) => self.enqueue_owned_exact_reply_routes_while_guarded(
                 data,
                 peer,
-                reply_route,
+                reply_routes,
+                None,
                 rollover_claim,
                 operation.permit(),
             ),
@@ -5092,21 +8009,34 @@ impl ProductionV2Services {
     }
 
     /// Send one context-bound Native AMX v2 message to a participant peer.
+    #[cfg(test)]
     pub(crate) fn post_native_amx(&self, peer: PeerId, message: NativeAmxMessage) {
-        self.post_native_amx_with_reply_route(peer, None, message);
+        self.post_native_amx_with_reply_routes(peer, None, message);
     }
 
     /// Send a Native AMX request normally or a request-induced vote on its exact route.
-    pub(crate) fn post_native_amx_with_reply_route(
+    pub(crate) fn post_native_amx_with_reply_routes(
         &self,
         peer: PeerId,
-        reply_route: Option<NetworkReplyRoute>,
+        reply_routes: Option<NetworkReplyRoutes>,
         message: NativeAmxMessage,
     ) {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return;
         };
+        let route_shape_is_valid = match &message {
+            NativeAmxMessage::PrepareRequest(_) | NativeAmxMessage::CommitRequest(_) => {
+                reply_routes.is_none()
+            }
+            NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_) => {
+                reply_routes.is_some()
+            }
+        };
+        if !route_shape_is_valid {
+            iroha_logger::error!("Native AMX request/vote has invalid reply-route ownership");
+            return;
+        }
         let body = match native_amx_message_body(&message) {
             Ok(body)
                 if body.round.context_id == self.context.id()
@@ -5125,11 +8055,12 @@ impl ProductionV2Services {
             message_hash: HashOf::new(&message),
         };
         let data = NetworkMessage::NativeAmx(Box::new(message));
-        let result = match reply_route {
-            Some(reply_route) => self.enqueue_exact_reply_while_guarded(
+        let result = match reply_routes {
+            Some(reply_routes) => self.enqueue_owned_exact_reply_routes_while_guarded(
                 data,
                 peer,
-                reply_route,
+                reply_routes,
+                None,
                 rollover_claim,
                 operation.permit(),
             ),
@@ -5205,10 +8136,11 @@ impl ProductionV2Services {
         self.enqueue_exact_fanout_while_guarded(vec![data], vec![peer], rollover_claim, _permit)
     }
 
-    fn post_block_message_on_reply_route_while_guarded(
+    fn post_block_message_on_reply_routes_while_guarded(
         &self,
         peer: PeerId,
-        reply_route: NetworkReplyRoute,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
         message: BlockMessage,
         permit: &ConsensusOutputPermit<'_>,
     ) -> Result<ExactFanoutOwnership, String> {
@@ -5225,10 +8157,11 @@ impl ProductionV2Services {
         let wire = BlockMessageWire::try_preencoded(Arc::new(message)).map_err(|error| {
             format!("failed to encode guarded Sumeragi v2 reply for {peer}: {error}")
         })?;
-        self.enqueue_exact_reply_while_guarded(
+        self.enqueue_owned_exact_reply_routes_while_guarded(
             NetworkMessage::SumeragiBlock(Box::new(wire)),
             peer,
-            reply_route,
+            reply_routes,
+            Some(ingress_ownership),
             rollover_claim,
             permit,
         )
@@ -5931,6 +8864,7 @@ pub(super) mod tests {
 
     use super::*;
     use crate::sumeragi::{
+        InboundBlockMessage, fair_v2_ingress_admit_for_test,
         v2::AdapterEffect,
         v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
@@ -5945,7 +8879,10 @@ pub(super) mod tests {
     };
     #[cfg(feature = "bls")]
     use crate::sumeragi::{
-        v2::{AdapterFingerprints, SignRequest, SumeragiV2Adapter, VerifiedHeightContext},
+        v2::{
+            AdapterFingerprints, DeferredAdmissionOrdinalSource, SignRequest, SumeragiV2Adapter,
+            VerifiedHeightContext,
+        },
         v2_body_store::BlockSignaturePolicy,
         v2_effects::EffectExecutorStep,
         v2_runtime::{RuntimeQueueConfig, SerializedV2Runtime},
@@ -5980,6 +8917,10 @@ pub(super) mod tests {
             now: Instant,
         ) -> Result<RuntimeStep<AdapterEffect>, String> {
             self.step_effects(now)
+        }
+
+        fn take_scheduler_ownership(&mut self) -> Result<(), String> {
+            Ok(())
         }
 
         fn decided_body(
@@ -6159,7 +9100,8 @@ pub(super) mod tests {
         }
     }
 
-    fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
+    /// Build closed-network production services for sibling runner tests.
+    pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -6200,6 +9142,11 @@ pub(super) mod tests {
         context.validate().expect("valid context");
         let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
         let local_peer = context.roster[0].validator.clone();
+        let frozen_semantic_targets = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
         let service = ProductionV2Services {
             context,
             local_peer,
@@ -6228,7 +9175,8 @@ pub(super) mod tests {
             merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
             pending_exact_output: Mutex::new(
-                PendingExactOutput::new(16, 5, 4).expect("bounded test output corridor"),
+                PendingExactOutput::new(16, 5, 4, &frozen_semantic_targets)
+                    .expect("bounded test output corridor"),
             ),
             exact_output_admission_hook: None,
             active_tag,
@@ -6275,7 +9223,8 @@ pub(super) mod tests {
         }
     }
 
-    fn lane_commit_qc_block_message(validator: PeerId) -> BlockMessage {
+    /// Build a deterministic lane CommitQC block for sibling Sumeragi tests.
+    pub(in crate::sumeragi) fn lane_commit_qc_block_message(validator: PeerId) -> BlockMessage {
         BlockMessage::LaneBlockQc(lane_commit_qc(validator))
     }
 
@@ -6387,6 +9336,33 @@ pub(super) mod tests {
         )
     }
 
+    fn certified_sidecar_flush_fixture(
+        chunk: &CertifiedMergeSidecarChunkV1,
+        route: &NetworkReplyRoute,
+    ) -> (
+        NetworkReplyFlushAckTestFixture,
+        NetworkReplyFlushAck,
+        CertifiedMergeSidecarChunkAdmission,
+    ) {
+        let post = Post {
+            data: NetworkMessage::CertifiedMergeSidecar(Box::new(
+                CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+            )),
+            peer_id: chunk.requester.clone(),
+            priority: Priority::High,
+        };
+        let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
+        let admission = CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
+            &post,
+            route,
+            0,
+            1,
+            ack.identity(),
+        )
+        .expect("bind exact worker-side sidecar flush fixture");
+        (control, ack, admission)
+    }
+
     fn merge_share_digest(message: &NetworkMessage) -> Hash {
         let NetworkMessage::MergeCommitteeSignature(signature) = message else {
             panic!("expected exact merge-share output");
@@ -6398,7 +9374,7 @@ pub(super) mod tests {
     fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
-        let mut pending = PendingExactOutput::new(1, 1, 1).expect("bounded output corridor");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("bounded output corridor");
         pending
             .enqueue(
                 PendingExactFanout::new(
@@ -6408,6 +9384,8 @@ pub(super) mod tests {
                 .expect("non-empty final QC fanout"),
             )
             .expect("retain final QC fanout");
+        assert_eq!(pending.source_fifo_owners.len(), 1);
+        assert_eq!(pending.fanouts[0].current_source_targets.len(), 1);
 
         assert_eq!(
             pending.drive_with(|post, ticket, _route| {
@@ -6446,6 +9424,7 @@ pub(super) mod tests {
         );
         assert_eq!(admitted, vec![peer]);
         assert!(!pending.is_pending());
+        assert!(pending.source_fifo_owners.is_empty());
     }
 
     #[test]
@@ -6454,8 +9433,8 @@ pub(super) mod tests {
         let peers = service.remote_voters();
         let digest = Hash::new(b"outbound corridor merge share");
         let message = merge_share_message(b"outbound corridor merge share");
-        let mut pending =
-            PendingExactOutput::new(1, 1, peers.len()).expect("bounded merge output corridor");
+        let mut pending = PendingExactOutput::new(1, 1, peers.len(), &peers)
+            .expect("bounded merge output corridor with exact frozen targets");
         pending
             .enqueue(
                 PendingExactFanout::new(vec![message], peers.clone())
@@ -6503,16 +9482,1900 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn backpressured_target_does_not_block_later_targets_or_fanouts() {
+    fn same_tenure_updates_and_reconnect_preserve_current_item() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let second_digest = Hash::new(b"source update second");
+        let messages = vec![
+            merge_share_message(b"source update first"),
+            merge_share_message(b"source update second"),
+        ];
+        let response_class = exact_output_class(&messages[0]).expect("classified response");
+        assert!(
+            messages
+                .iter()
+                .all(|message| exact_output_class(message) == Ok(response_class))
+        );
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let prior_route = routes.mint(peer.clone());
+        let prior_source =
+            ExactTargetRoute::Reply(prior_route.clone()).source(&peer, response_class);
+        let mut predecessor = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(prior_route.clone())],
+        )
+        .expect("two-message exact response");
+        let returned_second = predecessor.messages[1].clone();
+        let target = predecessor
+            .targets
+            .first_mut()
+            .expect("response has one target");
+        target.message_index = 1;
+        target.current = Some(Post {
+            data: returned_second.clone(),
+            peer_id: peer.clone(),
+            priority: Priority::High,
+        });
+        predecessor
+            .rebuild_current_source_targets()
+            .expect("manual predecessor cursor has a valid local FIFO index");
+
+        let mut pending = PendingExactOutput::new(1, 2, 1, &[]).expect("one-response corridor");
+        assert_eq!(
+            pending.enqueue(predecessor).expect("predecessor fits"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.ownership_units, 1);
+        let predecessor_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("retained predecessor has a stable FIFO identity");
+        assert_eq!(
+            pending
+                .source_fifo_owners
+                .get(&prior_source)
+                .and_then(BTreeSet::first),
+            Some(&predecessor_fifo_id)
+        );
+        let same_tenure_retry = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(prior_route.clone())],
+        )
+        .expect("same-tenure exact retry");
+        assert_eq!(
+            pending
+                .enqueue(same_tenure_retry)
+                .expect("same-tenure retry coalesces"),
+            ExactFanoutOwnership::Owned
+        );
+        let retained = pending
+            .fanouts
+            .front()
+            .and_then(|fanout| fanout.targets.first())
+            .expect("predecessor remains queued");
+        assert_eq!(retained.message_index, 1);
+        assert_eq!(
+            retained
+                .current
+                .as_ref()
+                .map(|post| HashOf::new(&post.data)),
+            Some(HashOf::new(&returned_second))
+        );
+
+        let later_delivery = routes
+            .redeliver(&prior_route)
+            .expect("same-tenure later delivery");
+        let later_delivery_retry = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(later_delivery.clone())],
+        )
+        .expect("later-delivery exact retry");
+        assert_eq!(
+            pending
+                .enqueue(later_delivery_retry)
+                .expect("later delivery updates only its source route"),
+            ExactFanoutOwnership::Owned
+        );
+        let retained = &pending.fanouts[0].targets[0];
+        assert_eq!(retained.message_index, 1);
+        assert_eq!(
+            retained
+                .current
+                .as_ref()
+                .map(|post| HashOf::new(&post.data)),
+            Some(HashOf::new(&returned_second))
+        );
+        assert!(matches!(
+            &retained.route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&later_delivery)
+        ));
+        let stale_retry = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(prior_route.clone())],
+        )
+        .expect("out-of-order same-source retry");
+        assert!(
+            pending
+                .enqueue(stale_retry)
+                .expect_err("an older delivery must be rejected atomically")
+                .contains("stale capability")
+        );
+        let retained = &pending.fanouts[0].targets[0];
+        assert_eq!(retained.message_index, 1);
+        assert_eq!(
+            retained
+                .current
+                .as_ref()
+                .map(|post| HashOf::new(&post.data)),
+            Some(HashOf::new(&returned_second))
+        );
+        assert!(matches!(
+            &retained.route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&later_delivery)
+        ));
+
+        assert!(routes.retire(&prior_route));
+        assert_eq!(
+            pending.drive_with(|_post, _ticket, _route| {
+                panic!("inactive source must park before actor admission")
+            }),
+            Ok(None)
+        );
+        let parked = &pending.fanouts[0].targets[0];
+        assert!(parked.parked);
+        assert_eq!(parked.message_index, 1);
+        assert!(parked.current.is_none());
+        assert!(parked.ticket.is_none());
+        assert_eq!(pending.fanouts[0].fifo_id, Some(predecessor_fifo_id));
+        assert_eq!(pending.fanouts[0].message_hashes.len(), 2);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 1);
+        assert_eq!(
+            pending.source_fifo_owners.get(&prior_source),
+            Some(&BTreeSet::from([predecessor_fifo_id]))
+        );
+        let reconnected_route = routes.mint(peer.clone());
+        let reconnected_source =
+            ExactTargetRoute::Reply(reconnected_route.clone()).source(&peer, response_class);
+        let reconnect = PendingExactFanout::new_with_routes(
+            messages,
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(reconnected_route.clone())],
+        )
+        .expect("same-source reconnect retry");
+        assert_eq!(
+            pending
+                .enqueue(reconnect)
+                .expect("same-source reconnect updates its route"),
+            ExactFanoutOwnership::Owned
+        );
+        let resumed = pending
+            .fanouts
+            .front()
+            .and_then(|fanout| fanout.targets.first())
+            .expect("reconnected source remains queued");
+        assert_eq!(resumed.message_index, 1);
+        assert!(!resumed.parked);
+        assert!(resumed.current.is_none());
+        assert!(resumed.ticket.is_none());
+        assert!(matches!(
+            &resumed.route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_route)
+        ));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 1);
+        assert_eq!(prior_source, reconnected_source);
+        assert_eq!(
+            pending
+                .source_fifo_owners
+                .get(&reconnected_source)
+                .and_then(BTreeSet::first),
+            Some(&predecessor_fifo_id),
+            "reconnect must retain the authenticated source's FIFO age"
+        );
+
+        let mut admitted = Vec::new();
+        let mut admit = |post: Post<NetworkMessage>,
+                         ticket: Option<NetworkActorAdmissionTicket>,
+                         route: &ExactTargetRoute| {
+            assert!(ticket.is_none());
+            assert!(matches!(
+                route,
+                ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_route)
+            ));
+            admitted.push(merge_share_digest(&post.data));
+            Ok(())
+        };
+        assert_eq!(pending.drive_with(&mut admit), Ok(None));
+        assert_eq!(admitted, vec![second_digest]);
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert!(pending.source_fifo_owners.is_empty());
+
+        let replay_bulk = ProductionV2Services::preencode_v2_network_message(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+                manifest_hash(b"source reconnect bulk"),
+                0,
+                b"source reconnect bulk",
+                0,
+            ))),
+        )
+        .expect("encode reconnect bulk output");
+        assert_eq!(exact_output_class(&replay_bulk), Ok(ExactOutputClass::Bulk));
+        let replay_messages = vec![lane_commit_qc_message(peer.clone()), replay_bulk.clone()];
+        let mut replay_routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let replay_prior_route = replay_routes.mint(peer.clone());
+        let mut replay_predecessor = PendingExactFanout::new_with_routes(
+            replay_messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(replay_prior_route.clone())],
+        )
+        .expect("mixed-class replay predecessor");
+        let replay_returned = replay_predecessor.messages[1].clone();
+        let replay_target = replay_predecessor
+            .targets
+            .first_mut()
+            .expect("mixed-class predecessor has one target");
+        replay_target.message_index = 1;
+        replay_target.current = Some(Post {
+            data: replay_returned,
+            peer_id: peer.clone(),
+            priority: Priority::High,
+        });
+        replay_predecessor
+            .rebuild_current_source_targets()
+            .expect("mixed-class predecessor cursor has a valid local FIFO index");
+
+        let mut replay_pending = PendingExactOutput::new(1, 2, 1, std::slice::from_ref(&peer))
+            .expect("one shared replay unit plus frozen target units");
+        assert_eq!(
+            replay_pending
+                .enqueue(replay_predecessor)
+                .expect("retain replay predecessor"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            replay_pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(peer.clone())],
+                        vec![peer.clone()],
+                    )
+                    .expect("newer lane owner"),
+                )
+                .expect("newer lane owner uses its frozen unit"),
+            ExactFanoutOwnership::Owned
+        );
+        let blocker_hub = PeerId::new(KeyPair::random().public_key().clone());
+        let blocker_route = replay_routes.mint_via(peer.clone(), blocker_hub);
+        assert_eq!(
+            replay_pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        vec![replay_bulk],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(blocker_route.clone())],
+                    )
+                    .expect("duplicate bulk reservation blocker"),
+                )
+                .expect("bulk blocker consumes the only shared unit"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(replay_pending.shared_ownership_units, 1);
+        assert!(replay_routes.retire(&replay_prior_route));
+        let replay_reconnected_route = replay_routes.mint(peer.clone());
+        let source_index_before = replay_pending.source_fifo_owners.clone();
+        let ownership_before = replay_pending.reservation_owner_counts.clone();
+        assert_eq!(
+            replay_pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        replay_messages.clone(),
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(replay_reconnected_route.clone())],
+                    )
+                    .expect("same-source reconnect under full shared capacity"),
+                )
+                .expect("reconnect reuses its already-owned suffix reservation"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(replay_pending.source_fifo_owners, source_index_before);
+        assert_eq!(replay_pending.reservation_owner_counts, ownership_before);
+        let replay_target = &replay_pending.fanouts[0].targets[0];
+        assert_eq!(replay_target.message_index, 1);
+        assert!(replay_target.current.is_none());
+        assert!(matches!(
+            &replay_target.route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&replay_reconnected_route)
+        ));
+
+        assert!(replay_routes.retire(&blocker_route));
+        let blocker_index = replay_pending
+            .fanouts
+            .iter()
+            .position(|fanout| {
+                matches!(
+                    &fanout.targets[0].route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&blocker_route)
+                )
+            })
+            .expect("retired capacity blocker remains queued");
+        replay_pending
+            .retire_inactive_reply_target(blocker_index, 0)
+            .expect("retiring the blocker parks its payload without erasing ownership");
+        assert!(replay_pending.fanouts[blocker_index].targets[0].parked);
+        assert_eq!(replay_pending.shared_ownership_units, 1);
+        assert!(replay_pending.source_fifo_owners.values().any(|owners| {
+            owners.contains(
+                &replay_pending.fanouts[blocker_index]
+                    .fifo_id
+                    .expect("parked fanout retains stable age"),
+            )
+        }));
+        assert_eq!(
+            replay_pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        replay_messages.clone(),
+                        vec![peer],
+                        vec![ExactTargetRoute::Reply(replay_reconnected_route.clone())],
+                    )
+                    .expect("exact reconnect retry under retained capacity"),
+                )
+                .expect("exact retry reuses the retained source reservation"),
+            ExactFanoutOwnership::Owned
+        );
+        let replay_target = &replay_pending.fanouts[0].targets[0];
+        assert_eq!(replay_target.message_index, 1);
+        assert!(replay_target.current.is_none());
+        assert!(matches!(
+            &replay_target.route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&replay_reconnected_route)
+        ));
+        assert_eq!(replay_pending.shared_ownership_units, 1);
+    }
+
+    #[test]
+    fn completed_sidecar_source_reconnect_stays_terminal_while_sibling_backpressures() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
+        let chunk = match &chunk_message {
+            CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.clone(),
+            CertifiedMergeSidecarMessage::Request(_) => {
+                unreachable!("sidecar fixture returns one response chunk")
+            }
+        };
+        let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
+            scope: service.exact_output_scope(),
+            target: peer.clone(),
+            transfer: CertifiedSidecarTransferIdentity::from_chunk(&chunk),
+            chunk_index: chunk.chunk_index,
+            chunk_count: chunk.chunk_count,
+            response_hash: HashOf::new(&chunk),
+        };
+        let message = NetworkMessage::CertifiedMergeSidecar(Box::new(chunk_message));
+        let response_class = exact_output_class(&message).expect("classify sidecar response");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
+        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
+        let mut reply_routes =
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
+        reply_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
+            )
+            .expect("retain both authenticated response sources");
+
+        let mut pending =
+            PendingExactOutput::new(2, 1, 2, &[]).expect("two-source sidecar response corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::claimed_with_reply_routes(
+                        vec![message.clone()],
+                        peer.clone(),
+                        reply_routes,
+                        rollover_claim.clone(),
+                    )
+                    .expect("valid two-source sidecar claim")
+                    .expect("two-source sidecar fanout"),
+                )
+                .expect("retain both sidecar sources"),
+            ExactFanoutOwnership::Owned
+        );
+        let fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("sidecar fanout owns stable FIFO age");
+        let (mut source_a_flush_control, source_a_flush_ack, _source_a_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route_a);
+        let mut source_a_flush_ack = Some(source_a_flush_ack);
+        assert_eq!(
+            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route| {
+                if matches!(route, ExactTargetRoute::Reply(route) if route.same_source(&route_a)) {
+                    assert!(ticket.is_none());
+                    return Ok(ExactOutputAttemptOutcome::SidecarFlush(
+                        source_a_flush_ack
+                            .take()
+                            .expect("source A sidecar chunk is handed to one writer"),
+                    ));
+                }
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_source(&route_b)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 17,
+                })
+            }),
+            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 17 })
+        );
+        assert!(source_a_flush_ack.is_none());
+        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+        assert!(source_a_flush_control.close());
+        pending
+            .poll_sidecar_flushes()
+            .expect("closed exact writer identity remains well formed");
+        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert!(
+            pending.admitted_sidecar_chunks.is_empty(),
+            "a closed writer without Flushed must not advance the sidecar cursor"
+        );
+        let a_index = pending.fanouts[0]
+            .targets
+            .iter()
+            .position(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
+            })
+            .expect("source A target remains as completed history");
+        let b_index = pending.fanouts[0]
+            .targets
+            .iter()
+            .position(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
+            })
+            .expect("source B target remains backpressured");
+        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert_eq!(pending.fanouts[0].targets[b_index].message_index, 0);
+        assert!(pending.fanouts[0].targets[b_index].current.is_some());
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        let exact_duplicate = NetworkReplyRoutes::try_from_route(route_a.clone())
+            .expect("exact completed-source duplicate");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::claimed_with_reply_routes(
+                        vec![message.clone()],
+                        peer.clone(),
+                        exact_duplicate,
+                        rollover_claim.clone(),
+                    )
+                    .expect("valid exact completed-source claim")
+                    .expect("exact completed-source retry"),
+                )
+                .expect("exact duplicate coalesces without replay"),
+            ExactFanoutOwnership::Owned
+        );
+        assert!(pending.fanouts[0].target_is_complete(a_index));
+
+        let later_a = routes
+            .redeliver(&route_a)
+            .expect("later delivery on completed source tenure");
+        let later_delivery = NetworkReplyRoutes::try_from_route(later_a.clone())
+            .expect("later completed-source delivery");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::claimed_with_reply_routes(
+                        vec![message.clone()],
+                        peer.clone(),
+                        later_delivery,
+                        rollover_claim.clone(),
+                    )
+                    .expect("valid later completed-source claim")
+                    .expect("later completed-source retry"),
+                )
+                .expect("later delivery updates without replay"),
+            ExactFanoutOwnership::Owned
+        );
+        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert_eq!(pending.ownership_units, 1);
+
+        assert!(routes.retire(&later_a));
+        let reconnected_a = routes.mint_via(peer.clone(), hub_a.clone());
+        let reconnect = NetworkReplyRoutes::try_from_route(reconnected_a.clone())
+            .expect("same-source reconnect route set");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::claimed_with_reply_routes(
+                        vec![message],
+                        peer.clone(),
+                        reconnect,
+                        rollover_claim,
+                    )
+                    .expect("valid same-source reconnect claim")
+                    .expect("same-source reconnect fanout"),
+                )
+                .expect("completed source reconnect preserves terminal ownership"),
+            ExactFanoutOwnership::Owned
+        );
+        let fanout = &pending.fanouts[0];
+        assert_eq!(fanout.fifo_id, Some(fifo_id));
+        assert_eq!(fanout.targets[a_index].message_index, 1);
+        assert!(fanout.targets[a_index].current.is_none());
+        assert!(fanout.targets[a_index].ticket.is_none());
+        assert!(fanout.target_is_complete(a_index));
+        assert!(matches!(
+            &fanout.targets[a_index].route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
+        ));
+        assert_eq!(fanout.targets[b_index].message_index, 0);
+        assert!(fanout.targets[b_index].current.is_some());
+        assert!(matches!(
+            &fanout.targets[b_index].route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&route_b)
+        ));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        assert!(routes.retire(&reconnected_a));
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_source(&route_b)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 13,
+                })
+            }),
+            Ok(Some(13))
+        );
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert!(!pending.fanouts[0].targets[a_index].parked);
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 1);
+        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        let second_reconnect_a = routes.mint_via(peer.clone(), hub_a);
+        let retry_routes = NetworkReplyRoutes::try_from_route(second_reconnect_a.clone())
+            .expect("second source A reconnect route set");
+        let retry_messages = pending.fanouts[0].messages.clone();
+        let retry_claim = pending.fanouts[0].rollover_claim.clone();
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::claimed_with_reply_routes(
+                        retry_messages,
+                        peer,
+                        retry_routes,
+                        retry_claim,
+                    )
+                    .expect("valid second source A reconnect claim")
+                    .expect("second source A reconnect fanout"),
+                )
+                .expect("second reconnect preserves source A's terminal cursor"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 1);
+        assert!(!pending.fanouts[0].targets[a_index].parked);
+        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert!(matches!(
+            &pending.fanouts[0].targets[a_index].route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&second_reconnect_a)
+        ));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+    }
+
+    #[test]
+    fn sidecar_flush_ack_identity_mismatch_fails_closed() {
+        let (service, _) = fixture();
+        let requester = service.context.roster[1].validator.clone();
+        let (_, message) = certified_sidecar_outputs(&service.local_peer, &requester);
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = message else {
+            unreachable!("sidecar fixture returns one response chunk")
+        };
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester);
+        let (_admission_control, _admission_ack, admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        let (mut substituted_control, substituted_ack, _substituted_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        assert!(substituted_control.flush());
+
+        let mut pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
+        pending
+            .flushing_sidecar_chunks
+            .push_back(PendingCertifiedMergeSidecarChunkFlush {
+                admission,
+                flush_ack: substituted_ack,
+            });
+
+        assert!(matches!(
+            pending.poll_sidecar_flushes(),
+            Err(MergeSidecarError::FlushIdentityMismatch(_))
+        ));
+        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+
+        let (mut exact_control, exact_ack, exact_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        assert!(exact_control.flush());
+        let mut exact_pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
+        exact_pending
+            .flushing_sidecar_chunks
+            .push_back(PendingCertifiedMergeSidecarChunkFlush {
+                admission: exact_admission,
+                flush_ack: exact_ack,
+            });
+        exact_pending
+            .poll_sidecar_flushes()
+            .expect("the exact actor output satisfies the shared flush kernel");
+        assert!(exact_pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(exact_pending.admitted_sidecar_chunks.len(), 1);
+    }
+
+    #[test]
+    fn inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"worker tombstone collision");
+        let response_class = exact_output_class(&message).expect("classified response");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 3);
+        let route_a = routes.mint_via(peer.clone(), hub_a);
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
+        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
+        let mut reply_routes =
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
+        reply_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
+            )
+            .expect("retain two authenticated sources");
+        let mut pending =
+            PendingExactOutput::new(3, 1, 3, &[]).expect("three-source history corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_reply_routes(
+                        vec![message.clone()],
+                        peer.clone(),
+                        reply_routes,
+                    )
+                    .expect("two-source retained fanout"),
+                )
+                .expect("retain source history"),
+            ExactFanoutOwnership::Owned
+        );
+        assert!(routes.retire(&route_a));
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_delivery(&route_b)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 19,
+                })
+            }),
+            Ok(Some(19))
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.ownership_units, 2);
+        let parked_a = pending.fanouts[0]
+            .targets
+            .iter()
+            .find(|target| {
+                matches!(
+                    &target.route,
+                    ExactTargetRoute::Reply(route) if route.same_source(&route_a)
+                )
+            })
+            .expect("retired source A keeps its independent target");
+        assert!(parked_a.parked);
+        assert_eq!(parked_a.message_index, 0);
+        assert!(parked_a.current.is_none());
+        assert!(parked_a.ticket.is_none());
+        assert_eq!(pending.source_fifo_owners.len(), 2);
+        let fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("parked source retains its stable fanout age");
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+        let fifo_before = pending.source_fifo_owners.clone();
+        let collision = routes
+            .forge_equal_ordinal_different_tenure(&route_a, peer.clone(), hub_c)
+            .expect("forge cross-source reuse of the retired ordinal");
+        assert!(route_a.equal_ordinal_different_tenure(&collision));
+        let collision_routes = NetworkReplyRoutes::try_from_route(collision)
+            .expect("forged collision is independently live");
+        let candidate =
+            PendingExactFanout::new_with_reply_routes(vec![message], peer, collision_routes)
+                .expect("collision candidate retains its bounded route set");
+        let targets_before = pending.fanouts[0].targets.len();
+        let reservations_before = pending.reservation_owner_counts.clone();
+        let error = pending
+            .enqueue(candidate)
+            .expect_err("retired route tombstone must reject the forged ordinal atomically");
+        assert!(error.contains("reused a delivery ordinal"));
+        assert_eq!(pending.fanouts[0].targets.len(), targets_before);
+        assert_eq!(pending.reservation_owner_counts, reservations_before);
+        assert_eq!(pending.source_fifo_owners, fifo_before);
+        assert_eq!(pending.ownership_units, 2);
+        assert!(
+            pending.fanouts[0]
+                .reply_routes
+                .as_ref()
+                .is_some_and(|history| history.iter().any(|route| route.same_delivery(&route_b)))
+        );
+    }
+
+    #[test]
+    fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"worker route-history retirement race");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a);
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let retained = PendingExactFanout::new_with_reply_routes(
+            vec![message.clone()],
+            peer.clone(),
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route history"),
+        )
+        .expect("retained source A fanout");
+        let candidate = PendingExactFanout::new_with_reply_routes(
+            vec![message],
+            peer.clone(),
+            NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route history"),
+        )
+        .expect("candidate source B fanout");
+
+        let mut hook_calls = 0usize;
+        let plan = retained
+            .reply_target_merge_plan_after_candidate_prune(&candidate, |attempt| {
+                hook_calls = hook_calls.saturating_add(1);
+                if attempt == 0 {
+                    assert!(
+                        routes.retire(&route_b),
+                        "candidate retires after its owned-transfer prune"
+                    );
+                }
+            })
+            .expect("inactive-only retry prunes the raced candidate atomically");
+        assert_eq!(hook_calls, 2);
+        assert!(plan.targets.is_empty());
+        assert_eq!(plan.reply_routes.len(), 1);
+        assert!(
+            plan.reply_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_a))
+        );
+
+        let collision = routes
+            .forge_equal_ordinal_different_tenure(&route_b, peer, hub_c)
+            .expect("forge reuse of the raced delivery ordinal");
+        let mut history = plan.reply_routes;
+        assert!(matches!(
+            history.merge(
+                &NetworkReplyRoutes::try_from_route(collision)
+                    .expect("forged collision is independently live")
+            ),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+    }
+
+    #[test]
+    fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let first_digest = Hash::new(b"fallback first");
+        let second_digest = Hash::new(b"fallback second");
+        let messages = vec![
+            merge_share_message(b"fallback first"),
+            merge_share_message(b"fallback second"),
+        ];
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let response_class = exact_output_class(&messages[0]).expect("classified response");
+        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
+        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
+        let mut predecessor = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_a.clone())],
+        )
+        .expect("two-message source A response");
+        let returned_second = predecessor.messages[1].clone();
+        let target = predecessor
+            .targets
+            .first_mut()
+            .expect("response has one target");
+        target.message_index = 1;
+        target.current = Some(Post {
+            data: returned_second,
+            peer_id: peer.clone(),
+            priority: Priority::High,
+        });
+        predecessor
+            .rebuild_current_source_targets()
+            .expect("manual fallback cursor has a valid local FIFO index");
+
+        let mut pending = PendingExactOutput::new(2, 2, 2, &[])
+            .expect("two independent authenticated sources fit");
+        assert_eq!(
+            pending.enqueue(predecessor).expect("predecessor fits"),
+            ExactFanoutOwnership::Owned
+        );
+        let fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("semantic response owns one stable FIFO age");
+        assert!(routes.retire(&route_a));
+        assert_eq!(
+            pending.drive_with(|_post, _ticket, _route| {
+                panic!("inactive source A must park before actor admission")
+            }),
+            Ok(None)
+        );
+        let parked_a = &pending.fanouts[0].targets[0];
+        assert!(parked_a.parked);
+        assert_eq!(parked_a.message_index, 1);
+        assert!(parked_a.current.is_none());
+        assert_eq!(pending.fanouts[0].fifo_id, Some(fifo_id));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        let alternate = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_b.clone())],
+        )
+        .expect("new source B response");
+        assert_eq!(
+            pending
+                .enqueue(alternate)
+                .expect("new source gets an independent bounded attempt"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets.len(), 2);
+        assert!(pending.fanouts[0].targets[0].parked);
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
+        assert!(!pending.fanouts[0].targets[1].parked);
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 2);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        let mut admitted_b = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(ticket.is_none());
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
+                ));
+                admitted_b.push(merge_share_digest(&post.data));
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(admitted_b, vec![first_digest, second_digest]);
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert!(pending.fanouts[0].targets[0].parked);
+        assert!(pending.fanouts[0].target_is_complete(1));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+        assert!(!pending.source_fifo_owners.contains_key(&source_b));
+
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let route_c = routes.mint_via(peer.clone(), hub_c);
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        messages.clone(),
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(route_c)],
+                    )
+                    .expect("third authenticated source candidate"),
+                )
+                .expect("configured source geometry returns bounded backpressure"),
+            ExactFanoutOwnership::SourceRetained
+        );
+        assert_eq!(pending.fanouts[0].targets.len(), 2);
+        assert_eq!(pending.ownership_units, 1);
+
+        let reconnected_a = routes.mint_via(peer.clone(), hub_a);
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        messages,
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(reconnected_a.clone())],
+                    )
+                    .expect("same-source reconnect response"),
+                )
+                .expect("source A reconnect reuses its retained ownership"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert!(!pending.fanouts[0].targets[0].parked);
+        assert!(pending.fanouts[0].targets[0].current.is_none());
+        let mut admitted_a = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(ticket.is_none());
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_a)
+                ));
+                admitted_a.push(merge_share_digest(&post.data));
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(admitted_a, vec![second_digest]);
+        assert!(pending.fanouts.is_empty());
+
+        let retired_without_alternate_source = routes.mint(peer.clone());
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        vec![merge_share_message(
+                            b"retired reply without alternate source"
+                        )],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(
+                            retired_without_alternate_source.clone(),
+                        )],
+                    )
+                    .expect("retirable reply output"),
+                )
+                .expect("retain reply before its tenure retires"),
+            ExactFanoutOwnership::Owned
+        );
+        assert!(routes.retire(&retired_without_alternate_source));
+        assert_eq!(
+            pending.drive_with(|_post, _ticket, _route| {
+                panic!("an already-inactive reply route must retire before actor admission")
+            }),
+            Ok(None)
+        );
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(pending.fanouts.len(), 1);
+        assert!(pending.fanouts[0].targets[0].parked);
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
+        assert!(!pending.source_fifo_owners.is_empty());
+
+        let inactive_before_enqueue = routes.mint(peer.clone());
+        assert!(routes.retire(&inactive_before_enqueue));
+        let inactive_candidate = PendingExactFanout::new_with_routes(
+            vec![merge_share_message(
+                b"inactive before exact-output admission",
+            )],
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(inactive_before_enqueue)],
+        )
+        .expect("inactive unowned candidate");
+        assert!(
+            pending
+                .can_enqueue(&inactive_candidate)
+                .expect_err("read-only admission rejects an already-dead source")
+                .contains("inactive capability")
+        );
+        assert!(
+            pending
+                .enqueue(inactive_candidate)
+                .expect_err("an all-dead candidate must be rejected atomically")
+                .contains("inactive capability")
+        );
+        assert!(!pending.is_pending());
+        assert_eq!(pending.ownership_units, 1);
+
+        let retired_during_admission = routes.mint(peer.clone());
+        let mut race_pending = PendingExactOutput::new(1, 1, 1, &[])
+            .expect("one independent admission-race source fits");
+        assert_eq!(
+            race_pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        vec![merge_share_message(b"reply retirement admission race")],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(retired_during_admission.clone())],
+                    )
+                    .expect("racing reply output"),
+                )
+                .expect("retain reply before its admission race"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            race_pending.drive_with(|post, _ticket, _route| {
+                assert!(routes.retire(&retired_during_admission));
+                Err(NetworkActorAdmissionError::Rejected {
+                    message: post,
+                    reason: NetworkActorAdmissionRejection::InactiveReplyRoute,
+                })
+            }),
+            Ok(None)
+        );
+        assert!(!race_pending.is_pending());
+        assert_eq!(race_pending.ownership_units, 1);
+        assert_eq!(race_pending.shared_ownership_units, 1);
+        assert_eq!(race_pending.fanouts.len(), 1);
+        assert!(race_pending.fanouts[0].targets[0].parked);
+        assert!(!race_pending.source_fifo_owners.is_empty());
+
+        let older_same_source = routes.mint(peer.clone());
+        let younger_same_source = routes.mint(peer.clone());
+        assert_eq!(
+            older_same_source.source_key(),
+            younger_same_source.source_key()
+        );
+        let mut blocked_pending = PendingExactOutput::new(1, 1, 2, std::slice::from_ref(&peer))
+            .expect("one shared duplicate-source unit");
+        let error = blocked_pending
+            .enqueue(
+                PendingExactFanout::new_with_routes(
+                    vec![merge_share_message(b"duplicate-source retirement")],
+                    vec![peer.clone(), peer.clone()],
+                    vec![
+                        ExactTargetRoute::Reply(older_same_source),
+                        ExactTargetRoute::Reply(younger_same_source),
+                    ],
+                )
+                .expect("malformed duplicate-source fanout fixture"),
+            )
+            .expect_err("one semantic request retains at most one attempt per source");
+        assert!(error.contains("duplicated an authenticated source"));
+        assert!(!blocked_pending.is_pending());
+
+        let older_global_route = routes.mint(peer.clone());
+        let younger_global_route = routes.mint(peer.clone());
+        let global_class = exact_output_class(&merge_share_message(b"global FIFO class"))
+            .expect("classified global FIFO response");
+        let global_source =
+            ExactTargetRoute::Reply(older_global_route.clone()).source(&peer, global_class);
+        let mut global_pending =
+            PendingExactOutput::new(2, 1, 1, &[]).expect("two global FIFO owners fit");
+        for (route, label) in [
+            (older_global_route.clone(), b"older global owner".as_slice()),
+            (
+                younger_global_route.clone(),
+                b"younger global owner".as_slice(),
+            ),
+        ] {
+            assert_eq!(
+                global_pending
+                    .enqueue(
+                        PendingExactFanout::new_with_routes(
+                            vec![merge_share_message(label)],
+                            vec![peer.clone()],
+                            vec![ExactTargetRoute::Reply(route)],
+                        )
+                        .expect("global FIFO reply fanout"),
+                    )
+                    .expect("global FIFO reply fanout fits"),
+                ExactFanoutOwnership::Owned
+            );
+        }
+        let older_fifo_id = global_pending.fanouts[0]
+            .fifo_id
+            .expect("older reply fanout has FIFO identity");
+        let younger_fifo_id = global_pending.fanouts[1]
+            .fifo_id
+            .expect("younger reply fanout has FIFO identity");
+        assert_eq!(
+            global_pending.source_fifo_owners.get(&global_source),
+            Some(&BTreeSet::from([older_fifo_id, younger_fifo_id]))
+        );
+        assert!(routes.retire(&younger_global_route));
+        assert_eq!(
+            global_pending.drive_with(|post, ticket, route| {
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&older_global_route)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 23,
+                })
+            }),
+            Ok(Some(23))
+        );
+        assert_eq!(global_pending.fanouts.len(), 2);
+        assert_eq!(global_pending.ownership_units, 2);
+        assert_eq!(global_pending.shared_ownership_units, 2);
+        assert!(global_pending.fanouts[1].targets[0].parked);
+        assert_eq!(
+            global_pending.source_fifo_owners.get(&global_source),
+            Some(&BTreeSet::from([older_fifo_id, younger_fifo_id]))
+        );
+
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut mixed_routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let live_route = mixed_routes.mint_via(peer.clone(), hub_a);
+        let retired_route = mixed_routes.mint_via(peer.clone(), hub_b);
+        assert!(mixed_routes.retire(&retired_route));
+        let mut mixed_pending =
+            PendingExactOutput::new(2, 1, 2, &[]).expect("two-source candidate corridor");
+        let mixed_fanout = PendingExactFanout::new_with_routes(
+            vec![merge_share_message(b"mixed live and retired sources")],
+            vec![peer.clone(), peer],
+            vec![
+                ExactTargetRoute::Reply(live_route.clone()),
+                ExactTargetRoute::Reply(retired_route),
+            ],
+        )
+        .expect("mixed-liveness response fanout");
+        assert!(
+            mixed_pending
+                .can_enqueue(&mixed_fanout)
+                .expect_err("preflight must reject one inactive source")
+                .contains("inactive capability")
+        );
+        assert!(
+            mixed_pending
+                .enqueue(mixed_fanout)
+                .expect_err("one inactive source must reject the whole fanout")
+                .contains("inactive capability")
+        );
+        assert_eq!(mixed_pending.ownership_units, 0);
+        assert_eq!(mixed_pending.shared_ownership_units, 0);
+        assert!(mixed_pending.reservation_owner_counts.is_empty());
+        assert!(mixed_pending.source_fifo_owners.is_empty());
+        assert!(!mixed_pending.is_pending());
+    }
+
+    #[test]
+    fn owned_reply_transfer_retirement_after_validation_is_atomic() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a);
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let message = merge_share_message(b"owned transfer retirement race");
+        let mut pending =
+            PendingExactOutput::new(2, 1, 2, &[]).expect("two independent owned reply sources fit");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        vec![message.clone()],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(route_a)],
+                    )
+                    .expect("retained source fanout"),
+                )
+                .expect("retain first source"),
+            ExactFanoutOwnership::Owned
+        );
+        let mut candidate = PendingExactFanout::new_with_routes(
+            vec![message],
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_b.clone())],
+        )
+        .expect("owned alternate-source transfer");
+        assert!(
+            pending
+                .validate_owned_reply_transfer(&mut candidate)
+                .expect("candidate is live at strict validation")
+        );
+        let fifo_before = pending.source_fifo_owners.clone();
+        let reservations_before = pending.reservation_owner_counts.clone();
+        let units_before = pending.ownership_units;
+        assert!(routes.retire(&route_b));
+        assert_eq!(
+            pending
+                .enqueue_validated(candidate)
+                .expect("post-validation retirement drops only the raced occurrence"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.source_fifo_owners, fifo_before);
+        assert_eq!(pending.reservation_owner_counts, reservations_before);
+        assert_eq!(pending.ownership_units, units_before);
+        assert_eq!(pending.fanouts[0].targets.len(), 1);
+    }
+
+    #[test]
+    fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let first_digest = Hash::new(b"independent route first");
+        let second_digest = Hash::new(b"independent route second");
+        let messages = vec![
+            merge_share_message(b"independent route first"),
+            merge_share_message(b"independent route second"),
+        ];
+        let response_class = exact_output_class(&messages[0]).expect("classified response");
+        assert!(
+            messages
+                .iter()
+                .all(|message| exact_output_class(message) == Ok(response_class))
+        );
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let mut fanout = PendingExactFanout::new_with_routes(
+            messages.clone(),
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_a.clone())],
+        )
+        .expect("first-source response fanout");
+        fanout.targets[0].message_index = 1;
+        fanout.targets[0].current = Some(Post {
+            data: messages[1].clone(),
+            peer_id: peer.clone(),
+            priority: Priority::High,
+        });
+        fanout
+            .rebuild_current_source_targets()
+            .expect("advanced source A cursor remains indexed");
+
+        let mut pending = PendingExactOutput::new(2, 2, 2, &[])
+            .expect("two authenticated response sources fit exactly");
+        assert_eq!(
+            pending
+                .enqueue(fanout)
+                .expect("retain first source attempt"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new_with_routes(
+                        messages.clone(),
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Reply(route_b.clone())],
+                    )
+                    .expect("second-source response retry"),
+                )
+                .expect("append the independent source attempt"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets.len(), 2);
+        assert_eq!(pending.ownership_units, 2);
+        let fanout_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("multi-source response has one stable FIFO identity");
+        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
+        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a)) {
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 31,
+                    });
+                }
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 29,
+                })
+            }),
+            Ok(Some(29))
+        );
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert!(pending.fanouts[0].targets[0].current.is_some());
+        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
+        assert!(pending.fanouts[0].targets[1].current.is_some());
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert!(routes.retire(&route_a));
+        let route_a_reconnected = routes.mint_via(peer.clone(), hub_a.clone());
+        let retry = PendingExactFanout::new_with_routes(
+            messages,
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_a_reconnected.clone())],
+        )
+        .expect("same-source reconnect retry");
+        assert_eq!(
+            pending.enqueue(retry).expect("merge A/B/A route ownership"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets.len(), 2);
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert!(pending.fanouts[0].targets[0].current.is_none());
+        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
+        assert!(pending.fanouts[0].targets[1].current.is_some());
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+        assert!(matches!(
+            &pending.fanouts[0].targets[0].route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected)
+        ));
+        assert!(matches!(
+            &pending.fanouts[0].targets[1].route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
+        ));
+
+        let mut completed_a = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(ticket.is_none());
+                if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected))
+                {
+                    completed_a.push(merge_share_digest(&post.data));
+                    return Ok(());
+                }
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
+                ));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 23,
+                })
+            }),
+            Ok(Some(23))
+        );
+        assert_eq!(completed_a, vec![second_digest]);
+        assert!(pending.fanouts[0].target_is_complete(0));
+        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
+        assert_eq!(pending.ownership_units, 1);
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fanout_fifo_id]))
+        );
+
+        assert!(routes.retire(&route_a_reconnected));
+        let route_a_completed_reconnect = routes.mint_via(peer.clone(), hub_a);
+        let completed_retry = PendingExactFanout::new_with_routes(
+            vec![
+                merge_share_message(b"independent route first"),
+                merge_share_message(b"independent route second"),
+            ],
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(route_a_completed_reconnect.clone())],
+        )
+        .expect("completed same-source reconnect retry");
+        assert_eq!(
+            pending
+                .enqueue(completed_retry)
+                .expect("completed reconnect preserves terminal ownership"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 2);
+        assert!(pending.fanouts[0].targets[0].current.is_none());
+        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
+        assert_eq!(pending.ownership_units, 1);
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert!(matches!(
+            &pending.fanouts[0].targets[0].route,
+            ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_completed_reconnect)
+        ));
+
+        let mut admitted_a = Vec::new();
+        let mut admitted_b = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(ticket.is_none());
+                let digest = merge_share_digest(&post.data);
+                match route {
+                    ExactTargetRoute::Reply(route)
+                        if route.same_tenure(&route_a_completed_reconnect) =>
+                    {
+                        admitted_a.push(digest);
+                    }
+                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b) => {
+                        admitted_b.push(digest);
+                    }
+                    _ => panic!("unexpected response route"),
+                }
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert!(admitted_a.is_empty());
+        assert_eq!(admitted_b, vec![first_digest, second_digest]);
+    }
+
+    #[test]
+    fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
+        let (service, keys) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let safety =
+            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
+                .expect("encode safety output");
+        let lane = lane_commit_qc_message(peer.clone());
+        let bulk = ProductionV2Services::preencode_v2_network_message(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+                manifest_hash(b"cross-class scheduler manifest"),
+                0,
+                b"bulk",
+                0,
+            ))),
+        )
+        .expect("encode bulk output");
+        assert_eq!(exact_output_class(&safety), Ok(ExactOutputClass::Safety));
+        assert_eq!(exact_output_class(&lane), Ok(ExactOutputClass::Lane));
+        assert_eq!(exact_output_class(&bulk), Ok(ExactOutputClass::Bulk));
+        assert!(
+            PendingExactFanout::classified_with_routes(
+                vec![bulk.clone(), safety.clone()],
+                vec![peer.clone()],
+                vec![ExactTargetRoute::Topology],
+            )
+            .is_err(),
+            "a blocked lower-priority prefix must not own a later safety source"
+        );
+
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&peer))
+            .expect("shared slot plus three reserved classes");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(vec![bulk], vec![peer.clone()]).expect("bulk fanout"),
+                )
+                .expect("bulk fanout within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 9,
+                })
+            }),
+            Ok(Some(9))
+        );
+
+        for message in [safety, lane] {
+            assert_eq!(
+                pending
+                    .enqueue(
+                        PendingExactFanout::new(vec![message], vec![peer.clone()])
+                            .expect("reserved class fanout"),
+                    )
+                    .expect("reserved class fanout within bounds"),
+                ExactFanoutOwnership::Owned,
+                "each unopened class for one semantic target has reserved ownership"
+            );
+        }
+
+        let mut admitted = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                let class = exact_output_class(&post.data)
+                    .expect("test messages have exact output classes");
+                if class == ExactOutputClass::Bulk {
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 9,
+                    });
+                }
+                assert!(ticket.is_none());
+                admitted.push(class);
+                Ok(())
+            }),
+            Ok(Some(9))
+        );
+        assert_eq!(
+            admitted,
+            vec![ExactOutputClass::Safety, ExactOutputClass::Lane]
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                assert_eq!(exact_output_class(&post.data), Ok(ExactOutputClass::Bulk));
+                assert!(ticket.is_none());
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert!(!pending.is_pending());
+    }
+
+    #[test]
+    fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
+        let (service, keys) = fixture();
+        assert!(validate_shared_ownership_geometry(2, 1).is_err());
+        assert_eq!(validate_shared_ownership_geometry(3, 1), Ok(()));
+        let validator = service.context.roster[1].validator.clone();
+        let observer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let observer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&validator))
+            .expect("one shared slot plus the frozen validator reservations");
+        assert_eq!(pending.shared_ownership_unit_capacity, 1);
+        assert_eq!(pending.reserved_target_classes.len(), 3);
+        assert_eq!(pending.ownership_unit_capacity, 4);
+
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(observer_a.clone())],
+                        vec![observer_a.clone()],
+                    )
+                    .expect("first observer response"),
+                )
+                .expect("first observer response is within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                assert_eq!(post.peer_id, observer_a);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 11,
+                })
+            }),
+            Ok(Some(11))
+        );
+
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(observer_b.clone())],
+                        vec![observer_b],
+                    )
+                    .expect("second observer response"),
+                )
+                .expect("second observer response is within bounds"),
+            ExactFanoutOwnership::SourceRetained,
+            "a novel non-roster identity must not claim a frozen validator slot"
+        );
+
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let safety =
+            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
+                .expect("encode safety output");
+        let lane = lane_commit_qc_message(validator.clone());
+        let bulk = ProductionV2Services::preencode_v2_network_message(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+                manifest_hash(b"frozen reservation regression manifest"),
+                0,
+                b"bulk",
+                0,
+            ))),
+        )
+        .expect("encode bulk output");
+        for message in [safety, lane, bulk] {
+            assert_eq!(
+                pending
+                    .enqueue(
+                        PendingExactFanout::new(vec![message], vec![validator.clone()])
+                            .expect("frozen validator fanout"),
+                    )
+                    .expect("frozen validator fanout is within bounds"),
+                ExactFanoutOwnership::Owned,
+                "each frozen validator class retains its own slot"
+            );
+        }
+
+        let mut admitted = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                if post.peer_id == observer_a {
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 11,
+                    });
+                }
+                assert_eq!(post.peer_id, validator);
+                assert!(ticket.is_none());
+                admitted.push(exact_output_class(&post.data).expect("classified validator output"));
+                Ok(())
+            }),
+            Ok(Some(11))
+        );
+        assert_eq!(
+            admitted,
+            vec![
+                ExactOutputClass::Safety,
+                ExactOutputClass::Lane,
+                ExactOutputClass::Bulk,
+            ]
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+    }
+
+    #[test]
+    fn partial_fanout_progress_releases_only_the_completed_target_unit() {
+        let (service, _) = fixture();
+        let first = service.context.roster[1].validator.clone();
+        let second = service.context.roster[2].validator.clone();
+        let frozen = vec![first.clone(), second.clone()];
+        let mut pending =
+            PendingExactOutput::new(1, 1, 2, &frozen).expect("frozen two-validator corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(first.clone())],
+                        vec![first.clone(), second.clone()],
+                    )
+                    .expect("two-target lane fanout"),
+                )
+                .expect("two-target lane fanout is within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 0);
+
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                if post.peer_id == first {
+                    assert!(ticket.is_none());
+                    return Ok(());
+                }
+                assert_eq!(post.peer_id, second);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 13,
+                })
+            }),
+            Ok(Some(13))
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert!(
+            !pending
+                .reservation_owner_counts
+                .contains_key(&ExactTargetReservation {
+                    semantic_target: first.clone(),
+                    class: ExactOutputClass::Lane,
+                })
+        );
+
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(first.clone())],
+                        vec![first.clone()],
+                    )
+                    .expect("new output for completed target"),
+                )
+                .expect("new completed-target output is within bounds"),
+            ExactFanoutOwnership::Owned,
+            "partial progress must free the completed target/class reservation"
+        );
+        assert_eq!(
+            pending
+                .reservation_owner_counts
+                .get(&ExactTargetReservation {
+                    semantic_target: first,
+                    class: ExactOutputClass::Lane,
+                }),
+            Some(&1)
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 0);
+    }
+
+    #[test]
+    fn ownership_units_reject_reservation_spill_and_release_exact_target() {
+        let (service, _) = fixture();
+        let constrained = service.context.roster[1].validator.clone();
+        let alternate = service.context.roster[2].validator.clone();
+        let observer = PeerId::new(KeyPair::random().public_key().clone());
+        let frozen = vec![constrained.clone(), alternate.clone()];
+        let mut pending =
+            PendingExactOutput::new(1, 1, 2, &frozen).expect("frozen two-validator corridor");
+
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(observer.clone())],
+                        vec![observer],
+                    )
+                    .expect("observer fanout"),
+                )
+                .expect("observer consumes the only shared slot"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(constrained.clone())],
+                        vec![constrained.clone(), alternate.clone()],
+                    )
+                    .expect("flexible validator fanout"),
+                )
+                .expect("flexible fanout owns both exact frozen units"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(constrained.clone())],
+                        vec![constrained.clone()],
+                    )
+                    .expect("constrained validator fanout"),
+                )
+                .expect("duplicate target/class must consume shared ownership"),
+            ExactFanoutOwnership::SourceRetained,
+            "a multi-target fanout already owns the constrained unit; it cannot be undercharged"
+        );
+        assert_eq!(pending.ownership_units, 3);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                if post.peer_id == constrained {
+                    assert!(ticket.is_none());
+                    return Ok(());
+                }
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 17,
+                })
+            }),
+            Ok(Some(17))
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(constrained.clone())],
+                        vec![constrained],
+                    )
+                    .expect("released exact target fanout"),
+                )
+                .expect("released frozen unit remains independently available"),
+            ExactFanoutOwnership::Owned
+        );
+    }
+
+    #[test]
+    fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() {
         let (service, _) = fixture();
         let blocked = service.context.roster[1].validator.clone();
         let same_fanout_responsive = service.context.roster[2].validator.clone();
         let later_fanout_responsive = service.context.roster[3].validator.clone();
+        let observer = PeerId::new(KeyPair::random().public_key().clone());
         let oldest_first_digest = Hash::new(b"oldest blocked-peer fanout first");
         let oldest_second_digest = Hash::new(b"oldest blocked-peer fanout second");
         let responsive_digest = Hash::new(b"later responsive fanout");
         let later_blocked_digest = Hash::new(b"later blocked-peer fanout");
-        let mut pending = PendingExactOutput::new(3, 2, 2).expect("bounded output corridor");
+        let frozen = vec![
+            blocked.clone(),
+            same_fanout_responsive.clone(),
+            later_fanout_responsive.clone(),
+        ];
+        let mut pending = PendingExactOutput::new(1, 2, 2, &frozen)
+            .expect("one shared unit plus exact frozen target units");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![merge_share_message(b"shared observer blocker")],
+                        vec![observer.clone()],
+                    )
+                    .expect("observer blocker"),
+                )
+                .expect("observer consumes the shared ownership unit"),
+            ExactFanoutOwnership::Owned
+        );
         assert_eq!(
             pending
                 .enqueue(
@@ -6533,6 +11396,13 @@ pub(super) mod tests {
         let mut admitted = Vec::new();
         assert_eq!(
             pending.drive_with(|post, ticket, _route| {
+                if post.peer_id == observer {
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 7,
+                    });
+                }
                 if post.peer_id == blocked {
                     blocked_attempts = blocked_attempts.saturating_add(1);
                     return Err(NetworkActorAdmissionError::Backpressured {
@@ -6556,26 +11426,39 @@ pub(super) mod tests {
             ]
         );
 
-        for fanout in [
-            PendingExactFanout::new(
-                vec![merge_share_message(b"later responsive fanout")],
-                vec![later_fanout_responsive.clone()],
-            )
-            .expect("later responsive fanout"),
-            PendingExactFanout::new(
-                vec![merge_share_message(b"later blocked-peer fanout")],
-                vec![blocked.clone()],
-            )
-            .expect("later same-target fanout"),
-        ] {
-            assert_eq!(
-                pending.enqueue(fanout).expect("fanout within bounds"),
-                ExactFanoutOwnership::Owned
-            );
-        }
+        let responsive_fanout = PendingExactFanout::new(
+            vec![merge_share_message(b"later responsive fanout")],
+            vec![later_fanout_responsive.clone()],
+        )
+        .expect("later responsive fanout");
+        assert_eq!(
+            pending
+                .enqueue(responsive_fanout)
+                .expect("responsive fanout within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        let later_blocked_fanout = PendingExactFanout::new(
+            vec![merge_share_message(b"later blocked-peer fanout")],
+            vec![blocked.clone()],
+        )
+        .expect("later same-source fanout");
+        assert_eq!(
+            pending
+                .enqueue(later_blocked_fanout)
+                .expect("same-source fanout within protocol bounds"),
+            ExactFanoutOwnership::SourceRetained,
+            "a blocked source cannot consume the slot reserved for another source/class"
+        );
 
         assert_eq!(
             pending.drive_with(|post, ticket, _route| {
+                if post.peer_id == observer {
+                    return Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 7,
+                    });
+                }
                 if post.peer_id == blocked {
                     blocked_attempts = blocked_attempts.saturating_add(1);
                     return Err(NetworkActorAdmissionError::Backpressured {
@@ -6601,19 +11484,52 @@ pub(super) mod tests {
         );
         assert_eq!(pending.fanouts.len(), 2);
         assert!(pending.fanouts[0].targets[0].current.is_some());
-        assert!(pending.fanouts[0].target_is_complete(1));
-        assert!(pending.fanouts[1].targets[0].current.is_none());
+        assert!(pending.fanouts[1].targets[0].current.is_some());
+        assert!(pending.fanouts[1].target_is_complete(1));
 
-        let mut admitted_to_recovered_target = Vec::new();
         assert_eq!(
             pending.drive_with(|post, ticket, _route| {
-                assert_eq!(post.peer_id, blocked);
                 assert!(ticket.is_none());
-                admitted_to_recovered_target.push(merge_share_digest(&post.data));
+                if post.peer_id == blocked {
+                    admitted.push((post.peer_id, merge_share_digest(&post.data)));
+                } else {
+                    assert_eq!(post.peer_id, observer);
+                }
                 Ok(())
             }),
             Ok(None)
         );
+        assert!(!pending.is_pending());
+
+        let later_blocked_fanout = PendingExactFanout::new(
+            vec![merge_share_message(b"later blocked-peer fanout")],
+            vec![blocked.clone()],
+        )
+        .expect("reconstructed same-source fanout");
+        assert_eq!(
+            pending
+                .enqueue(later_blocked_fanout)
+                .expect("reconstructed fanout within bounds"),
+            ExactFanoutOwnership::Owned
+        );
+        assert_eq!(
+            pending.drive_with(|post, ticket, _route| {
+                assert_eq!(post.peer_id, blocked);
+                assert!(ticket.is_none());
+                admitted.push((post.peer_id, merge_share_digest(&post.data)));
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            admitted.last(),
+            Some(&(blocked.clone(), later_blocked_digest)),
+            "the producer-owned suffix becomes schedulable after the older FIFO head completes"
+        );
+        let admitted_to_recovered_target = admitted
+            .iter()
+            .filter_map(|(peer, digest)| (peer == &blocked).then_some(*digest))
+            .collect::<Vec<_>>();
         assert_eq!(
             admitted_to_recovered_target,
             vec![
@@ -6701,23 +11617,18 @@ pub(super) mod tests {
         assert!(pending.fanouts[0].targets[0].current.is_some());
         drop(pending);
 
-        service.post_native_amx(
-            blocked.clone(),
-            native_amx_output(&service.context, service.local_peer.clone()),
-        );
         service.broadcast_merge_to_voters(merge_share(b"rollover merge share"));
-        let (sidecar_request, sidecar_chunk) =
+        let (sidecar_request, _sidecar_chunk) =
             certified_sidecar_outputs(&service.local_peer, &blocked);
         service.post_certified_merge_sidecar(blocked.clone(), sidecar_request);
-        service.post_certified_merge_sidecar(blocked.clone(), sidecar_chunk);
         assert_eq!(
             service
                 .lock_pending_exact_output()
                 .expect("inspect typed rollover outputs")
                 .fanouts
                 .len(),
-            5,
-            "lane, Native AMX, merge-share, sidecar request, and sidecar chunk stay owned"
+            3,
+            "lane, merge-share, and locally initiated sidecar request stay owned"
         );
 
         assert_eq!(
@@ -6728,7 +11639,7 @@ pub(super) mod tests {
                     &lane_authority,
                 )
                 .expect("durable application supersedes dead-target output"),
-            5
+            3
         );
         assert!(
             !service
@@ -6745,11 +11656,77 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn response_outputs_without_exact_routes_fail_stop() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        service.post_native_amx(
+            peer,
+            native_amx_output(&service.context, service.local_peer.clone()),
+        );
+        assert!(service.output_guard.restart_required());
+
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_request, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
+        service.post_certified_merge_sidecar(peer, chunk);
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn sidecar_receipts_use_a_separate_bounded_control_queue() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
+        let message = NetworkMessage::CertifiedMergeSidecar(Box::new(chunk));
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let fanout = || {
+            PendingExactFanout::new_with_routes(
+                vec![message.clone()],
+                vec![peer.clone()],
+                vec![ExactTargetRoute::Reply(route.clone())],
+            )
+            .expect("one routed sidecar response")
+        };
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[])
+            .expect("one ownership unit and one receipt-control unit");
+        assert_eq!(pending.sidecar_admission_capacity, 1);
+        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending.drive_with_budget(1, |_post, _ticket, _route| Ok(())),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
+
+        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending.drive_with_budget(1, |_post, _ticket, _route| {
+                panic!("a full receipt queue must stop before actor admission")
+            }),
+            Ok(ExactOutputDriveOutcome::ReceiptBackpressured)
+        );
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
+
+        pending
+            .admitted_sidecar_chunks
+            .pop_front()
+            .expect("release the first bounded receipt");
+        assert_eq!(
+            pending.drive_with_budget(1, |_post, _ticket, _route| Ok(())),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
+    }
+
+    #[test]
     fn actor_backpressure_cannot_change_returned_payload_identity() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let original = merge_share_message(b"original exact output");
-        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
         pending
             .enqueue(
                 PendingExactFanout::new(vec![original], vec![peer]).expect("original exact fanout"),
@@ -6773,11 +11750,46 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn exact_output_retry_rejects_a_different_message_identity() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let reply_route = routes.mint(peer.clone());
+        let original = merge_share_message(b"retained exact output");
+        let mut retained = PendingExactFanout::new_with_routes(
+            vec![original.clone()],
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(reply_route.clone())],
+        )
+        .expect("retained exact fanout");
+        let exact_retry = PendingExactFanout::new_with_routes(
+            vec![original],
+            vec![peer.clone()],
+            vec![ExactTargetRoute::Reply(reply_route.clone())],
+        )
+        .expect("exact same-tenure retransmission");
+        let conflicting = PendingExactFanout::new_with_routes(
+            vec![merge_share_message(b"conflicting exact output")],
+            vec![peer],
+            vec![ExactTargetRoute::Reply(reply_route)],
+        )
+        .expect("conflicting retransmission");
+
+        assert!(retained.can_coalesce_retry(&exact_retry));
+        assert_ne!(retained.message_hashes, conflicting.message_hashes);
+        assert!(
+            !retained
+                .coalesce_retry(&conflicting)
+                .expect("conflicting retry is structurally valid")
+        );
+    }
+
+    #[test]
     fn outbound_corridor_capacity_keeps_the_owned_front_bounded() {
         let (service, _) = fixture();
         let first_peer = service.context.roster[1].validator.clone();
         let second_peer = service.context.roster[2].validator.clone();
-        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
         assert_eq!(
             pending
                 .enqueue(
@@ -6810,11 +11822,14 @@ pub(super) mod tests {
         let (service, keys) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let (_, artifact) = durable_finality_fixture(&service, &keys);
-        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
         pending
             .enqueue(
-                PendingExactFanout::new(vec![NetworkMessage::Health], vec![peer])
-                    .expect("non-empty exact-only fanout"),
+                PendingExactFanout::new(
+                    vec![merge_share_message(b"manual untyped output")],
+                    vec![peer],
+                )
+                .expect("non-empty exact-only fanout"),
             )
             .expect("retain exact-only fanout");
 
@@ -6836,7 +11851,7 @@ pub(super) mod tests {
             context_id: native_round.context_id,
             height: native_round.height,
         };
-        let mut wrong = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        let mut wrong = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
         wrong
             .enqueue(
                 PendingExactFanout::claimed(
@@ -6860,11 +11875,152 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor() {
+        let (service, keys) = fixture();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let requester = service.context.roster[1].validator.clone();
+        let (_, chunk) = certified_sidecar_outputs(&service.local_peer, &requester);
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = chunk else {
+            unreachable!("sidecar fixture returns one response chunk")
+        };
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester);
+        let mut pending =
+            PendingExactOutput::new(4, 1, 1, &[]).expect("four bounded sidecar completion states");
+
+        let (_pending_control, pending_ack, pending_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        let (mut flushed_control, flushed_ack, flushed_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        assert!(flushed_control.flush());
+        let (mut closed_control, closed_ack, closed_admission) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        assert!(closed_control.close());
+        for (admission, flush_ack) in [
+            (pending_admission, pending_ack),
+            (flushed_admission, flushed_ack),
+            (closed_admission, closed_ack),
+        ] {
+            pending
+                .flushing_sidecar_chunks
+                .push_back(PendingCertifiedMergeSidecarChunkFlush {
+                    admission,
+                    flush_ack,
+                });
+        }
+        let (_admitted_control, _admitted_ack, admitted) =
+            certified_sidecar_flush_fixture(&chunk, &route);
+        pending.admitted_sidecar_chunks.push_back(admitted);
+        assert_eq!(pending.sidecar_control_units(), 4);
+
+        assert_eq!(
+            pending
+                .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+                .expect("typed height handoff supersedes every volatile completion state"),
+            4
+        );
+        assert!(!pending.is_pending());
+        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+    }
+
+    #[test]
+    fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
+        let (service, keys) = fixture();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let requester = service.context.roster[1].validator.clone();
+        let message =
+            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
+                .expect("encode global CommitQC response");
+        let class = exact_output_class(&message).expect("classify global CommitQC response");
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester.clone());
+        let source = ExactTargetRoute::Reply(route.clone()).source(&requester, class);
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[])
+            .expect("one parked applied-height response corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::claimed_with_routes(
+                    vec![message.clone()],
+                    vec![requester.clone()],
+                    vec![ExactTargetRoute::Reply(route.clone())],
+                    ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+                )
+                .expect("valid routed global finality claim")
+                .expect("one routed global response"),
+            )
+            .expect("retain the routed global response");
+        let fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("routed response owns stable FIFO age");
+        assert!(routes.retire(&route));
+        assert_eq!(
+            pending.drive_with(|_post, _ticket, _route| {
+                panic!("inactive response route must park before actor admission")
+            }),
+            Ok(None)
+        );
+        let parked = &pending.fanouts[0].targets[0];
+        assert!(parked.parked);
+        assert_eq!(parked.message_index, 0);
+        assert!(parked.current.is_none());
+        assert!(parked.ticket.is_none());
+        assert!(!pending.is_pending());
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 1);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+
+        assert_eq!(
+            pending
+                .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+                .expect("durable finality counts and supersedes the parked cursor"),
+            1
+        );
+        assert!(pending.fanouts.is_empty());
+        assert!(pending.source_fifo_owners.is_empty());
+        assert!(pending.reservation_owner_counts.is_empty());
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.shared_ownership_units, 0);
+
+        let active_route = routes.mint(requester.clone());
+        let mut rejected = PendingExactOutput::new(1, 1, 1, &[])
+            .expect("one tampered applied-height response corridor");
+        rejected
+            .enqueue(
+                PendingExactFanout::claimed_with_routes(
+                    vec![message],
+                    vec![requester],
+                    vec![ExactTargetRoute::Reply(active_route)],
+                    ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+                )
+                .expect("valid active routed global finality claim")
+                .expect("one active routed global response"),
+            )
+            .expect("retain the active routed global response");
+        rejected.fanouts[0].targets[0].parked = true;
+        let fifo_before = rejected.source_fifo_owners.clone();
+        let reservations_before = rejected.reservation_owner_counts.clone();
+        let error = rejected
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("an active route cannot masquerade as a parked source");
+        assert!(error.contains("parked reply source changed"));
+        assert_eq!(rejected.fanouts.len(), 1);
+        assert_eq!(rejected.source_fifo_owners, fifo_before);
+        assert_eq!(rejected.reservation_owner_counts, reservations_before);
+        assert_eq!(rejected.ownership_units, 1);
+        assert_eq!(rejected.shared_ownership_units, 1);
+    }
+
+    #[test]
     fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
         let (service, keys) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let (_, artifact) = durable_finality_fixture(&service, &keys);
-        let mut pending = PendingExactOutput::new(2, 1, 1).expect("two-fanout corridor");
+        let mut pending = PendingExactOutput::new(2, 1, 1, &[]).expect("two-fanout corridor");
         let global =
             ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
                 .expect("encode global CommitQC");
@@ -6939,7 +12095,7 @@ pub(super) mod tests {
                 wire::ConsensusMessageV2Payload::QuorumCertificate(wrong_height),
             ))
             .expect("encode wrong-height global certificate");
-        let mut pending = PendingExactOutput::new(1, 1, 1).expect("one-fanout corridor");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
         pending
             .enqueue(
                 PendingExactFanout::claimed(
@@ -6972,7 +12128,7 @@ pub(super) mod tests {
         let commit_message =
             ProductionV2Services::preencode_v2_network_message(history.commit_response.clone())
                 .expect("encode historical CommitQC response");
-        let mut manual = PendingExactOutput::new(1, 1, 1).expect("one manual response");
+        let mut manual = PendingExactOutput::new(1, 1, 1, &[]).expect("one manual response");
         manual
             .enqueue(
                 PendingExactFanout::new(
@@ -7068,7 +12224,8 @@ pub(super) mod tests {
                 ),
             ))
             .expect("encode substituted historical CommitQC response");
-        let mut mismatched = PendingExactOutput::new(1, 1, 1).expect("one mismatched response");
+        let mut mismatched =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one mismatched response");
         mismatched
             .enqueue(
                 PendingExactFanout::claimed(
@@ -7361,33 +12518,32 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn permanently_rejected_network_output_fails_stop() {
+    fn full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
-        service
-            .lock_pending_exact_output()
-            .expect("lock output corridor")
-            .enqueue(
-                PendingExactFanout::new(vec![NetworkMessage::Health], vec![peer])
-                    .expect("non-empty rejected fanout"),
-            )
-            .expect("retain output before route validation");
+        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
+        assert_eq!(
+            pending
+                .enqueue(
+                    PendingExactFanout::new(
+                        vec![lane_commit_qc_message(peer.clone())],
+                        vec![peer.clone()],
+                    )
+                    .expect("valid progress fanout"),
+                )
+                .expect("valid fanout enters corridor"),
+            ExactFanoutOwnership::Owned
+        );
+        let error = PendingExactFanout::classified_with_routes(
+            vec![NetworkMessage::Health],
+            vec![peer],
+            vec![ExactTargetRoute::Topology],
+        )
+        .expect_err("a non-progress route has no reliable scheduler class");
 
-        let error = service
-            .retry_pending_exact_output()
-            .expect_err("a non-progress route must be permanently rejected");
-
-        assert!(error.contains("permanently rejected output"));
-        assert!(service.output_guard.restart_required());
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect rejected output ownership");
+        assert!(error.contains("no reliable progress class"));
         assert_eq!(pending.fanouts.len(), 1);
-        let retained = pending.fanouts[0].targets[0]
-            .current
-            .as_ref()
-            .expect("permanent rejection returned the exact post");
-        assert!(matches!(&retained.data, NetworkMessage::Health));
+        assert!(!service.output_guard.restart_required());
     }
 
     fn locked_candidate_subject(label: &[u8]) -> wire::BlockSubject {
@@ -8159,6 +13315,7 @@ pub(super) mod tests {
             Generation::new(context.height),
             consensus_key_hash,
             fingerprints,
+            DeferredAdmissionOrdinalSource::new(0),
         )
         .expect("open pre-crash adapter");
         assert!(startup.is_empty());
@@ -8275,6 +13432,7 @@ pub(super) mod tests {
             Generation::new(context.height),
             consensus_key_hash,
             fingerprints,
+            DeferredAdmissionOrdinalSource::new(0),
         )
         .expect("reopen adapter from safety WAL");
         let replayed_tag = match startup_effects.as_slice() {
@@ -8338,6 +13496,17 @@ pub(super) mod tests {
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
             admission,
+        });
+        let expected_targets = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
+        let admitted_posts = Arc::new(Mutex::new(Vec::new()));
+        let admitted_posts_for_hook = Arc::clone(&admitted_posts);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            admitted_posts_for_hook
+                .lock()
+                .expect("lock admitted replay outputs")
+                .push(post);
+            Ok(())
         });
         executor
             .consume_effects(startup_effects, &mut service)
@@ -8414,6 +13583,33 @@ pub(super) mod tests {
         assert_eq!(executor.current_tag(), replayed_tag);
         assert_eq!(service.active_tag, replayed_tag);
         assert_eq!(executor.status().pending_signatures, 1);
+        let admitted_posts = admitted_posts
+            .lock()
+            .expect("inspect admitted replay outputs");
+        let mut proposal_targets = BTreeSet::new();
+        let mut chunk_targets = BTreeSet::new();
+        for post in admitted_posts.iter() {
+            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+                panic!("replayed proposal emitted a non-Sumeragi message");
+            };
+            let BlockMessage::V2(message) = envelope.as_message() else {
+                panic!("replayed proposal emitted a lane message");
+            };
+            match &message.payload {
+                wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                    assert_eq!(proposal.round, proposal_round);
+                    assert_eq!(proposal.subject, proposal_subject);
+                    assert!(proposal_targets.insert(post.peer_id.clone()));
+                }
+                wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
+                    assert_eq!(chunk.manifest_hash, HashOf::new(payload.manifest()));
+                    chunk_targets.insert(post.peer_id.clone());
+                }
+                payload => panic!("unexpected replay output payload: {payload:?}"),
+            }
+        }
+        assert_eq!(proposal_targets, expected_targets);
+        assert_eq!(chunk_targets, expected_targets);
         drop(service.io.take());
     }
 
@@ -10411,17 +15607,43 @@ pub(super) mod tests {
         durable_finality_fixture(service, keys).0
     }
 
-    fn service_for_history_context(
+    /// Rebind closed-network production services to an exact durable context.
+    pub(in crate::sumeragi) fn service_for_history_context(
         kura: Arc<Kura>,
         context: wire::HeightContext,
         validators: &[KeyPair],
     ) -> ProductionV2Services {
+        service_for_history_context_with_local_validator(kura, context, validators, 0)
+    }
+
+    /// Rebind closed-network production services to one validator in an exact durable context.
+    pub(in crate::sumeragi) fn service_for_history_context_with_local_validator(
+        kura: Arc<Kura>,
+        context: wire::HeightContext,
+        validators: &[KeyPair],
+        local_validator: wire::ValidatorIndex,
+    ) -> ProductionV2Services {
         let (mut service, _) = fixture();
         context.validate().expect("valid history-fixture successor");
+        let local_index = usize::try_from(local_validator)
+            .expect("history-fixture validator index fits this platform");
+        let local_key = validators
+            .get(local_index)
+            .expect("history-fixture validator index belongs to its key roster")
+            .clone();
+        let local_peer = PeerId::new(local_key.public_key().clone());
+        assert_eq!(
+            context
+                .roster
+                .get(local_index)
+                .map(|entry| &entry.validator),
+            Some(&local_peer),
+            "history-fixture key roster must match its durable context"
+        );
         service.context = context;
-        service.local_peer = PeerId::new(validators[0].public_key().clone());
-        service.local_validator = Some(0);
-        service.key_pair = validators[0].clone();
+        service.local_peer = local_peer;
+        service.local_validator = Some(local_validator);
+        service.key_pair = local_key;
         service.kura = kura;
         service.active_tag = EventTag::new(
             service.context.height,
@@ -10799,6 +16021,173 @@ pub(super) mod tests {
             sender,
             signature: vec![0xA5],
         }
+    }
+
+    fn fair_ingress_route_owner(
+        message: BlockMessage,
+        semantic_origin: PeerId,
+        authenticated_via: PeerId,
+        route: NetworkReplyRoute,
+    ) -> (NetworkReplyRoutes, FairV2IngressOwnershipEvidence) {
+        let mut admitted = fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                message,
+                semantic_origin,
+                authenticated_via,
+                route,
+            )
+            .expect("test route binds fair-ingress ownership"),
+        );
+        let ownership = admitted
+            .take_ingress_ownership()
+            .expect("fair ingress attaches exact ownership");
+        let (_, _, routes) = admitted.into_message_sender_and_reply_routes();
+        (
+            routes.expect("authenticated test ingress retains its reply route"),
+            ownership,
+        )
+    }
+
+    #[test]
+    fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
+        let (service, _) = fixture();
+        let requester = service.context.roster[1].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = route_fixture.mint_via(requester.clone(), hub_a.clone());
+        let route_b = route_fixture.mint_via(requester.clone(), hub_b.clone());
+        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+                manifest_hash(b"fair output request"),
+                0,
+                b"owned",
+                0,
+            )),
+        ));
+        let (routes_a, ownership_a) =
+            fair_ingress_route_owner(request.clone(), requester.clone(), hub_a, route_a.clone());
+        let (routes_b, ownership_b) =
+            fair_ingress_route_owner(request, requester.clone(), hub_b, route_b.clone());
+        let response = lane_commit_qc_message(service.local_peer.clone());
+        let mut retained = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+            vec![response.clone()],
+            requester.clone(),
+            routes_a,
+            Some(ownership_a),
+            ExactOutputRolloverClaim::Exact,
+        )
+        .expect("source A ownership is exact")
+        .expect("source A response fanout");
+        let candidate = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+            vec![response.clone()],
+            requester.clone(),
+            routes_b.clone(),
+            Some(ownership_b),
+            ExactOutputRolloverClaim::Exact,
+        )
+        .expect("source B ownership is exact")
+        .expect("source B response fanout");
+
+        assert!(retained.coalesce_retry(&candidate).expect("lossless merge"));
+        assert_eq!(retained.targets.len(), 2);
+        let ownership = retained
+            .ingress_ownership
+            .as_ref()
+            .expect("coalesced response retains fair ownership");
+        assert!(ownership.validate_exact());
+        assert_eq!(ownership.admission_count, 2);
+        assert!(ownership.matches_reply_routes(retained.reply_routes.as_ref()));
+        assert!(retained.targets.iter().any(|target| {
+            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_a))
+        }));
+        assert!(retained.targets.iter().any(|target| {
+            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_b))
+        }));
+        let source_a_index = retained
+            .targets
+            .iter()
+            .position(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_a))
+            })
+            .expect("source A target");
+        retained
+            .mark_admitted(source_a_index)
+            .expect("source A advances independently");
+        let ownership = retained
+            .ingress_ownership
+            .as_ref()
+            .expect("admission retains fair ownership");
+        let source_a_cursor = ownership
+            .attempts
+            .iter()
+            .find(|attempt| attempt.route.same_source(&route_a))
+            .expect("source A cursor");
+        let source_b_cursor = ownership
+            .attempts
+            .iter()
+            .find(|attempt| attempt.route.same_source(&route_b))
+            .expect("source B cursor");
+        assert_eq!(source_a_cursor.message_cursor, 1);
+        assert_eq!(source_b_cursor.message_cursor, 0);
+
+        let missing = PendingExactFanout::claimed_with_reply_routes(
+            vec![response],
+            requester,
+            routes_b,
+            ExactOutputRolloverClaim::Exact,
+        )
+        .expect("shape-only candidate")
+        .expect("shape-only response fanout");
+        assert!(retained.coalesce_retry(&missing).is_err());
+    }
+
+    #[test]
+    fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
+        let (mut service, _) = fixture();
+        service.max_orphan_chunks = 4;
+        let sender = service.context.roster[0].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = route_fixture.mint_via(sender.clone(), hub_a.clone());
+        let route_b = route_fixture.mint_via(sender.clone(), hub_b.clone());
+        let payload_chunk = chunk(manifest_hash(b"fair buffered chunk"), 0, b"a", 0);
+        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(payload_chunk.clone()),
+        ));
+        let (_, ownership_a) =
+            fair_ingress_route_owner(message.clone(), sender.clone(), hub_a, route_a.clone());
+        let (_, ownership_b) =
+            fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
+
+        assert_eq!(
+            service.buffer_orphan_payload_chunk_owned(
+                sender.clone(),
+                payload_chunk.clone(),
+                ownership_a,
+            ),
+            PayloadChunkDisposition::Buffered
+        );
+        assert_eq!(
+            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), ownership_b),
+            PayloadChunkDisposition::Duplicate
+        );
+        let ownership = service
+            .orphan_chunks
+            .get(&payload_chunk.manifest_hash)
+            .and_then(|chunks| chunks.front())
+            .and_then(|chunk| chunk.ingress_ownership.as_ref())
+            .expect("buffered duplicate retains fair ownership");
+        assert_eq!(ownership.admission_count, 2);
+        let routes = ownership
+            .current_reply_routes()
+            .expect("both authenticated routes remain available");
+        assert_eq!(routes.len(), 2);
+        assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
+        assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
     }
 
     #[test]

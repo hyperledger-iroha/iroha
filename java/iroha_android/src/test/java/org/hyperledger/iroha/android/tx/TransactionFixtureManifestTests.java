@@ -24,6 +24,8 @@ import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountAddress.AccountAddressException;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.model.ContractInvocation;
+import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -40,7 +42,9 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Validates the Norito fixture manifest emitted by {@code scripts/export_norito_fixtures}.
@@ -71,8 +75,19 @@ public final class TransactionFixtureManifestTests {
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER =
       NoritoAdapters.rawByteVecAdapter();
+  private static final TypeAdapter<byte[]> FIXED_HASH_ADAPTER = NoritoAdapters.fixedBytes(32);
+  private static final TypeAdapter<byte[]> CONTRACT_ARGUMENT_RECORD_ADAPTER =
+      new ContractArgumentRecordEnvelopeAdapter();
+  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER =
+      NoritoAdapters.option(CONTRACT_ARGUMENT_RECORD_ADAPTER);
+  private static final TypeAdapter<InstructionEnvelope> INSTRUCTION_ENVELOPE_ADAPTER =
+      new InstructionEnvelopeAdapter();
   private static final TypeAdapter<List<InstructionEnvelope>> INSTRUCTION_LIST_ADAPTER =
-      NoritoAdapters.sequence(new InstructionEnvelopeAdapter());
+      NoritoAdapters.sequence(INSTRUCTION_ENVELOPE_ADAPTER);
+  private static final TypeAdapter<ContractInvocationEnvelope> CONTRACT_INVOCATION_ADAPTER =
+      new ContractInvocationEnvelopeAdapter();
+  private static final TypeAdapter<List<ExecutableBatchItemEnvelope>> EXECUTABLE_BATCH_ADAPTER =
+      NoritoAdapters.sequence(new ExecutableBatchItemEnvelopeAdapter());
   private static final TypeAdapter<List<MetadataEntry>> METADATA_ENTRY_LIST_ADAPTER =
       NoritoAdapters.sequence(new MetadataEntryAdapter());
   private static final TypeAdapter<AccountAddress.MultisigMemberPayload> MULTISIG_MEMBER_ADAPTER =
@@ -138,6 +153,33 @@ public final class TransactionFixtureManifestTests {
         assertTrue(expected.getMessage().contains("base64"));
       }
     }
+  }
+
+  @Test
+  public void independentlyDecodesMixedBatchItemVariants() throws Exception {
+    TransactionPayloadFixtures.Fixture mixed = null;
+    for (final TransactionPayloadFixtures.Fixture fixture :
+        TransactionPayloadFixtures.load(TransactionPayloadFixtures.resolveFixturePath())) {
+      if ("mixed_executable_batch".equals(fixture.name())) {
+        mixed = fixture;
+        break;
+      }
+    }
+    if (mixed == null) {
+      throw new AssertionError("mixed_executable_batch fixture is missing");
+    }
+
+    final TransactionPayload payload = mixed.toPayload();
+    final byte[] encoded = PAYLOAD_CODEC.encodeTransaction(payload);
+    final RawPayload raw = decodePayloadRaw(mixed.name(), encoded);
+    assertTrue("expected independently decoded Batch tag 4", raw.executable().isBatch());
+    final List<ExecutableBatchItemEnvelope> rawItems = raw.executable().batchItems();
+    assertEquals("mixed batch item count", 3, rawItems.size());
+    assertTrue("batch item tag 0 must decode as Instruction", rawItems.get(0).isInstruction());
+    assertTrue("batch item tag 1 must decode as ContractCall", rawItems.get(1).isContractCall());
+    assertTrue("batch item tag 0 must preserve order", rawItems.get(2).isInstruction());
+    assertBatchPayloadsMatch(
+        mixed.name(), rawItems, payload.executable().batchItems());
   }
 
   public static void main(final String[] args) throws Exception {
@@ -286,11 +328,20 @@ public final class TransactionFixtureManifestTests {
         name + ": payload hash mismatch (expected " + payloadHash + ", computed " + computedPayloadHash + ")",
         payloadHash,
         computedPayloadHash);
-    final String computedSignedHash = SignedTransactionHasher.hashCanonicalHex(signedBytes);
-    assertEquals(
-        name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")",
-        signedHash,
-        computedSignedHash);
+    if ("ivm_transfer".equals(name)) {
+      try {
+        SignedTransactionHasher.hashCanonicalHex(signedBytes);
+        fail(name + ": legacy gasless signed transaction must not be admitted");
+      } catch (final IllegalArgumentException expected) {
+        // Historical fixture bytes remain available for decode-only compatibility.
+      }
+    } else {
+      final String computedSignedHash = SignedTransactionHasher.hashCanonicalHex(signedBytes);
+      assertEquals(
+          name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")",
+          signedHash,
+          computedSignedHash);
+    }
 
     final TransactionPayloadFixtures.Fixture payloadFixture = payloadFixtures.get(name);
     if (payloadFixture != null) {
@@ -531,23 +582,48 @@ public final class TransactionFixtureManifestTests {
           name + ": IVM bytes mismatch vs decoded payload",
           raw.executable().ivmBytes(),
           payload.executable().ivmBytes());
-    } else {
+    } else if (raw.executable().isInstructions()) {
       assertTrue(name + ": executable type mismatch", payload.executable().isInstructions());
       assertInstructionPayloadsMatch(
           name,
           raw.executable().instructions(),
           payload.executable().instructions());
+    } else if (raw.executable().isContractCall()) {
+      assertTrue(name + ": executable type mismatch", payload.executable().isContractCall());
+      assertContractInvocationMatches(
+          name,
+          raw.executable().contractInvocation(),
+          payload.executable().contractInvocation());
+    } else if (raw.executable().isBatch()) {
+      assertTrue(name + ": executable type mismatch", payload.executable().isBatch());
+      assertBatchPayloadsMatch(
+          name,
+          raw.executable().batchItems(),
+          payload.executable().batchItems());
+    } else {
+      throw new IllegalStateException(name + ": unknown independently decoded executable type");
     }
-    final byte[] reencoded;
-    try {
-      reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(name + ": failed to re-encode payload", ex);
+    if ("ivm_transfer".equals(name)) {
+      assertTrue(name + ": legacy executable must remain IVM", payload.executable().isIvm());
+      assertNull(name + ": legacy fixture must remain gasless", payload.feePayment().gasLimit());
+      try {
+        PAYLOAD_CODEC.encodeTransaction(payload);
+        fail(name + ": gasless IVM payload must not be re-encoded");
+      } catch (final Exception expected) {
+        // Historical wire data remains decodable but cannot enter a new signing flow.
+      }
+    } else {
+      final byte[] reencoded;
+      try {
+        reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
+      } catch (final Exception ex) {
+        throw new IllegalStateException(name + ": failed to re-encode payload", ex);
+      }
+      assertArrayEquals(
+          name + ": payload bytes differ after Android re-encoding",
+          payloadBytes,
+          reencoded);
     }
-    assertArrayEquals(
-        name + ": payload bytes differ after Android re-encoding",
-        payloadBytes,
-        reencoded);
 
     final SignedParts signedParts = decodeSignedParts(name, signedBytes);
     assertArrayEquals(
@@ -557,6 +633,16 @@ public final class TransactionFixtureManifestTests {
     verifySignature(name, signingKey, payloadBytes, signedParts.signature());
     final SignedTransaction signed =
         new SignedTransaction(payloadBytes, signedParts.signature(), new byte[0], SIGNED_SCHEMA);
+    if ("ivm_transfer".equals(name)) {
+      try {
+        SignedTransactionEncoder.encode(signed);
+        fail(name + ": legacy gasless payload must not be signed again");
+      } catch (final Exception expected) {
+        // Historical signed bytes remain verifiable without reopening the signing path.
+      }
+      canonicalChecked++;
+      return;
+    }
     final byte[] encodedSigned;
     try {
       encodedSigned = SignedTransactionEncoder.encode(signed);
@@ -722,6 +808,7 @@ public final class TransactionFixtureManifestTests {
     final byte[] executableField = readField(decoder, name + ".payload.executable");
     final byte[] ttlField = readField(decoder, name + ".payload.time_to_live_ms");
     final byte[] nonceField = readField(decoder, name + ".payload.nonce");
+    final byte[] feePaymentField = readField(decoder, name + ".payload.fee_payment");
     final byte[] metadataField = readField(decoder, name + ".payload.metadata");
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": payload has trailing bytes");
@@ -736,6 +823,9 @@ public final class TransactionFixtureManifestTests {
         decodeFieldPayload(ttlField, TTL_ADAPTER, name + ".payload.time_to_live_ms");
     final Optional<Long> nonce =
         decodeFieldPayload(nonceField, NONCE_ADAPTER, name + ".payload.nonce");
+    if (feePaymentField.length == 0) {
+      throw new IllegalStateException(name + ": payload fee_payment must not be empty");
+    }
     validateMetadataField(metadataField, name + ".payload.metadata");
     return new RawPayload(chainId, authority, creationTimeMs, ttl, nonce, executable);
   }
@@ -763,6 +853,28 @@ public final class TransactionFixtureManifestTests {
         throw new IllegalStateException(name + ": executable has trailing bytes");
       }
       return ExecutableEnvelope.forInstructions(instructions);
+    }
+    if (tag == 1L) {
+      final ContractInvocationEnvelope invocation =
+          decodeSizedField(
+              decoder,
+              CONTRACT_INVOCATION_ADAPTER,
+              name + ".payload.executable.contract_call");
+      if (decoder.remaining() != 0) {
+        throw new IllegalStateException(name + ": executable has trailing bytes");
+      }
+      return ExecutableEnvelope.forContractCall(invocation);
+    }
+    if (tag == 4L) {
+      final List<ExecutableBatchItemEnvelope> items =
+          decodeSizedField(
+              decoder,
+              EXECUTABLE_BATCH_ADAPTER,
+              name + ".payload.executable.batch");
+      if (decoder.remaining() != 0) {
+        throw new IllegalStateException(name + ": executable has trailing bytes");
+      }
+      return ExecutableEnvelope.forBatch(items);
     }
     throw new IllegalStateException(name + ": unknown executable tag " + tag);
   }
@@ -1128,24 +1240,67 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static final class ExecutableEnvelope {
+    private enum Kind {
+      IVM,
+      INSTRUCTIONS,
+      CONTRACT_CALL,
+      BATCH
+    }
+
+    private final Kind kind;
     private final byte[] ivmBytes;
     private final List<InstructionEnvelope> instructions;
+    private final ContractInvocationEnvelope contractInvocation;
+    private final List<ExecutableBatchItemEnvelope> batchItems;
 
-    private ExecutableEnvelope(final byte[] ivmBytes, final List<InstructionEnvelope> instructions) {
+    private ExecutableEnvelope(
+        final Kind kind,
+        final byte[] ivmBytes,
+        final List<InstructionEnvelope> instructions,
+        final ContractInvocationEnvelope contractInvocation,
+        final List<ExecutableBatchItemEnvelope> batchItems) {
+      this.kind = kind;
       this.ivmBytes = ivmBytes;
       this.instructions = instructions;
+      this.contractInvocation = contractInvocation;
+      this.batchItems = batchItems;
     }
 
     private static ExecutableEnvelope forIvm(final byte[] ivmBytes) {
-      return new ExecutableEnvelope(Arrays.copyOf(ivmBytes, ivmBytes.length), null);
+      return new ExecutableEnvelope(
+          Kind.IVM, Arrays.copyOf(ivmBytes, ivmBytes.length), null, null, null);
     }
 
     private static ExecutableEnvelope forInstructions(final List<InstructionEnvelope> instructions) {
-      return new ExecutableEnvelope(new byte[0], new ArrayList<>(instructions));
+      return new ExecutableEnvelope(
+          Kind.INSTRUCTIONS, new byte[0], new ArrayList<>(instructions), null, null);
+    }
+
+    private static ExecutableEnvelope forContractCall(
+        final ContractInvocationEnvelope invocation) {
+      return new ExecutableEnvelope(Kind.CONTRACT_CALL, new byte[0], null, invocation, null);
+    }
+
+    private static ExecutableEnvelope forBatch(
+        final List<ExecutableBatchItemEnvelope> items) {
+      return new ExecutableEnvelope(
+          Kind.BATCH, new byte[0], null, null, new ArrayList<>(items));
     }
 
     private boolean isIvm() {
-      return instructions == null;
+      return kind == Kind.IVM;
+    }
+
+    private boolean isInstructions() {
+      return kind == Kind.INSTRUCTIONS;
+    }
+
+    private boolean isContractCall() {
+      return kind == Kind.CONTRACT_CALL;
+    }
+
+    private boolean isBatch() {
+      return kind == Kind.BATCH;
     }
 
     private byte[] ivmBytes() {
@@ -1157,6 +1312,20 @@ public final class TransactionFixtureManifestTests {
         return Collections.emptyList();
       }
       return new ArrayList<>(instructions);
+    }
+
+    private ContractInvocationEnvelope contractInvocation() {
+      if (!isContractCall()) {
+        throw new IllegalStateException("Executable envelope does not contain a contract call");
+      }
+      return contractInvocation;
+    }
+
+    private List<ExecutableBatchItemEnvelope> batchItems() {
+      if (batchItems == null) {
+        return Collections.emptyList();
+      }
+      return new ArrayList<>(batchItems);
     }
   }
 
@@ -1202,6 +1371,205 @@ public final class TransactionFixtureManifestTests {
     }
   }
 
+  private static final class ContractInvocationEnvelope {
+    private final String contractAddress;
+    private final byte[] expectedCodeHash;
+    private final String entrypoint;
+    private final byte[] arguments;
+
+    private ContractInvocationEnvelope(
+        final String contractAddress,
+        final byte[] expectedCodeHash,
+        final String entrypoint,
+        final byte[] arguments) {
+      this.contractAddress = contractAddress;
+      this.expectedCodeHash = Arrays.copyOf(expectedCodeHash, expectedCodeHash.length);
+      this.entrypoint = entrypoint;
+      this.arguments = arguments == null ? null : Arrays.copyOf(arguments, arguments.length);
+    }
+
+    private String contractAddress() {
+      return contractAddress;
+    }
+
+    private byte[] expectedCodeHash() {
+      return Arrays.copyOf(expectedCodeHash, expectedCodeHash.length);
+    }
+
+    private String entrypoint() {
+      return entrypoint;
+    }
+
+    private byte[] arguments() {
+      return arguments == null ? null : Arrays.copyOf(arguments, arguments.length);
+    }
+  }
+
+  private static final class ContractArgumentRecordEnvelopeAdapter
+      implements TypeAdapter<byte[]> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      if (value.length > ContractInvocation.MAX_ARGUMENT_BYTES) {
+        throw new IllegalArgumentException("ContractInvocation arguments exceed the wire limit");
+      }
+      encoder.writeLength(value.length, false);
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      final long length = decoder.readLength(false);
+      if (length > ContractInvocation.MAX_ARGUMENT_BYTES) {
+        throw new IllegalArgumentException("ContractInvocation arguments exceed the wire limit");
+      }
+      return decoder.readBytes(Math.toIntExact(length));
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class ContractInvocationEnvelopeAdapter
+      implements TypeAdapter<ContractInvocationEnvelope> {
+    @Override
+    public void encode(
+        final NoritoEncoder encoder, final ContractInvocationEnvelope value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value.contractAddress());
+      encodeSizedField(encoder, FIXED_HASH_ADAPTER, value.expectedCodeHash());
+      encodeSizedField(encoder, STRING_ADAPTER, value.entrypoint());
+      encodeSizedField(
+          encoder,
+          OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER,
+          Optional.ofNullable(value.arguments()));
+    }
+
+    @Override
+    public ContractInvocationEnvelope decode(final NoritoDecoder decoder) {
+      final String contractAddress =
+          decodeSizedField(decoder, STRING_ADAPTER, "contract_invocation.contract_address");
+      final byte[] expectedCodeHash =
+          decodeSizedField(
+              decoder, FIXED_HASH_ADAPTER, "contract_invocation.expected_code_hash");
+      final String entrypoint =
+          decodeSizedField(decoder, STRING_ADAPTER, "contract_invocation.entrypoint");
+      final Optional<byte[]> arguments =
+          decodeSizedField(
+              decoder,
+              OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER,
+              "contract_invocation.arguments");
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("ContractInvocation has trailing bytes");
+      }
+      return new ContractInvocationEnvelope(
+          contractAddress, expectedCodeHash, entrypoint, arguments.orElse(null));
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class ExecutableBatchItemEnvelope {
+    private enum Kind {
+      INSTRUCTION,
+      CONTRACT_CALL
+    }
+
+    private final Kind kind;
+    private final InstructionEnvelope instruction;
+    private final ContractInvocationEnvelope contractInvocation;
+
+    private ExecutableBatchItemEnvelope(
+        final Kind kind,
+        final InstructionEnvelope instruction,
+        final ContractInvocationEnvelope contractInvocation) {
+      this.kind = kind;
+      this.instruction = instruction;
+      this.contractInvocation = contractInvocation;
+    }
+
+    private static ExecutableBatchItemEnvelope forInstruction(
+        final InstructionEnvelope instruction) {
+      return new ExecutableBatchItemEnvelope(Kind.INSTRUCTION, instruction, null);
+    }
+
+    private static ExecutableBatchItemEnvelope forContractCall(
+        final ContractInvocationEnvelope invocation) {
+      return new ExecutableBatchItemEnvelope(Kind.CONTRACT_CALL, null, invocation);
+    }
+
+    private boolean isInstruction() {
+      return kind == Kind.INSTRUCTION;
+    }
+
+    private boolean isContractCall() {
+      return kind == Kind.CONTRACT_CALL;
+    }
+
+    private InstructionEnvelope instruction() {
+      if (!isInstruction()) {
+        throw new IllegalStateException("Batch item does not contain an instruction");
+      }
+      return instruction;
+    }
+
+    private ContractInvocationEnvelope contractInvocation() {
+      if (!isContractCall()) {
+        throw new IllegalStateException("Batch item does not contain a contract call");
+      }
+      return contractInvocation;
+    }
+  }
+
+  private static final class ExecutableBatchItemEnvelopeAdapter
+      implements TypeAdapter<ExecutableBatchItemEnvelope> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ExecutableBatchItemEnvelope value) {
+      if (value.isInstruction()) {
+        UINT32_ADAPTER.encode(encoder, 0L);
+        encodeSizedField(encoder, INSTRUCTION_ENVELOPE_ADAPTER, value.instruction());
+        return;
+      }
+      if (value.isContractCall()) {
+        UINT32_ADAPTER.encode(encoder, 1L);
+        encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, value.contractInvocation());
+        return;
+      }
+      throw new IllegalArgumentException("Unknown executable batch item envelope");
+    }
+
+    @Override
+    public ExecutableBatchItemEnvelope decode(final NoritoDecoder decoder) {
+      final long tag = UINT32_ADAPTER.decode(decoder);
+      final ExecutableBatchItemEnvelope item;
+      if (tag == 0L) {
+        item =
+            ExecutableBatchItemEnvelope.forInstruction(
+                decodeSizedField(
+                    decoder, INSTRUCTION_ENVELOPE_ADAPTER, "batch_item.instruction"));
+      } else if (tag == 1L) {
+        item =
+            ExecutableBatchItemEnvelope.forContractCall(
+                decodeSizedField(
+                    decoder, CONTRACT_INVOCATION_ADAPTER, "batch_item.contract_call"));
+      } else {
+        throw new IllegalArgumentException("Unknown executable batch item tag " + tag);
+      }
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Executable batch item has trailing bytes");
+      }
+      return item;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
   private static void assertInstructionPayloadsMatch(
       final String name,
       final List<InstructionEnvelope> rawInstructions,
@@ -1225,6 +1593,53 @@ public final class TransactionFixtureManifestTests {
           name + ": instruction wire payload mismatch at index " + i,
           raw.payload(),
           wirePayload.payloadBytes());
+    }
+  }
+
+  private static void assertContractInvocationMatches(
+      final String name,
+      final ContractInvocationEnvelope raw,
+      final ContractInvocation decoded) {
+    assertEquals(
+        name + ": contract address mismatch",
+        raw.contractAddress(),
+        decoded.contractAddress());
+    assertArrayEquals(
+        name + ": expected code hash mismatch",
+        raw.expectedCodeHash(),
+        decoded.expectedCodeHash());
+    assertEquals(
+        name + ": contract entrypoint mismatch",
+        raw.entrypoint(),
+        decoded.entrypoint());
+    assertArrayEquals(
+        name + ": contract arguments mismatch",
+        raw.arguments(),
+        decoded.arguments());
+  }
+
+  private static void assertBatchPayloadsMatch(
+      final String name,
+      final List<ExecutableBatchItemEnvelope> rawItems,
+      final List<ExecutableBatchItem> decodedItems) {
+    assertEquals(name + ": batch item count mismatch", rawItems.size(), decodedItems.size());
+    for (int index = 0; index < rawItems.size(); index++) {
+      final ExecutableBatchItemEnvelope raw = rawItems.get(index);
+      final ExecutableBatchItem decoded = decodedItems.get(index);
+      final String itemName = name + ": batch item " + index;
+      if (raw.isInstruction()) {
+        assertTrue(itemName + " tag mismatch", decoded.isInstruction());
+        assertInstructionPayloadsMatch(
+            itemName,
+            Collections.singletonList(raw.instruction()),
+            Collections.singletonList(decoded.instruction()));
+      } else if (raw.isContractCall()) {
+        assertTrue(itemName + " tag mismatch", decoded.isContractCall());
+        assertContractInvocationMatches(
+            itemName, raw.contractInvocation(), decoded.contractInvocation());
+      } else {
+        throw new IllegalStateException(itemName + " has an unknown independently decoded tag");
+      }
     }
   }
 

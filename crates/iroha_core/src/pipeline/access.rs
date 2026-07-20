@@ -635,6 +635,14 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        // Mixed batches execute against the live state at a singleton DAG barrier. Precise
+        // ordered access derivation is intentionally deferred until the live-batch executor can
+        // expose one access journal spanning native ISIs and every contract call.
+        Executable::Batch(_) => with_stateful_admission_keys(
+            tx,
+            AccessSet::global(),
+            Some(AccessSetSource::ConservativeFallback),
+        ),
         Executable::ContractCall(call) => {
             if let Some(view) = state_ro
                 && let Some(identity) =
@@ -834,6 +842,11 @@ where
             tx,
             derive_from_overlay_artifacts(overlay, None, Some(state_ro), false),
             None,
+        ),
+        Executable::Batch(_) => with_stateful_admission_keys(
+            tx,
+            AccessSet::global(),
+            Some(AccessSetSource::ConservativeFallback),
         ),
         Executable::IvmProved(proved) => {
             let mut set = derive_from_overlay_artifacts(overlay, None, Some(state_ro), false);
@@ -2076,6 +2089,7 @@ where
                 ));
             }
         }
+        ExecutableRef::Batch(_) => set.union_with(AccessSet::global()),
         ExecutableRef::ContractCall(invocation) => {
             if let Some(identity) =
                 code::fetch_bound_contract_identity(state_ro, &invocation.contract_address)
@@ -2637,12 +2651,10 @@ fn access_key_from_state_log(key: &str) -> AccessKey {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
-
     use iroha_data_model::{
         isi::Log,
         level::Level,
-        transaction::{Executable, IvmBytecode, TransactionBuilder},
+        transaction::{Executable, ExecutableBatchItem, IvmBytecode, TransactionBuilder},
     };
 
     use super::*;
@@ -2988,6 +3000,48 @@ mod tests {
                 "unexpected lifecycle marker mode for `{entrypoint}`"
             );
         }
+    }
+
+    #[test]
+    fn mixed_executable_batch_forces_a_global_scheduler_barrier() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            92,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let transaction = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "before call".to_owned(),
+                ))),
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address,
+                    expected_code_hash: iroha_crypto::Hash::new(b"mixed-batch"),
+                    entrypoint: "main".to_owned(),
+                    arguments: None,
+                }),
+            ]
+            .into(),
+        ))
+        .sign(keypair.private_key());
+
+        let (set, source) = derive_for_transaction_with_source::<crate::state::StateView<'_>>(
+            &transaction,
+            None,
+            IvmStrategy::Conservative,
+        );
+
+        assert!(set.write_keys.contains("*"));
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     fn generic_state_get_test_program() -> Vec<u8> {

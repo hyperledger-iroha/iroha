@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.tx.norito.NoritoException
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -167,6 +169,41 @@ class TransactionPayloadTest {
     }
 
     @Test
+    fun `VM and contract executables require gas before payload encoding`() {
+        val invocation = ContractInvocation(
+            CONTRACT_ADDRESS,
+            ByteArray(32) { 1 },
+            "run",
+        )
+        val executables = listOf(
+            Executable.ivm(byteArrayOf(1)),
+            Executable.contractCall(invocation),
+            Executable.batch(listOf(ExecutableBatchItem.contractCall(invocation))),
+        )
+
+        executables.forEach { executable ->
+            val gasless = testPayload(executable = executable)
+            assertFailsWith<NoritoException> {
+                NoritoJavaCodecAdapter().encodeTransaction(gasless)
+            }
+            val gasBound = testPayload(
+                executable = executable,
+                feePayment = FeePaymentIntent.authority(emptyList(), 1L),
+            )
+            NoritoJavaCodecAdapter().encodeTransaction(gasBound)
+        }
+    }
+
+    @Test
+    fun `native instructions do not require a transaction gas limit`() {
+        testPayload(
+            executable = Executable.instructions(
+                listOf(InstructionBox.fromWirePayload("iroha.test", byteArrayOf(1))),
+            ),
+        )
+    }
+
+    @Test
     fun `equal instances are equal`() {
         val executable = Executable.ivm(byteArrayOf(1, 2, 3))
         val a = testPayload(
@@ -174,6 +211,7 @@ class TransactionPayloadTest {
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
+            feePayment = FeePaymentIntent.authority(emptyList(), 1L),
             timeToLiveMs = 500,
             nonce = 1,
             metadata = mapOf("k" to JsonValue.string("v")),
@@ -183,6 +221,7 @@ class TransactionPayloadTest {
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
+            feePayment = FeePaymentIntent.authority(emptyList(), 1L),
             timeToLiveMs = 500,
             nonce = 1,
             metadata = mapOf("k" to JsonValue.string("v")),
@@ -202,9 +241,10 @@ class TransactionPayloadTest {
         chainId: String = "00000000",
         authority: String = sampleAuthority(0x00),
         creationTimeMs: Long = System.currentTimeMillis(),
-        executable: Executable = Executable.ivm(byteArrayOf()),
+        executable: Executable = Executable.instructions(emptyList()),
         timeToLiveMs: Long? = null,
         nonce: Int? = null,
+        feePayment: FeePaymentIntent = FeePaymentIntent.authority(emptyList()),
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
@@ -213,11 +253,16 @@ class TransactionPayloadTest {
         executable = executable,
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
-        feePayment = FeePaymentIntent.authority(emptyList()),
+        feePayment = feePayment,
         metadata = metadata,
     )
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
         .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+    companion object {
+        private const val CONTRACT_ADDRESS =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    }
 }

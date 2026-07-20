@@ -22,7 +22,7 @@ use iroha_data_model::{
     },
     query::error::QueryExecutionFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
-    transaction::{TransactionEntrypoint, executable::Executable},
+    transaction::TransactionEntrypoint,
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
@@ -834,10 +834,11 @@ fn locate_instruction_box(
                     | TransactionEntrypoint::PrivateKaigi(_)
                     | TransactionEntrypoint::Time(_) => return Err(not_found()),
                 };
-                let Executable::Instructions(instructions) = tx.instructions() else {
-                    return Err(not_found());
-                };
-                let instruction = instructions.get(lookup_index).ok_or_else(not_found)?;
+                let instruction = tx
+                    .instructions()
+                    .explicit_instructions()
+                    .nth(lookup_index)
+                    .ok_or_else(not_found)?;
                 return Ok(instruction.clone());
             }
         }

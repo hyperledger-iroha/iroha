@@ -878,6 +878,31 @@ if isinstance(receipt, dict):
     print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
 
+Native instructions and deployed-contract calls can share one ordered, atomic
+batch. Any batch containing a contract call must bind a positive `gas_limit`
+in its fee intent:
+
+```python
+from iroha_python import Instruction, TransactionConfig, TransactionDraft, authority_fee_payment
+
+mixed = TransactionDraft(TransactionConfig(
+    chain_id="dev-chain",
+    authority=authority_account_id,
+    fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
+))
+mixed.add_instruction(Instruction.register_domain("before"))
+mixed.add_contract_call(
+    contract_address,
+    expected_code_hash_hex,  # Exact 32-byte marked code hash as raw hex.
+    "settle",
+    canonical_argument_record,
+)
+mixed.add_instruction(Instruction.register_domain("after"))
+
+# The signed Batch keeps the exact instruction → call → instruction order.
+envelope = mixed.sign(pair.private_key)
+```
+
 To request sponsorship, bind the draft to one exact program and immutable
 revision before quoting:
 

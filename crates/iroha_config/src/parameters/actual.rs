@@ -56,9 +56,7 @@ use iroha_data_model::{
     domain::DomainId,
     hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
     jurisdiction::JdgSignatureScheme,
-    merge::{
-        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
-    },
+    merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
@@ -5790,9 +5788,8 @@ impl Sumeragi {
                 .expect("static recommended transport-completion manifest fits u64");
         let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
             .expect("static timeout-vote reserve fits u64");
-        let lane_progress_bytes =
-            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
-                .expect("static certified lane-source limit fits u64");
+        let lane_progress_bytes = u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
+            .expect("static certified lane-source limit fits u64");
         let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
             .expect("static complete lane-source limit fits u64");
         let ordinary_bytes = max_payload_bytes
@@ -11212,8 +11209,7 @@ mod tests {
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
         let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
-        config.queues.body_source_bytes =
-            NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
+        config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {

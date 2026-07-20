@@ -8,10 +8,13 @@ import java.util.Base64
 import kotlin.io.path.readText
 import org.hyperledger.iroha.sdk.client.FeePaymentJson
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 internal data class TransactionPayloadFixture(
     val name: String,
@@ -27,6 +30,11 @@ internal data class TransactionPayloadFixture(
     val signedHash: String?,
 ) {
     fun materializePayload(adapter: NoritoJavaCodecAdapter): TransactionPayload {
+        if (name == LEGACY_GASLESS_IVM_FIXTURE && encodedBase64 != null) {
+            return adapter.decodeTransaction(
+                AndroidFixtureSupport.decodeCanonicalBase64(encodedBase64, "$name.encoded"),
+            )
+        }
         payload?.let { return AndroidFixtureSupport.buildPayload(name, it) }
         check(!encodedBase64.isNullOrBlank()) { "$name: fixture missing payload and encoded data" }
         return adapter.decodeTransaction(
@@ -34,6 +42,8 @@ internal data class TransactionPayloadFixture(
         )
     }
 }
+
+internal const val LEGACY_GASLESS_IVM_FIXTURE = "ivm_transfer"
 
 internal data class TransactionManifestFixture(
     val name: String,
@@ -236,32 +246,41 @@ internal object AndroidFixtureSupport {
                     executableMap["Instructions"],
                     "$name.payload.executable.Instructions",
                 ).mapIndexed { index, raw ->
-                    val instruction = asMap(raw, "$name.payload.executable.Instructions[$index]")
-                    require(instruction.size == 2) {
-                        "$name: instruction entries must only include wire_name and payload_base64"
-                    }
-                    val wireName = requiredString(
-                        instruction["wire_name"],
-                        "$name.payload.executable.Instructions[$index].wire_name",
-                    )
-                    val payloadBase64 = requiredString(
-                        instruction["payload_base64"],
-                        "$name.payload.executable.Instructions[$index].payload_base64",
-                    )
-                    val bytes = try {
-                        decodeCanonicalBase64(
-                            payloadBase64,
-                            "$name.payload.executable.Instructions[$index].payload_base64",
-                        )
-                    } catch (ex: IllegalStateException) {
-                        throw IllegalStateException(
-                            "$name: instruction payload_base64 is not valid base64",
-                            ex,
-                        )
-                    }
-                    InstructionBox.fromWirePayload(wireName, bytes)
+                    parseInstruction(raw, "$name.payload.executable.Instructions[$index]", name)
                 }
                 Executable.instructions(instructions)
+            }
+
+            executableMap.containsKey("ContractCall") -> Executable.contractCall(
+                parseContractInvocation(
+                    executableMap["ContractCall"],
+                    "$name.payload.executable.ContractCall",
+                ),
+            )
+
+            executableMap.containsKey("Batch") -> {
+                val entries = asList(
+                    executableMap["Batch"],
+                    "$name.payload.executable.Batch",
+                ).mapIndexed { index, raw ->
+                    val context = "$name.payload.executable.Batch[$index]"
+                    val item = asMap(raw, context)
+                    require(item.size == 1) {
+                        "$context must contain exactly one externally tagged variant"
+                    }
+                    when {
+                        item.containsKey("Instruction") -> ExecutableBatchItem.instruction(
+                            parseInstruction(item["Instruction"], "$context.Instruction", name),
+                        )
+
+                        item.containsKey("ContractCall") -> ExecutableBatchItem.contractCall(
+                            parseContractInvocation(item["ContractCall"], "$context.ContractCall"),
+                        )
+
+                        else -> error("$context has an unknown executable batch item variant")
+                    }
+                }
+                Executable.batch(entries)
             }
 
             else -> error("$name: executable variant missing")
@@ -285,6 +304,61 @@ internal object AndroidFixtureSupport {
                 "$name.payload.fee_payment",
             ),
             metadata = metadata,
+        )
+    }
+
+    private fun parseInstruction(value: Any?, context: String, fixtureName: String): InstructionBox {
+        val instruction = asMap(value, context)
+        require(instruction.size == 2) {
+            "$fixtureName: instruction entries must only include wire_name and payload_base64"
+        }
+        val wireName = requiredString(instruction["wire_name"], "$context.wire_name")
+        val payloadBase64 = requiredString(
+            instruction["payload_base64"],
+            "$context.payload_base64",
+        )
+        val bytes = try {
+            decodeCanonicalBase64(payloadBase64, "$context.payload_base64")
+        } catch (ex: IllegalStateException) {
+            throw IllegalStateException(
+                "$fixtureName: instruction payload_base64 is not valid base64",
+                ex,
+            )
+        }
+        return InstructionBox.fromWirePayload(wireName, bytes)
+    }
+
+    private fun parseContractInvocation(value: Any?, context: String): ContractInvocation {
+        val invocation = asMap(value, context)
+        require(invocation.keys == setOf(
+            "contract_address",
+            "expected_code_hash",
+            "entrypoint",
+            "arguments",
+        ) || invocation.keys == setOf(
+            "contract_address",
+            "expected_code_hash",
+            "entrypoint",
+        )) {
+            "$context contains unexpected fields"
+        }
+        val arguments = invocation["arguments"]?.let { raw ->
+            asList(raw, "$context.arguments").mapIndexed { index, byte ->
+                val value = requiredLong(byte, "$context.arguments[$index]")
+                require(value in 0..255) { "$context.arguments[$index] must fit in a byte" }
+                value.toByte()
+            }.toByteArray()
+        }
+        return ContractInvocation(
+            contractAddress = requiredString(
+                invocation["contract_address"],
+                "$context.contract_address",
+            ),
+            expectedCodeHash = HashLiteral.decode(
+                requiredString(invocation["expected_code_hash"], "$context.expected_code_hash"),
+            ),
+            entrypoint = requiredString(invocation["entrypoint"], "$context.entrypoint"),
+            arguments = arguments,
         )
     }
 

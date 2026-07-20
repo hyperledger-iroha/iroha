@@ -222,6 +222,60 @@ internal sealed class TransactionEncodingContext
         return executable.ToArray();
     }
 
+    public byte[] EncodeExecutableBatch(IReadOnlyList<TransactionBatchEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            throw new ArgumentException("Executable batches must contain at least one item.", nameof(entries));
+        }
+
+        var sequence = new OfflineNoritoWriter();
+        sequence.WriteLength((ulong)entries.Count);
+        foreach (var entry in entries)
+        {
+            var item = new OfflineNoritoWriter();
+            switch (entry)
+            {
+                case TransactionBatchEntry.InstructionEntry instruction:
+                    item.WriteUInt32LittleEndian(0);
+                    item.WriteField(EncodeInstruction(instruction.Value));
+                    break;
+                case TransactionBatchEntry.ContractCallEntry call:
+                    item.WriteUInt32LittleEndian(1);
+                    item.WriteField(EncodeContractInvocation(call.Invocation));
+                    break;
+                default:
+                    throw new ArgumentException("Unknown executable batch entry.", nameof(entries));
+            }
+            sequence.WriteField(item.ToArray());
+        }
+
+        var executable = new OfflineNoritoWriter();
+        executable.WriteUInt32LittleEndian(4);
+        executable.WriteField(sequence.ToArray());
+        return executable.ToArray();
+    }
+
+    private byte[] EncodeContractInvocation(TransactionContractInvocation invocation)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeString(invocation.ContractAddress));
+        writer.WriteField(invocation.ExpectedCodeHashSpan);
+        writer.WriteField(EncodeString(invocation.Entrypoint));
+        var arguments = new OfflineNoritoWriter();
+        if (invocation.HasArguments)
+        {
+            arguments.WriteByte(1);
+            arguments.WriteField(EncodeBytesVec(invocation.ArgumentsSpan));
+        }
+        else
+        {
+            arguments.WriteByte(0);
+        }
+        writer.WriteField(arguments.ToArray());
+        return writer.ToArray();
+    }
+
     public byte[] EncodeAssetId(string assetDefinitionId, string accountId, ulong? dataspaceId = null)
     {
         var writer = new OfflineNoritoWriter();

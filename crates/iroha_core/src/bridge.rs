@@ -19,7 +19,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     name::Name,
     peer::PeerId,
-    transaction::{Executable, TransactionEntrypoint},
+    transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
 use iroha_sccp::{
     SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
@@ -795,6 +795,13 @@ fn collect_sccp_messages_from_executable<F>(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for (item_index, item) in items.iter().enumerate() {
+                if let ExecutableBatchItem::Instruction(instruction) = item {
+                    push_instruction(item_index, instruction);
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for (instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 push_instruction(instruction_index, instruction);
@@ -806,10 +813,35 @@ fn collect_sccp_messages_from_executable<F>(
 fn sccp_message_candidates_from_executable(
     executable: &Executable,
 ) -> Vec<RecordedSccpMessageCandidate> {
+    if let Executable::Batch(items) = executable {
+        return items
+            .iter()
+            .enumerate()
+            .filter_map(|(instruction_index, item)| {
+                let ExecutableBatchItem::Instruction(instruction) = item else {
+                    return None;
+                };
+                let record = recorded_sccp_message_instruction(instruction)?;
+                let Ok(validated) =
+                    validate_recorded_sccp_message_payload_bytes_for_block_collection(
+                        record.context,
+                        &record.payload_bytes,
+                    )
+                else {
+                    return None;
+                };
+                Some(RecordedSccpMessageCandidate {
+                    instruction_index,
+                    validated,
+                })
+            })
+            .collect();
+    }
     let instructions = match executable {
         Executable::Instructions(instructions) => instructions.as_ref(),
         Executable::IvmProved(proved) => proved.overlay.as_ref(),
         Executable::ContractCall(_) | Executable::Ivm(_) => return Vec::new(),
+        Executable::Batch(_) => unreachable!("batch handled above"),
     };
 
     instructions
@@ -1038,68 +1070,88 @@ fn invalid_sccp_record_instruction_in_executable(
     tx_index: usize,
     executable: &Executable,
 ) -> Option<SccpRecordInstructionValidationError> {
-    let instructions = match executable {
-        Executable::Instructions(instructions) => instructions.as_ref(),
-        Executable::IvmProved(proved) => proved.overlay.as_ref(),
-        Executable::ContractCall(_) | Executable::Ivm(_) => return None,
-    };
-    instructions
-        .iter()
-        .enumerate()
-        .find_map(|(instruction_index, instruction)| {
-            let record = recorded_sccp_message_instruction(instruction)?;
-            match validate_recorded_sccp_message_payload_bytes(
-                record.context,
-                &record.payload_bytes,
-            ) {
-                Ok(_) => None,
-                Err(RecordedSccpMessageValidationError::InvalidPayload) => {
-                    Some(SccpRecordInstructionValidationError::InvalidPayload {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::InvalidContext) => {
-                    Some(SccpRecordInstructionValidationError::InvalidContext {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain }) => {
-                    Some(SccpRecordInstructionValidationError::NonSoraSource {
-                        tx_index,
-                        instruction_index,
-                        source_domain,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::TargetProfileMismatch {
+    let validate_one = |instruction_index: usize, instruction: &InstructionBox| {
+        let record = recorded_sccp_message_instruction(instruction)?;
+        match validate_recorded_sccp_message_payload_bytes(record.context, &record.payload_bytes) {
+            Ok(_) => None,
+            Err(RecordedSccpMessageValidationError::InvalidPayload) => {
+                Some(SccpRecordInstructionValidationError::InvalidPayload {
+                    tx_index,
+                    instruction_index,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::InvalidContext) => {
+                Some(SccpRecordInstructionValidationError::InvalidContext {
+                    tx_index,
+                    instruction_index,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain }) => {
+                Some(SccpRecordInstructionValidationError::NonSoraSource {
+                    tx_index,
+                    instruction_index,
+                    source_domain,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::TargetProfileMismatch {
+                target,
+                payload_target_domain,
+            }) => Some(
+                SccpRecordInstructionValidationError::TargetProfileMismatch {
+                    tx_index,
+                    instruction_index,
                     target,
                     payload_target_domain,
-                }) => Some(
-                    SccpRecordInstructionValidationError::TargetProfileMismatch {
-                        tx_index,
-                        instruction_index,
-                        target,
-                        payload_target_domain,
-                    },
-                ),
-                Err(RecordedSccpMessageValidationError::HashRoleCollision) => {
-                    Some(SccpRecordInstructionValidationError::HashRoleCollision {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::RouteBinding { error }) => {
-                    Some(SccpRecordInstructionValidationError::RouteBinding {
-                        tx_index,
-                        instruction_index,
-                        error,
-                    })
-                }
+                },
+            ),
+            Err(RecordedSccpMessageValidationError::HashRoleCollision) => {
+                Some(SccpRecordInstructionValidationError::HashRoleCollision {
+                    tx_index,
+                    instruction_index,
+                })
             }
-        })
-}
+            Err(RecordedSccpMessageValidationError::RouteBinding { error }) => {
+                Some(SccpRecordInstructionValidationError::RouteBinding {
+                    tx_index,
+                    instruction_index,
+                    error,
+                })
+            }
+        }
+    };
 
+    match executable {
+        Executable::Instructions(instructions) => {
+            instructions
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    validate_one(instruction_index, instruction)
+                })
+        }
+        Executable::IvmProved(proved) => {
+            proved
+                .overlay
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    validate_one(instruction_index, instruction)
+                })
+        }
+        Executable::Batch(items) => {
+            items
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, item)| match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        validate_one(instruction_index, instruction)
+                    }
+                    ExecutableBatchItem::ContractCall(_) => None,
+                })
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => None,
+    }
+}
 fn invalid_sccp_record_instruction_in_signed_block(
     block: &SignedBlock,
 ) -> Option<SccpRecordInstructionValidationError> {

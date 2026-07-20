@@ -339,6 +339,7 @@ impl<F> LoadedAction<F> {
             ExecutableRef::Ivm(blob_hash) => Some(blob_hash),
             ExecutableRef::ContractCall(_) => None,
             ExecutableRef::Instructions(_) => None,
+            ExecutableRef::Batch(_) => None,
         }
     }
 }
@@ -651,6 +652,7 @@ mod tests {
         match reparsed.executable {
             ExecutableRef::Instructions(restored) => assert_eq!(restored, instructions),
             ExecutableRef::ContractCall(_) => panic!("expected instruction executable"),
+            ExecutableRef::Batch(_) => panic!("expected instruction executable"),
             ExecutableRef::Ivm(_) => panic!("expected instruction executable"),
         }
     }

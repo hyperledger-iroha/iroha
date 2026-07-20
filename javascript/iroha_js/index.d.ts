@@ -8260,6 +8260,40 @@ export interface TransactionAssemblyInput {
   privateKeyAlgorithm?: string | null;
 }
 
+export type ExecutableBatchEntry =
+  | {
+      kind: "instruction";
+      instruction: object | string;
+    }
+  | {
+      kind: "contractCall";
+      contractAddress: string;
+      /** Exact marked 32-byte Iroha code hash. */
+      expectedCodeHash: Buffer | ArrayBuffer | ArrayBufferView | string;
+      entrypoint: string;
+      /** Canonical schema-bound argument-record bytes; maximum 1 MiB. */
+      arguments?: Buffer | ArrayBuffer | ArrayBufferView | null;
+    };
+
+export interface ExecutableBatchTransactionAssemblyInput {
+  chainId: string;
+  authority: string;
+  entries: ExecutableBatchEntry[];
+  /** Must include `gasLimit` when any entry is a contract call. */
+  feePayment: BrowserFeePayment;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export type ExecutableBatchTransactionPayloadDraftInput = Omit<
+  ExecutableBatchTransactionAssemblyInput,
+  "privateKey" | "privateKeyAlgorithm"
+>;
+
 /** Exact unsigned payload whose non-fee fields are fixed before quoting. */
 export type TransactionPayloadDraftInput = Omit<
   TransactionAssemblyInput,
@@ -13556,8 +13590,16 @@ export function buildTransaction(
   input: TransactionAssemblyInput,
 ): SignedTransactionResult;
 
+export function buildExecutableBatchTransaction(
+  input: ExecutableBatchTransactionAssemblyInput,
+): SignedTransactionResult;
+
 export function buildTransactionPayload(
   input: TransactionPayloadDraftInput,
+): TransactionPayloadDraftResult;
+
+export function buildExecutableBatchTransactionPayload(
+  input: ExecutableBatchTransactionPayloadDraftInput,
 ): TransactionPayloadDraftResult;
 
 export function signQuotedTransactionPayload(

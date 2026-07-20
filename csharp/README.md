@@ -562,6 +562,28 @@ lifecycle record. Contract/IVM intents also require a positive gas bound.
 Metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected, and sponsor rejection never falls back to the authority.
 
+### Atomic mixed executable batches
+
+Append native instructions and deployed-contract calls to the same builder in
+their intended execution order:
+
+```csharp
+var transaction = client.Ledger
+    .BuildTransaction(chainId, authorityAccountId, feeIntentWithGasLimit)
+    .AddInstruction(registerInstruction)
+    .AddContractCall(new TransactionContractInvocation(
+        contractAddress,
+        expectedCodeHash,
+        "apply",
+        argumentRecord))
+    .AddInstruction(transferInstruction);
+```
+
+The builder emits `Executable::Batch` as soon as a contract call is present.
+The node applies all items atomically, and the batch shares one positive,
+signature-bound gas limit. Empty batches and noncanonical contract addresses
+are rejected before signing; contract addresses must use lowercase V1 Bech32m.
+
 ## Sample
 
 ```csharp

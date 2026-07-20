@@ -2025,6 +2025,7 @@ mod tests {
                 Executable::ContractCall(_) => {}
                 Executable::Ivm(_) => {}
                 Executable::IvmProved(_) => {}
+                Executable::Batch(_) => {}
             }
         }
         assert_eq!(

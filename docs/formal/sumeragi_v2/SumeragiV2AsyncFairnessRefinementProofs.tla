@@ -241,7 +241,12 @@ PROOF
                             /\ CommandMatches(
                                  command, command.node, qc.view,
                                  qc.subject)
-                            /\ ValidateDecidedBody(command.node, qc))
+                            /\ ValidateDecidedBody(command.node, qc)
+                      \/ \E qc \in prepareQCs:
+                            /\ CommandMatches(
+                                 command, command.node, qc.view,
+                                 qc.subject)
+                            /\ ValidateLockedBody(command.node, qc))
         <4>1. command.node \in ValidatorIds
           BY <2>1 DEF AsyncCandidateTyped
         <4> QED BY <3>7, <4>1 DEF Next
@@ -338,9 +343,10 @@ PROOF
                    /\ command.item.envelope.recipient = command.node
                    /\ command.item.envelope.view = command.view
                    /\ command.item.envelope.subject = command.subject
-                   /\ \E qc \in DecisionQcValues:
+                   /\ \E qc \in DecisionQcValues \cup prepareQCs:
                         /\ CommandMatches(
                              command, command.node, qc.view, qc.subject)
+                        /\ CertifiedBodyRecoveryAuthority(command.node, qc)
                         /\ command.item.source \in qc.signers
                         /\ FetchCertifiedBody(command.node, qc)
         <4>1. command.node \in ValidatorIds

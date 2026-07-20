@@ -4,6 +4,12 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { verifyEd25519 } from "./crypto.browser.js";
 import {
+  CONTRACT_ADDRESS_V1_VERSION,
+  contractAddressHrp,
+  encodeContractAddressBech32m,
+  requireContractAddressForChain,
+} from "./contractAddress.js";
+import {
   buildCommitContractDeploymentInstruction,
   buildFinalizeSmartContractCodeUploadInstruction,
   buildRegisterSmartContractCodeInstruction,
@@ -28,13 +34,10 @@ const CONTRACT_ADDRESS_DOMAIN = Buffer.from(
   "iroha:contract-address:v1",
   "utf8",
 );
-const CONTRACT_ADDRESS_VERSION = 1;
 const CONTRACT_ADDRESS_HASH_BYTES = 20;
-const BECH32M_CONSTANT = 0x2bc830a3;
-const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 const CURRENT_IVM_ABI_VERSION = 1;
-const CURRENT_DATA_MODEL_VERSION = 2;
+const CURRENT_DATA_MODEL_VERSION = 3;
 const CURRENT_SIGNED_TRANSACTION_SCHEMA_HASH_HEX =
   "7ab5ff9c572efb316deac478f19209c5";
 
@@ -251,134 +254,6 @@ function u64Be(value) {
   return output;
 }
 
-function contractHrp(chainDiscriminant) {
-  if (chainDiscriminant === 753n) return "sorac";
-  if (chainDiscriminant === 369n) return "tairac";
-  return `c${chainDiscriminant.toString(16)}`;
-}
-
-function convertToBase32(bytes) {
-  let accumulator = 0;
-  let bits = 0;
-  const output = [];
-  for (const byte of bytes) {
-    accumulator = (accumulator << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      output.push((accumulator >>> bits) & 0x1f);
-    }
-  }
-  if (bits > 0) output.push((accumulator << (5 - bits)) & 0x1f);
-  return output;
-}
-
-function bech32Polymod(values) {
-  const generators = [
-    0x3b6a57b2,
-    0x26508e6d,
-    0x1ea119fa,
-    0x3d4233dd,
-    0x2a1462b3,
-  ];
-  let checksum = 1;
-  for (const value of values) {
-    const top = checksum >>> 25;
-    checksum = ((checksum & 0x1ff_ffff) << 5) ^ value;
-    for (let index = 0; index < generators.length; index += 1) {
-      if (((top >>> index) & 1) !== 0) checksum ^= generators[index];
-    }
-  }
-  return checksum >>> 0;
-}
-
-function decodeBech32Payload(values, context) {
-  const output = [];
-  let accumulator = 0;
-  let bits = 0;
-  for (const value of values) {
-    accumulator = (accumulator << 5) | value;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      output.push((accumulator >>> bits) & 0xff);
-    }
-    accumulator &= (1 << bits) - 1;
-  }
-  if (bits >= 5 || (bits > 0 && accumulator !== 0)) {
-    throw new TypeError(`${context} has noncanonical Bech32 padding`);
-  }
-  return Buffer.from(output);
-}
-
-function requireContractAddress(value, chainDiscriminant, context) {
-  const literal = requireExactString(value, context);
-  if (literal !== literal.toLowerCase()) {
-    throw new TypeError(`${context} must use canonical lowercase Bech32m`);
-  }
-  const separator = literal.lastIndexOf("1");
-  if (separator <= 0 || separator + 7 > literal.length) {
-    throw new TypeError(`${context} is not a canonical contract address`);
-  }
-  const hrp = literal.slice(0, separator);
-  const expectedHrp = contractHrp(chainDiscriminant);
-  if (hrp !== expectedHrp) {
-    throw new TypeError(`${context} belongs to a different chain discriminant`);
-  }
-  const values = [];
-  for (const character of literal.slice(separator + 1)) {
-    const index = BECH32_CHARSET.indexOf(character);
-    if (index < 0) {
-      throw new TypeError(`${context} contains a non-Bech32 character`);
-    }
-    values.push(index);
-  }
-  if (
-    bech32Polymod([...hrpExpand(hrp), ...values]) !==
-    BECH32M_CONSTANT
-  ) {
-    throw new TypeError(`${context} has an invalid Bech32m checksum`);
-  }
-  const payload = decodeBech32Payload(values.slice(0, -6), context);
-  if (payload.length !== 29 || payload[0] !== CONTRACT_ADDRESS_VERSION) {
-    throw new TypeError(`${context} has an unsupported contract-address payload`);
-  }
-  return Object.freeze({
-    literal,
-    dataspaceId: payload.readBigUInt64BE(1),
-  });
-}
-
-function hrpExpand(hrp) {
-  return [
-    ...Array.from(hrp, (character) => character.codePointAt(0) >>> 5),
-    0,
-    ...Array.from(hrp, (character) => character.codePointAt(0) & 0x1f),
-  ];
-}
-
-function encodeBech32m(hrp, payload) {
-  const data = convertToBase32(payload);
-  const checksumInput = [
-    ...hrpExpand(hrp),
-    ...data,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-  ];
-  const polymod = (bech32Polymod(checksumInput) ^ BECH32M_CONSTANT) >>> 0;
-  const checksum = Array.from(
-    { length: 6 },
-    (_, index) => (polymod >>> (5 * (5 - index))) & 0x1f,
-  );
-  return `${hrp}1${[...data, ...checksum]
-    .map((value) => BECH32_CHARSET[value])
-    .join("")}`;
-}
-
 function authorityDetails(authority, expectedDiscriminant) {
   const literal = requireExactString(authority, "authority");
   let parsed;
@@ -435,11 +310,11 @@ export function deriveContractAddress({
   ]);
   const digest = Buffer.from(blake3(preimage));
   const payload = Buffer.concat([
-    Buffer.of(CONTRACT_ADDRESS_VERSION),
+    Buffer.of(CONTRACT_ADDRESS_V1_VERSION),
     u64Be(dataspace),
     digest.subarray(0, CONTRACT_ADDRESS_HASH_BYTES),
   ]);
-  return encodeBech32m(contractHrp(discriminant), payload);
+  return encodeContractAddressBech32m(contractAddressHrp(discriminant), payload);
 }
 
 /**
@@ -907,7 +782,7 @@ export async function deploySmartContractBrowser(options) {
     },
   );
   if (state.previousContractAddress !== null) {
-    const previous = requireContractAddress(
+    const previous = requireContractAddressForChain(
       state.previousContractAddress,
       chainDiscriminant,
       "previousContractAddress",

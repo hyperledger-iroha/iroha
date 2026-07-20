@@ -72,7 +72,7 @@ every Apple slice and marks the XCFramework plus its artifact manifest. The
 Do not use skip-build mode with this option: the builder rejects that ambiguous
 combination rather than labeling pre-existing libraries as production-enabled.
 
-CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging.
+CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and mandatory missing-artifact rejection.
 
 ### CocoaPods
 
@@ -171,6 +171,26 @@ sdk.submit(envelope: envelope) { err in
     print(err as Any)
 }
 
+// Interleave canonical instruction frames and deployed-contract calls in one
+// atomic transaction. All items share the signed gas limit.
+let invocation = try TransactionContractInvocation(
+    contractAddress: contractAddress,
+    expectedCodeHash: expectedCodeHash,
+    entrypoint: "apply",
+    arguments: argumentRecord
+)
+let mixedEnvelope = try sdk.buildSignedExecutableBatch(
+    chainId: "00000000-0000-0000-0000-000000000000",
+    authority: accountId,
+    entries: [
+        .instruction(registerFrame),
+        .contractCall(invocation),
+        .instruction(transferFrame),
+    ],
+    feePayment: .authority(chargeLimits: [], gasLimit: 500_000),
+    signingKey: signingKey
+)
+
 // Query pipeline status if needed
 torii.getTransactionStatus(hashHex: envelope.hashHex) { status in
     print(status)
@@ -181,6 +201,10 @@ sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
+
+Executable batches must be non-empty. Contract-call entries require a positive
+signature-bound gas limit and an exact lowercase V1 Bech32m contract address;
+invalid payloads are rejected before signing.
 
 Lease renewal and native auto-renew use the same local-signing flow through
 `planAliasLeaseRenewal`, `planAliasAutoRenew`, and

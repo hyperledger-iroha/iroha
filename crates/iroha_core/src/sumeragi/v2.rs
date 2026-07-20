@@ -12,6 +12,10 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -577,6 +581,18 @@ impl AuthenticatedConsensusMessage {
         self.0 == *message
     }
 
+    /// Canonical bytes of the exact authenticated envelope retained by this
+    /// process-local token.
+    pub(crate) fn canonical_wire_bytes(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+
+    /// Clone the exact authenticated envelope for fair-ingress unit fixtures.
+    #[cfg(test)]
+    pub(crate) fn wire_envelope_for_test(&self) -> wire::ConsensusMessageV2 {
+        self.0.clone()
+    }
+
     /// Construct an authenticated token for scheduling-boundary unit tests.
     #[cfg(test)]
     pub(crate) fn for_test(message: wire::ConsensusMessageV2) -> Self {
@@ -673,6 +689,8 @@ pub(crate) fn classify_decided_local_proposal(
 
 #[derive(Clone, Debug)]
 struct DeferredInput {
+    admission_ordinal: u128,
+    admission_capability: DeferredAdmissionCapability,
     event: reducer::Event,
     completion_evidence: Option<BodyPipelineCompletionEvidence>,
     retag_authenticated_ingress: bool,
@@ -700,8 +718,154 @@ impl PartialEq for DeferredInput {
 
 impl Eq for DeferredInput {}
 
+/// Actor-owned source of process-local deferred admission ordinals.
+///
+/// The source is deliberately shared across height adapters. Replacing an
+/// adapter therefore cannot alias a stale deferred capability by restarting
+/// the sequence. Values are opaque, never serialized, and have no consensus
+/// meaning.
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredAdmissionOrdinalSource {
+    state: Arc<Mutex<DeferredAdmissionOrdinalState>>,
+    identity: Arc<()>,
+}
+
+#[derive(Debug)]
+struct DeferredAdmissionOrdinalState {
+    next: u128,
+}
+
+impl DeferredAdmissionOrdinalSource {
+    /// Construct an actor-global source whose first successful admission uses
+    /// `first`.
+    ///
+    /// Callers must retain and reuse this source across replacement height
+    /// adapters. The runtime actor must inject the same source into every
+    /// replacement adapter; there is deliberately no process-global fallback.
+    pub(crate) fn new(first: u128) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(DeferredAdmissionOrdinalState { next: first })),
+            identity: Arc::new(()),
+        }
+    }
+
+    fn mint(&self) -> Result<DeferredAdmissionCapability, AdapterError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AdapterError::DeferredAdmissionOrdinalSourceUnavailable)?;
+        // Reserve a successor before returning the current ordinal. `u128::MAX`
+        // is never issued, so every successful capability has a distinct
+        // representable successor and exhaustion cannot wrap to a stale owner.
+        let successor = state
+            .next
+            .checked_add(1)
+            .ok_or(AdapterError::DeferredAdmissionOrdinalExhausted)?;
+        let ordinal = state.next;
+        state.next = successor;
+        Ok(DeferredAdmissionCapability {
+            ordinal,
+            source_identity: Arc::clone(&self.identity),
+            adapter_service_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            unbound_fixture: false,
+        })
+    }
+
+    #[cfg(test)]
+    fn next_for_test(&self) -> u128 {
+        self.state
+            .lock()
+            .expect("test deferred ordinal source remains available")
+            .next
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DeferredAdmissionCapability {
+    ordinal: u128,
+    source_identity: Arc<()>,
+    adapter_service_claimed: Arc<AtomicBool>,
+    runtime_handoff_claimed: Arc<AtomicBool>,
+    #[cfg(test)]
+    unbound_fixture: bool,
+}
+
+impl PartialEq for DeferredAdmissionCapability {
+    fn eq(&self, other: &Self) -> bool {
+        self.ordinal == other.ordinal
+            && Arc::ptr_eq(&self.source_identity, &other.source_identity)
+            && Arc::ptr_eq(
+                &self.adapter_service_claimed,
+                &other.adapter_service_claimed,
+            )
+            && Arc::ptr_eq(
+                &self.runtime_handoff_claimed,
+                &other.runtime_handoff_claimed,
+            )
+            && {
+                #[cfg(test)]
+                {
+                    self.unbound_fixture == other.unbound_fixture
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
+    }
+}
+
+impl Eq for DeferredAdmissionCapability {}
+
+impl DeferredAdmissionCapability {
+    fn pending() -> Self {
+        Self {
+            ordinal: 0,
+            source_identity: Arc::new(()),
+            adapter_service_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            unbound_fixture: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(ordinal: u128) -> Self {
+        Self {
+            ordinal,
+            source_identity: Arc::new(()),
+            adapter_service_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            unbound_fixture: true,
+        }
+    }
+
+    fn claim_adapter_service_once(&self) -> bool {
+        self.adapter_service_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn adapter_service_is_claimed(&self) -> bool {
+        self.adapter_service_claimed.load(Ordering::Acquire)
+    }
+
+    fn claim_runtime_handoff_once(&self) -> bool {
+        self.runtime_handoff_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn runtime_handoff_is_claimed(&self) -> bool {
+        self.runtime_handoff_claimed.load(Ordering::Acquire)
+    }
+}
+
+/// Three bounded classes in the adapter-owned Busy-deferred lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeferredPriority {
+pub(crate) enum DeferredPriority {
     /// Trusted completions and local timer events which untrusted traffic
     /// must not displace.
     Completion,
@@ -710,6 +874,742 @@ enum DeferredPriority {
     Progress,
     /// Proposals and individual control votes.
     Normal,
+}
+
+impl DeferredPriority {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Completion => 1,
+            Self::Progress => 2,
+            Self::Normal => 3,
+        }
+    }
+}
+
+/// Typed reducer-event discriminant retained by a deferred service token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeferredEventKind {
+    /// Complete safety-WAL replay.
+    ResumeAfterReplay,
+    /// Locally built body is durable and valid.
+    LocalProposalReady,
+    /// Authenticated proposal.
+    ProposalReceived,
+    /// Authenticated Prepare or Commit vote.
+    VoteReceived,
+    /// Verified PrepareQC or CommitQC.
+    QuorumCertificateReceived,
+    /// Authenticated timeout vote.
+    TimeoutVoteReceived,
+    /// Verified timeout certificate.
+    TimeoutCertificateReceived,
+    /// Absolute round timeout.
+    TimeoutElapsed,
+    /// Periodic retransmission timeout.
+    RetransmitElapsed,
+    /// Reconstructed body completion.
+    BodyAvailable,
+    /// Durable body-store completion.
+    BodyStored,
+    /// Deterministic validation completion.
+    ValidationCompleted,
+    /// Safety-WAL persistence acknowledgement.
+    Persisted,
+    /// Safety-WAL persistence failure.
+    PersistenceFailed,
+    /// Local signing completion.
+    Signed,
+    /// Local application completion.
+    ApplicationCompleted,
+}
+
+impl DeferredEventKind {
+    const fn code(self) -> u8 {
+        match self {
+            Self::LocalProposalReady => 0,
+            Self::ProposalReceived => 1,
+            Self::VoteReceived => 2,
+            Self::QuorumCertificateReceived => 3,
+            Self::TimeoutVoteReceived => 4,
+            Self::TimeoutCertificateReceived => 5,
+            Self::TimeoutElapsed => 6,
+            Self::RetransmitElapsed => 7,
+            Self::BodyAvailable => 8,
+            Self::BodyStored => 9,
+            Self::ValidationCompleted => 10,
+            Self::Persisted => 11,
+            Self::PersistenceFailed => 12,
+            Self::Signed => 13,
+            Self::ApplicationCompleted => 14,
+            Self::ResumeAfterReplay => 15,
+        }
+    }
+}
+
+/// Exact local retagging relation for one selected deferred occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeferredRetagRelation {
+    /// The asynchronous completion or local event retained its original tag.
+    Unchanged,
+    /// An authenticated network event was rebound to the current reducer tag.
+    AuthenticatedIngress {
+        /// Tag retained while the authenticated event waited.
+        from: reducer::EventTag,
+        /// Current reducer tag used for this retry.
+        to: reducer::EventTag,
+    },
+}
+
+/// Per-class deferred queue lengths around one exact service selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredQueueLengths {
+    /// Completion-lane owners.
+    pub(crate) completion: u64,
+    /// Progress-lane owners.
+    pub(crate) progress: u64,
+    /// Normal-lane owners.
+    pub(crate) normal: u64,
+}
+
+impl DeferredQueueLengths {
+    fn total(self) -> u64 {
+        self.checked_total()
+            .expect("bounded deferred queue totals fit u64")
+    }
+
+    fn checked_total(self) -> Option<u64> {
+        self.completion
+            .checked_add(self.progress)?
+            .checked_add(self.normal)
+    }
+
+    const fn for_priority(self, priority: DeferredPriority) -> u64 {
+        match priority {
+            DeferredPriority::Completion => self.completion,
+            DeferredPriority::Progress => self.progress,
+            DeferredPriority::Normal => self.normal,
+        }
+    }
+}
+
+/// Exact process-local owner discharged by one Busy-deferred service turn.
+///
+/// The full typed events remain process-local and make semantic identity
+/// lossless. `projection_hash` is a deterministic integrity projection over
+/// every externally inspected field and every fixed event/evidence field; it
+/// is not a wire capability and must never be serialized.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredServiceEvidence {
+    /// Actor-global ordinal minted only when this owner first entered a queue.
+    pub(crate) admission_ordinal: u128,
+    /// Exact selected queue class.
+    pub(crate) priority: DeferredPriority,
+    /// Typed reducer-event discriminant.
+    pub(crate) event_kind: DeferredEventKind,
+    /// Original tag retained at admission.
+    pub(crate) original_tag: reducer::EventTag,
+    /// Effective tag dispatched to the reducer.
+    pub(crate) effective_tag: reducer::EventTag,
+    /// Exact authenticated-retag relation.
+    pub(crate) retag: DeferredRetagRelation,
+    /// Whether the selected owner is protected locked-round progress.
+    pub(crate) protected_progress: bool,
+    /// Selected owner's accumulated eligible service debt.
+    pub(crate) eligible_skips_before: u64,
+    /// Service retires the selected owner's debt.
+    pub(crate) eligible_skips_after: u64,
+    /// All class lengths before selection.
+    pub(crate) queue_lengths_before: DeferredQueueLengths,
+    /// All class lengths after selection.
+    pub(crate) queue_lengths_after: DeferredQueueLengths,
+    /// Redundant exact total before selection.
+    pub(crate) total_len_before: u64,
+    /// Redundant exact total after selection.
+    pub(crate) total_len_after: u64,
+    /// Three-class service cursor before selection.
+    pub(crate) service_cursor_before: DeferredPriority,
+    /// Three-class service cursor after selection.
+    pub(crate) service_cursor_after: DeferredPriority,
+    /// Hash over the complete immutable process-local projection.
+    pub(crate) projection_hash: Hash,
+    original_event: reducer::Event,
+    effective_event: reducer::Event,
+    completion_evidence: Option<BodyPipelineCompletionEvidence>,
+    original_admission: Option<IngressAdmission>,
+    effective_admission: Option<IngressAdmission>,
+    admission_capability: DeferredAdmissionCapability,
+}
+
+impl DeferredServiceEvidence {
+    /// Construct one internally consistent Completion-lane token for scheduler
+    /// shell tests which use a fake driver rather than a real adapter.
+    #[cfg(test)]
+    pub(crate) fn completion_for_test(
+        source: &DeferredAdmissionOrdinalSource,
+        tag: reducer::EventTag,
+        completion_len_before: u64,
+        service_cursor_before: DeferredPriority,
+    ) -> Self {
+        assert!(completion_len_before != 0);
+        let admission_capability = source
+            .mint()
+            .expect("test deferred ordinal remains available");
+        let admission_ordinal = admission_capability.ordinal;
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let queue_lengths_before = DeferredQueueLengths {
+            completion: completion_len_before,
+            progress: 0,
+            normal: 0,
+        };
+        let queue_lengths_after = DeferredQueueLengths {
+            completion: completion_len_before - 1,
+            progress: 0,
+            normal: 0,
+        };
+        let mut cursor = service_cursor_before;
+        for _ in 0..3 {
+            let selected = cursor;
+            cursor = cursor.next();
+            if selected == DeferredPriority::Completion {
+                break;
+            }
+        }
+        let mut evidence = Self {
+            admission_ordinal,
+            priority: DeferredPriority::Completion,
+            event_kind: DeferredEventKind::TimeoutElapsed,
+            original_tag: tag,
+            effective_tag: tag,
+            retag: DeferredRetagRelation::Unchanged,
+            protected_progress: false,
+            eligible_skips_before: 0,
+            eligible_skips_after: 0,
+            queue_lengths_before,
+            queue_lengths_after,
+            total_len_before: queue_lengths_before.total(),
+            total_len_after: queue_lengths_after.total(),
+            service_cursor_before,
+            service_cursor_after: cursor,
+            projection_hash: Hash::new([]),
+            original_event: event.clone(),
+            effective_event: event,
+            completion_evidence: None,
+            original_admission: None,
+            effective_admission: None,
+            admission_capability,
+        };
+        evidence.projection_hash = deferred_service_projection_hash(&evidence);
+        assert!(evidence.validate_exact());
+        evidence
+    }
+
+    /// Return whether every redundant field and rank transition still matches
+    /// the exact selected occurrence.
+    pub(crate) fn validate_exact(&self) -> bool {
+        if self.admission_capability.ordinal != self.admission_ordinal
+            || self.event_kind != deferred_event_kind(&self.original_event)
+            || self.event_kind != deferred_event_kind(&self.effective_event)
+            || self.original_tag != deferred_event_tag(&self.original_event)
+            || self.effective_tag != deferred_event_tag(&self.effective_event)
+            || self.eligible_skips_after != 0
+            || Some(self.total_len_before) != self.queue_lengths_before.checked_total()
+            || Some(self.total_len_after) != self.queue_lengths_after.checked_total()
+            || self.total_len_after.checked_add(1) != Some(self.total_len_before)
+            || self
+                .queue_lengths_before
+                .for_priority(self.priority)
+                .checked_sub(1)
+                != Some(self.queue_lengths_after.for_priority(self.priority))
+        {
+            return false;
+        }
+        for priority in [
+            DeferredPriority::Completion,
+            DeferredPriority::Progress,
+            DeferredPriority::Normal,
+        ] {
+            if priority != self.priority
+                && self.queue_lengths_before.for_priority(priority)
+                    != self.queue_lengths_after.for_priority(priority)
+            {
+                return false;
+            }
+        }
+        let mut cursor = self.service_cursor_before;
+        let mut expected_selection = None;
+        let mut expected_after = cursor;
+        for _ in 0..3 {
+            let candidate = cursor;
+            cursor = cursor.next();
+            if self.queue_lengths_before.for_priority(candidate) != 0 {
+                expected_selection = Some(candidate);
+                expected_after = cursor;
+                break;
+            }
+        }
+        if expected_selection != Some(self.priority) || expected_after != self.service_cursor_after
+        {
+            return false;
+        }
+        let retag_is_exact = match self.retag {
+            DeferredRetagRelation::Unchanged => {
+                self.original_tag == self.effective_tag
+                    && self.original_event == self.effective_event
+                    && self.original_admission == self.effective_admission
+            }
+            DeferredRetagRelation::AuthenticatedIngress { from, to } => {
+                from == self.original_tag
+                    && to == self.effective_tag
+                    && self.original_event.clone().retag_authenticated_ingress(to)
+                        == self.effective_event
+                    && self.original_admission.map(|mut admission| {
+                        admission.generation = to.generation();
+                        admission
+                    }) == self.effective_admission
+            }
+        };
+        retag_is_exact && self.projection_hash == deferred_service_projection_hash(self)
+    }
+
+    /// Return whether this token owns the supplied exact reducer event.
+    pub(crate) fn matches_effective_event(&self, event: &reducer::Event) -> bool {
+        self.validate_exact() && self.effective_event == *event
+    }
+
+    /// Return whether the adapter claimed this owner before reducer dispatch.
+    pub(crate) fn adapter_service_is_claimed(&self) -> bool {
+        self.admission_capability.adapter_service_is_claimed()
+    }
+
+    /// Atomically consume the adapter-to-runtime handoff once. Cloned or
+    /// replayed tokens retain the same process-local capability and fail after
+    /// the first successful claim.
+    pub(crate) fn claim_runtime_handoff_once(&self) -> bool {
+        self.validate_exact()
+            && self.adapter_service_is_claimed()
+            && self.admission_capability.claim_runtime_handoff_once()
+    }
+
+    /// Return whether both production seams consumed this exact occurrence.
+    pub(crate) fn service_handoff_is_complete(&self) -> bool {
+        self.adapter_service_is_claimed() && self.admission_capability.runtime_handoff_is_claimed()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn claim_adapter_service_for_test(&self) -> bool {
+        self.validate_exact() && self.admission_capability.claim_adapter_service_once()
+    }
+
+    /// Return whether this occurrence was minted by the supplied actor-owned
+    /// source rather than another runtime actor with an overlapping ordinal.
+    pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
+        let exact = Arc::ptr_eq(&self.admission_capability.source_identity, &source.identity);
+        #[cfg(test)]
+        {
+            exact || self.admission_capability.unbound_fixture
+        }
+        #[cfg(not(test))]
+        {
+            exact
+        }
+    }
+}
+
+struct DeferredServiceSelection {
+    input: DeferredInput,
+    evidence: DeferredServiceEvidence,
+}
+
+fn deferred_event_kind(event: &reducer::Event) -> DeferredEventKind {
+    match event {
+        reducer::Event::ResumeAfterReplay { .. } => DeferredEventKind::ResumeAfterReplay,
+        reducer::Event::LocalProposalReady { .. } => DeferredEventKind::LocalProposalReady,
+        reducer::Event::ProposalReceived { .. } => DeferredEventKind::ProposalReceived,
+        reducer::Event::VoteReceived { .. } => DeferredEventKind::VoteReceived,
+        reducer::Event::QuorumCertificateReceived { .. } => {
+            DeferredEventKind::QuorumCertificateReceived
+        }
+        reducer::Event::TimeoutVoteReceived { .. } => DeferredEventKind::TimeoutVoteReceived,
+        reducer::Event::TimeoutCertificateReceived { .. } => {
+            DeferredEventKind::TimeoutCertificateReceived
+        }
+        reducer::Event::TimeoutElapsed { .. } => DeferredEventKind::TimeoutElapsed,
+        reducer::Event::RetransmitElapsed { .. } => DeferredEventKind::RetransmitElapsed,
+        reducer::Event::BodyAvailable { .. } => DeferredEventKind::BodyAvailable,
+        reducer::Event::BodyStored { .. } => DeferredEventKind::BodyStored,
+        reducer::Event::ValidationCompleted { .. } => DeferredEventKind::ValidationCompleted,
+        reducer::Event::Persisted { .. } => DeferredEventKind::Persisted,
+        reducer::Event::PersistenceFailed { .. } => DeferredEventKind::PersistenceFailed,
+        reducer::Event::Signed { .. } => DeferredEventKind::Signed,
+        reducer::Event::ApplicationCompleted { .. } => DeferredEventKind::ApplicationCompleted,
+    }
+}
+
+fn deferred_event_tag(event: &reducer::Event) -> reducer::EventTag {
+    match event {
+        reducer::Event::ResumeAfterReplay { tag }
+        | reducer::Event::LocalProposalReady { tag, .. }
+        | reducer::Event::ProposalReceived { tag, .. }
+        | reducer::Event::VoteReceived { tag, .. }
+        | reducer::Event::QuorumCertificateReceived { tag, .. }
+        | reducer::Event::TimeoutVoteReceived { tag, .. }
+        | reducer::Event::TimeoutCertificateReceived { tag, .. }
+        | reducer::Event::TimeoutElapsed { tag }
+        | reducer::Event::RetransmitElapsed { tag }
+        | reducer::Event::BodyAvailable { tag, .. }
+        | reducer::Event::BodyStored { tag, .. }
+        | reducer::Event::ValidationCompleted { tag, .. }
+        | reducer::Event::Persisted { tag, .. }
+        | reducer::Event::PersistenceFailed { tag, .. }
+        | reducer::Event::Signed { tag, .. }
+        | reducer::Event::ApplicationCompleted { tag, .. } => *tag,
+    }
+}
+
+fn append_deferred_projection_field(projection: &mut Vec<u8>, field: &[u8]) {
+    let len = u64::try_from(field.len()).expect("bounded deferred projection field fits u64");
+    projection.extend_from_slice(&len.to_le_bytes());
+    projection.extend_from_slice(field);
+}
+
+fn append_deferred_projection_u64(projection: &mut Vec<u8>, value: u64) {
+    append_deferred_projection_field(projection, &value.to_le_bytes());
+}
+
+fn append_deferred_projection_tag(projection: &mut Vec<u8>, tag: reducer::EventTag) {
+    append_deferred_projection_u64(projection, tag.height());
+    append_deferred_projection_u64(projection, tag.view());
+    append_deferred_projection_u64(projection, tag.generation().get());
+}
+
+fn append_deferred_projection_round(projection: &mut Vec<u8>, round: reducer::Round) {
+    append_deferred_projection_u64(projection, round.height());
+    append_deferred_projection_u64(projection, round.view());
+}
+
+fn append_deferred_projection_phase(projection: &mut Vec<u8>, phase: reducer::Phase) {
+    projection.push(match phase {
+        reducer::Phase::Prepare => 1,
+        reducer::Phase::Commit => 2,
+    });
+}
+
+fn append_deferred_projection_signature(
+    projection: &mut Vec<u8>,
+    signature: &reducer::OpaqueSignature,
+) {
+    append_deferred_projection_field(projection, signature.as_bytes());
+}
+
+fn append_deferred_projection_certificate(
+    projection: &mut Vec<u8>,
+    certificate: &reducer::QuorumCertificate,
+) {
+    let reference = certificate.reference();
+    append_deferred_projection_field(projection, reference.context_id().as_bytes());
+    append_deferred_projection_round(projection, reference.round());
+    append_deferred_projection_phase(projection, reference.phase());
+    append_deferred_projection_field(projection, reference.subject().as_bytes());
+    append_deferred_projection_u64(
+        projection,
+        u64::try_from(certificate.signatures().len())
+            .expect("bounded certificate signer count fits u64"),
+    );
+    for share in certificate.signatures() {
+        append_deferred_projection_field(projection, share.signer().as_bytes());
+        append_deferred_projection_signature(projection, share.signature());
+    }
+}
+
+fn append_deferred_projection_manifest(
+    projection: &mut Vec<u8>,
+    manifest: &reducer::PayloadManifest,
+) {
+    append_deferred_projection_field(projection, manifest.subject().as_bytes());
+    append_deferred_projection_field(projection, manifest.payload_hash().as_bytes());
+    append_deferred_projection_field(projection, manifest.chunk_root().as_bytes());
+    append_deferred_projection_u64(projection, manifest.byte_len());
+    append_deferred_projection_field(projection, &manifest.chunk_count().to_le_bytes());
+}
+
+fn append_deferred_projection_timeout_certificate(
+    projection: &mut Vec<u8>,
+    certificate: &reducer::TimeoutCertificate,
+) {
+    append_deferred_projection_field(projection, certificate.context_id().as_bytes());
+    append_deferred_projection_round(projection, certificate.round());
+    append_deferred_projection_u64(
+        projection,
+        u64::try_from(certificate.groups().len()).expect("bounded timeout group count fits u64"),
+    );
+    for group in certificate.groups() {
+        match group.highest_prepare() {
+            Some(highest_prepare) => {
+                projection.push(1);
+                append_deferred_projection_certificate(projection, highest_prepare);
+            }
+            None => projection.push(0),
+        }
+        append_deferred_projection_u64(
+            projection,
+            u64::try_from(group.signatures().len()).expect("bounded timeout signer count fits u64"),
+        );
+        for share in group.signatures() {
+            append_deferred_projection_field(projection, share.signer().as_bytes());
+            append_deferred_projection_signature(projection, share.signature());
+        }
+    }
+}
+
+fn append_deferred_projection_event(projection: &mut Vec<u8>, event: &reducer::Event) {
+    projection.push(deferred_event_kind(event).code());
+    append_deferred_projection_tag(projection, deferred_event_tag(event));
+    match event {
+        reducer::Event::ResumeAfterReplay { .. }
+        | reducer::Event::TimeoutElapsed { .. }
+        | reducer::Event::RetransmitElapsed { .. } => {}
+        reducer::Event::LocalProposalReady { manifest, .. } => {
+            append_deferred_projection_manifest(projection, manifest);
+        }
+        reducer::Event::ProposalReceived { proposal, .. } => {
+            let body = proposal.proposal();
+            append_deferred_projection_field(projection, body.context_id().as_bytes());
+            append_deferred_projection_round(projection, body.round());
+            append_deferred_projection_field(projection, body.proposer().as_bytes());
+            append_deferred_projection_manifest(projection, body.manifest());
+            match body.justification() {
+                reducer::ProposalJustification::ParentCommit(reference) => {
+                    projection.push(1);
+                    match reference {
+                        Some(reference) => {
+                            projection.push(1);
+                            append_deferred_projection_field(
+                                projection,
+                                reference.context_id().as_bytes(),
+                            );
+                            append_deferred_projection_round(projection, reference.round());
+                            append_deferred_projection_phase(projection, reference.phase());
+                            append_deferred_projection_field(
+                                projection,
+                                reference.subject().as_bytes(),
+                            );
+                        }
+                        None => projection.push(0),
+                    }
+                }
+                reducer::ProposalJustification::Timeout(certificate) => {
+                    projection.push(2);
+                    append_deferred_projection_timeout_certificate(projection, certificate);
+                }
+            }
+            append_deferred_projection_signature(projection, proposal.signature());
+        }
+        reducer::Event::VoteReceived { vote, .. } => {
+            let body = vote.vote();
+            append_deferred_projection_field(projection, body.context_id().as_bytes());
+            append_deferred_projection_round(projection, body.round());
+            append_deferred_projection_phase(projection, body.phase());
+            append_deferred_projection_field(projection, body.subject().as_bytes());
+            append_deferred_projection_field(projection, body.signer().as_bytes());
+            append_deferred_projection_signature(projection, vote.signature());
+        }
+        reducer::Event::QuorumCertificateReceived { certificate, .. } => {
+            append_deferred_projection_certificate(projection, certificate);
+        }
+        reducer::Event::TimeoutVoteReceived { vote, .. } => {
+            let body = vote.vote();
+            append_deferred_projection_field(projection, body.context_id().as_bytes());
+            append_deferred_projection_round(projection, body.round());
+            append_deferred_projection_field(projection, body.signer().as_bytes());
+            match body.highest_prepare() {
+                Some(highest_prepare) => {
+                    projection.push(1);
+                    append_deferred_projection_certificate(projection, highest_prepare);
+                }
+                None => projection.push(0),
+            }
+            append_deferred_projection_signature(projection, vote.signature());
+        }
+        reducer::Event::TimeoutCertificateReceived { certificate, .. } => {
+            append_deferred_projection_timeout_certificate(projection, certificate);
+        }
+        reducer::Event::BodyAvailable { round, subject, .. }
+        | reducer::Event::BodyStored { round, subject, .. } => {
+            append_deferred_projection_round(projection, *round);
+            append_deferred_projection_field(projection, subject.as_bytes());
+        }
+        reducer::Event::ValidationCompleted {
+            round,
+            subject,
+            valid,
+            ..
+        } => {
+            append_deferred_projection_round(projection, *round);
+            append_deferred_projection_field(projection, subject.as_bytes());
+            projection.push(u8::from(*valid));
+        }
+        reducer::Event::Persisted { id, .. } | reducer::Event::PersistenceFailed { id, .. } => {
+            append_deferred_projection_u64(projection, id.get());
+        }
+        reducer::Event::Signed { signature, .. } => {
+            append_deferred_projection_signature(projection, signature);
+        }
+        reducer::Event::ApplicationCompleted { subject, .. } => {
+            append_deferred_projection_field(projection, subject.as_bytes());
+        }
+    }
+}
+
+fn append_deferred_projection_receipt(projection: &mut Vec<u8>, receipt: &DurableBodyReceipt) {
+    append_deferred_projection_field(projection, &receipt.context_id().encode());
+    append_deferred_projection_field(projection, &receipt.round().encode());
+    append_deferred_projection_field(projection, &receipt.subject().encode());
+    append_deferred_projection_field(projection, receipt.manifest_hash().as_ref());
+    append_deferred_projection_field(projection, receipt.frame_hash().as_ref());
+}
+
+fn append_deferred_projection_completion_evidence(
+    projection: &mut Vec<u8>,
+    evidence: Option<&BodyPipelineCompletionEvidence>,
+) {
+    let Some(evidence) = evidence else {
+        projection.push(0);
+        return;
+    };
+    match evidence {
+        BodyPipelineCompletionEvidence::LocalProposalReady {
+            manifest,
+            durable_receipt,
+            validated_receipt,
+        } => {
+            projection.push(1);
+            append_deferred_projection_field(projection, &manifest.encode());
+            append_deferred_projection_receipt(projection, durable_receipt);
+            append_deferred_projection_field(
+                projection,
+                &validated_receipt.execution_commitment().encode(),
+            );
+        }
+        BodyPipelineCompletionEvidence::BodyAvailable { manifest } => {
+            projection.push(2);
+            append_deferred_projection_field(projection, &manifest.encode());
+        }
+        BodyPipelineCompletionEvidence::BodyStored {
+            round,
+            subject,
+            receipt,
+        } => {
+            projection.push(3);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &subject.encode());
+            append_deferred_projection_receipt(projection, receipt);
+        }
+        BodyPipelineCompletionEvidence::ValidationSucceeded {
+            round,
+            subject,
+            receipt,
+        } => {
+            projection.push(4);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &subject.encode());
+            append_deferred_projection_receipt(projection, receipt.durable());
+            append_deferred_projection_field(projection, &receipt.execution_commitment().encode());
+        }
+        BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => {
+            projection.push(5);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &subject.encode());
+        }
+    }
+}
+
+fn append_deferred_projection_admission(
+    projection: &mut Vec<u8>,
+    admission: Option<IngressAdmission>,
+) {
+    let Some(admission) = admission else {
+        projection.push(0);
+        return;
+    };
+    projection.push(1);
+    match admission.key {
+        IngressSemanticKey::Proposal { round, proposer } => {
+            projection.push(1);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &proposer.encode());
+        }
+        IngressSemanticKey::Vote {
+            round,
+            phase,
+            signer,
+        } => {
+            projection.push(2);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &phase.encode());
+            append_deferred_projection_field(projection, &signer.encode());
+        }
+        IngressSemanticKey::TimeoutVote { round, signer } => {
+            projection.push(3);
+            append_deferred_projection_field(projection, &round.encode());
+            append_deferred_projection_field(projection, &signer.encode());
+        }
+    }
+    match admission.fingerprint {
+        IngressFingerprint::Proposal(hash) => {
+            projection.push(1);
+            append_deferred_projection_field(projection, hash.as_ref());
+        }
+        IngressFingerprint::Vote(subject, commitment) => {
+            projection.push(2);
+            append_deferred_projection_field(projection, &subject.encode());
+            append_deferred_projection_field(projection, &commitment.encode());
+        }
+        IngressFingerprint::TimeoutVote(reference) => {
+            projection.push(3);
+            append_deferred_projection_field(projection, &reference.encode());
+        }
+    }
+    append_deferred_projection_u64(projection, admission.generation.get());
+    projection.push(u8::from(admission.inserted_equivocation));
+    projection.push(u8::from(admission.locked_commit_progress));
+}
+
+fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash {
+    let mut projection = Vec::new();
+    append_deferred_projection_field(&mut projection, &evidence.admission_ordinal.to_le_bytes());
+    projection.push(evidence.priority.code());
+    projection.push(evidence.event_kind.code());
+    append_deferred_projection_tag(&mut projection, evidence.original_tag);
+    append_deferred_projection_tag(&mut projection, evidence.effective_tag);
+    match evidence.retag {
+        DeferredRetagRelation::Unchanged => projection.push(0),
+        DeferredRetagRelation::AuthenticatedIngress { from, to } => {
+            projection.push(1);
+            append_deferred_projection_tag(&mut projection, from);
+            append_deferred_projection_tag(&mut projection, to);
+        }
+    }
+    projection.push(u8::from(evidence.protected_progress));
+    append_deferred_projection_u64(&mut projection, evidence.eligible_skips_before);
+    append_deferred_projection_u64(&mut projection, evidence.eligible_skips_after);
+    for lengths in [evidence.queue_lengths_before, evidence.queue_lengths_after] {
+        append_deferred_projection_u64(&mut projection, lengths.completion);
+        append_deferred_projection_u64(&mut projection, lengths.progress);
+        append_deferred_projection_u64(&mut projection, lengths.normal);
+    }
+    append_deferred_projection_u64(&mut projection, evidence.total_len_before);
+    append_deferred_projection_u64(&mut projection, evidence.total_len_after);
+    projection.push(evidence.service_cursor_before.code());
+    projection.push(evidence.service_cursor_after.code());
+    append_deferred_projection_event(&mut projection, &evidence.original_event);
+    append_deferred_projection_event(&mut projection, &evidence.effective_event);
+    append_deferred_projection_completion_evidence(
+        &mut projection,
+        evidence.completion_evidence.as_ref(),
+    );
+    append_deferred_projection_admission(&mut projection, evidence.original_admission);
+    append_deferred_projection_admission(&mut projection, evidence.effective_admission);
+    Hash::new(projection)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1134,6 +2034,17 @@ pub(crate) enum AdapterError {
     /// Trusted completion ownership exceeded the bounded deferred lane.
     #[error("Sumeragi v2 deferred completion lane exceeded its bounded capacity")]
     DeferredCompletionCapacityExceeded,
+    /// The actor-global deferred admission ordinal cannot advance without
+    /// wrapping and potentially aliasing a stale owner.
+    #[error("Sumeragi v2 deferred admission ordinal space is exhausted")]
+    DeferredAdmissionOrdinalExhausted,
+    /// The actor-global deferred ordinal source was poisoned by a failed local
+    /// owner and can no longer mint trustworthy capabilities.
+    #[error("Sumeragi v2 deferred admission ordinal source is unavailable")]
+    DeferredAdmissionOrdinalSourceUnavailable,
+    /// Exact deferred service debt could not advance without wrapping.
+    #[error("Sumeragi v2 deferred service debt overflowed")]
+    DeferredServiceDebtOverflow,
     /// One adapter invocation violated the reviewed reducer/continuation
     /// composition contract. This is an internal source-refinement failure,
     /// never recoverable input backpressure.
@@ -1161,6 +2072,10 @@ pub(crate) enum AdapterError {
     /// create a non-decreasing serialized-runtime spin.
     #[error("Sumeragi v2 deferred service violated its open-fence contract and is fail-closed")]
     DeferredServiceContractViolation,
+    /// The selected deferred occurrence did not retain the exact actor source,
+    /// semantic projection, or single-use capability.
+    #[error("Sumeragi v2 deferred service ownership token is invalid or already consumed")]
+    DeferredServiceOwnershipViolation,
     /// The reducer is permanently closed after a durability failure.
     #[error("Sumeragi v2 adapter is fail-closed after a durability failure")]
     FailClosed,
@@ -1186,6 +2101,7 @@ pub(crate) struct SumeragiV2Adapter {
     deferred_completions: VecDeque<DeferredInput>,
     deferred_progress_inputs: VecDeque<DeferredInput>,
     deferred_inputs: VecDeque<DeferredInput>,
+    deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     next_deferred_priority: DeferredPriority,
     ignore_counts: BTreeMap<reducer::IgnoreReason, u64>,
     last_progress: Option<(
@@ -1251,6 +2167,7 @@ impl SumeragiV2Adapter {
         generation: reducer::Generation,
         consensus_key_hash: [u8; 32],
         fingerprints: AdapterFingerprints,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator(
             wal_path,
@@ -1260,6 +2177,7 @@ impl SumeragiV2Adapter {
             consensus_key_hash,
             fingerprints,
             Box::<BlsNormalSignatureAggregator>::default(),
+            deferred_admission_ordinals,
         )
     }
 
@@ -1278,6 +2196,7 @@ impl SumeragiV2Adapter {
         generation: reducer::Generation,
         consensus_key_hash: [u8; 32],
         fingerprints: AdapterFingerprints,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication(
             wal_path,
@@ -1288,6 +2207,7 @@ impl SumeragiV2Adapter {
             fingerprints,
             Box::<BlsNormalSignatureAggregator>::default(),
             false,
+            deferred_admission_ordinals,
         )
     }
 
@@ -1300,6 +2220,7 @@ impl SumeragiV2Adapter {
         consensus_key_hash: [u8; 32],
         fingerprints: AdapterFingerprints,
         aggregator: Box<dyn SignatureAggregator>,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication(
             wal_path,
@@ -1310,6 +2231,7 @@ impl SumeragiV2Adapter {
             fingerprints,
             aggregator,
             true,
+            deferred_admission_ordinals,
         )
     }
 
@@ -1323,6 +2245,7 @@ impl SumeragiV2Adapter {
         fingerprints: AdapterFingerprints,
         aggregator: Box<dyn SignatureAggregator>,
         publish_initial_status: bool,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         let VerifiedHeightContext {
             context: wire_context,
@@ -1394,6 +2317,7 @@ impl SumeragiV2Adapter {
             deferred_completions: VecDeque::new(),
             deferred_progress_inputs: VecDeque::new(),
             deferred_inputs: VecDeque::new(),
+            deferred_admission_ordinals,
             next_deferred_priority: DeferredPriority::Completion,
             ignore_counts: BTreeMap::new(),
             last_progress: None,
@@ -1416,6 +2340,14 @@ impl SumeragiV2Adapter {
     /// Return the tag which must accompany a new asynchronous operation.
     pub(crate) const fn current_tag(&self) -> reducer::EventTag {
         self.reducer.current_tag()
+    }
+
+    /// Actor-global ordinal source shared with every replacement height
+    /// adapter owned by this runtime actor.
+    pub(crate) const fn deferred_admission_ordinal_source(
+        &self,
+    ) -> &DeferredAdmissionOrdinalSource {
+        &self.deferred_admission_ordinals
     }
 
     /// Snapshot the exact reducer-owned facts which constrain local proposal
@@ -2683,7 +3615,11 @@ impl SumeragiV2Adapter {
         let core_manifest = self
             .registry
             .manifest_to_core(manifest, &self.wire_context)?;
+        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_ordinal = admission_capability.ordinal;
         self.deferred_completions.push_back(DeferredInput {
+            admission_ordinal,
+            admission_capability,
             event: reducer::Event::BodyAvailable {
                 tag,
                 round: reducer::Round::new(manifest.round.height, manifest.round.view),
@@ -2715,7 +3651,11 @@ impl SumeragiV2Adapter {
         let round = proposal.proposal().round();
         let subject = proposal.proposal().manifest().subject();
         self.active_subject = Some((round, subject));
+        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_ordinal = admission_capability.ordinal;
         self.deferred_inputs.push_back(DeferredInput {
+            admission_ordinal,
+            admission_capability,
             event: reducer::Event::ProposalReceived { tag, proposal },
             completion_evidence: None,
             retag_authenticated_ingress: true,
@@ -2806,7 +3746,11 @@ impl SumeragiV2Adapter {
                 }
             }
         };
+        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_ordinal = admission_capability.ordinal;
         self.deferred_completions.push_back(DeferredInput {
+            admission_ordinal,
+            admission_capability,
             event,
             completion_evidence: Some(completion_evidence),
             retag_authenticated_ingress: false,
@@ -3995,7 +4939,9 @@ impl SumeragiV2Adapter {
     ) -> Result<bool, AdapterError> {
         let protected_progress =
             admission.is_some_and(|admission| admission.locked_commit_progress);
-        let input = DeferredInput {
+        let mut input = DeferredInput {
+            admission_ordinal: 0,
+            admission_capability: DeferredAdmissionCapability::pending(),
             event,
             completion_evidence,
             retag_authenticated_ingress,
@@ -4006,12 +4952,12 @@ impl SumeragiV2Adapter {
             eligible_skips: 0,
         };
         let progress_capacity = deferred_progress_capacity(self.wire_context.roster.len());
-        let queue = match priority {
-            DeferredPriority::Completion => &mut self.deferred_completions,
-            DeferredPriority::Progress => &mut self.deferred_progress_inputs,
-            DeferredPriority::Normal => &mut self.deferred_inputs,
+        let duplicate = match priority {
+            DeferredPriority::Completion => self.deferred_completions.contains(&input),
+            DeferredPriority::Progress => self.deferred_progress_inputs.contains(&input),
+            DeferredPriority::Normal => self.deferred_inputs.contains(&input),
         };
-        if queue.contains(&input) {
+        if duplicate {
             return Ok(true);
         }
         match priority {
@@ -4021,11 +4967,9 @@ impl SumeragiV2Adapter {
                 // `contains` above bounds repeated retransmit ticks for one tag,
                 // while the one-shot absolute timeout is never dropped merely
                 // because the normal deferred lane is full.
-                if queue.len() >= MAX_DEFERRED_INPUTS {
+                if self.deferred_completions.len() >= MAX_DEFERRED_INPUTS {
                     return Err(AdapterError::DeferredCompletionCapacityExceeded);
                 }
-                queue.push_back(input);
-                Ok(true)
             }
             DeferredPriority::Progress => {
                 // The progress lane is partitioned before admission: one slot
@@ -4046,29 +4990,47 @@ impl SumeragiV2Adapter {
                     | DeferredProgressClass::CommitCertificate
                     | DeferredProgressClass::TimeoutCertificate => 1,
                 };
-                if queue.iter().any(|queued| {
+                if self.deferred_progress_inputs.iter().any(|queued| {
                     deferred_progress_owner(queued)
                         .is_some_and(|queued_owner| queued_owner == owner)
                 }) {
                     return Ok(false);
                 }
-                let class_len = queue
+                let class_len = self
+                    .deferred_progress_inputs
                     .iter()
                     .filter(|queued| deferred_progress_class(queued) == Some(class))
                     .count();
-                if class_len >= class_capacity || queue.len() >= progress_capacity {
+                if class_len >= class_capacity
+                    || self.deferred_progress_inputs.len() >= progress_capacity
+                {
                     return Ok(false);
                 }
-                queue.push_back(input);
-                Ok(true)
             }
             DeferredPriority::Normal => {
-                if queue.len() < MAX_DEFERRED_INPUTS {
-                    queue.push_back(input);
-                    Ok(true)
-                } else {
-                    Ok(false)
+                if self.deferred_inputs.len() >= MAX_DEFERRED_INPUTS {
+                    return Ok(false);
                 }
+            }
+        }
+        input.admission_capability = self.mint_deferred_admission_ordinal()?;
+        input.admission_ordinal = input.admission_capability.ordinal;
+        match priority {
+            DeferredPriority::Completion => self.deferred_completions.push_back(input),
+            DeferredPriority::Progress => self.deferred_progress_inputs.push_back(input),
+            DeferredPriority::Normal => self.deferred_inputs.push_back(input),
+        }
+        Ok(true)
+    }
+
+    fn mint_deferred_admission_ordinal(
+        &mut self,
+    ) -> Result<DeferredAdmissionCapability, AdapterError> {
+        match self.deferred_admission_ordinals.mint() {
+            Ok(ordinal) => Ok(ordinal),
+            Err(error) => {
+                self.fail_closed = true;
+                Err(error)
             }
         }
     }
@@ -4095,21 +5057,44 @@ impl SumeragiV2Adapter {
     /// Returning one macro-step preserves the executor's fixed retained-batch
     /// bound. Repeated serialized runtime turns decrease the finite deferred
     /// rank, while `pop_deferred_next` keeps the three classes round-robin.
+    #[cfg(test)]
     pub(crate) fn drain_deferred(&mut self) -> Result<Vec<AdapterEffect>, AdapterError> {
+        self.drain_deferred_with_evidence()
+            .map(|selection| selection.map_or_else(Vec::new, |(effects, _)| effects))
+    }
+
+    /// Service one deferred transition and return its exact process-local
+    /// ownership token with the resulting effects.
+    ///
+    /// `None` means no owner was serviceable. Production runtime code treats a
+    /// `None` after observing [`Self::deferred_work_is_serviceable`] as a
+    /// fail-closed source-fidelity violation.
+    pub(crate) fn drain_deferred_with_evidence(
+        &mut self,
+    ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
         self.ensure_ingress()?;
         if !self.deferred_work_is_serviceable() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
-        let Some(mut input) = self.pop_deferred_next() else {
-            return Ok(Vec::new());
+        let Some(selection) = self.pop_deferred_next()? else {
+            return Ok(None);
         };
-        if input.retag_authenticated_ingress {
-            let current_tag = self.reducer.current_tag();
-            input.event = input.event.retag_authenticated_ingress(current_tag);
-            if let Some(admission) = &mut input.admission {
-                admission.generation = current_tag.generation();
-            }
+        if !selection.evidence.validate_exact()
+            || !selection
+                .evidence
+                .matches_effective_event(&selection.input.event)
+            || !selection
+                .evidence
+                .belongs_to(&self.deferred_admission_ordinals)
+            || !selection
+                .evidence
+                .admission_capability
+                .claim_adapter_service_once()
+        {
+            self.fail_closed = true;
+            return Err(AdapterError::DeferredServiceOwnershipViolation);
         }
+        let input = selection.input;
         let event = input.event;
         let observed_event = event.clone();
         let outcome = self.reducer.step(event)?;
@@ -4128,7 +5113,7 @@ impl SumeragiV2Adapter {
         let effects = self.drive_effects(outcome.into_effects())?;
         self.publish_status()?;
         self.log_body_progress(&observed_event, disposition, effects.len());
-        Ok(effects)
+        Ok(Some((effects, selection.evidence)))
     }
 
     /// Fail closed when the deferred-service predicate and reducer Busy
@@ -4138,7 +5123,20 @@ impl SumeragiV2Adapter {
         AdapterError::DeferredServiceContractViolation
     }
 
-    fn pop_deferred_next(&mut self) -> Option<DeferredInput> {
+    fn deferred_queue_lengths(&self) -> DeferredQueueLengths {
+        DeferredQueueLengths {
+            completion: u64::try_from(self.deferred_completions.len())
+                .expect("bounded completion queue length fits u64"),
+            progress: u64::try_from(self.deferred_progress_inputs.len())
+                .expect("bounded progress queue length fits u64"),
+            normal: u64::try_from(self.deferred_inputs.len())
+                .expect("bounded normal queue length fits u64"),
+        }
+    }
+
+    fn pop_deferred_next(&mut self) -> Result<Option<DeferredServiceSelection>, AdapterError> {
+        let queue_lengths_before = self.deferred_queue_lengths();
+        let service_cursor_before = self.next_deferred_priority;
         for _ in 0..3 {
             let priority = self.next_deferred_priority;
             self.next_deferred_priority = self.next_deferred_priority.next();
@@ -4164,12 +5162,59 @@ impl SumeragiV2Adapter {
                 if skipped_priority != priority
                     && let Some(oldest) = oldest
                 {
-                    oldest.eligible_skips = oldest.eligible_skips.saturating_add(1);
+                    let Some(next_debt) = oldest.eligible_skips.checked_add(1) else {
+                        self.fail_closed = true;
+                        return Err(AdapterError::DeferredServiceDebtOverflow);
+                    };
+                    oldest.eligible_skips = next_debt;
                 }
             }
-            return Some(selected);
+            let mut input = selected;
+            let original_event = input.event.clone();
+            let original_admission = input.admission;
+            let original_tag = deferred_event_tag(&original_event);
+            let retag = if input.retag_authenticated_ingress {
+                let current_tag = self.reducer.current_tag();
+                input.event = input.event.retag_authenticated_ingress(current_tag);
+                if let Some(admission) = &mut input.admission {
+                    admission.generation = current_tag.generation();
+                }
+                DeferredRetagRelation::AuthenticatedIngress {
+                    from: original_tag,
+                    to: current_tag,
+                }
+            } else {
+                DeferredRetagRelation::Unchanged
+            };
+            let queue_lengths_after = self.deferred_queue_lengths();
+            let mut evidence = DeferredServiceEvidence {
+                admission_ordinal: input.admission_ordinal,
+                priority,
+                event_kind: deferred_event_kind(&original_event),
+                original_tag,
+                effective_tag: deferred_event_tag(&input.event),
+                retag,
+                protected_progress: input.protected_progress,
+                eligible_skips_before: input.eligible_skips,
+                eligible_skips_after: 0,
+                queue_lengths_before,
+                queue_lengths_after,
+                total_len_before: queue_lengths_before.total(),
+                total_len_after: queue_lengths_after.total(),
+                service_cursor_before,
+                service_cursor_after: self.next_deferred_priority,
+                projection_hash: Hash::new([]),
+                original_event,
+                effective_event: input.event.clone(),
+                completion_evidence: input.completion_evidence.clone(),
+                original_admission,
+                effective_admission: input.admission,
+                admission_capability: input.admission_capability.clone(),
+            };
+            evidence.projection_hash = deferred_service_projection_hash(&evidence);
+            return Ok(Some(DeferredServiceSelection { input, evidence }));
         }
-        None
+        Ok(None)
     }
 
     fn publish_status(&mut self) -> Result<(), AdapterError> {
@@ -6030,6 +7075,7 @@ mod tests {
                 build: Hash::new(b"deferred build"),
                 config: Hash::new(b"deferred config"),
             },
+            DeferredAdmissionOrdinalSource::new(1),
         )
         .expect("open replayed adapter without status publication");
 
@@ -6425,6 +7471,7 @@ mod tests {
             [0x62; 32],
             fingerprints(),
             Box::new(TestAggregator),
+            DeferredAdmissionOrdinalSource::new(1),
         )
         .expect("open successor adapter");
         assert!(startup.is_empty());
@@ -6616,6 +7663,10 @@ mod tests {
         (durable, validated)
     }
 
+    fn deferred_admission_ordinals() -> DeferredAdmissionOrdinalSource {
+        DeferredAdmissionOrdinalSource::new(1)
+    }
+
     fn open_test(
         directory: &TempDir,
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
@@ -6627,6 +7678,7 @@ mod tests {
             [0x11; 32],
             fingerprints(),
             Box::new(TestAggregator),
+            deferred_admission_ordinals(),
         )
     }
 
@@ -6655,6 +7707,7 @@ mod tests {
             [0x22; 32],
             fingerprints(),
             Box::new(TestAggregator),
+            deferred_admission_ordinals(),
         )
     }
 
@@ -7453,6 +8506,8 @@ mod tests {
             .expect("convert authenticated proposal before reducer reports Busy");
         let deferred_tag = adapter.current_tag();
         adapter.deferred_inputs.push_back(DeferredInput {
+            admission_ordinal: 1,
+            admission_capability: DeferredAdmissionCapability::for_test(1),
             event: reducer::Event::ProposalReceived {
                 tag: deferred_tag,
                 proposal: deferred,
@@ -7989,6 +9044,12 @@ mod tests {
                 ..
             })
         ));
+        let first_completion_ordinal = adapter
+            .deferred_completions
+            .front()
+            .expect("first completion retains an exact owner")
+            .admission_ordinal;
+        let next_ordinal_before_duplicate = adapter.deferred_admission_ordinals.next_for_test();
 
         let exact_retry = adapter
             .local_proposal_ready(proposal_tag, manifest, &durable, &validated)
@@ -8002,6 +9063,20 @@ mod tests {
             adapter.deferred_body_pipeline_completion_ownership(proposal_tag, &evidence),
             (1, 1),
             "an exact retry cannot duplicate completion ownership"
+        );
+        assert_eq!(
+            adapter
+                .deferred_completions
+                .front()
+                .expect("duplicate retains the original owner")
+                .admission_ordinal,
+            first_completion_ordinal,
+            "an exact duplicate must not mint or reset its admission ordinal"
+        );
+        assert_eq!(
+            adapter.deferred_admission_ordinals.next_for_test(),
+            next_ordinal_before_duplicate,
+            "duplicate coalescing must not consume an actor ordinal"
         );
 
         let completed = adapter
@@ -8149,6 +9224,7 @@ mod tests {
             reducer::Generation::new(1),
             [0x22; 32],
             fingerprints(),
+            deferred_admission_ordinals(),
         )
         .expect("replay leader without publishing status");
         assert!(matches!(
@@ -8353,6 +9429,7 @@ mod tests {
                 [0x99; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
+                deferred_admission_ordinals(),
             ),
             Err(AdapterError::SafetyWal(SafetyWalError::IdentityMismatch {
                 field: "consensus key hash",
@@ -8439,6 +9516,7 @@ mod tests {
                 [0x22; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
+                deferred_admission_ordinals(),
             )
             .expect("open adapter");
             assert!(startup.is_empty());
@@ -8468,6 +9546,7 @@ mod tests {
                 [0x22; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
+                deferred_admission_ordinals(),
             ),
             Err(AdapterError::Cryptography(_))
         ));
@@ -8741,6 +9820,7 @@ mod tests {
                 [0x22; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
+                deferred_admission_ordinals(),
             )
             .expect("open adapter");
             assert!(startup.is_empty());
@@ -8769,6 +9849,7 @@ mod tests {
                 [0x22; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
+                deferred_admission_ordinals(),
             ),
             Err(AdapterError::Cryptography(_))
         ));
@@ -10718,12 +11799,375 @@ mod tests {
     }
 
     #[test]
+    fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
+        let source = DeferredAdmissionOrdinalSource::new(0);
+        let tag = reducer::EventTag::new(1, 0, reducer::Generation::new(1));
+        let first = DeferredServiceEvidence::completion_for_test(
+            &source,
+            tag,
+            1,
+            DeferredPriority::Completion,
+        );
+        let second = DeferredServiceEvidence::completion_for_test(
+            &source,
+            tag,
+            1,
+            DeferredPriority::Completion,
+        );
+
+        assert_eq!(first.admission_ordinal, 0);
+        assert_eq!(second.admission_ordinal, 1);
+        assert!(first.validate_exact());
+        assert!(first.belongs_to(&source));
+        assert!(first.claim_adapter_service_for_test());
+        assert!(!first.claim_adapter_service_for_test());
+        assert!(first.claim_runtime_handoff_once());
+        assert!(!first.claim_runtime_handoff_once());
+        assert!(first.service_handoff_is_complete());
+        assert!(second.claim_adapter_service_for_test());
+        assert!(second.claim_runtime_handoff_once());
+    }
+
+    #[test]
+    fn deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        adapter.deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(u128::MAX - 1);
+        let context = adapter.wire_context.clone();
+        let proposer = context.leader(0);
+        let first = proposal(&context, proposer, subject(0xD1));
+        let second = proposal(&context, proposer, subject(0xD2));
+        let wire::ConsensusMessageV2Payload::Proposal(first) = first.payload else {
+            unreachable!("proposal fixture")
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(second) = second.payload else {
+            unreachable!("proposal fixture")
+        };
+        let tag = adapter.current_tag();
+
+        adapter
+            .defer_body_available_for_test(tag, &first.manifest)
+            .expect("last safely advanceable ordinal is admitted");
+        assert_eq!(
+            adapter
+                .deferred_completions
+                .front()
+                .expect("first owner remains queued")
+                .admission_ordinal,
+            u128::MAX - 1
+        );
+        assert!(matches!(
+            adapter.defer_body_available_for_test(tag, &second.manifest),
+            Err(AdapterError::DeferredAdmissionOrdinalExhausted)
+        ));
+        assert!(adapter.fail_closed);
+        assert_eq!(adapter.deferred_completions.len(), 1);
+        assert_eq!(
+            adapter.deferred_admission_ordinals.next_for_test(),
+            u128::MAX,
+            "exhaustion cannot wrap the actor source to a stale ordinal"
+        );
+    }
+
+    #[test]
+    fn deferred_actor_source_never_aliases_across_adapter_instances() {
+        let first_directory = TempDir::new().expect("first temporary directory");
+        let second_directory = TempDir::new().expect("second temporary directory");
+        let source = DeferredAdmissionOrdinalSource::new(0);
+        let open = |directory: &TempDir, source: DeferredAdmissionOrdinalSource| {
+            SumeragiV2Adapter::open_with_aggregator(
+                directory.path().join("shared-ordinal-safety.wal"),
+                verified_genesis(context()),
+                Some(0),
+                reducer::Generation::new(1),
+                [0xD3; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                source,
+            )
+        };
+        let (mut first, first_startup) =
+            open(&first_directory, source.clone()).expect("open first adapter tenure");
+        let (mut second, second_startup) =
+            open(&second_directory, source.clone()).expect("open second adapter tenure");
+        assert!(first_startup.is_empty());
+        assert!(second_startup.is_empty());
+        let first_context = first.wire_context.clone();
+        let second_context = second.wire_context.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(first_proposal) =
+            proposal(&first_context, first_context.leader(0), subject(0xD4)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(second_proposal) =
+            proposal(&second_context, second_context.leader(0), subject(0xD5)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let first_tag = first.current_tag();
+        let second_tag = second.current_tag();
+        first
+            .defer_body_available_for_test(first_tag, &first_proposal.manifest)
+            .expect("first tenure admits owner zero");
+        second
+            .defer_body_available_for_test(second_tag, &second_proposal.manifest)
+            .expect("second tenure advances the same actor source");
+
+        let first_owner = first
+            .pop_deferred_next()
+            .expect("first tenure rank remains valid")
+            .expect("first tenure returns exact owner")
+            .evidence;
+        let second_owner = second
+            .pop_deferred_next()
+            .expect("second tenure rank remains valid")
+            .expect("second tenure returns exact owner")
+            .evidence;
+        assert_eq!(first_owner.admission_ordinal, 0);
+        assert_eq!(second_owner.admission_ordinal, 1);
+        assert_ne!(
+            first_owner.admission_ordinal,
+            second_owner.admission_ordinal
+        );
+        assert!(first_owner.belongs_to(&source));
+        assert!(second_owner.belongs_to(&source));
+        assert!(first_owner.validate_exact());
+        assert!(second_owner.validate_exact());
+    }
+
+    #[test]
+    fn deferred_service_evidence_rejects_every_owner_and_rank_mutation() {
+        let source = DeferredAdmissionOrdinalSource::new(0);
+        let foreign = DeferredAdmissionOrdinalSource::new(0);
+        let tag = reducer::EventTag::new(7, 2, reducer::Generation::new(3));
+        let evidence =
+            DeferredServiceEvidence::completion_for_test(&source, tag, 1, DeferredPriority::Normal);
+        assert!(evidence.validate_exact());
+        assert!(evidence.belongs_to(&source));
+        assert!(!evidence.belongs_to(&foreign));
+
+        let rejected = |mutated: DeferredServiceEvidence| {
+            assert!(!mutated.validate_exact());
+        };
+
+        let mut mutated = evidence.clone();
+        mutated.admission_ordinal = 1;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.priority = DeferredPriority::Progress;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.event_kind = DeferredEventKind::RetransmitElapsed;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.original_tag = reducer::EventTag::new(7, 3, reducer::Generation::new(3));
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.original_event = reducer::Event::RetransmitElapsed { tag };
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.protected_progress = true;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.eligible_skips_after = 1;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.service_cursor_after = DeferredPriority::Normal;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.service_cursor_before = DeferredPriority::Completion;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.queue_lengths_after.completion = 1;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.total_len_before = 2;
+        rejected(mutated);
+
+        let mut mutated = evidence.clone();
+        mutated.retag = DeferredRetagRelation::AuthenticatedIngress { from: tag, to: tag };
+        rejected(mutated);
+
+        let mut mutated = evidence;
+        mutated.projection_hash = Hash::new(b"wrong deferred projection");
+        rejected(mutated);
+    }
+
+    #[test]
+    fn deferred_authenticated_retry_retains_exact_original_and_effective_tags() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let context = adapter.wire_context.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) =
+            proposal(&context, context.leader(0), subject(0xD6)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let proposal = adapter
+            .registry
+            .proposal_to_core(&proposal, &context)
+            .expect("convert authenticated proposal");
+        let effective_tag = adapter.current_tag();
+        let original_tag = reducer::EventTag::new(
+            effective_tag.height(),
+            effective_tag.view().saturating_add(1),
+            effective_tag.generation(),
+        );
+        let admission_capability = adapter
+            .mint_deferred_admission_ordinal()
+            .expect("mint exact deferred owner");
+        adapter.deferred_inputs.push_back(DeferredInput {
+            admission_ordinal: admission_capability.ordinal,
+            admission_capability,
+            event: reducer::Event::ProposalReceived {
+                tag: original_tag,
+                proposal,
+            },
+            completion_evidence: None,
+            retag_authenticated_ingress: true,
+            priority: DeferredPriority::Normal,
+            protected_progress: false,
+            admission: None,
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        });
+        adapter.next_deferred_priority = DeferredPriority::Normal;
+
+        let selection = adapter
+            .pop_deferred_next()
+            .expect("authenticated retry rank remains valid")
+            .expect("select exact authenticated retry");
+        assert!(selection.evidence.validate_exact());
+        assert_eq!(selection.evidence.original_tag, original_tag);
+        assert_eq!(selection.evidence.effective_tag, effective_tag);
+        assert_eq!(
+            selection.evidence.retag,
+            DeferredRetagRelation::AuthenticatedIngress {
+                from: original_tag,
+                to: effective_tag,
+            }
+        );
+        assert!(
+            selection
+                .evidence
+                .matches_effective_event(&selection.input.event)
+        );
+    }
+
+    #[test]
+    fn deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_step() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let current = adapter.current_tag();
+        let stale = reducer::EventTag::new(
+            current.height().saturating_add(1),
+            current.view(),
+            current.generation(),
+        );
+        let capability = adapter
+            .mint_deferred_admission_ordinal()
+            .expect("mint exact adapter capability");
+        let input = |tag| DeferredInput {
+            admission_ordinal: capability.ordinal,
+            admission_capability: capability.clone(),
+            event: reducer::Event::TimeoutElapsed { tag },
+            completion_evidence: None,
+            retag_authenticated_ingress: false,
+            priority: DeferredPriority::Completion,
+            protected_progress: false,
+            admission: None,
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        };
+        adapter.deferred_completions.push_back(input(stale));
+        adapter
+            .deferred_completions
+            .push_back(input(reducer::EventTag::new(
+                stale.height().saturating_add(1),
+                stale.view(),
+                stale.generation(),
+            )));
+
+        let (_, first) = adapter
+            .drain_deferred_with_evidence()
+            .expect("first exact capability crosses the adapter")
+            .expect("first deferred owner is serviceable");
+        assert!(first.adapter_service_is_claimed());
+        assert!(!first.service_handoff_is_complete());
+        assert_eq!(
+            adapter
+                .ignore_counts
+                .get(&reducer::IgnoreReason::WrongHeight)
+                .copied(),
+            Some(1)
+        );
+        assert!(matches!(
+            adapter.drain_deferred_with_evidence(),
+            Err(AdapterError::DeferredServiceOwnershipViolation)
+        ));
+        assert_eq!(
+            adapter
+                .ignore_counts
+                .get(&reducer::IgnoreReason::WrongHeight)
+                .copied(),
+            Some(1),
+            "the replay is rejected before a second reducer transition"
+        );
+
+        let foreign_directory = TempDir::new().expect("foreign temporary directory");
+        let (mut foreign_adapter, foreign_startup) =
+            open_test(&foreign_directory).expect("open foreign adapter");
+        assert!(foreign_startup.is_empty());
+        let foreign_source = DeferredAdmissionOrdinalSource::new(0);
+        let foreign_capability = foreign_source.mint().expect("mint foreign capability");
+        let foreign_tag = reducer::EventTag::new(
+            foreign_adapter.current_tag().height().saturating_add(1),
+            foreign_adapter.current_tag().view(),
+            foreign_adapter.current_tag().generation(),
+        );
+        foreign_adapter
+            .deferred_completions
+            .push_back(DeferredInput {
+                admission_ordinal: foreign_capability.ordinal,
+                admission_capability: foreign_capability,
+                event: reducer::Event::TimeoutElapsed { tag: foreign_tag },
+                completion_evidence: None,
+                retag_authenticated_ingress: false,
+                priority: DeferredPriority::Completion,
+                protected_progress: false,
+                admission: None,
+                admitted_at: Instant::now(),
+                eligible_skips: 0,
+            });
+        assert!(matches!(
+            foreign_adapter.drain_deferred_with_evidence(),
+            Err(AdapterError::DeferredServiceOwnershipViolation)
+        ));
+        assert!(foreign_adapter.ignore_counts.is_empty());
+    }
+
+    #[test]
     fn deferred_service_debt_counts_only_oldest_skipped_classes() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
         let input = |priority| DeferredInput {
+            admission_ordinal: priority.code().into(),
+            admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag },
             completion_evidence: None,
             retag_authenticated_ingress: false,
@@ -10755,13 +12199,48 @@ mod tests {
 
         let selected = adapter
             .pop_deferred_next()
+            .expect("deferred service debt remains representable")
             .expect("completion receives its turn");
-        assert_eq!(selected.priority, DeferredPriority::Completion);
+        assert_eq!(selected.evidence.priority, DeferredPriority::Completion);
+        assert!(selected.evidence.validate_exact());
         assert_eq!(adapter.deferred_completions[0].eligible_skips, 0);
         assert_eq!(adapter.deferred_progress_inputs[0].eligible_skips, 1);
         assert_eq!(adapter.deferred_progress_inputs[1].eligible_skips, 0);
         assert_eq!(adapter.deferred_inputs[0].eligible_skips, 1);
         assert_eq!(adapter.deferred_inputs[1].eligible_skips, 0);
+    }
+
+    #[test]
+    fn deferred_service_debt_overflow_is_typed_and_fail_closed() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let input = |ordinal, priority, eligible_skips| DeferredInput {
+            admission_ordinal: ordinal,
+            admission_capability: DeferredAdmissionCapability::for_test(ordinal),
+            event: reducer::Event::TimeoutElapsed { tag },
+            completion_evidence: None,
+            retag_authenticated_ingress: false,
+            priority,
+            protected_progress: false,
+            admission: None,
+            admitted_at: Instant::now(),
+            eligible_skips,
+        };
+        adapter
+            .deferred_completions
+            .push_back(input(1, DeferredPriority::Completion, 0));
+        adapter
+            .deferred_progress_inputs
+            .push_back(input(2, DeferredPriority::Progress, u64::MAX));
+        adapter.next_deferred_priority = DeferredPriority::Completion;
+
+        assert!(matches!(
+            adapter.pop_deferred_next(),
+            Err(AdapterError::DeferredServiceDebtOverflow)
+        ));
+        assert!(adapter.fail_closed);
     }
 
     #[test]
@@ -10771,6 +12250,8 @@ mod tests {
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
         let input = |priority| DeferredInput {
+            admission_ordinal: priority.code().into(),
+            admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag },
             completion_evidence: None,
             retag_authenticated_ingress: false,
@@ -10797,10 +12278,12 @@ mod tests {
 
         let selected = (0..6)
             .map(|_| {
-                adapter
+                let selection = adapter
                     .pop_deferred_next()
-                    .expect("every nonempty class receives both turns")
-                    .priority
+                    .expect("deferred service debt remains representable")
+                    .expect("every nonempty class receives both turns");
+                assert!(selection.evidence.validate_exact());
+                selection.evidence.priority
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -10814,7 +12297,12 @@ mod tests {
                 DeferredPriority::Normal,
             ]
         );
-        assert!(adapter.pop_deferred_next().is_none());
+        assert!(
+            adapter
+                .pop_deferred_next()
+                .expect("empty rank remains valid")
+                .is_none()
+        );
     }
 
     #[test]
@@ -10829,6 +12317,8 @@ mod tests {
             current.generation(),
         );
         let input = |priority| DeferredInput {
+            admission_ordinal: priority.code().into(),
+            admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag: stale },
             completion_evidence: None,
             retag_authenticated_ingress: false,
@@ -10933,12 +12423,20 @@ mod tests {
             qc(wire::GlobalPhase::Prepare, 0xE0),
             qc(wire::GlobalPhase::Commit, 0xE1),
         ];
-        for certificate in deferred_qcs {
+        for (ordinal, certificate) in deferred_qcs.into_iter().enumerate() {
             let certificate = adapter
                 .registry
                 .qc_to_core(&certificate, &adapter.wire_context)
                 .expect("convert certificate lane fixture");
             adapter.deferred_progress_inputs.push_back(DeferredInput {
+                admission_ordinal: u128::try_from(ordinal)
+                    .expect("bounded fixture ordinal fits u128")
+                    .saturating_add(1),
+                admission_capability: DeferredAdmissionCapability::for_test(
+                    u128::try_from(ordinal)
+                        .expect("bounded fixture ordinal fits u128")
+                        .saturating_add(1),
+                ),
                 event: reducer::Event::QuorumCertificateReceived { tag, certificate },
                 completion_evidence: None,
                 retag_authenticated_ingress: true,
@@ -10962,6 +12460,8 @@ mod tests {
             .tc_to_core(&deferred_timeout, &adapter.wire_context)
             .expect("convert timeout-certificate lane fixture");
         adapter.deferred_progress_inputs.push_back(DeferredInput {
+            admission_ordinal: 4,
+            admission_capability: DeferredAdmissionCapability::for_test(4),
             event: reducer::Event::TimeoutCertificateReceived {
                 tag,
                 certificate: deferred_timeout,
@@ -11112,6 +12612,10 @@ mod tests {
                 .vote_to_core(&filler_vote, &adapter.wire_context)
                 .expect("convert locked-vote capacity fixture");
             fillers.push_back(DeferredInput {
+                admission_ordinal: u128::from(signer).saturating_add(1),
+                admission_capability: DeferredAdmissionCapability::for_test(
+                    u128::from(signer).saturating_add(1),
+                ),
                 event: reducer::Event::VoteReceived {
                     tag: replay_tag,
                     vote: filler_vote,
@@ -11478,6 +12982,8 @@ mod tests {
             .expect("convert certificate lane fixture");
         let tag = adapter.current_tag();
         let certificate_input = DeferredInput {
+            admission_ordinal: 1,
+            admission_capability: DeferredAdmissionCapability::for_test(1),
             event: reducer::Event::TimeoutCertificateReceived {
                 tag,
                 certificate: timeout,
@@ -12080,6 +13586,7 @@ mod tests {
             [0x83; 32],
             fingerprints(),
             Box::new(TestAggregator),
+            deferred_admission_ordinals(),
         )
         .expect("open observing adapter");
         assert!(startup.is_empty());
@@ -12544,6 +14051,7 @@ mod tests {
             [0x33; 32],
             fingerprints(),
             Box::new(TestAggregator),
+            deferred_admission_ordinals(),
         )
         .expect("open observing adapter");
         assert!(startup.is_empty());
@@ -12596,6 +14104,8 @@ mod tests {
         for signer in 0_u32..3 {
             if signer == 2 {
                 adapter.deferred_completions.push_back(DeferredInput {
+                    admission_ordinal: 1,
+                    admission_capability: DeferredAdmissionCapability::for_test(1),
                     event: reducer::Event::BodyAvailable {
                         tag: original_tag,
                         round: core_round,

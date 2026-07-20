@@ -11,10 +11,9 @@ private val DEFAULT_AUTHORITY = AccountAddress
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
- * The structure mirrors the Rust data model sufficiently for encoding and signing. Instruction
- * handling currently focuses on the IVM bytecode variant; support for general instruction lists will
- * be added alongside dedicated builders. `authority` must use the canonical I105 account
- * literal.
+ * The structure mirrors the Rust data model sufficiently for encoding and signing, including
+ * instruction lists, by-reference contract calls, IVM bytecode, and flat mixed batches. `authority`
+ * must use the canonical I105 account literal.
  */
 class TransactionPayload(
     val chainId: String = DEFAULT_CHAIN_ID,

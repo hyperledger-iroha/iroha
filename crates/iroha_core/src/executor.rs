@@ -53,9 +53,10 @@ use iroha_data_model::{
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
     transaction::{
-        Executable, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, SignedTransaction,
-        executable::ContractInvocation, signed::TransactionPayload,
+        Executable, ExecutableBatchItem, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
+        SignedTransaction, executable::ContractInvocation, signed::TransactionPayload,
     },
+    trigger::TriggerId,
 };
 use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
@@ -82,7 +83,7 @@ use crate::{
     settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
-        ivm::cache::{ExecutableProgramSummary, IvmCache},
+        ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
     },
     state::{
         StateReadOnly, StateTransaction, WorldReadOnly, fee_sponsor_revision_safe_activation_height,
@@ -1566,6 +1567,32 @@ fn fee_sponsor_operations(
             code_hash: invocation.expected_code_hash,
             entrypoint: invocation.entrypoint.clone(),
         }]),
+        Executable::Batch(items) => items
+            .iter()
+            .map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => {
+                    let wire_id = iroha_data_model::isi::instruction_wire_id(instruction)
+                        .ok_or_else(|| {
+                            NexusFeeAdmissionError::sponsor(
+                                FeeRejectionCode::InvalidProgramConfiguration,
+                                "fee sponsor program could not resolve native instruction wire id",
+                            )
+                        })?
+                        .to_owned();
+                    Ok(FeeSponsorOperation::NativeInstruction {
+                        wire_id,
+                        asset_definition_id: fee_sponsor_asset_transfer_definition_id(instruction),
+                    })
+                }
+                ExecutableBatchItem::ContractCall(invocation) => {
+                    Ok(FeeSponsorOperation::ContractCall {
+                        contract_address: invocation.contract_address.clone(),
+                        code_hash: invocation.expected_code_hash,
+                        entrypoint: invocation.entrypoint.clone(),
+                    })
+                }
+            })
+            .collect(),
         Executable::Ivm(bytecode) => Ok(vec![FeeSponsorOperation::Ivm {
             code_hash: iroha_crypto::Hash::new(bytecode.as_ref()),
             proved: false,
@@ -2307,6 +2334,28 @@ pub struct ContractCallExecutionContext {
     pub(crate) entrypoint_permission: Option<String>,
     pub(crate) args: Json,
     pub(crate) argument_record: Option<ivm::PreparedArgumentRecord>,
+}
+
+/// Cache-independent inputs resolved for one deployed-contract invocation.
+///
+/// Keeping the prepared summary owned lets trigger execution release the outer IVM cache mutex
+/// before guest-emitted instructions are applied and potentially invoke another VM-backed trigger.
+#[derive(Debug)]
+pub(crate) struct ResolvedContractInvocation {
+    identity: code::BoundContractIdentity,
+    contract_subject: AccountId,
+    summary: ProgramSummary,
+}
+
+/// Effects and metering information returned by one deployed-contract invocation.
+#[derive(Debug)]
+pub(crate) struct ContractInvocationOutcome {
+    /// Gas consumed by the VM, including execution that ended in a later artifact error.
+    pub(crate) gas_used: u64,
+    /// Guest-emitted instructions that were successfully applied.
+    pub(crate) executed_instructions: Vec<InstructionBox>,
+    /// Trigger-local NFT sequence after successful guest execution.
+    pub(crate) next_nft_sequence: Option<u64>,
 }
 
 impl ContractCallExecutionContext {
@@ -3267,6 +3316,33 @@ fn fee_bound_for_admission_payload(
                 })?;
             (proved.overlay.len(), gas_limit)
         }
+        Executable::Batch(items) => {
+            let instructions: Vec<_> = items
+                .iter()
+                .filter_map(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                    ExecutableBatchItem::ContractCall(_) => None,
+                })
+                .collect();
+            let contains_contract_call = items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)));
+            let gas_used = if contains_contract_call {
+                payload
+                    .fee_payment
+                    .gas_limit()
+                    .map(core::num::NonZeroU64::get)
+                    .ok_or_else(|| {
+                        NexusFeeAdmissionError::rejected(
+                            FeeRejectionCode::InvalidGasLimit,
+                            "missing gas limit in fee payment intent",
+                        )
+                    })?
+            } else {
+                isi_gas::meter_instructions(&instructions)
+            };
+            (instructions.len(), gas_used)
+        }
     };
 
     Ok((tx_bytes_len, instruction_count, gas_used))
@@ -3961,6 +4037,11 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             overlay.instruction_count(),
             true,
         ),
+        Executable::Batch(_) => {
+            return Err(ValidationFail::InternalError(
+                "mixed batch reached overlay fee settlement".to_owned(),
+            ));
+        }
     };
 
     if require_gas_limit && gas_limit_md.is_none() {
@@ -4026,6 +4107,102 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         )?;
     }
 
+    Ok(())
+}
+
+/// Charge fees for a rejected mixed batch after its staged business effects were discarded.
+///
+/// Mixed batches execute directly against a live [`StateTransaction`] instead of producing a
+/// [`crate::pipeline::overlay::TxOverlay`]. The caller must therefore pass the gas captured before
+/// dropping that failed transaction and invoke this helper on a fresh fee-only transaction.
+pub(crate) fn charge_fees_for_rejected_live_batch(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    gas_used: u64,
+) -> Result<(), ValidationFail> {
+    if is_initial_genesis_context(state_transaction) {
+        return Ok(());
+    }
+
+    let instruction_count = match transaction.instructions() {
+        Executable::Batch(items) => items
+            .iter()
+            .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
+            .count(),
+        _ => {
+            return Err(ValidationFail::InternalError(
+                "non-batch transaction reached rejected live-batch fee settlement".to_owned(),
+            ));
+        }
+    };
+    let tx_bytes_len = to_bytes(transaction.payload())
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            ValidationFail::InternalError(format!(
+                "failed to encode transaction payload for fee metering: {err}"
+            ))
+        })?;
+    let fee_sponsor = transaction
+        .fee_payment_intent()
+        .sponsor_program()
+        .map(|(program_id, _)| program_id.clone());
+    let skip_nexus_fee = fee_exempt_transaction(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+    );
+    let gas_asset_opt = transaction
+        .fee_payment_intent()
+        .charge_limits()
+        .iter()
+        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
+        .map(|limit| limit.asset_definition_id.canonical_address());
+    let tx_hash = transaction.hash();
+    let settlement_source_id = {
+        let mut bytes = [0_u8; iroha_crypto::Hash::LENGTH];
+        bytes.copy_from_slice(tx_hash.as_ref());
+        bytes
+    };
+
+    Executor::settle_live_transaction_fees(
+        state_transaction,
+        authority,
+        transaction,
+        tx_hash,
+        settlement_source_id,
+        gas_used,
+        instruction_count,
+        tx_bytes_len,
+        gas_asset_opt,
+        fee_sponsor,
+        skip_nexus_fee,
+    )
+}
+
+fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
+    instructions.iter().fold(0_u64, |total, instruction| {
+        total.saturating_add(u64::try_from(instruction.encode().len()).unwrap_or(u64::MAX))
+    })
+}
+
+fn enforce_live_batch_overlay_limits(
+    max_instructions: usize,
+    max_bytes: u64,
+    instruction_count: usize,
+    byte_size: u64,
+) -> Result<(), ValidationFail> {
+    if max_instructions > 0 && instruction_count > max_instructions {
+        return Err(ValidationFail::NotPermitted(format!(
+            "overlay exceeds max instructions: {instruction_count} > {max_instructions}"
+        )));
+    }
+    if max_bytes > 0 && byte_size > max_bytes {
+        return Err(ValidationFail::NotPermitted(format!(
+            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
+        )));
+    }
     Ok(())
 }
 
@@ -5176,6 +5353,317 @@ impl Executor {
 
         Ok(())
     }
+
+    /// Resolve the cache-bound inputs for one deployed-contract invocation.
+    ///
+    /// The returned value owns its prepared-program handle and can therefore be executed after
+    /// the caller releases any mutex guard used to access `ivm_cache`.
+    pub(crate) fn resolve_contract_invocation(
+        &self,
+        state_transaction: &StateTransaction<'_, '_>,
+        call: &ContractInvocation,
+        ivm_cache: &mut IvmCache,
+    ) -> Result<ResolvedContractInvocation, ValidationFail> {
+        let identity =
+            code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        call.contract_address
+                    ))
+                })?;
+        ensure_contract_invocation_code_hash(call, identity.code_hash)?;
+        let contract_subject =
+            code::fetch_bound_contract_subject(state_transaction, &identity.contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        identity.contract_address
+                    ))
+                })?;
+        let code_bytes = state_transaction
+            .world
+            .contract_code()
+            .get(&identity.code_hash)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "contract bytecode `{}` not found in WSV",
+                    identity.code_hash
+                ))
+            })?;
+        let summary = if let Some(summary) = ivm_cache
+            .cached_program_summary(identity.code_hash)
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+        {
+            summary
+        } else {
+            ivm_cache
+                .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+        };
+        if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+            return Err(ValidationFail::NotPermitted(format!(
+                "cached contract bytecode `{}` does not match live WSV",
+                identity.code_hash
+            )));
+        }
+        Ok(ResolvedContractInvocation {
+            identity,
+            contract_subject,
+            summary,
+        })
+    }
+
+    /// Execute one deployed-contract invocation against the current transaction view.
+    ///
+    /// Fee settlement and block-gas accounting deliberately remain with the enclosing
+    /// executable. This lets a mixed batch invoke this helper multiple times while sharing one
+    /// signed gas limit and settling exactly once.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn execute_contract_invocation(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        call: &ContractInvocation,
+        ivm_cache: &mut IvmCache,
+        effective_limit: u64,
+        logical_time_ms: u64,
+        trigger_context: Option<(&TriggerId, u64)>,
+    ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
+        self.execute_resolved_contract_invocation(
+            state_transaction,
+            authority,
+            call,
+            resolved,
+            effective_limit,
+            logical_time_ms,
+            trigger_context,
+        )
+    }
+
+    /// Execute a previously resolved deployed-contract invocation without accessing `IvmCache`.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn execute_resolved_contract_invocation(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        call: &ContractInvocation,
+        resolved: ResolvedContractInvocation,
+        effective_limit: u64,
+        logical_time_ms: u64,
+        trigger_context: Option<(&TriggerId, u64)>,
+    ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+
+        let ResolvedContractInvocation {
+            identity,
+            contract_subject,
+            summary,
+        } = resolved;
+        let effective_cycles =
+            validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        let effective_limit = effective_limit.min(
+            crate::smartcontracts::ivm::gas_limit_for_cycles(effective_cycles),
+        );
+        let manifest = state_transaction
+            .world
+            .contract_manifests()
+            .get(&identity.code_hash)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "contract instance `{}` has no manifest",
+                    identity.contract_address
+                ))
+            })?;
+        crate::smartcontracts::ivm::validate_manifest_hashes(
+            manifest,
+            summary.code_hash,
+            summary.abi_hash,
+        )
+        .map_err(ValidationFail::IvmAdmission)?;
+        let lifecycle_transition = validate_prepared_contract_lifecycle_call(
+            &state_transaction.world,
+            &call.contract_address,
+            identity.code_hash,
+            summary.prepared_contract(),
+            &call.entrypoint,
+        )?;
+        let entrypoint_authorization = authorize_prepared_contract_selector(
+            &state_transaction.world,
+            authority,
+            summary.prepared_contract(),
+            &call.entrypoint,
+            &identity,
+        )?;
+        let contract_call_context = parse_prepared_contract_invocation_execution_context(
+            call,
+            summary.prepared_contract(),
+            identity.contract_alias.clone(),
+            contract_subject,
+            effective_limit,
+        )?;
+        let mut runtime = summary
+            .checkout_runtime(effective_limit)
+            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+        runtime.set_max_cycles(effective_cycles.get());
+        runtime.set_gas_limit(effective_limit);
+        if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
+            argument_record
+                .precharge_vm(&mut runtime)
+                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+        }
+        if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
+            let code_len = runtime.memory.code_len();
+            runtime.set_register(1, code_len);
+            runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                let selector = contract_call_context
+                    .entrypoint
+                    .as_deref()
+                    .unwrap_or("main");
+                ValidationFail::NotPermitted(format!(
+                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                ))
+            })?;
+        }
+        let contract_runtime_context = contract_call_context.runtime_context();
+        let accounts = state_transaction.accounts_snapshot();
+        let mut host = CoreCoreHost::with_accounts_and_argument_record(
+            authority.clone(),
+            Arc::clone(&accounts),
+            contract_call_context.argument_record,
+        );
+        host.set_prepared_contract_cache(summary.prepared_contract_cache());
+        // User contract calls execute before the enclosing block has a finalized creation
+        // timestamp, so their caller supplies the deterministic logical time. Trigger callers
+        // additionally bind the trigger id and deterministic NFT sequence base.
+        host.set_block_time_ms(logical_time_ms);
+        if let Some((trigger_id, nft_seq_base)) = trigger_context {
+            host.set_trigger_id(trigger_id.clone());
+            host.set_nft_seq_base(nft_seq_base);
+        }
+        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+        host.set_zk_config(&state_transaction.zk);
+        host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+        host.set_query_state(state_transaction);
+        host.set_contract_runtime_context(contract_runtime_context.clone());
+        host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
+        if let Some(pending) = lifecycle_transition {
+            host.set_contract_lifecycle_transition(&call.contract_address, pending);
+        }
+        host.set_chain_id(&state_transaction.chain_id);
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(state_transaction.telemetry.clone());
+        host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+            .map_err(|err| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+            })?;
+        let run_result = runtime.run_with_host(&mut host);
+        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+        if let Err(err) = run_result {
+            let error =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
+            drop(host);
+            // Retain attempted VM work even when the guest traps. Live-batch rejection discards
+            // business state but uses this counter for block budgeting and rejected fees.
+            state_transaction.last_tx_gas_used =
+                state_transaction.last_tx_gas_used.saturating_add(gas_used);
+            return Err(error);
+        }
+        let next_nft_sequence = trigger_context.map(|_| host.next_nft_sequence());
+        let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+            crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                context,
+                summary.prepared_contract().artifact(),
+            )
+        });
+        let artifacts = host.into_execution_artifacts(contract_runtime_context.clone());
+        // Retain completed VM work even when artifact validation or application later fails.
+        state_transaction.last_tx_gas_used =
+            state_transaction.last_tx_gas_used.saturating_add(gas_used);
+        let artifacts = artifacts?;
+        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+            &artifacts.queued_instructions_by_authority(),
+            state_transaction,
+            runtime_origin,
+        )
+        .map_err(|rejection| match rejection {
+            crate::tx::TransactionRejectionReason::Validation(fail) => fail,
+            other => ValidationFail::NotPermitted(format!(
+                "validation-fee policy resolution failed during deployed contract execution: {other:?}"
+            )),
+        })?;
+        if let Some(pending) = lifecycle_transition {
+            code::validate_contract_lifecycle_completion(
+                &state_transaction.world,
+                &call.contract_address,
+                pending,
+            )?;
+        }
+        let executed = artifacts.apply_to_transaction_with_lifecycle(
+            state_transaction,
+            authority,
+            lifecycle_transition.map(|pending| (&call.contract_address, pending)),
+        )?;
+        Ok(ContractInvocationOutcome {
+            gas_used,
+            executed_instructions: executed,
+            next_nft_sequence,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn settle_live_transaction_fees(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction: &SignedTransaction,
+        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
+        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
+        gas_used: u64,
+        instruction_count: usize,
+        tx_bytes_len: usize,
+        gas_asset_opt: Option<String>,
+        fee_sponsor: Option<FeeSponsorProgramId>,
+        skip_nexus_fee: bool,
+    ) -> Result<(), ValidationFail> {
+        state_transaction.last_tx_gas_used = gas_used;
+        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+
+        if should_charge_pipeline_gas_asset(
+            skip_nexus_fee,
+            state_transaction.nexus.enabled,
+            &state_transaction.nexus.fees,
+            &gas_asset_opt,
+        ) && let Some(gas_asset_id_str) = gas_asset_opt
+        {
+            Self::charge_pipeline_gas_asset_fee(
+                state_transaction,
+                authority,
+                transaction,
+                tx_hash.clone(),
+                settlement_source_id,
+                &gas_asset_id_str,
+                gas_used,
+                fee_sponsor.as_ref(),
+            )?;
+        }
+
+        if !skip_nexus_fee {
+            Self::charge_nexus_fees(
+                state_transaction,
+                authority,
+                transaction,
+                tx_hash,
+                fee_sponsor,
+                tx_bytes_len,
+                instruction_count,
+                gas_used,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Execute [`SignedTransaction`].
     ///
     /// # Errors
@@ -5667,9 +6155,7 @@ impl Executor {
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
-                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
-
-                let gas_limit_md = gas_limit_md.ok_or_else(|| {
+                let gas_limit = gas_limit_md.ok_or_else(|| {
                     ValidationFail::NotPermitted(
                         "missing gas limit in fee payment intent".to_owned(),
                     )
@@ -5681,187 +6167,158 @@ impl Executor {
                         .gas_limit_per_block
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
-                let effective_limit = gas_limit_md.min(block_remaining);
-                let identity =
-                    code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "contract instance `{}` not found in WSV",
-                                call.contract_address
-                            ))
-                        })?;
-                ensure_contract_invocation_code_hash(&call, identity.code_hash)?;
-                let contract_subject = code::fetch_bound_contract_subject(
+                let effective_limit = gas_limit.min(block_remaining);
+                let outcome = self.execute_contract_invocation(
                     state_transaction,
-                    &identity.contract_address,
+                    authority,
+                    &call,
+                    ivm_cache,
+                    effective_limit,
+                    tx_creation_time_ms,
+                    None,
+                )?;
+                Self::settle_live_transaction_fees(
+                    state_transaction,
+                    authority,
+                    &transaction_for_fee,
+                    tx_hash,
+                    settlement_source_id,
+                    outcome.gas_used,
+                    0,
+                    tx_bytes_len,
+                    gas_asset_opt,
+                    fee_sponsor,
+                    skip_nexus_fee,
                 )
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{}` has no valid subject binding",
-                        identity.contract_address
-                    ))
-                })?;
-                let code_bytes = state_transaction
-                    .world
-                    .contract_code()
-                    .get(&identity.code_hash)
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(format!(
-                            "contract bytecode `{}` not found in WSV",
-                            identity.code_hash
-                        ))
-                    })?;
-                let summary = if let Some(summary) = ivm_cache
-                    .cached_program_summary(identity.code_hash)
-                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
-                {
-                    summary
+            }
+            (Self::Initial | Self::UserProvided(_), Executable::Batch(items)) => {
+                if items.is_empty() {
+                    return Err(ValidationFail::NotPermitted(
+                        "executable batch must not be empty".to_owned(),
+                    ));
+                }
+
+                let items = items.into_vec();
+                let contains_contract_call = items
+                    .iter()
+                    .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)));
+                let gas_limit = if contains_contract_call {
+                    Some(gas_limit_md.ok_or_else(|| {
+                        ValidationFail::NotPermitted(
+                            "missing gas limit in fee payment intent".to_owned(),
+                        )
+                    })?)
                 } else {
-                    ivm_cache
-                        .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
-                        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                    gas_limit_md
                 };
-                if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+                let explicit_instructions: Vec<_> = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect();
+                let explicit_gas = isi_gas::meter_instructions(&explicit_instructions);
+                if let Some(limit) = gas_limit
+                    && explicit_gas > limit
+                {
                     return Err(ValidationFail::NotPermitted(format!(
-                        "cached contract bytecode `{}` does not match live WSV",
-                        identity.code_hash
+                        "out of gas: used {explicit_gas} > limit {limit}"
                     )));
                 }
-                let effective_cycles =
-                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
-                let manifest = state_transaction
-                    .world
-                    .contract_manifests()
-                    .get(&identity.code_hash)
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(format!(
-                            "contract instance `{}` has no manifest",
-                            identity.contract_address
-                        ))
-                    })?;
-                crate::smartcontracts::ivm::validate_manifest_hashes(
-                    manifest,
-                    summary.code_hash,
-                    summary.abi_hash,
-                )
-                .map_err(ValidationFail::IvmAdmission)?;
-                let lifecycle_transition = validate_prepared_contract_lifecycle_call(
-                    &state_transaction.world,
-                    &call.contract_address,
-                    identity.code_hash,
-                    summary.prepared_contract(),
-                    &call.entrypoint,
+
+                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    state_transaction
+                        .gas_limit_per_block
+                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
+                };
+                if explicit_gas > block_remaining {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "block gas limit exceeded: {} > {}",
+                        state_transaction
+                            .gas_used_in_block_so_far
+                            .saturating_add(explicit_gas),
+                        state_transaction.gas_limit_per_block
+                    )));
+                }
+                let available_total = gas_limit.unwrap_or(u64::MAX).min(block_remaining);
+                let mut gas_used = explicit_gas;
+                let max_overlay_instructions = state_transaction.pipeline.overlay_max_instructions;
+                let max_overlay_bytes = state_transaction.pipeline.overlay_max_bytes;
+                let mut overlay_instruction_count = explicit_instructions.len();
+                let mut overlay_byte_size = live_batch_overlay_byte_size(&explicit_instructions);
+                enforce_live_batch_overlay_limits(
+                    max_overlay_instructions,
+                    max_overlay_bytes,
+                    overlay_instruction_count,
+                    overlay_byte_size,
                 )?;
-                let entrypoint_authorization = authorize_prepared_contract_selector(
-                    &state_transaction.world,
-                    authority,
-                    summary.prepared_contract(),
-                    &call.entrypoint,
-                    &identity,
-                )?;
-                let contract_call_context = parse_prepared_contract_invocation_execution_context(
-                    &call,
-                    summary.prepared_contract(),
-                    identity.contract_alias.clone(),
-                    contract_subject,
-                    effective_limit,
-                )?;
-                let mut runtime = summary
-                    .checkout_runtime(effective_limit)
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                runtime.set_max_cycles(effective_cycles.get());
-                runtime.set_gas_limit(effective_limit);
-                if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
-                    argument_record
-                        .precharge_vm(&mut runtime)
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                // Native ISIs are metered as one authored set, matching the existing
+                // `Executable::Instructions` rejected-business fee behavior.
+                state_transaction.last_tx_gas_used = explicit_gas;
+
+                for item in items {
+                    match item {
+                        ExecutableBatchItem::Instruction(instruction) => {
+                            // Mixed batches intentionally do not inherit the pure-ISI
+                            // deployment self-bootstrap exception.
+                            self.execute_instruction(state_transaction, authority, instruction)?;
+                        }
+                        ExecutableBatchItem::ContractCall(call) => {
+                            let remaining = available_total.saturating_sub(gas_used);
+                            let outcome = self.execute_contract_invocation(
+                                state_transaction,
+                                authority,
+                                &call,
+                                ivm_cache,
+                                remaining,
+                                tx_creation_time_ms,
+                                None,
+                            )?;
+                            gas_used = gas_used.saturating_add(outcome.gas_used);
+                            overlay_instruction_count = overlay_instruction_count
+                                .saturating_add(outcome.executed_instructions.len());
+                            overlay_byte_size = overlay_byte_size.saturating_add(
+                                live_batch_overlay_byte_size(&outcome.executed_instructions),
+                            );
+                            if let Err(error) = enforce_live_batch_overlay_limits(
+                                max_overlay_instructions,
+                                max_overlay_bytes,
+                                overlay_instruction_count,
+                                overlay_byte_size,
+                            ) {
+                                // Overlay caps are preparation limits for ordinary executables.
+                                // Preserve that no-fee rejection behavior even though live batches
+                                // discover contract-emitted instructions during execution.
+                                state_transaction.last_tx_gas_used = 0;
+                                return Err(error);
+                            }
+                        }
+                    }
                 }
-                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
-                    let code_len = runtime.memory.code_len();
-                    runtime.set_register(1, code_len);
-                    runtime.set_program_counter(entrypoint_pc).map_err(|err| {
-                        let selector = contract_call_context
-                            .entrypoint
-                            .as_deref()
-                            .unwrap_or("main");
-                        ValidationFail::NotPermitted(format!(
-                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                        ))
-                    })?;
+
+                let confidential_delta = explicit_instructions
+                    .iter()
+                    .map(crate::gas::confidential_gas_cost)
+                    .sum::<u64>();
+                if confidential_delta > 0 {
+                    state_transaction.record_confidential_gas_delta(confidential_delta);
                 }
-                let contract_runtime_context = contract_call_context.runtime_context();
-                let accounts = state_transaction.accounts_snapshot();
-                let mut host = CoreCoreHost::with_accounts_and_argument_record(
-                    authority.clone(),
-                    Arc::clone(&accounts),
-                    contract_call_context.argument_record,
-                );
-                host.set_prepared_contract_cache(summary.prepared_contract_cache());
-                // User contract calls execute before the enclosing block has a finalized
-                // creation timestamp, so expose the transaction creation time as the
-                // logical "current time" seen by `current_time_ms()`.
-                host.set_block_time_ms(tx_creation_time_ms);
-                host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                host.set_zk_config(&state_transaction.zk);
-                host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
-                host.set_query_state(state_transaction);
-                host.set_contract_runtime_context(contract_runtime_context.clone());
-                host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                if let Some(pending) = lifecycle_transition {
-                    host.set_contract_lifecycle_transition(&call.contract_address, pending);
-                }
-                host.set_chain_id(&state_transaction.chain_id);
-                #[cfg(feature = "telemetry")]
-                host.set_telemetry(state_transaction.telemetry.clone());
-                host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
-                    .map_err(|err| {
-                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
-                    })?;
-                if let Err(err) = runtime.run_with_host(&mut host) {
-                    return Err(
-                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime, &err,
-                        ),
-                    );
-                }
-                let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                if let Some(pending) = lifecycle_transition {
-                    code::validate_contract_lifecycle_completion(
-                        &state_transaction.world,
-                        &call.contract_address,
-                        pending,
-                    )?;
-                }
-                let _executed = artifacts.apply_to_transaction_with_lifecycle(
+                Self::settle_live_transaction_fees(
                     state_transaction,
                     authority,
-                    lifecycle_transition.map(|pending| (&call.contract_address, pending)),
-                )?;
-                state_transaction.last_tx_gas_used = gas_used;
-                Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-
-                if should_charge_pipeline_gas_asset(
+                    &transaction_for_fee,
+                    tx_hash,
+                    settlement_source_id,
+                    gas_used,
+                    explicit_instructions.len(),
+                    tx_bytes_len,
+                    gas_asset_opt,
+                    fee_sponsor,
                     skip_nexus_fee,
-                    state_transaction.nexus.enabled,
-                    &state_transaction.nexus.fees,
-                    &gas_asset_opt,
-                ) && let Some(gas_asset_id_str) = gas_asset_opt
-                {
-                    Self::charge_pipeline_gas_asset_fee(
-                        state_transaction,
-                        authority,
-                        &transaction_for_fee,
-                        tx_hash,
-                        settlement_source_id,
-                        &gas_asset_id_str,
-                        gas_used,
-                        fee_sponsor.as_ref(),
-                    )?;
-                }
-
-                Ok(())
+                )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
                 // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
@@ -9714,7 +10171,10 @@ where
     R: StateReadOnly,
 {
     match transaction.instructions() {
-        Executable::Instructions(_) => Ok(()),
+        // Batch calls are authorized immediately before each ordered invocation. A preceding
+        // item may legitimately install or update the binding which a later call observes, so
+        // validating every call against the pre-batch world would break atomic state visibility.
+        Executable::Instructions(_) | Executable::Batch(_) => Ok(()),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state, &call.contract_address)
                 .ok_or_else(|| {
@@ -10761,6 +11221,51 @@ mod tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
+        let authority = checked_account_id();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            31,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let expected_code_hash = Hash::new(b"sponsored-mixed-batch");
+        let executable = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "sponsored instruction".to_owned(),
+                ))),
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash,
+                    entrypoint: "main".to_owned(),
+                    arguments: None,
+                }),
+            ]
+            .into(),
+        );
+
+        let operations = fee_sponsor_operations(&executable).expect("resolve sponsor operations");
+        assert_eq!(operations.len(), 2);
+        assert!(matches!(
+            &operations[0],
+            FeeSponsorOperation::NativeInstruction { .. }
+        ));
+        assert!(matches!(
+            &operations[1],
+            FeeSponsorOperation::ContractCall {
+                contract_address: seen_address,
+                code_hash: seen_hash,
+                entrypoint,
+            } if seen_address == &contract_address
+                && seen_hash == &expected_code_hash
+                && entrypoint == "main"
+        ));
     }
 
     #[test]
@@ -12950,20 +13455,19 @@ mod tests {
     fn configure_direct_genesis_ivm_fee_fixture(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        sink: &AccountId,
         fee_asset: &AssetDefinitionId,
-    ) -> (AssetId, Quantity, AssetId, Quantity) {
+    ) -> (AssetId, Quantity, Quantity) {
         configure_direct_nexus_fee_snapshot(state_transaction, fee_asset);
-        state_transaction.nexus.fees.fee_sink_account_id = sink.to_string();
 
-        let sink_asset_id = AssetId::new(fee_asset.clone(), sink.clone());
-        Mint::asset_quantity(11_u32, sink_asset_id.clone())
-            .execute(authority, state_transaction)
-            .expect("seed the direct-fee sink balance");
         let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
         let payer_before = test_asset_balance(state_transaction, &payer_asset_id);
-        let sink_before = test_asset_balance(state_transaction, &sink_asset_id);
-        (payer_asset_id, payer_before, sink_asset_id, sink_before)
+        let supply_before = state_transaction
+            .world
+            .asset_definition(fee_asset)
+            .expect("direct-fee asset definition")
+            .total_quantity()
+            .clone();
+        (payer_asset_id, payer_before, supply_before)
     }
 
     #[test]
@@ -13015,7 +13519,7 @@ mod tests {
 
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
-        let (state, keypair, authority, sink, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
             ..ivm::ProgramMetadata::default()
@@ -13025,17 +13529,23 @@ mod tests {
         let transaction = TransactionBuilder::new(
             state.chain_id.clone(),
             authority.clone(),
-            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000_000)),
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    fee_asset.clone(),
+                    Quantity::from(2_u32),
+                )],
+                core::num::NonZeroU64::new(1_000_000),
+            ),
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-        let (payer_asset_id, payer_before, sink_asset_id, sink_before) =
+        let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
                 &mut state_transaction,
                 &authority,
-                &sink,
                 &fee_asset,
             );
         let mut ivm_cache = IvmCache::new();
@@ -13055,15 +13565,19 @@ mod tests {
             "generic IVM genesis execution must not debit its payer"
         );
         assert_eq!(
-            test_asset_balance(&state_transaction, &sink_asset_id),
-            sink_before,
-            "generic IVM genesis execution must not change its fee sink"
+            state_transaction
+                .world
+                .asset_definition(&fee_asset)
+                .expect("direct-fee asset definition")
+                .total_quantity(),
+            &supply_before,
+            "generic IVM genesis execution must not burn fee-asset supply"
         );
     }
 
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
-        let (state, keypair, authority, sink, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         let (program, _) = contract_program_with_entrypoint("run", None);
         let verified =
             ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
@@ -13087,18 +13601,24 @@ mod tests {
         let transaction = TransactionBuilder::new(
             state.chain_id.clone(),
             authority.clone(),
-            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000_000)),
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    fee_asset.clone(),
+                    Quantity::from(2_u32),
+                )],
+                core::num::NonZeroU64::new(1_000_000),
+            ),
         )
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-        let (payer_asset_id, payer_before, sink_asset_id, sink_before) =
+        let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
                 &mut state_transaction,
                 &authority,
-                &sink,
                 &fee_asset,
             );
         let subject_binding =
@@ -13140,9 +13660,13 @@ mod tests {
             "prepared-contract IVM genesis execution must not debit its payer"
         );
         assert_eq!(
-            test_asset_balance(&state_transaction, &sink_asset_id),
-            sink_before,
-            "prepared-contract IVM genesis execution must not change its fee sink"
+            state_transaction
+                .world
+                .asset_definition(&fee_asset)
+                .expect("direct-fee asset definition")
+                .total_quantity(),
+            &supply_before,
+            "prepared-contract IVM genesis execution must not burn fee-asset supply"
         );
     }
 
@@ -17480,6 +18004,347 @@ seiyaku GuardedValueRebound {
                 .get(&metadata_marker),
             Some(&authorized_marker),
             "deactivated direct contract call must apply no queued effect"
+        );
+    }
+
+    #[test]
+    fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku OrderedBatchGuard {
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("mixed_batch_marker"),
+      value: Json::parse("{\"written\":true}")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile ordered mixed-batch contract");
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse mixed-batch contract");
+        let schema = parsed
+            .contract_interface
+            .as_ref()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entry| entry.name == "write")
+            })
+            .and_then(|entry| entry.argument_schema.as_ref())
+            .expect("write argument schema");
+        let arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": "9" })),
+        )
+        .expect("encode mixed-batch arguments");
+        let arguments =
+            iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(arguments)
+                .expect("bounded mixed-batch arguments");
+
+        let chain_id = ChainId::from("ordered-mixed-batch");
+        let authority = ALICE_ID.clone();
+        let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
+            .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            93,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "write".to_owned(),
+            }
+            .into();
+        let invocation = ContractInvocation {
+            contract_address,
+            expected_code_hash: code_hash,
+            entrypoint: "write".to_owned(),
+            arguments: Some(arguments),
+        };
+        let explicit_instructions = vec![
+            InstructionBox::from(Grant::account_permission(
+                entrypoint_permission.clone(),
+                authority.clone(),
+            )),
+            InstructionBox::from(Revoke::account_permission(
+                entrypoint_permission.clone(),
+                authority.clone(),
+            )),
+        ];
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(explicit_instructions[0].clone()),
+                ExecutableBatchItem::ContractCall(invocation.clone()),
+                ExecutableBatchItem::Instruction(explicit_instructions[1].clone()),
+            ]
+            .into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_tx = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+        super::Executor::Initial
+            .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+            .expect("grant-call-revoke batch must execute in order");
+
+        let marker: Name = "mixed_batch_marker".parse().expect("marker name");
+        assert!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&marker)
+                .is_some(),
+            "the contract call must observe the preceding permission grant"
+        );
+        assert!(
+            !state_tx
+                .world
+                .account_permissions_iter(&authority)
+                .expect("authority permissions")
+                .any(|permission| permission == &entrypoint_permission),
+            "the trailing revoke must remain visible after the call"
+        );
+        assert!(
+            state_tx.last_tx_gas_used > isi_gas::meter_instructions(&explicit_instructions),
+            "aggregate batch gas must include contract execution"
+        );
+        state_tx.apply();
+
+        let capped_transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(explicit_instructions[0].clone()),
+                ExecutableBatchItem::ContractCall(invocation.clone()),
+            ]
+            .into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+
+        let mut instruction_capped_state_tx = block.transaction();
+        instruction_capped_state_tx
+            .pipeline
+            .overlay_max_instructions = 1;
+        let instruction_cap_error = super::Executor::Initial
+            .execute_transaction(
+                &mut instruction_capped_state_tx,
+                &authority,
+                capped_transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("contract-emitted ISIs must count toward the mixed-batch overlay cap");
+        assert!(
+            matches!(instruction_cap_error, ValidationFail::NotPermitted(ref message)
+                if message == "overlay exceeds max instructions: 2 > 1"),
+            "unexpected mixed-batch instruction-cap error: {instruction_cap_error}"
+        );
+        drop(instruction_capped_state_tx);
+
+        let explicit_overlay_bytes =
+            super::live_batch_overlay_byte_size(&explicit_instructions[..1]);
+        let mut byte_capped_state_tx = block.transaction();
+        byte_capped_state_tx.pipeline.overlay_max_instructions = 0;
+        byte_capped_state_tx.pipeline.overlay_max_bytes = explicit_overlay_bytes;
+        let byte_cap_error = super::Executor::Initial
+            .execute_transaction(
+                &mut byte_capped_state_tx,
+                &authority,
+                capped_transaction,
+                &mut ivm_cache,
+            )
+            .expect_err("contract-emitted ISIs must count toward the mixed-batch byte cap");
+        assert!(
+            matches!(byte_cap_error, ValidationFail::NotPermitted(ref message)
+                if message.starts_with("overlay exceeds max bytes: ")
+                    && message.ends_with(&format!(" > {explicit_overlay_bytes}"))),
+            "unexpected mixed-batch byte-cap error: {byte_cap_error}"
+        );
+        drop(byte_capped_state_tx);
+
+        let cap_verification_tx = block.transaction();
+        assert!(
+            !cap_verification_tx
+                .world
+                .account_permissions_iter(&authority)
+                .expect("authority permissions")
+                .any(|permission| permission == &entrypoint_permission),
+            "dropping a cap-rejected mixed batch must roll back its permission grant"
+        );
+        drop(cap_verification_tx);
+
+        let rollback_marker: Name = "mixed_batch_rollback_marker"
+            .parse()
+            .expect("rollback marker name");
+        let failing_transaction = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(SetKeyValue::account(
+                    authority.clone(),
+                    rollback_marker.clone(),
+                    Json::new(true),
+                ))),
+                ExecutableBatchItem::ContractCall(invocation),
+            ]
+            .into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut failed_state_tx = block.transaction();
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut failed_state_tx,
+                &authority,
+                failing_transaction,
+                &mut ivm_cache,
+            )
+            .expect_err("the revoked permission must reject the later call");
+        assert!(error.to_string().contains("CanInvokeContractEntrypoint"));
+        drop(failed_state_tx);
+
+        let verification_tx = block.transaction();
+        assert!(
+            verification_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&rollback_marker)
+                .is_none(),
+            "dropping the failed batch transaction must roll back its preceding native write"
+        );
+    }
+
+    #[test]
+    fn resolved_contract_invocation_releases_cache_and_records_vm_error_gas() {
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku MeteredFailure {
+  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("must_not_be_written"),
+      value: Json::parse("true")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile metered failure contract");
+        let authority = ALICE_ID.clone();
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").expect("valid domain id"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            94,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive metered failure contract address");
+        let contract_account = Account::new(contract_address.subject_id()).build(&authority);
+        let mut world = World::with([domain], [account, contract_account], []);
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "run".to_owned(),
+            }
+            .into();
+        Grant::account_permission(entrypoint_permission, authority.clone())
+            .execute(&authority, &mut state_transaction)
+            .expect("grant metered failure entrypoint permission");
+        let invocation = ContractInvocation {
+            contract_address,
+            expected_code_hash: code_hash,
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let executor = state_transaction.world.executor.clone();
+        let cache = state_transaction.ivm_cache;
+        let resolved = {
+            let mut guard = cache.lock();
+            executor
+                .resolve_contract_invocation(&state_transaction, &invocation, &mut guard)
+                .expect("resolve deployed contract while the cache is locked")
+        };
+        assert!(
+            cache.try_lock().is_some(),
+            "the resolved invocation must not retain the outer cache mutex"
+        );
+
+        let error = executor
+            .execute_resolved_contract_invocation(
+                &mut state_transaction,
+                &authority,
+                &invocation,
+                resolved,
+                10,
+                0,
+                None,
+            )
+            .expect_err("ten units of gas cannot complete the contract");
+
+        assert!(
+            error.to_string().contains("gas"),
+            "unexpected VM failure: {error}"
+        );
+        assert!(
+            (1..=10).contains(&state_transaction.last_tx_gas_used),
+            "failed VM execution must retain its chargeable gas, observed {}",
+            state_transaction.last_tx_gas_used
         );
     }
 

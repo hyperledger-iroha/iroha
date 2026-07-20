@@ -181,14 +181,33 @@ def test_cli_planner_failure_does_not_reflect_subprocess_output(tmp_path: Path) 
 
 def test_complete_plan_hash_and_atomicity_validation() -> None:
     plan = _plan(5)
-    validated = MODULE.validate_plan_response(
-        {"status": "Ready", "blockers": [], "plan": plan},
-        5,
-    )
+    validated = MODULE.validate_plan_response(plan, 5)
 
     assert validated.body == plan
     assert validated.resource_count == 5
     assert validated.plan_hash == PLAN_HASH
+
+
+def test_plan_envelopes_and_legacy_sequence_names_are_rejected() -> None:
+    plan = _plan(5)
+    with pytest.raises(MODULE.BulkOnboardError, match="not an envelope"):
+        MODULE.validate_plan_response({"plan": plan}, 5)
+
+    for canonical, legacy in [
+        ("resources", "resource_dispositions"),
+        ("resources", "dispositions"),
+        ("instructions", "framed_instructions"),
+        ("instructions", "instruction_frames"),
+    ]:
+        legacy_plan = _plan(5)
+        legacy_plan["body"][legacy] = legacy_plan["body"].pop(canonical)
+        with pytest.raises(MODULE.BulkOnboardError, match=f"canonical .*{canonical}"):
+            MODULE.validate_plan_response(legacy_plan, 5)
+
+        mixed_plan = _plan(5)
+        mixed_plan["body"][legacy] = list(mixed_plan["body"][canonical])
+        with pytest.raises(MODULE.BulkOnboardError, match="forbidden legacy"):
+            MODULE.validate_plan_response(mixed_plan, 5)
 
 
 @pytest.mark.parametrize(
@@ -311,7 +330,7 @@ def test_raw_token_argument_is_rejected_without_echo(capsys) -> None:
     assert raw_secret not in captured.err
 
 
-def test_plan_only_persists_deterministically_without_subprocess(
+def test_default_planning_persists_deterministically_without_applying(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -330,7 +349,7 @@ def test_plan_only_persists_deterministically_without_subprocess(
     monkeypatch.setattr(
         MODULE,
         "apply_plan",
-        lambda *_args, **_kwargs: pytest.fail("plan-only invoked subprocess"),
+        lambda *_args, **_kwargs: pytest.fail("default planning invoked apply"),
     )
 
     result = MODULE.main(
@@ -338,7 +357,6 @@ def test_plan_only_persists_deterministically_without_subprocess(
             str(intent_file),
             "--plan-file",
             str(plan_file),
-            "--plan-only",
         ]
     )
 
@@ -350,6 +368,56 @@ def test_plan_only_persists_deterministically_without_subprocess(
     first_bytes = plan_file.read_bytes()
     MODULE.write_plan_file(plan_file, expected_plan)
     assert plan_file.read_bytes() == first_bytes
+
+
+def test_apply_requires_explicit_flag_and_retired_plan_only_is_rejected(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    intent_file = tmp_path / "intent.json"
+    intent_file.write_text(json.dumps(_setup_intent()), encoding="utf-8")
+    plan_file = tmp_path / "setup.plan.json"
+    expected_plan = _plan(5)
+    applied: list[tuple[str, Path, Path | None]] = []
+
+    monkeypatch.setattr(
+        MODULE,
+        "request_plan_with_cli",
+        lambda *_args, **_kwargs: expected_plan,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "apply_plan",
+        lambda cli, plan, *, config_file: applied.append((cli, plan, config_file)),
+    )
+
+    result = MODULE.main(
+        [
+            str(intent_file),
+            "--plan-file",
+            str(plan_file),
+            "--apply",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.err == ""
+    assert "Applied 5 alias resource(s) atomically" in captured.out
+    assert applied == [("iroha", plan_file, None)]
+
+    with pytest.raises(SystemExit) as exited:
+        MODULE.main(
+            [
+                str(intent_file),
+                "--plan-file",
+                str(plan_file),
+                "--plan-only",
+            ]
+        )
+    assert exited.value.code == 2
+    assert "unsupported command-line argument" in capsys.readouterr().err
 
 
 def test_redaction_is_bounded_and_removes_common_secret_forms() -> None:

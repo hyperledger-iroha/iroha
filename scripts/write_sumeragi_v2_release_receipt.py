@@ -8,6 +8,7 @@ import base64
 import csv
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,17 @@ import subprocess
 import sys
 import time
 from typing import Any
+
+try:
+    from sumeragi_v2_localnet_manifest import (
+        LocalnetManifestError,
+        canonical_localnet_manifest,
+    )
+except ModuleNotFoundError:
+    from scripts.sumeragi_v2_localnet_manifest import (
+        LocalnetManifestError,
+        canonical_localnet_manifest,
+    )
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -56,9 +68,11 @@ _MAX_POLICY_BYTES = 16 * 1024 * 1024
 _MAX_HELPER_BYTES = 16 * 1024 * 1024
 _MAX_TOOL_BYTES = 512 * 1024 * 1024
 _MAX_REPLAY_OUTPUT_BYTES = 4 * 1024 * 1024
+_MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
+_MAX_LOCALNET_MANIFEST_BYTES = 64 * 1024 * 1024
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "540f91f9cfe1f3e55797ead639d61380121b0f7091e07c555b8ff6d5611794ed"
+    "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -175,6 +189,12 @@ _SEED_SUMMARY_FIELDS = (
     "localnet",
     "command",
 )
+_SEED_LOCALNET_MANIFEST_FIELDS = (
+    "run_index",
+    "localnet",
+    "manifest",
+    "manifest_sha256",
+)
 _CORRIDOR_SUMMARY_FIELDS = (
     "leg_index",
     "leg_id",
@@ -187,7 +207,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 298
+_PRODUCTION_TEST_COUNT = 378
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -207,8 +227,9 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        22,
+        24,
     ),
+    ("production-merge-sidecar", "merge_sidecar::tests", 25),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
@@ -220,11 +241,11 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 52),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 20),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 27),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 24),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 12),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 27),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 46),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -243,7 +264,17 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-network-reliable-actor",
         "network::tests",
-        28,
+        43,
+    ),
+    (
+        "production-irohad-consensus-message-control",
+        "consensus_message_control::tests",
+        1,
+    ),
+    (
+        "production-irohad-network-relay",
+        "network_relay_tests",
+        1,
     ),
     (
         "production-irohad-authenticated-via",
@@ -312,10 +343,13 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
                 (
                     "sumeragi::",
                     "sumeragi_v2_runner::",
+                    "merge_sidecar::",
                     "kura::",
                     "nexus::",
                     "peer::",
                     "network::",
+                    "consensus_message_control::tests::",
+                    "network_relay_tests::",
                     "tests::relay_fairness::",
                 )
             )
@@ -338,9 +372,14 @@ def _production_module_command(module: str) -> str:
         )
     if module in {"peer::run::tests", "network::tests"}:
         return f"cargo test --locked -p iroha_p2p --lib {module} -- --test-threads=1"
-    if module == "tests::relay_fairness":
+    if module in {
+        "consensus_message_control::tests",
+        "network_relay_tests",
+        "tests::relay_fairness",
+    }:
         return (
             "cargo test --locked -p irohad --bin irohad "
+            "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )
     return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"
@@ -372,6 +411,29 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             1,
             "cargo test --locked -p iroha_data_model --lib "
             f"{_DATA_LANE_CERTIFICATE_TEST} -- --exact --test-threads=1",
+        )
+    )
+    legs.extend(
+        (
+            (
+                "source-sealed-workspace-clippy",
+                "command",
+                0,
+                "cargo clippy --workspace --all-targets -- -D warnings",
+            ),
+            (
+                "source-sealed-workspace-tests",
+                "command",
+                0,
+                "cargo test --locked --workspace",
+            ),
+            (
+                "source-sealed-irohad-tests",
+                "command",
+                0,
+                "cargo test --locked -p irohad --bin irohad "
+                "--features test-network-message-control",
+            ),
         )
     )
     legs.extend(
@@ -420,7 +482,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-seed-launcher",
                 "pytest",
-                10,
+                11,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
@@ -442,7 +504,9 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
                 "test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
-                "test_mocked_seed_matrix_refuses_uninspected_stale_lock",
+                "test_mocked_seed_matrix_refuses_uninspected_stale_lock "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_unsafe_retained_localnet_entries",
             ),
             (
                 "preflight-chaos-launcher",
@@ -479,14 +543,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                182,
+                189,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
             ),
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                582,
+                828,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -3042,31 +3106,11 @@ def _formal_artifacts(
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path | None, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
     ledger = _regular_file(
         completion_path.with_name("proof_coverage.json"), "formal proof ledger"
     )
     checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
-    cross_tool_result = subprocess.run(
-        [
-            sys.executable,
-            str(checker),
-            "--ledger",
-            str(ledger),
-            "--print-cross-tool-obligations",
-        ],
-        cwd=repo_root,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=checker_environment,
-    )
-    if cross_tool_result.returncode != 0:
-        raise ReceiptError(
-            "archived formal ledger has an invalid cross-tool evidence requirement"
-        )
-    cross_tool_required = bool(cross_tool_result.stdout.strip())
     expected_completion_fields = {
         "schema_version",
         "head_commit",
@@ -3078,11 +3122,10 @@ def _formal_artifacts(
         "proof_evidence_sha256",
         "verus_evidence_sha256",
         "verus_log_sha256",
+        "cross_tool_evidence_sha256",
         "harness_cargo_lock_sha256",
         "formal_toolchain_sha256",
     }
-    if cross_tool_required:
-        expected_completion_fields.add("cross_tool_evidence_sha256")
     _require_fields(
         fields,
         expected_completion_fields,
@@ -3111,17 +3154,10 @@ def _formal_artifacts(
     verus_log = _regular_file(
         completion_path.with_name("verus.log"), "formal Verus log"
     )
-    cross_tool_candidate = completion_path.with_name("cross_tool_evidence.json")
-    if cross_tool_required:
-        cross_tool_evidence: Path | None = _regular_file(
-            cross_tool_candidate, "formal cross-tool evidence"
-        )
-    else:
-        if os.path.lexists(cross_tool_candidate):
-            raise ReceiptError(
-                "formal archive contains forbidden dormant cross-tool evidence"
-            )
-        cross_tool_evidence = None
+    cross_tool_evidence = _regular_file(
+        completion_path.with_name("cross_tool_evidence.json"),
+        "formal cross-tool evidence",
+    )
     harness_lock = _regular_file(
         completion_path.with_name("harness-Cargo.lock"), "formal harness lock"
     )
@@ -3134,18 +3170,41 @@ def _formal_artifacts(
         (evidence, "proof_evidence_sha256", "formal proof evidence"),
         (verus_evidence, "verus_evidence_sha256", "formal Verus evidence"),
         (verus_log, "verus_log_sha256", "formal Verus log"),
+        (
+            cross_tool_evidence,
+            "cross_tool_evidence_sha256",
+            "formal cross-tool evidence",
+        ),
         (harness_lock, "harness_cargo_lock_sha256", "formal harness lock"),
         (toolchain_path, "formal_toolchain_sha256", "formal toolchain"),
     ):
         if _sha256(artifact) != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
-    if (
-        cross_tool_evidence is not None
-        and _sha256(cross_tool_evidence) != fields["cross_tool_evidence_sha256"]
-    ):
-        raise ReceiptError("formal cross-tool evidence digest mismatch")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
+    cross_tool_result = subprocess.run(
+        [
+            sys.executable,
+            str(checker),
+            "--ledger",
+            str(ledger),
+            "--print-cross-tool-obligations",
+        ],
+        cwd=repo_root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=checker_environment,
+    )
+    if cross_tool_result.returncode != 0:
+        raise ReceiptError(
+            "archived formal ledger has an invalid cross-tool evidence requirement"
+        )
+    if not cross_tool_result.stdout.strip():
+        raise ReceiptError(
+            "archived formal release ledger does not require cross-tool evidence"
+        )
     toolchain_path, toolchain = _load_tsv(toolchain_path, "formal toolchain")
     _require_fields(
         toolchain,
@@ -3227,11 +3286,9 @@ def _formal_artifacts(
         str(verus_evidence),
         "--verus-log",
         str(verus_log),
+        "--cross-tool-evidence",
+        str(cross_tool_evidence),
     ]
-    if cross_tool_evidence is not None:
-        checker_args.extend(
-            ["--cross-tool-evidence", str(cross_tool_evidence)]
-        )
     result = subprocess.run(
         checker_args,
         cwd=repo_root,
@@ -3302,6 +3359,8 @@ def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
         if len(matches) != 1 or lines.count("# fail 0") != 1:
             raise ReceiptError(f"{name} has an ambiguous Node transcript")
         return int(matches[0].group(1))
+    if kind == "command":
+        return 0
     raise ReceiptError(f"{name} has unknown leg kind {kind}")
 
 
@@ -3605,6 +3664,109 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
     return run_logs
 
 
+def _seed_localnet_manifests(
+    seed_path: Path, fields: dict[str, str]
+) -> tuple[Path, list[Path]]:
+    if (
+        fields["localnet_manifest_count"] != str(_SEED_RUN_COUNT)
+        or fields["localnet_manifests_path"] != "localnet-manifests.tsv"
+        or not _DIGEST_RE.fullmatch(fields["localnet_manifests_sha256"])
+    ):
+        raise ReceiptError("seed completion has an invalid localnet manifest binding")
+    index_path = _regular_file(
+        seed_path.parent / fields["localnet_manifests_path"],
+        "seed localnet manifest index",
+    )
+    index_snapshot = _read_evidence_snapshot(
+        index_path,
+        "seed localnet manifest index",
+        maximum_bytes=_MAX_LOCALNET_MANIFEST_INDEX_BYTES,
+    )
+    if index_snapshot.sha256 != fields["localnet_manifests_sha256"]:
+        raise ReceiptError("seed localnet manifest index digest mismatch")
+    try:
+        reader = csv.DictReader(
+            io.StringIO(index_snapshot.data.decode("utf-8")), delimiter="\t"
+        )
+        if tuple(reader.fieldnames or ()) != _SEED_LOCALNET_MANIFEST_FIELDS:
+            raise ReceiptError("seed localnet manifest index fields are not canonical")
+        rows = list(reader)
+    except UnicodeDecodeError as error:
+        raise ReceiptError("seed localnet manifest index is not UTF-8") from error
+    if len(rows) != _SEED_RUN_COUNT:
+        raise ReceiptError(
+            f"seed localnet manifest index must contain exactly {_SEED_RUN_COUNT} rows"
+        )
+
+    records: list[tuple[int, str, str, str]] = []
+    canonical_index_lines = ["\t".join(_SEED_LOCALNET_MANIFEST_FIELDS)]
+    for index, row in enumerate(rows):
+        localnet = f"localnets/run-{index:03d}"
+        relative_manifest = f"localnet-manifests/run-{index:03d}.tsv"
+        path_field = f"localnet_manifest_{index:03d}_path"
+        digest_field = f"localnet_manifest_{index:03d}_sha256"
+        digest = row.get("manifest_sha256", "")
+        expected_row = {
+            "run_index": str(index),
+            "localnet": localnet,
+            "manifest": relative_manifest,
+            "manifest_sha256": digest,
+        }
+        if (
+            None in row
+            or set(row) != set(_SEED_LOCALNET_MANIFEST_FIELDS)
+            or row != expected_row
+            or not _DIGEST_RE.fullmatch(digest)
+            or fields[path_field] != relative_manifest
+            or fields[digest_field] != digest
+        ):
+            raise ReceiptError(
+                f"seed localnet manifest index row {index} is not canonical"
+            )
+        records.append((index, localnet, relative_manifest, digest))
+        canonical_index_lines.append(
+            "\t".join((str(index), localnet, relative_manifest, digest))
+        )
+    canonical_index = ("\n".join(canonical_index_lines) + "\n").encode("utf-8")
+    if index_snapshot.data != canonical_index:
+        raise ReceiptError("seed localnet manifest index bytes are not canonical")
+
+    manifests: list[Path] = []
+    for index, localnet, relative_manifest, digest in records:
+        manifest_candidate = seed_path.parent / relative_manifest
+        try:
+            resolved_manifest = manifest_candidate.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ReceiptError(
+                f"seed localnet manifest {index} is unavailable"
+            ) from error
+        if resolved_manifest != manifest_candidate:
+            raise ReceiptError(f"seed localnet manifest {index} escaped its archive")
+        manifest_path = _regular_file(
+            manifest_candidate,
+            f"seed localnet manifest {index}",
+        )
+        snapshot = _read_evidence_snapshot(
+            manifest_path,
+            f"seed localnet manifest {index}",
+            maximum_bytes=_MAX_LOCALNET_MANIFEST_BYTES,
+        )
+        if snapshot.sha256 != digest:
+            raise ReceiptError(f"seed localnet manifest {index} digest mismatch")
+        try:
+            expected = canonical_localnet_manifest(seed_path.parent / localnet)
+        except LocalnetManifestError as error:
+            raise ReceiptError(
+                f"seed retained localnet {index} is unsafe or unstable: {error}"
+            ) from error
+        if snapshot.data != expected:
+            raise ReceiptError(
+                f"seed localnet manifest {index} does not match retained content"
+            )
+        manifests.append(manifest_path)
+    return index_path, manifests
+
+
 def build_receipt(
     *,
     candidate_identity_path: Path,
@@ -3734,6 +3896,14 @@ def build_receipt(
         formal_path, formal_completion, sealed, checker_environment, repo_root
     )
     seed_path, seed = _load_tsv(seed_completion_path, "seed completion")
+    seed_manifest_fields = {
+        "localnet_manifest_count",
+        "localnet_manifests_path",
+        "localnet_manifests_sha256",
+    }
+    for index in range(_SEED_RUN_COUNT):
+        seed_manifest_fields.add(f"localnet_manifest_{index:03d}_path")
+        seed_manifest_fields.add(f"localnet_manifest_{index:03d}_sha256")
     _require_fields(
         seed,
         {
@@ -3746,11 +3916,12 @@ def build_receipt(
             "completed_runs",
             "expected_runs",
             "summary_sha256",
-        },
+        }
+        | seed_manifest_fields,
         "seed completion",
     )
     if (
-        seed["schema_version"] != "1"
+        seed["schema_version"] != "2"
         or seed["profile"] != "release"
         or seed["head_commit"] != sealed["head_commit"]
         or seed["head_tree"] != sealed["head_tree"]
@@ -3764,6 +3935,9 @@ def build_receipt(
     if _sha256(seed_summary) != seed["summary_sha256"]:
         raise ReceiptError("seed completion summary digest mismatch")
     seed_run_logs = _seed_run_logs(seed_path, seed_summary, manifest)
+    seed_localnet_manifest_index, seed_localnet_manifests = (
+        _seed_localnet_manifests(seed_path, seed)
+    )
 
     chaos_path, chaos = _load_tsv(chaos_completion_path, "chaos completion")
     _require_fields(
@@ -3893,15 +4067,6 @@ def build_receipt(
     if taira_result.returncode != 0:
         raise ReceiptError("archived Taira evidence failed release validation")
 
-    formal_cross_tool_receipt = (
-        {}
-        if formal_cross_tool_evidence is None
-        else {
-            "formal_cross_tool_evidence": _artifact(
-                formal_cross_tool_evidence
-            )
-        }
-    )
     return {
         "schema_version": 1,
         "protocol": "sumeragi-v2",
@@ -3945,12 +4110,18 @@ def build_receipt(
             "formal_proof_evidence": _artifact(formal_evidence),
             "formal_verus_evidence": _artifact(formal_verus_evidence),
             "formal_verus_log": _artifact(formal_verus_log),
-            **formal_cross_tool_receipt,
+            "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
             "seed_matrix_completion": _artifact(seed_path),
             "seed_matrix_summary": _artifact(seed_summary),
             "seed_matrix_run_logs": [_artifact(path) for path in seed_run_logs],
+            "seed_matrix_localnet_manifest_index": _artifact(
+                seed_localnet_manifest_index
+            ),
+            "seed_matrix_localnet_manifests": [
+                _artifact(path) for path in seed_localnet_manifests
+            ],
             "chaos_completion": _artifact(chaos_path),
             "chaos_log": _artifact(chaos_log),
             "taira_completion": _artifact(taira_path),

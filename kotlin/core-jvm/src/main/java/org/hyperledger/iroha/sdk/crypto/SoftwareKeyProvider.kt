@@ -4,10 +4,10 @@ import java.security.InvalidParameterException
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.NoSuchAlgorithmException
-import java.security.Provider
 import java.security.SecureRandom
 import java.security.Security
 import java.util.concurrent.ConcurrentHashMap
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.hyperledger.iroha.sdk.crypto.export.DeterministicKeyExporter
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportException
@@ -256,22 +256,15 @@ class SoftwareKeyProvider(
         @JvmStatic
         fun tryBouncyCastleGenerator(): KeyPairGenerator? {
             return try {
-                val providerClass =
-                    Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider")
-                val provider =
-                    providerClass.getDeclaredConstructor().newInstance() as Provider
+                val provider = BouncyCastleProvider()
                 val providerName = provider.name
                 if (Security.getProvider(providerName) == null) {
                     Security.addProvider(provider)
                 }
                 KeyPairGenerator.getInstance("EdDSA", providerName)
-            } catch (_: ClassNotFoundException) {
-                null
-            } catch (_: ReflectiveOperationException) {
-                null
-            } catch (_: ClassCastException) {
-                null
             } catch (_: NoSuchAlgorithmException) {
+                null
+            } catch (_: SecurityException) {
                 null
             }
         }

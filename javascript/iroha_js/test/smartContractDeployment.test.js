@@ -264,7 +264,7 @@ test("browser deployment retains the existing key locally and commits every step
       });
       return {
         abi_version: 1,
-        data_model_version: 2,
+        data_model_version: 3,
         signed_transaction_schema_hash_hex:
           "7ab5ff9c572efb316deac478f19209c5",
       };
@@ -419,7 +419,7 @@ test("browser deployment stops without exact persisted Applied finality and auth
     nonceForStep: (_step, sequence) => sequence + 1,
     readNodeCapabilities: () => ({
       abi_version: 1,
-      data_model_version: 2,
+      data_model_version: 3,
       signed_transaction_schema_hash_hex:
         "7ab5ff9c572efb316deac478f19209c5",
     }),
@@ -489,7 +489,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
       ...base,
       readNodeCapabilities: () => ({
         abi_version: 1,
-        data_model_version: 2,
+        data_model_version: 3,
         signed_transaction_schema_hash_hex: "00".repeat(16),
       }),
       signManifest() {
@@ -506,7 +506,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
       ...base,
       readNodeCapabilities: () => ({
         abi_version: 1,
-        data_model_version: 2,
+        data_model_version: 3,
         signed_transaction_schema_hash_hex:
           "7ab5ff9c572efb316deac478f19209c5",
       }),
@@ -531,7 +531,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
     feePayment: AUTHORITY_FEE_PAYMENT,
     readNodeCapabilities: () => ({
       abi_version: 1,
-      data_model_version: 2,
+      data_model_version: 3,
       signed_transaction_schema_hash_hex:
         "7ab5ff9c572efb316deac478f19209c5",
     }),

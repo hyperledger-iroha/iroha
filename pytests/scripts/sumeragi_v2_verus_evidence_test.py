@@ -44,7 +44,7 @@ def configure_fixture(module, monkeypatch, tmp_path: Path):
             (
                 module.begin_marker(NONCE, MANIFEST),
                 "verification results:: 1690 verified, 0 errors",
-                "verification results:: 107 verified, 0 errors",
+                "verification results:: 126 verified, 0 errors",
                 module.success_marker(NONCE, MANIFEST),
             )
         )
@@ -65,6 +65,7 @@ def configure_fixture(module, monkeypatch, tmp_path: Path):
 
     evidence = {
         "schema_version": module.SCHEMA_VERSION,
+        "verification_contract_sha256": module.verification_contract_sha256(),
         "source_manifest_sha256": MANIFEST,
         "sources": [{"path": "source.rs", "sha256": sha256(source)}],
         "tool": {
@@ -92,12 +93,17 @@ def test_canonical_verus_evidence_is_accepted(monkeypatch, tmp_path: Path) -> No
 
     module = load_module()
     evidence, _, _ = configure_fixture(module, monkeypatch, tmp_path)
+    assert module.SCHEMA_VERSION == 2
     assert module.validate_evidence(evidence, root=tmp_path) == ()
 
 
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
+        (
+            lambda evidence: evidence.__setitem__("schema_version", 1),
+            "schema_version must equal 2",
+        ),
         (
             lambda evidence: evidence["invocation"].remove("--no-cheating"),
             "invocation does not match",
@@ -109,6 +115,12 @@ def test_canonical_verus_evidence_is_accepted(monkeypatch, tmp_path: Path) -> No
         (
             lambda evidence: evidence.__setitem__("backend_verification", "true"),
             "backend_verification=true",
+        ),
+        (
+            lambda evidence: evidence.__setitem__(
+                "verification_contract_sha256", "0" * 64
+            ),
+            "verification contract digest has drifted",
         ),
         (
             lambda evidence: evidence["results"].__setitem__("root_verified", 0),
@@ -183,12 +195,12 @@ def test_archived_log_override_retains_canonical_evidence_name(
     (
         (
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 107 verified, 0 errors",
+            "verification results:: 126 verified, 0 errors",
         ),
         (
             "BEGIN",
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 107 verified, 0 errors",
+            "verification results:: 126 verified, 0 errors",
             "SUCCESS",
             "SUCCESS",
         ),
@@ -201,7 +213,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         (
             "BEGIN",
             "verification results:: 1690 verified, 1 errors",
-            "verification results:: 107 verified, 0 errors",
+            "verification results:: 126 verified, 0 errors",
             "SUCCESS",
         ),
         (
@@ -212,7 +224,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         ),
         (
             "BEGIN",
-            "verification results:: 107 verified, 0 errors",
+            "verification results:: 126 verified, 0 errors",
             "verification results:: 1690 verified, 0 errors",
             "SUCCESS",
         ),
@@ -280,6 +292,29 @@ def test_repository_verus_invocation_matches_the_evidence_contract() -> None:
 
     module = load_module()
     module._verify_invocation_contract(ROOT)
+
+
+def test_repository_required_verus_sources_are_regular_files() -> None:
+    """Every source named by the evidence contract exists on the real tree."""
+
+    module = load_module()
+    entries = module._source_entries(ROOT)
+    assert [entry["path"] for entry in entries] == list(module.REQUIRED_SOURCE_PATHS)
+
+
+def test_repository_verus_evidence_binds_the_sidecar_admission_corridor() -> None:
+    """Every production owner in the chunk-admission handoff is source-bound."""
+
+    module = load_module()
+    assert {
+        "crates/iroha_core/src/merge_sidecar.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_p2p/src/network.rs",
+        "crates/iroha_p2p/src/peer.rs",
+    } <= set(module.REQUIRED_SOURCE_PATHS)
 
 
 def test_verus_invocation_without_no_cheating_is_rejected(tmp_path: Path) -> None:

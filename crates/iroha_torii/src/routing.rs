@@ -38415,7 +38415,7 @@ fn append_account_history_projections_for_tx(
     index: &mut AccountHistoryIndex,
     tx: &iroha_data_model::query::CommittedTransaction,
 ) {
-    use iroha_data_model::transaction::{Executable, signed::TransactionEntrypoint};
+    use iroha_data_model::transaction::signed::TransactionEntrypoint;
 
     let base = account_history_tx_base(tx);
     let mut sequence = 0usize;
@@ -38452,19 +38452,17 @@ fn append_account_history_projections_for_tx(
 
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
-            if let Executable::Instructions(instructions) = signed.instructions() {
-                for instruction in instructions.iter() {
-                    append_for_instruction(instruction);
-                }
+            for instruction in signed.instructions().explicit_instructions() {
+                append_for_instruction(instruction);
             }
         }
         TransactionEntrypoint::SealedReveal(reveal) => {
-            if let Executable::Instructions(instructions) =
-                reveal.signed_transaction().instructions()
+            for instruction in reveal
+                .signed_transaction()
+                .instructions()
+                .explicit_instructions()
             {
-                for instruction in instructions.iter() {
-                    append_for_instruction(instruction);
-                }
+                append_for_instruction(instruction);
             }
         }
         TransactionEntrypoint::Time(entry) => {
@@ -40493,17 +40491,25 @@ where
 }
 
 #[cfg(feature = "app_api")]
+fn executable_explicit_instructions(
+    executable: &iroha_data_model::transaction::Executable,
+    mut visit: impl FnMut(&iroha_data_model::isi::InstructionBox),
+) {
+    for instruction in executable.explicit_instructions() {
+        visit(instruction);
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn executable_contains_account_id(
     executable: &iroha_data_model::transaction::Executable,
     expected: &AccountId,
 ) -> bool {
-    use iroha_data_model::transaction::Executable;
-    match executable {
-        Executable::Instructions(instructions) => instructions
-            .iter()
-            .any(|instruction| instruction_matches_account_id(instruction, expected)),
-        _ => false,
-    }
+    let mut found = false;
+    executable_explicit_instructions(executable, |instruction| {
+        found |= instruction_matches_account_id(instruction, expected);
+    });
+    found
 }
 
 #[cfg(feature = "app_api")]
@@ -40514,13 +40520,11 @@ fn executable_contains_domain_predicate<F>(
 where
     F: Fn(&DomainId) -> bool,
 {
-    use iroha_data_model::transaction::Executable;
-    match executable {
-        Executable::Instructions(instructions) => instructions
-            .iter()
-            .any(|instruction| instruction_matches_domain_predicate(instruction, matches_domain)),
-        _ => false,
-    }
+    let mut found = false;
+    executable_explicit_instructions(executable, |instruction| {
+        found |= instruction_matches_domain_predicate(instruction, matches_domain);
+    });
+    found
 }
 
 #[cfg(feature = "app_api")]
@@ -40728,20 +40732,18 @@ fn executable_contains_asset_id(
     executable: &iroha_data_model::transaction::Executable,
     expected: &iroha_data_model::asset::AssetId,
 ) -> bool {
-    use iroha_data_model::transaction::Executable;
-    match executable {
-        Executable::Instructions(instructions) => instructions
-            .iter()
-            .any(|instruction| instruction_matches_asset_id(instruction, expected)),
-        _ => false,
-    }
+    let mut found = false;
+    executable_explicit_instructions(executable, |instruction| {
+        found |= instruction_matches_asset_id(instruction, expected);
+    });
+    found
 }
 
 #[cfg(feature = "app_api")]
 fn tx_collect_asset_ids(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Vec<iroha_data_model::asset::AssetId> {
-    use iroha_data_model::transaction::{Executable, signed::TransactionEntrypoint};
+    use iroha_data_model::transaction::signed::TransactionEntrypoint;
 
     let mut out = Vec::new();
     let mut visit_instruction = |instr: &iroha_data_model::isi::InstructionBox| {
@@ -40749,21 +40751,14 @@ fn tx_collect_asset_ids(
     };
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
-            if let Executable::Instructions(instructions) = signed.instructions() {
-                for instr in instructions.iter() {
-                    visit_instruction(instr);
-                }
-            }
+            executable_explicit_instructions(signed.instructions(), &mut visit_instruction);
         }
         TransactionEntrypoint::SealedCommitment(_) => {}
         TransactionEntrypoint::SealedReveal(reveal) => {
-            if let Executable::Instructions(instructions) =
-                reveal.signed_transaction().instructions()
-            {
-                for instr in instructions.iter() {
-                    visit_instruction(instr);
-                }
-            }
+            executable_explicit_instructions(
+                reveal.signed_transaction().instructions(),
+                &mut visit_instruction,
+            );
         }
         TransactionEntrypoint::PrivateKaigi(_) => {}
         TransactionEntrypoint::Time(entry) => {
@@ -45719,7 +45714,7 @@ mod tx_query_filter_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_lookup_tests {
-    use std::{borrow::Cow, sync::Arc, time::Duration};
+    use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
 
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -45768,6 +45763,17 @@ mod explorer_lookup_tests {
     fn build_state_with_transactions(
         instruction_batches: Vec<Vec<dm::InstructionBox>>,
     ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
+        build_state_with_executables(
+            instruction_batches
+                .into_iter()
+                .map(dm::Executable::from)
+                .collect(),
+        )
+    }
+
+    fn build_state_with_executables(
+        executables: Vec<dm::Executable>,
+    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -45781,15 +45787,18 @@ mod explorer_lookup_tests {
             checked_explorer_lookup_account(0x20, "derive explorer lookup authority fixture key");
         let mut hashes = Vec::new();
         let mut txs = Vec::new();
-        for (index, instructions) in instruction_batches.into_iter().enumerate() {
+        for (index, executable) in executables.into_iter().enumerate() {
+            let gas_limit = executable
+                .requires_transaction_gas_limit()
+                .then(|| NonZeroU64::new(10_000).expect("non-zero test gas limit"));
             let mut builder = dm::TransactionBuilder::new(
                 chain.clone(),
                 authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
             );
             builder.set_creation_time(Duration::from_millis(1_710_000_000_000 + index as u64));
             let signed = builder
-                .with_instructions(instructions)
+                .with_executable(executable)
                 .sign(authority_key.private_key());
             hashes.push(signed.hash_as_entrypoint());
             txs.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
@@ -45905,6 +45914,54 @@ mod explorer_lookup_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].index, 2);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_instruction_reads_include_batch_items_in_order() {
+        let first: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "first batch item".to_owned()).into();
+        let second: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "second batch item".to_owned()).into();
+        let executable = dm::Executable::Batch(
+            vec![
+                dm::ExecutableBatchItem::from(first),
+                dm::ExecutableBatchItem::from(second),
+            ]
+            .into(),
+        );
+        let (state, mut hashes) = build_state_with_executables(vec![executable]);
+        let target_hash = hashes.remove(0);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: None,
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+        let max_height = state.committed_height() as u64;
+
+        let (items, pagination) =
+            collect_instruction_history(state.as_ref(), max_height, &filters, 1, 10)
+                .expect("batch instruction history");
+        assert_eq!(pagination.total_items, 2);
+        assert_eq!(
+            items.iter().map(|item| item.index).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let latest = collect_latest_instruction_history(state.as_ref(), max_height, &filters, 10)
+            .expect("latest batch instruction history");
+        assert_eq!(
+            latest.iter().map(|item| item.index).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let detail =
+            find_instruction_detail(state.as_ref(), max_height, target_hash.to_string(), 1)
+                .expect("second batch instruction detail");
+        assert_eq!(detail.index, 1);
     }
 
     #[test]
@@ -65209,7 +65266,7 @@ mod sponsored_onboarding_dto_tests {
         for forbidden in ["private_key", "token", "uaid", "public_key_hex"] {
             let encoded = format!(
                 r#"{{"version":1,"alias":"merchant@banka.paynet","account_id":"{}","{forbidden}":"forbidden"}}"#,
-                iroha_test_samples::ALICE_ID
+                iroha_test_samples::ALICE_ID.to_string()
             );
             assert!(
                 norito::json::from_str::<AccountOnboardingPlanRequestDto>(&encoded).is_err(),
@@ -65568,13 +65625,49 @@ fn faucet_executable_is_claim(
     source_asset_id: &AssetId,
     amount: &iroha_primitives::numeric::Quantity,
 ) -> bool {
-    matches!(
-        executable,
-        Executable::Instructions(instructions)
-            if instructions.iter().any(|instruction| {
-                faucet_instruction_is_claim(instruction, source_asset_id, amount)
-            })
+    executable
+        .explicit_instructions()
+        .any(|instruction| faucet_instruction_is_claim(instruction, source_asset_id, amount))
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn faucet_claim_scanner_includes_instruction_items_from_mixed_batch() {
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    let source_asset_id = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa"),
+        ALICE_ID.clone(),
+    );
+    let amount = Quantity::from(5_u32);
+    let transfer: InstructionBox =
+        Transfer::asset_quantity(source_asset_id.clone(), amount.clone(), BOB_ID.clone()).into();
+    let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        0,
+        &ALICE_ID,
+        1,
+        DataSpaceId::UNIVERSAL,
     )
+    .expect("contract address");
+    let contract_call = iroha_data_model::transaction::executable::ContractInvocation {
+        contract_address,
+        expected_code_hash: Hash::prehashed([0x42; Hash::LENGTH]),
+        entrypoint: "before_claim".to_owned(),
+        arguments: None,
+    };
+    let executable = Executable::Batch(
+        vec![
+            iroha_data_model::transaction::ExecutableBatchItem::from(contract_call),
+            iroha_data_model::transaction::ExecutableBatchItem::from(transfer),
+        ]
+        .into(),
+    );
+
+    assert!(faucet_executable_is_claim(
+        &executable,
+        &source_asset_id,
+        &amount
+    ));
 }
 
 #[cfg(feature = "app_api")]
@@ -66059,11 +66152,9 @@ pub async fn handle_v1_confidential_notes(
                     if result.as_ref().is_err() {
                         continue;
                     }
-                    let Executable::Instructions(instructions) = tx.instructions() else {
-                        continue;
-                    };
-                    let confidential_instructions: Vec<Value> = instructions
-                        .iter()
+                    let confidential_instructions: Vec<Value> = tx
+                        .instructions()
+                        .explicit_instructions()
                         .filter_map(|instruction| {
                             confidential_note_instruction_payload(instruction, &asset)
                         })
@@ -71361,10 +71452,7 @@ fn collect_instruction_history_from_kura(
             if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
-            for (idx, instruction) in instructions.iter().enumerate() {
+            for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
                     continue;
@@ -71441,10 +71529,7 @@ fn collect_latest_instruction_history(
             if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
-            for (idx, instruction) in instructions.iter().enumerate() {
+            for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
                     continue;
@@ -71532,10 +71617,7 @@ fn collect_instruction_history(
             if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
-            for (idx, instruction) in instructions.iter().enumerate() {
+            for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
                     continue;
@@ -71708,11 +71790,10 @@ fn instruction_detail_at_height(
         if entrypoint_hash != target {
             continue;
         }
-        let Executable::Instructions(instructions) = tx.instructions() else {
-            return Err(explorer_not_found());
-        };
-        let instruction = instructions
-            .get(lookup_index)
+        let instruction = tx
+            .instructions()
+            .explicit_instructions()
+            .nth(lookup_index)
             .ok_or_else(explorer_not_found)?;
         let kind = crate::explorer::instruction_kind(instruction);
         let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
@@ -72276,11 +72357,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                     continue;
                 }
 
-                let Executable::Instructions(instructions) = tx.instructions() else {
-                    continue;
-                };
-
-                for instr in instructions.iter() {
+                for instr in tx.instructions().explicit_instructions() {
                     let any = instr.as_any();
 
                     // Velocity: asset transfers only.

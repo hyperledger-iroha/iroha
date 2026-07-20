@@ -1,5 +1,108 @@
 import Foundation
 
+/// Validation errors for mixed executable transaction authoring.
+public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendable {
+    case emptyBatch
+    case invalidInstructionWireName
+    case invalidInstructionFrame
+    case invalidContractAddress
+    case invalidExpectedCodeHashLength(Int)
+    case invalidExpectedCodeHashMarker
+    case invalidEntrypoint
+    case contractArgumentsTooLarge(Int)
+    case missingGasLimit
+    case zeroTimeToLive
+    case zeroNonce
+
+    public var errorDescription: String? {
+        switch self {
+        case .emptyBatch:
+            return "An executable batch must contain at least one item."
+        case .invalidInstructionWireName:
+            return "Instruction wire name must be exact non-empty text."
+        case .invalidInstructionFrame:
+            return "Instruction payload must contain a valid Norito frame."
+        case .invalidContractAddress:
+            return "Contract address must be a canonical lowercase V1 Bech32m literal."
+        case let .invalidExpectedCodeHashLength(length):
+            return "Expected contract code hash must be 32 bytes (received \(length))."
+        case .invalidExpectedCodeHashMarker:
+            return "Expected contract code hash must use Iroha's marked hash encoding."
+        case .invalidEntrypoint:
+            return "Contract entrypoint must be exact non-empty text without whitespace."
+        case let .contractArgumentsTooLarge(length):
+            return "Contract arguments exceed the 1048576-byte wire limit (received \(length))."
+        case .missingGasLimit:
+            return "A batch containing a contract call requires a signature-bound gas limit."
+        case .zeroTimeToLive:
+            return "Transaction time-to-live must be non-zero."
+        case .zeroNonce:
+            return "Transaction nonce must be non-zero."
+        }
+    }
+}
+
+/// Canonical dynamic instruction frame accepted by `InstructionBox`.
+public struct TransactionInstructionFrame: Equatable, Sendable {
+    public let wireName: String
+    public let framedPayload: Data
+
+    public init(wireName: String, framedPayload: Data) throws {
+        guard !wireName.isEmpty,
+              wireName == wireName.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw ExecutableBatchInputError.invalidInstructionWireName
+        }
+        guard noritoDecodeFrame(framedPayload) != nil else {
+            throw ExecutableBatchInputError.invalidInstructionFrame
+        }
+        self.wireName = wireName
+        self.framedPayload = framedPayload
+    }
+}
+
+/// Signature-bound invocation of one deployed contract revision.
+public struct TransactionContractInvocation: Equatable, Sendable {
+    public static let maximumArgumentsBytes = 1024 * 1024
+
+    public let contractAddress: String
+    public let expectedCodeHash: Data
+    public let entrypoint: String
+    public let arguments: Data?
+
+    public init(contractAddress: String,
+                expectedCodeHash: Data,
+                entrypoint: String,
+                arguments: Data? = nil) throws {
+        guard ContractAddressV1.isCanonical(contractAddress) else {
+            throw ExecutableBatchInputError.invalidContractAddress
+        }
+        guard expectedCodeHash.count == 32 else {
+            throw ExecutableBatchInputError.invalidExpectedCodeHashLength(expectedCodeHash.count)
+        }
+        guard let finalHashByte = expectedCodeHash.last, finalHashByte & 1 == 1 else {
+            throw ExecutableBatchInputError.invalidExpectedCodeHashMarker
+        }
+        guard !entrypoint.isEmpty,
+              entrypoint == entrypoint.trimmingCharacters(in: .whitespacesAndNewlines),
+              !entrypoint.contains(where: \.isWhitespace) else {
+            throw ExecutableBatchInputError.invalidEntrypoint
+        }
+        if let arguments, arguments.count > Self.maximumArgumentsBytes {
+            throw ExecutableBatchInputError.contractArgumentsTooLarge(arguments.count)
+        }
+        self.contractAddress = contractAddress
+        self.expectedCodeHash = expectedCodeHash
+        self.entrypoint = entrypoint
+        self.arguments = arguments
+    }
+}
+
+/// One ordered item in an atomic mixed executable batch.
+public enum TransactionBatchEntry: Equatable, Sendable {
+    case instruction(TransactionInstructionFrame)
+    case contractCall(TransactionContractInvocation)
+}
+
 public struct TransferRequest: Sendable {
     public let chainId: String
     public let authority: String
@@ -1335,6 +1438,49 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeTransfer(transfer: transfer,
                                                           signingKey: signingKey,
                                                           creationTimeMs: creationTimeMs)
+    }
+
+    /// Build and sign one atomic ordered mix of native instructions and deployed-contract calls.
+    public func buildSignedExecutableBatch(
+        chainId: String,
+        authority: String,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        nonce: UInt32? = nil,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        try SingleInstructionSwiftNoritoEncoder.encodeExecutableBatch(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            nonce: nonce,
+            entries: entries,
+            feePayment: feePayment,
+            signingKey: signingKey
+        )
+    }
+
+    /// Ed25519 convenience overload for an atomic mixed executable batch.
+    public func buildSignedExecutableBatch(
+        chainId: String,
+        authority: String,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        nonce: UInt32? = nil,
+        keypair: Keypair
+    ) throws -> SignedTransactionEnvelope {
+        try buildSignedExecutableBatch(
+            chainId: chainId,
+            authority: authority,
+            entries: entries,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            signingKey: SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        )
     }
 
     /// Verify the planner commitment and exact frames, then locally sign one

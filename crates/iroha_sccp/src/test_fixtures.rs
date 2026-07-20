@@ -498,9 +498,18 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
             | TransactionEntrypoint::PrivateKaigi(_)
             | TransactionEntrypoint::Time(_) => continue,
         };
-        let instructions: &[InstructionBox] = match transaction.instructions() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
+        let instructions: Vec<&InstructionBox> = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.iter().collect(),
+            Executable::IvmProved(proved) => proved.overlay.iter().collect(),
+            Executable::Batch(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                        instruction,
+                    ) => Some(instruction),
+                    iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_) => None,
+                })
+                .collect(),
             Executable::ContractCall(_) | Executable::Ivm(_) => continue,
         };
         for instruction in instructions {

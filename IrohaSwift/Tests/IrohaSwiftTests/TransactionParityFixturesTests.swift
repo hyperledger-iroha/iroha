@@ -13,6 +13,44 @@ final class TransactionParityFixturesTests: XCTestCase {
         )
     }
 
+    func testFixtureExecutableDecoderPreservesMixedBatchOrder() throws {
+        let data = Data(#"""
+        {
+          "Batch": [
+            {"Instruction": {"kind": "Grant", "arguments": {"action": "GrantPermission"}}},
+            {"ContractCall": {
+              "contract_address": "tairac1example",
+              "expected_code_hash": "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+              "entrypoint": "run",
+              "arguments": [1, 2, 3, 4]
+            }},
+            {"Instruction": {"kind": "Revoke", "arguments": {"action": "RevokePermission"}}}
+          ]
+        }
+        """#.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let executable = try decoder.decode(TransactionExecutable.self, from: data)
+
+        guard case let .batch(items) = executable else {
+            return XCTFail("expected mixed executable batch")
+        }
+        XCTAssertEqual(items.count, 3)
+        guard case let .instruction(first) = items[0] else {
+            return XCTFail("expected leading instruction")
+        }
+        XCTAssertEqual(first.kind, "Grant")
+        guard case let .contractCall(invocation) = items[1] else {
+            return XCTFail("expected middle contract call")
+        }
+        XCTAssertEqual(invocation.entrypoint, "run")
+        XCTAssertEqual(invocation.arguments, [1, 2, 3, 4])
+        guard case let .instruction(last) = items[2] else {
+            return XCTFail("expected trailing instruction")
+        }
+        XCTAssertEqual(last.kind, "Revoke")
+    }
+
     func testSwiftParityManifestSignedHashesUseCompactExternalEntrypoint() throws {
         let loader = try Self.fixtures()
         XCTAssertEqual(loader.manifests.count, 3)
@@ -515,7 +553,16 @@ private struct TransactionPayloadSpec: Decodable {
     }
 
     func instruction(kind: String, action: String) throws -> TransactionInstruction {
-        guard case .instructions(let items) = executable else {
+        let items: [TransactionInstruction]
+        switch executable {
+        case let .instructions(instructions):
+            items = instructions
+        case let .batch(entries):
+            items = entries.compactMap { entry in
+                guard case let .instruction(instruction) = entry else { return nil }
+                return instruction
+            }
+        case .ivm:
             throw FixtureError.unsupportedExecutable(kind)
         }
         guard let instruction = items.first(where: { instruction in
@@ -530,10 +577,12 @@ private struct TransactionPayloadSpec: Decodable {
 private enum TransactionExecutable: Decodable {
     case instructions([TransactionInstruction])
     case ivm(Data)
+    case batch([TransactionExecutableBatchItem])
 
     private enum CodingKeys: String, CodingKey {
         case instructions = "Instructions"
         case ivm = "Ivm"
+        case batch = "Batch"
     }
 
     init(from decoder: Decoder) throws {
@@ -547,6 +596,8 @@ private enum TransactionExecutable: Decodable {
                                                        debugDescription: "invalid base64 payload")
             }
             self = .ivm(decoded)
+        } else if let batch = try container.decodeIfPresent([TransactionExecutableBatchItem].self, forKey: .batch) {
+            self = .batch(batch)
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
@@ -554,6 +605,50 @@ private enum TransactionExecutable: Decodable {
             )
         }
     }
+}
+
+private enum TransactionExecutableBatchItem: Decodable {
+    case instruction(TransactionInstruction)
+    case contractCall(TransactionContractInvocationSpec)
+
+    private enum CodingKeys: String, CodingKey {
+        case instruction = "Instruction"
+        case contractCall = "ContractCall"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.allKeys.count == 1 else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "executable batch item must contain exactly one variant"
+                )
+            )
+        }
+        if let instruction = try container.decodeIfPresent(TransactionInstruction.self, forKey: .instruction) {
+            self = .instruction(instruction)
+        } else if let invocation = try container.decodeIfPresent(
+            TransactionContractInvocationSpec.self,
+            forKey: .contractCall
+        ) {
+            self = .contractCall(invocation)
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "unsupported executable batch item"
+                )
+            )
+        }
+    }
+}
+
+private struct TransactionContractInvocationSpec: Decodable {
+    let contractAddress: String
+    let expectedCodeHash: String
+    let entrypoint: String
+    let arguments: [UInt8]?
 }
 
 private struct TransactionInstruction: Decodable {

@@ -968,13 +968,45 @@ pub fn classify_alias_intent(
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<AliasPlanDispositionV1, AliasSetupError> {
-    classify_alias_intent_with_planned_parents(
+    classify_alias_intent_with_planned_parents_and_endorsement_policy(
         world,
         catalog,
         &BTreeMap::new(),
         &BTreeSet::new(),
         intent,
         now_ms,
+        false,
+    )
+}
+
+/// Classify one declarative intent while enforcing the live domain-endorsement policy.
+///
+/// Per-domain policy stored in `world` overrides
+/// `default_domain_endorsement_required`, matching domain registration. Because
+/// [`iroha_data_model::alias_setup::AliasDomainIntentV1`] cannot carry immutable
+/// endorsement metadata, an absent domain that requires it is blocked before an
+/// executable acquisition disposition can be returned.
+///
+/// # Errors
+///
+/// Returns the same coded failures as [`classify_alias_intent`], and
+/// `alias.domain.endorsement_required` when an absent domain cannot be created
+/// from the declarative setup model under the active policy.
+pub fn classify_alias_intent_with_endorsement_policy(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    intent: &AliasIntentV1,
+    now_ms: u64,
+    default_domain_endorsement_required: bool,
+) -> Result<AliasPlanDispositionV1, AliasSetupError> {
+    classify_alias_intent_with_planned_parents_and_endorsement_policy(
+        world,
+        catalog,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+        intent,
+        now_ms,
+        default_domain_endorsement_required,
     )
 }
 
@@ -1025,6 +1057,38 @@ pub fn classify_alias_intent_with_planned_parents(
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<AliasPlanDispositionV1, AliasSetupError> {
+    classify_alias_intent_with_planned_parents_and_endorsement_policy(
+        world,
+        catalog,
+        planned_dataspaces,
+        planned_domains,
+        intent,
+        now_ms,
+        false,
+    )
+}
+
+/// Classify an ordered intent while enforcing the live domain-endorsement policy.
+///
+/// This is the policy-aware form of [`classify_alias_intent_with_planned_parents`].
+/// Per-domain policy stored in `world` overrides
+/// `default_domain_endorsement_required`, exactly as it does during consensus
+/// domain registration.
+///
+/// # Errors
+///
+/// Returns the same coded failures as [`classify_alias_intent_with_planned_parents`],
+/// and `alias.domain.endorsement_required` when an absent domain cannot be
+/// represented by the declarative setup intent under the active policy.
+pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
+    intent: &AliasIntentV1,
+    now_ms: u64,
+    default_domain_endorsement_required: bool,
+) -> Result<AliasPlanDispositionV1, AliasSetupError> {
     if !matches!(intent, AliasIntentV1::AccountAlias(value) if matches!(value.provision, AccountProvisionV1::Create))
         && world.accounts().get(alias_intent_owner(intent)).is_none()
     {
@@ -1047,7 +1111,26 @@ pub fn classify_alias_intent_with_planned_parents(
 
     let resource_needs_repair = match intent {
         AliasIntentV1::Dataspace(_) => false,
-        AliasIntentV1::Domain(value) => classify_domain_state(world, value)?,
+        AliasIntentV1::Domain(value) => {
+            let needs_repair = classify_domain_state(world, value)?;
+            if world.domains().get(&value.domain.canonical_name).is_none()
+                && world
+                    .domain_endorsement_policies()
+                    .get(&value.domain.canonical_name)
+                    .map_or(default_domain_endorsement_required, |policy| {
+                        policy.required
+                    })
+            {
+                return Err(AliasSetupError::new(
+                    "alias.domain.endorsement_required",
+                    format!(
+                        "domain `{}` requires immutable endorsement metadata that AliasDomainIntentV1 cannot carry; create it through governed bootstrap/domain registration before requesting alias setup",
+                        value.domain
+                    ),
+                ));
+            }
+            needs_repair
+        }
         AliasIntentV1::AccountAlias(value) => classify_account_state(world, value)?,
     };
 
@@ -1288,6 +1371,54 @@ mod tests {
             )
             .expect("planned parent classification"),
             AliasPlanDispositionV1::Create
+        );
+    }
+
+    #[test]
+    fn endorsement_required_absent_domain_cannot_be_planned_for_setup() {
+        let owner = account(17);
+        let world = world_with_accounts(core::slice::from_ref(&owner));
+        let catalog = DataSpaceCatalog::new(Vec::new()).expect("empty dynamic catalog");
+        let parent = dynamic_dataspace_intent(owner.clone());
+        let AliasIntentV1::Dataspace(parent) = parent else {
+            unreachable!()
+        };
+        let domain_id = iroha_data_model::domain::DomainId::try_new(
+            "protected",
+            parent.dataspace.canonical_name.clone(),
+        )
+        .expect("protected domain");
+        let intent = AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(domain_id.clone(), parent.dataspace.dataspace_id),
+            owner,
+        });
+        let selector = selector_for_resolved_alias_target(&intent.target())
+            .expect("protected domain selector");
+        let planned_dataspaces = BTreeMap::from([(
+            parent.dataspace.canonical_name,
+            parent.dataspace.dataspace_id,
+        )]);
+
+        let error = classify_alias_intent_with_planned_parents_and_endorsement_policy(
+            &world.view(),
+            &catalog,
+            &planned_dataspaces,
+            &BTreeSet::new(),
+            &intent,
+            1,
+            true,
+        )
+        .expect_err("an endorsement-free domain intent must not yield an executable plan");
+        assert_eq!(error.code(), "alias.domain.endorsement_required");
+
+        let view = world.view();
+        assert!(
+            view.domains().get(&domain_id).is_none(),
+            "read-only planning must not create the blocked domain"
+        );
+        assert!(
+            crate::sns::record_by_selector(&view, &selector).is_none(),
+            "read-only planning must not acquire the blocked lease"
         );
     }
 

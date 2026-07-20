@@ -9,7 +9,7 @@ use iroha_data_model::{
         deframe_versioned_signed_block_bytes,
     },
     prelude::SetParameter,
-    transaction::executable::Executable,
+    transaction::{ExecutableBatchItem, executable::Executable},
 };
 use nonzero_ext::nonzero;
 
@@ -215,6 +215,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                             proved.bytecode.size_bytes(),
                             proved.overlay.len()
                         );
+                    }
+                    Executable::Batch(items) => {
+                        for (item_index, item) in items.iter().enumerate() {
+                            match item {
+                                ExecutableBatchItem::Instruction(instruction) => {
+                                    println!("  batch[{item_index}] instruction: {instruction:?}");
+                                    if let Some(set_param) =
+                                        instruction.as_any().downcast_ref::<SetParameter>()
+                                    {
+                                        println!("    set parameter payload: {:?}", set_param.0);
+                                    }
+                                }
+                                ExecutableBatchItem::ContractCall(call) => println!(
+                                    "  batch[{item_index}] contract call: address={} expected_code_hash={} entrypoint={} arguments={:?}",
+                                    call.contract_address,
+                                    call.expected_code_hash,
+                                    call.entrypoint,
+                                    call.arguments
+                                ),
+                            }
+                        }
                     }
                 }
                 if let Some(err) = block.error(idx) {

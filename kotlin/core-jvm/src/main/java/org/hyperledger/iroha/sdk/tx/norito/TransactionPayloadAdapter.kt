@@ -13,13 +13,16 @@ import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
 import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -33,6 +36,9 @@ import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
 
     override fun encode(encoder: NoritoEncoder, value: TransactionPayload) {
+        require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
+            "feePayment.gasLimit is required for IVM and contract-call executables"
+        }
         encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId)
         encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
         encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
@@ -204,6 +210,77 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             return tryDecodeWireInstruction(payload, decoder.flags, decoder.flagsHint)
                 ?: throw IllegalArgumentException("Instruction payload must be wire-framed")
         }
+    }
+
+    private class ContractArgumentRecordAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            require(value.size <= MAX_CONTRACT_ARGUMENT_RECORD_BYTES) {
+                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            }
+            RAW_BYTE_VEC_ADAPTER.encode(encoder, value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray {
+            val length = decoder.readLength(false)
+            require(length in 0L..MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong()) {
+                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            }
+            return decoder.readBytes(length.toInt())
+        }
+    }
+
+    private class ContractInvocationAdapter : TypeAdapter<ContractInvocation> {
+        override fun encode(encoder: NoritoEncoder, value: ContractInvocation) {
+            encodeSizedField(encoder, STRING_ADAPTER, value.contractAddress)
+            encodeSizedField(encoder, HASH_ADAPTER, value.expectedCodeHash)
+            encodeSizedField(encoder, STRING_ADAPTER, value.entrypoint)
+            encodeSizedField(
+                encoder,
+                CONTRACT_ARGUMENTS_ADAPTER,
+                Optional.ofNullable(value.arguments),
+            )
+        }
+
+        override fun decode(decoder: NoritoDecoder): ContractInvocation =
+            ContractInvocation(
+                contractAddress = decodeSizedField(decoder, STRING_ADAPTER),
+                expectedCodeHash = decodeSizedField(decoder, HASH_ADAPTER),
+                entrypoint = decodeSizedField(decoder, STRING_ADAPTER),
+                arguments = decodeBoundedSizedField<Optional<ByteArray>>(
+                    decoder,
+                    CONTRACT_ARGUMENTS_ADAPTER,
+                    MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong() + 32L,
+                    "ContractInvocation.arguments",
+                ).orElse(null),
+            )
+    }
+
+    private class ExecutableBatchItemAdapter : TypeAdapter<ExecutableBatchItem> {
+        override fun encode(encoder: NoritoEncoder, value: ExecutableBatchItem) {
+            when (value) {
+                is ExecutableBatchItem.Instruction -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_INSTRUCTION_TAG)
+                    encodeSizedField(encoder, INSTRUCTION_ADAPTER, value.instruction)
+                }
+                is ExecutableBatchItem.ContractCall -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_CONTRACT_CALL_TAG)
+                    encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, value.invocation)
+                }
+            }
+        }
+
+        override fun decode(decoder: NoritoDecoder): ExecutableBatchItem =
+            when (val tag = ENUM_TAG_ADAPTER.decode(decoder)) {
+                BATCH_ITEM_INSTRUCTION_TAG -> ExecutableBatchItem.instruction(
+                    decodeSizedField(decoder, INSTRUCTION_ADAPTER),
+                )
+                BATCH_ITEM_CONTRACT_CALL_TAG -> ExecutableBatchItem.contractCall(
+                    decodeSizedField(decoder, CONTRACT_INVOCATION_ADAPTER),
+                )
+                else -> throw IllegalArgumentException(
+                    "Unknown ExecutableBatchItem discriminant: $tag",
+                )
+            }
     }
 
     private class ExecutableAdapter : TypeAdapter<Executable> {
@@ -494,14 +571,29 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private val UINT8_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(8)
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
+        private val HASH_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.fixedBytes(32)
         private val IVM_BYTECODE_ADAPTER: TypeAdapter<ByteArray> = IvmBytecodeAdapter()
+        private val INSTRUCTION_ADAPTER: TypeAdapter<InstructionBox> = InstructionAdapter()
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =
-            NoritoAdapters.sequence(InstructionAdapter())
+            NoritoAdapters.sequence(INSTRUCTION_ADAPTER)
+        private val CONTRACT_ARGUMENT_RECORD_ADAPTER: TypeAdapter<ByteArray> =
+            ContractArgumentRecordAdapter()
+        private val CONTRACT_ARGUMENTS_ADAPTER: TypeAdapter<Optional<ByteArray>> =
+            NoritoAdapters.option(CONTRACT_ARGUMENT_RECORD_ADAPTER)
+        private val CONTRACT_INVOCATION_ADAPTER: TypeAdapter<ContractInvocation> =
+            ContractInvocationAdapter()
+        private val BATCH_ITEM_ADAPTER: TypeAdapter<ExecutableBatchItem> =
+            ExecutableBatchItemAdapter()
+        private val BATCH_ADAPTER: TypeAdapter<List<ExecutableBatchItem>> =
+            NoritoAdapters.sequence(BATCH_ITEM_ADAPTER)
         private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
         private const val EXECUTABLE_INSTRUCTIONS_TAG = 0L
         private const val EXECUTABLE_CONTRACT_CALL_TAG = 1L
         private const val EXECUTABLE_IVM_TAG = 2L
         private const val EXECUTABLE_IVM_PROVED_TAG = 3L
+        private const val EXECUTABLE_BATCH_TAG = 4L
+        private const val BATCH_ITEM_INSTRUCTION_TAG = 0L
+        private const val BATCH_ITEM_CONTRACT_CALL_TAG = 1L
         private val TTL_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(64))
         private val NONCE_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(32))
         private val GAS_LIMIT_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(64))
@@ -544,6 +636,23 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
             val value = adapter.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after field payload" }
+            return value
+        }
+
+        private fun <T> decodeBoundedSizedField(
+            decoder: NoritoDecoder,
+            adapter: TypeAdapter<T>,
+            maxEncodedLength: Long,
+            fieldName: String,
+        ): T {
+            val length = decoder.readLength(decoder.compactLenActive())
+            require(length in 0L..maxEncodedLength) {
+                "$fieldName payload exceeds $maxEncodedLength bytes"
+            }
+            val payload = decoder.readBytes(length.toInt())
+            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val value = adapter.decode(child)
+            require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
             return value
         }
 
@@ -628,6 +737,14 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                     ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG)
                     encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions)
                 }
+                is Executable.ContractCall -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_CONTRACT_CALL_TAG)
+                    encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, executable.invocation)
+                }
+                is Executable.Batch -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_BATCH_TAG)
+                    encodeSizedField(encoder, BATCH_ADAPTER, executable.entries)
+                }
             }
         }
 
@@ -642,7 +759,13 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                     val instructions = decodeSizedField(decoder, INSTRUCTION_LIST_ADAPTER)
                     Executable.instructions(instructions)
                 }
-                EXECUTABLE_CONTRACT_CALL_TAG, EXECUTABLE_IVM_PROVED_TAG ->
+                EXECUTABLE_CONTRACT_CALL_TAG -> Executable.contractCall(
+                    decodeSizedField(decoder, CONTRACT_INVOCATION_ADAPTER),
+                )
+                EXECUTABLE_BATCH_TAG -> Executable.batch(
+                    decodeSizedField(decoder, BATCH_ADAPTER),
+                )
+                EXECUTABLE_IVM_PROVED_TAG ->
                     throw IllegalArgumentException("Unsupported Executable discriminant: $tag")
                 else -> throw IllegalArgumentException("Unknown Executable discriminant: $tag")
             }

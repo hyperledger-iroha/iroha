@@ -801,6 +801,7 @@ pub(crate) struct RecoveredV2Height {
 pub(crate) struct PendingKuraApply {
     context_id: wire::HeightContextId,
     height: wire::Height,
+    state_height: wire::Height,
     block_hash: HashOf<BlockHeader>,
 }
 
@@ -815,6 +816,7 @@ impl PendingKuraApply {
         Self {
             context_id,
             height,
+            state_height: height.saturating_sub(1),
             block_hash,
         }
     }
@@ -827,6 +829,11 @@ impl PendingKuraApply {
     /// Interrupted application height.
     pub(crate) const fn height(self) -> wire::Height {
         self.height
+    }
+
+    /// Committed state height authenticated when recovery selected this tip.
+    pub(crate) const fn state_height(self) -> wire::Height {
+        self.state_height
     }
 
     /// Canonical block already durable in Kura.
@@ -1020,6 +1027,7 @@ pub(crate) fn recover_active_height(
     let pending_kura_apply = Some(PendingKuraApply {
         context_id: verified_context.context().id(),
         height: durable_height,
+        state_height,
         block_hash,
     });
     Ok(RecoveredV2Height {

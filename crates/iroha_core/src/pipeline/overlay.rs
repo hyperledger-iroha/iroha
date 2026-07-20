@@ -917,7 +917,9 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
         let submitted_bytecode = match tx.instructions() {
             Executable::Ivm(bytecode) => Some(bytecode.as_ref()),
             Executable::IvmProved(proved) => Some(proved.bytecode.as_ref()),
-            Executable::Instructions(_) | Executable::ContractCall(_) => None,
+            Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
+                None
+            }
         };
         if submitted_bytecode.is_some_and(|bytecode| bytecode != stored_bytecode) {
             return Err(OverlayBuildError::HeaderPolicy(
@@ -2300,6 +2302,9 @@ where
             prune_redundant_contract_ops(state_ro, &mut instrs);
             Ok(TxOverlay::from_instructions(instrs))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch must execute through the live scheduler barrier".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
                 .ok_or_else(|| {
@@ -2735,6 +2740,10 @@ pub fn build_overlay_for_transaction_with_accounts(
             let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
             Ok(TxOverlay::from_instructions(instrs))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch requires live state and cannot be flattened into an overlay"
+                .to_owned(),
+        )),
         Executable::ContractCall(_) => Err(OverlayBuildError::ContractCall(
             "Executable::ContractCall requires a full state view for overlay building".to_owned(),
         )),
@@ -2838,6 +2847,9 @@ where
                 false,
             ))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch must execute through the live scheduler barrier".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             #[cfg(feature = "telemetry")]
             let program_prepare_start = Instant::now();
@@ -3335,6 +3347,9 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 true,
             ))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch is not supported in quarantine overlay building".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
                 .ok_or_else(|| {

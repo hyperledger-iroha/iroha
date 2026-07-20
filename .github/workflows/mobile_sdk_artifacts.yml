@@ -8,6 +8,7 @@ on:
       - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/check_kotlin_no_reflection.sh"
       - "scripts/build_kagemusha_candidate_android_native.sh"
       - "scripts/run_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab.sh"
@@ -51,7 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n ci/check_kagemusha_candidate_android_lab.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+        run: bash -n ci/check_kagemusha_candidate_android_lab.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+      - name: Kotlin production reflection guard
+        run: scripts/check_kotlin_no_reflection.sh
       - name: Candidate Android lab isolation contract
         run: ci/check_kagemusha_candidate_android_lab.sh
       - name: Artifact checker fixture tests

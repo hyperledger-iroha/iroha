@@ -10,6 +10,7 @@ import csv
 import hashlib
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ SCENARIOS = (
     "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
     "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
 )
+IGNORED_SCENARIOS: frozenset[str] = frozenset()
 SOURCE_MANIFEST = "a" * 64
 HEAD_COMMIT = "1" * 40
 HEAD_TREE = "2" * 40
@@ -40,6 +42,9 @@ def _stubbed_environment(
     cargo = bin_dir / "cargo"
     inventory = "\n".join(
         f"sumeragi_v2_runner::{scenario}: test" for scenario in SCENARIOS
+    )
+    ignored_inventory = "\n".join(
+        f"sumeragi_v2_runner::{scenario}: test" for scenario in IGNORED_SCENARIOS
     )
     cargo.write_text(
         f"""#!/usr/bin/env bash
@@ -62,6 +67,7 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 
 case " $* " in
   *" --list --ignored "*)
+    printf '%s\n' '{ignored_inventory}'
     exit 0
     ;;
   *" --list "*)
@@ -141,6 +147,14 @@ case "${{SEED_MATRIX_FAKE_RUN_MODE:-pass}}" in
     emit_success
     exit 73
     ;;
+  unsafe-symlink)
+    ln -s "$SEED_MATRIX_ESCAPE_TARGET" "$TEST_NETWORK_TMP_DIR/mock_validator/escape"
+    emit_success
+    ;;
+  unsafe-special)
+    mkfifo "$TEST_NETWORK_TMP_DIR/mock_validator/special"
+    emit_success
+    ;;
   *)
     exit 64
     ;;
@@ -160,6 +174,9 @@ if [[ $# -eq 3 \
   printf '%s\n' '{SOURCE_MANIFEST}'
   exit 0
 fi
+if [[ "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" ]]; then
+  exec "$SEED_MATRIX_REAL_PYTHON3" "$@"
+fi
 printf 'unexpected mocked python3 invocation: %s\n' "$*" >&2
 exit 65
 """,
@@ -174,6 +191,7 @@ exit 65
     env["SEED_MATRIX_EXPECTED_REPO_ROOT"] = str(ROOT_DIR)
     env["SEED_MATRIX_CAPTURE"] = str(capture)
     env["SEED_MATRIX_FAKE_RUN_MODE"] = run_mode
+    env["SEED_MATRIX_REAL_PYTHON3"] = sys.executable
     evidence = tmp_path / "mocked-command-evidence"
     env["SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR"] = str(evidence)
     return env, capture, evidence
@@ -246,6 +264,12 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         "-- --exact --nocapture --test-threads=1" in row[0]
         for row in execution_rows
     )
+    for row, scenario in zip(
+        execution_rows,
+        (scenario for scenario in SCENARIOS for _ in range(4)),
+        strict=True,
+    ):
+        assert (" --ignored" in row[0]) == (scenario in IGNORED_SCENARIOS)
     assert all(row[1:3] == ["1", "1"] for row in rows)
     assert all(row[4:7] == ["<unset>", "0", "1"] for row in rows)
     source_manifests = {row[7] for row in rows}
@@ -280,7 +304,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     }
     assert {row["cargo_status"] for row in summary_rows} == {"0"}
     assert {row["tee_status"] for row in summary_rows} == {"0"}
-    for row in summary_rows:
+    for index, row in enumerate(summary_rows):
         output = invocation / row["output"]
         localnet = invocation / row["localnet"]
         assert output.is_file()
@@ -302,6 +326,18 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         assert "IROHA_TEST_PROCESS_TIMEOUT_MS=300" in row["command"]
         assert "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300" in row["command"]
         assert "--exact --nocapture --test-threads=1" in row["command"]
+        assert (" --ignored" in row["command"]) == (
+            row["scenario"] in IGNORED_SCENARIOS
+        )
+        manifest_relative = f"localnet-manifests/run-{index:03d}.tsv"
+        manifest = invocation / manifest_relative
+        assert manifest.is_file()
+        retained_log = retained_logs[0]
+        assert manifest.read_text(encoding="utf-8") == (
+            "path\tsize_bytes\tsha256\n"
+            f"mock_validator/run-1-stdout.log\t{retained_log.stat().st_size}\t"
+            f"{hashlib.sha256(retained_log.read_bytes()).hexdigest()}\n"
+        )
     invocation_fields = _key_values(invocation / "invocation.tsv")
     assert invocation_fields == {
         "schema_version": "1",
@@ -318,7 +354,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         "completion_file": "COMPLETED.tsv",
     }
     completion_fields = _key_values(invocation / "COMPLETED.tsv")
-    assert completion_fields["schema_version"] == "1"
+    assert completion_fields["schema_version"] == "2"
     assert completion_fields["profile"] == "pr"
     assert completion_fields["source_manifest_sha256"] == source_manifest
     assert completion_fields["completed_runs"] == str(len(SCENARIOS) * 4)
@@ -326,6 +362,28 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     assert completion_fields["summary_sha256"] == hashlib.sha256(
         (invocation / "summary.tsv").read_bytes()
     ).hexdigest()
+    assert completion_fields["localnet_manifest_count"] == str(
+        len(SCENARIOS) * 4
+    )
+    assert completion_fields["localnet_manifests_path"] == "localnet-manifests.tsv"
+    manifest_index = invocation / completion_fields["localnet_manifests_path"]
+    assert completion_fields["localnet_manifests_sha256"] == hashlib.sha256(
+        manifest_index.read_bytes()
+    ).hexdigest()
+    with manifest_index.open(encoding="utf-8", newline="") as source:
+        manifest_rows = list(csv.DictReader(source, delimiter="\t"))
+    assert len(manifest_rows) == len(SCENARIOS) * 4
+    for index, manifest_row in enumerate(manifest_rows):
+        relative = f"localnet-manifests/run-{index:03d}.tsv"
+        digest = hashlib.sha256((invocation / relative).read_bytes()).hexdigest()
+        assert manifest_row == {
+            "run_index": str(index),
+            "localnet": f"localnets/run-{index:03d}",
+            "manifest": relative,
+            "manifest_sha256": digest,
+        }
+        assert completion_fields[f"localnet_manifest_{index:03d}_path"] == relative
+        assert completion_fields[f"localnet_manifest_{index:03d}_sha256"] == digest
     assert str(invocation / "summary.tsv") in result.stderr
     assert str(invocation / "COMPLETED.tsv") in result.stderr
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(
@@ -396,6 +454,7 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
     assert completion["head_commit"] == HEAD_COMMIT
     assert completion["head_tree"] == HEAD_TREE
     assert completion["cargo_lock_sha256"] == CARGO_LOCK_SHA256
+    assert completion["localnet_manifest_count"] == "160"
 
 
 def test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence(
@@ -624,3 +683,33 @@ def test_mocked_seed_matrix_refuses_uninspected_stale_lock(
     assert not capture.exists()
     assert _invocations(evidence) == []
     assert (lock / "owner").is_file()
+
+
+def test_mocked_seed_matrix_rejects_unsafe_retained_localnet_entries(
+    tmp_path: Path,
+) -> None:
+    for run_mode, expected_error in (
+        ("unsafe-symlink", "contains a symlink"),
+        ("unsafe-special", "non-regular special file"),
+    ):
+        case_root = tmp_path / run_mode
+        case_root.mkdir()
+        escape_target = tmp_path / f"{run_mode}-outside"
+        escape_target.write_text("outside retained localnet\n", encoding="utf-8")
+        env, capture, evidence = _stubbed_environment(
+            case_root, run_mode=run_mode
+        )
+        env["SEED_MATRIX_ESCAPE_TARGET"] = str(escape_target)
+
+        result = _run_launcher(env)
+
+        assert result.returncode == 1
+        assert expected_error in result.stderr
+        assert "retained localnet" in result.stderr
+        assert len(capture.read_text(encoding="utf-8").splitlines()) == 3
+        invocation = _single_invocation(evidence)
+        rows = _summary_rows(invocation)
+        assert len(rows) == 1
+        assert rows[0]["result"] == "invalid_localnet"
+        assert not (invocation / "COMPLETED.tsv").exists()
+        assert not (evidence / ".seed-matrix.lock").exists()

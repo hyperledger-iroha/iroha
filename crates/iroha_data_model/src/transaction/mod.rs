@@ -12,8 +12,8 @@ pub mod receipt;
 pub mod signed;
 
 pub use executable::{
-    Executable, IvmBytecode, IvmProved, TransactionGasLimitError, parse_transaction_gas_limit,
-    require_transaction_gas_limit,
+    Executable, ExecutableBatchItem, IvmBytecode, IvmProved, TransactionGasLimitError,
+    parse_transaction_gas_limit, require_transaction_gas_limit,
 };
 pub use private_kaigi::{
     PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
@@ -34,14 +34,15 @@ pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntryp
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep,
-        FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, IvmBytecode,
-        IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
-        SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint,
-        TransactionBuilder, TransactionEntrypoint, TransactionGasLimitError, TransactionPayload,
-        TransactionResult, TransactionResultInner, TransactionSignature,
-        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
-        parse_transaction_gas_limit, require_transaction_gas_limit,
+        AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
+        ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
+        IvmBytecode, IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi,
+        PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
+        PrivateKaigiTransaction, SignedTransaction, SponsorFeePayment,
+        TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
+        TransactionEntrypoint, TransactionGasLimitError, TransactionPayload, TransactionResult,
+        TransactionResultInner, TransactionSignature, TransactionSubmissionReceipt,
+        TransactionSubmissionReceiptPayload, error::prelude::*, parse_transaction_gas_limit,
+        require_transaction_gas_limit,
     };
 }

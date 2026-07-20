@@ -2,112 +2,42 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-title: Sora Name Service Suffix Catalog
-summary: Canonical allowlist of SNS suffixes, steward assignments, and commercial parameters referenced by SN-1/SN-2.
+title: Sora Name Service Policy Inspection
+summary: Catalog-free external names and live on-chain SNS policy inspection.
 ---
 
-# Sora Name Service Suffix Catalog (SN-1 / SN-2)
+# Sora Name Service policy inspection
 
-Governance tracks every approved suffix in a deterministic catalog so registrars,
-DNS operators, wallets, and auditors can prove which namespaces are active and
-how they are configured. This document publishes the authoritative allowlist
-referenced throughout the roadmap’s Suffix Catalog section and links it to the
-machine-readable snapshot consumed by CLI tooling and dashboards.
+External dataspace, domain, and account-alias names are catalog-free textual
+values. The first-release surface does not embed a `.sora`, `.nexus`, or
+`.dao` suffix table and does not assign those strings the numeric IDs 1, 2,
+or 3. Operators must not derive a textual name-to-`DataSpaceId` mapping from a
+documentation snapshot.
 
-- **Scope.** `.sora`, `.nexus`, and `.dao` constitute the initial catalog.
-  Additional entries follow the same format once the governance vote concludes.
-- **Source of truth.** The catalog is exported as Norito-friendly JSON under
-  `docs/examples/sns/suffix_catalog_v1.json`; scripts ingesting the catalog must
-  hash/sign the JSON when distributing to operators.
-- **Consumers.** `iroha sns policy`, `cargo xtask sns-scorecard`, resolver/DNS
-  automation, onboarding kits, and KPI dashboards reference the same metadata so
-  suffix changes do not require bespoke spreadsheets.
+The planner resolves configured static mappings together with active SNS
+records. Unknown mappings fail, matching mappings are accepted, and a
+static/dynamic disagreement returns `alias.catalog.mapping_conflict`.
+Consensus revalidates the canonical text and numeric ID pair during execution.
 
-## Catalog schema
+## Read-only inspection
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `suffix` | string | Human-readable suffix with leading dot. |
-| `suffix_id` | `u16` | Identifier stored on-ledger in `SuffixPolicyV1::suffix_id`. |
-| `status` | enum | `active`, `paused`, or `revoked` describing launch readiness. |
-| `steward_account` | string | Account responsible for stewardship (matches registrar policy hooks). |
-| `fund_splitter_account` | string | Account that receives payments before routing per `fee_split`. |
-| `payment_asset_id` | string | Owner-qualified asset-holding id used for settlement (`<base58-asset-definition-id>#<i105-account-id>`). |
-| `min_term_years` / `max_term_years` | integer | Purchase term bounds from the policy. |
-| `grace_period_days` / `redemption_period_days` | integer | Renewal safety windows enforced by Torii. |
-| `referral_cap_bps` | integer | Maximum referral carve-out allowed by governance (basis points). |
-| `reserved_labels` | array | Governance-protected label objects `{label, assigned_to, release_at_ms, note}`. |
-| `pricing` | array | Tier objects with `label_regex`, `base_price`, `auction_kind`, and duration bounds. |
-| `fee_split` | object | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` basis-point split. |
-| `policy_version` | integer | Monotonic counter incremented every time governance edits the policy. |
+SNS retains read-only record and policy inspection:
 
-> **Tip:** When generating Norito fixtures or CLI drives, load the JSON snapshot
-> and emit the `suffix_id`/pricing tuple alongside the registrar payload so the
-> review queue can verify the submission without re-scraping docs.
+```bash
+iroha app sns registration \
+  --namespace account-alias \
+  --literal merchant@banka.paynet
 
-## Current catalog
-
-| Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
-|--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `<i105-account-id>` | `<i105-account-id>` | Active | `<asset-holding-id>` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 500000000 nano-XOR / 0.5 XOR (Vickrey)` | `treasury → <i105-account-id>` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `<i105-account-id>` | `<i105-account-id>` | Paused | `<asset-holding-id>` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → <i105-account-id>`, `guardian → <i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `<i105-account-id>` | `<i105-account-id>` | Revoked | `<asset-holding-id>` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
-
-All fields map directly to `SuffixPolicyV1`. The pricing column condenses the
-`pricing` array for readability; automation must consume the JSON snapshot to
-retrieve the exact regex, tier IDs, and auction parameters.
-
-## JSON snapshot & automation hooks
-
-- **File:** [`docs/examples/sns/suffix_catalog_v1.json`](../../examples/sns/suffix_catalog_v1.json)
-- **Versioning:** The `version` field increments every time governance ratifies
-  a new suffix or edits an existing one. `generated_at` follows RFC 3339.
-- **Validation:** `cargo xtask sns-catalog-verify` validates every
-  `suffix_catalog_*.json` snapshot, ensuring suffix ids/tier ids stay unique,
-  fields stay within policy bounds, and the accompanying checksum manifest
-  (e.g., `docs/examples/sns/suffix_catalog_v1.sha256`) matches the file bytes.
-  CI runs this command so drift is detected before publishing scorecards,
-  annexes, or registrar docs.
-
-```json
-{
-  "version": 1,
-  "generated_at": "2026-05-01T00:00:00Z",
-  "suffixes": [
-    {
-      "suffix": ".sora",
-      "suffix_id": 1,
-      "status": "active",
-      "fund_splitter_account": "<i105-account-id>",
-      "payment_asset_id": "<base58-asset-definition-id>#<i105-account-id>",
-      "referral_cap_bps": 500,
-      "pricing": [
-        {
-          "tier_id": 0,
-          "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "<base58-asset-definition-id>#<i105-account-id>", "amount": "0.5"},
-          "auction_kind": "vickrey_commit_reveal",
-          "min_duration_years": 1,
-          "max_duration_years": 5
-        }
-      ],
-      "...": "see docs/examples/sns/suffix_catalog_v1.json for the full record"
-    }
-  ]
-}
+iroha app sns policy --suffix-id <u16>
 ```
 
-## CLI, registrar, and DNS usage
+The corresponding Torii reads are
+`GET /v1/sns/names/{namespace}/{literal}` and
+`GET /v1/sns/policies/{suffix_id}`. A policy ID selects a live on-chain
+resource policy; it is not an external textual suffix catalog.
 
-1. **Registrar / CLI.** `iroha sns policy --suffix-id <id>` now references the
-   catalog when printing steward, asset, and pricing information so reviewers can
-   confirm governance parameters before approving a registration.
-2. **DNS / Gateway.** `scripts/sns_zonefile_skeleton.py` loads the catalog to
-   stamp explicit reserved labels and suffix IDs into GAR templates.
-3. **Dashboards.** `dashboards/grafana/sns_suffix_analytics.json` tags metrics
-   with the suffix metadata from this catalog so suffix-specific alerts remain
-   in sync with governance-approved values.
-
-When proposing new suffixes, update this catalog (Markdown + JSON) within the
-same change as the governance charter addendum so reviewers, registrars, and
-automation pick up the change atomically.
+Alias acquisition, repair, renewal, primary changes, rebinding, and auto-renew
+configuration are not SNS mutation routes. Use the signed planner and ordinary
+transaction flow under `iroha app alias`, as documented in
+[`registrar_api.md`](./registrar_api.md). The exact persisted SNS and alias
+types are documented in [`registry_schema.md`](./registry_schema.md).

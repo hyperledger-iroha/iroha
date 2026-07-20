@@ -16,7 +16,7 @@ The status is release-eligible only when all of the following hold together:
    surrogate;
 2. a fresh strict TLAPS module log is bound to the current canonical formal
    source manifest and the pinned TLAPM commit
-   `763bf3c1826d77a4cf206f43d5aa16775da1da33`;
+   `3ab43c7ff31db4ced850619d4746fa4c841a7681`;
 3. every mapped claim has exactly one named public Verus `proof fn` in the
    reviewed verified-crate source;
 4. the linked Verus evidence passes the pinned `--no-cheating` invocation,
@@ -157,10 +157,35 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The evidence architecture does not itself prove a production refinement. As
-of this change, the three obligations above remain `specified_unproved`; their
-named cross-tool TLA+ and Verus theorems have not been added. In this dormant
-state the release workflow neither generates nor accepts a cross-tool evidence
-document. The checker reports the active set with
-`--print-cross-tool-obligations`; empty output means the document must be
-absent.
+The evidence architecture does not itself prove a production refinement. The
+three ledger obligations above remain `specified_unproved`, but the
+effective-lock entry now has its exact named TLA+ bridge, four non-vacuous
+Verus theorems, shared Rust/Verus trace kernels, and fail-closed production
+call-site projections. A focused strict TLAPS slice proves the two bridge
+obligations, and the pinned Verus run proves the source-linked kernels. The
+entry is not promoted until those results are regenerated as one immutable,
+source-manifest-bound release evidence set. The current boundary is:
+
+- effective-lock verification now covers the serialized post-install lock,
+  immutable body-owner, exact retirement-accounting, and bounded class-selector
+  seams through live production invocations. Repeated host invocation and
+  terminating local work remain explicit runtime assumptions of the liveness
+  theorem rather than facts manufactured by this refinement;
+- progress-witness verification reaches the pure reducer/WAL transition and
+  timer/FIFO kernels, but not the collection-heavy runtime ingress, worker,
+  sidecar, P2P actor-to-writer-flush, or application trace as one verified
+  transition system; and
+- successor verification has no Verus model of the status adapter, runner
+  publication, startup failure, historical block-sync pipeline, crash/restart,
+  or epoch-boundary action mapping.
+
+The pinned `--no-cheating --rlimit 60` run verifies 1,690 dependency and 126
+root obligations with zero errors after splitting the largest EnterView query.
+The effective-lock four have the reviewed signatures and production call-path
+closure; the remaining 12 claims do not. In addition, the progress-witness
+target still depends on the unproved async progress-ownership invariant, and
+the successor target still depends on unproved successor starvation freedom.
+Because no ledger entry is yet `cross_tool_proved`, the dormant release
+workflow neither generates nor accepts a cross-tool evidence document. The
+checker reports the active set with `--print-cross-tool-obligations`; empty
+output means the document must be absent.

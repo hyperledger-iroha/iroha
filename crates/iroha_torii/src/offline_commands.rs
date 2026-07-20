@@ -20,7 +20,7 @@ use iroha_data_model::{
     name::Name,
     offline::KagemushaRecursiveSpendTopUpAnchorV4,
     transaction::{
-        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         error::TransactionRejectionReason, signed::TransactionResult,
     },
 };
@@ -1051,10 +1051,7 @@ fn offline_operation_record_in_transaction(
     if operation_id == [0; 32] || transaction.authority() != issuer_authority {
         return None;
     }
-    let Executable::Instructions(instructions) = transaction.instructions() else {
-        return None;
-    };
-    for instruction in instructions.iter() {
+    for instruction in transaction.instructions().explicit_instructions() {
         let any = instruction.as_any();
         let candidate = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
             Some(OfflineOperationRequest::TopUp(&top_up.request))

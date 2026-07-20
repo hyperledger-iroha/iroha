@@ -100,7 +100,7 @@ PendingVoteWritesAuthorized ==
        /\ request.qc.phase = "Prepare"
        /\ request.qc \in prepareQCs
        /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-          \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+          \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
                      request.vote.context, request.vote.view,
@@ -225,10 +225,10 @@ older timeout reports, the Commit must have the exact PrepareQC selected by a
 durably installed TC.  This is the retained provenance needed when a node
 learned the lock through the TC and validated its body only afterward.
 ***************************************************************************)
-HistoricalTcLockedCommitAuthorizationInvariant ==
+HistoricalLockedCommitAuthorizationInvariant ==
   /\ \A request \in pendingLockCommit:
        request.vote.view < nodeView[request.node]
-         => HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+         => HistoricalLockedPrepareForCommit(request.node, request.qc)
   /\ \A timeoutVote \in timeoutIntents, commitVote \in commitIntents:
        (/\ timeoutVote.signer \in Honest
         /\ commitVote.signer = timeoutVote.signer
@@ -237,6 +237,12 @@ HistoricalTcLockedCommitAuthorizationInvariant ==
         /\ commitVote.view <= timeoutVote.view
         /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
          => InstalledTcAuthorizesCommitVote(commitVote)
+
+\* Legacy release-ledger alias.  The canonical invariant name is source
+\* neutral because recovery itself also accepts an exact durable Commit
+\* intent carried through a later no-high TC.
+HistoricalTcLockedCommitAuthorizationInvariant ==
+  HistoricalLockedCommitAuthorizationInvariant
 
 (***************************************************************************
 This authorization invariant is a derived consequence of
@@ -262,6 +268,27 @@ HighestAndLockAreCertified ==
                /\ qc.view = lockRank[node]
                /\ qc.subject = lockSubject[node])
 
+(***************************************************************************
+Every non-empty durable lock has one of the two reducer origins which can
+reconstruct it after a view change.  PersistLockCommit records the matching
+local Commit intent atomically with the lock.  PersistInstallTC records the TC
+which selected an advancing lock.  A later no-high TC may retain either source
+without replacing it.  This reverse direction is intentionally separate from
+LocksCoverOwnCommits (which states Commit => lock) and from
+HighestAndLockAreCertified (which states only that a matching abstract QC
+exists).
+***************************************************************************)
+DurableLockRecoveryProvenanceInvariant ==
+  \A node \in ValidatorIds:
+    \/ lockRank[node] = NoRank
+    \/ ExactLockedCommitIntents(
+         node, lockRank[node], lockSubject[node]) # {}
+    \/ \E installed \in installedTCs:
+         /\ installed.node = node
+         /\ installed.tc.context = context
+         /\ TcHighRank(installed.tc) = lockRank[node]
+         /\ TcHighSubject(installed.tc) = lockSubject[node]
+
 ReducerProvenanceInvariant ==
   /\ HonestVoteUnique(prepareIntents)
   /\ HonestVoteUnique(commitIntents)
@@ -278,6 +305,7 @@ ReducerProvenanceInvariant ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 ReducerProvenanceWithoutVoteTransport ==
   /\ HonestVoteUnique(prepareIntents)
@@ -294,6 +322,7 @@ ReducerProvenanceWithoutVoteTransport ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 ReducerProvenanceWithoutTimeoutTransport ==
   /\ HonestVoteUnique(prepareIntents)
@@ -310,6 +339,7 @@ ReducerProvenanceWithoutTimeoutTransport ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 LineageInvariant ==
   /\ PrepareLineageSound

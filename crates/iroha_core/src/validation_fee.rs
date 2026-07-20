@@ -1065,17 +1065,36 @@ fn reject_opaque_fee_asset_effects(
             continue;
         };
         let action = register.object.action();
-        let nested_instructions = match action.executable() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
-            Executable::ContractCall(_) | Executable::Ivm(_) => continue,
-        };
-        reject_opaque_fee_asset_effects(
-            action.authority(),
-            nested_instructions,
-            fee_asset_definition_id,
-            None,
-        )?;
+        match action.executable() {
+            Executable::Instructions(instructions) => reject_opaque_fee_asset_effects(
+                action.authority(),
+                instructions,
+                fee_asset_definition_id,
+                None,
+            )?,
+            Executable::IvmProved(proved) => reject_opaque_fee_asset_effects(
+                action.authority(),
+                &proved.overlay,
+                fee_asset_definition_id,
+                None,
+            )?,
+            Executable::Batch(items) => {
+                let nested_instructions = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                reject_opaque_fee_asset_effects(
+                    action.authority(),
+                    &nested_instructions,
+                    fee_asset_definition_id,
+                    None,
+                )?;
+            }
+            Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        }
     }
     Ok(())
 }
@@ -1157,19 +1176,46 @@ where
             continue;
         };
         let action = register.object.action();
-        let nested_instructions = match action.executable() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
-            Executable::ContractCall(_) | Executable::Ivm(_) => continue,
-        };
-        reject_opaque_deferred_approval_effects_with(
-            action.authority(),
-            nested_instructions,
-            fee_asset_definition_id,
-            visited_proposals,
-            depth + 1,
-            resolve,
-        )?;
+        match action.executable() {
+            Executable::Instructions(instructions) => {
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    instructions,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::IvmProved(proved) => {
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    &proved.overlay,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::Batch(items) => {
+                let nested_instructions = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    &nested_instructions,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        }
     }
     Ok(())
 }
@@ -2302,11 +2348,28 @@ fn collect_asset_transfers(
     authority: &AccountId,
     fee_asset_definition_id: &AssetDefinitionId,
 ) -> Result<TransferCollection, ValidationFeeAdmissionError> {
+    let batch_instructions;
     let instructions = match executable {
         Executable::Instructions(instructions) => instructions.as_ref(),
         // The overlay is part of the signed transaction payload and is bound to the bytecode by
         // the proved-IVM attachment. Proof verification still runs before the overlay executes.
         Executable::IvmProved(proved) => proved.overlay.as_ref(),
+        Executable::Batch(items) => {
+            if items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            {
+                return Err(ValidationFeeAdmissionError::UnsupportedExecutable);
+            }
+            batch_instructions = items
+                .iter()
+                .filter_map(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                    ExecutableBatchItem::ContractCall(_) => None,
+                })
+                .collect::<Vec<_>>();
+            &batch_instructions
+        }
         Executable::ContractCall(_) | Executable::Ivm(_) => {
             return Err(ValidationFeeAdmissionError::UnsupportedExecutable);
         }

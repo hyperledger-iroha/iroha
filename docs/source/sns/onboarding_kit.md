@@ -9,8 +9,8 @@ summary: Dashboards, pricing cheatsheets, and registrar tooling required by road
 **Related assets:** `dashboards/grafana/sns_suffix_analytics.json`, `docs/portal/docs/sns/kpi-dashboard.md`.
 
 This guide bundles the analytics package and registrar onboarding collateral
-needed to exercise `.sora`, `.nexus`, and `.dao` launches. It ties together the
-Grafana dashboard, pricing references, DNS helpers, and developer automation so
+for explicitly selected live SNS policies. It ties together the Grafana
+dashboard, live policy inspection, DNS helpers, and developer automation so
 governance has deterministic evidence when approving registrars or suffixes.
 
 ## 1. Metric bundle
@@ -54,18 +54,17 @@ snapshot only after the dashboard has passed the safe-source review above:
 
 ```bash
 cargo xtask sns-annex \
-  --suffix .sora \
+  --suffix .example \
   --cycle 2026-03 \
   --dashboard dashboards/grafana/sns_suffix_analytics.json \
-  --dashboard-artifact artifacts/sns/regulatory/.sora/2026-03/sns_suffix_analytics.json \
-  --output docs/source/sns/reports/.sora/2026-03.md \
+  --dashboard-artifact artifacts/sns/regulatory/.example/2026-03/sns_suffix_analytics.json \
+  --output docs/source/sns/reports/.example/2026-03.md \
   --regulatory-entry docs/source/sns/regulatory/eu-dsa/2026-03.md \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
 - The command hashes the exported JSON, records the dashboard metadata, and
-  writes a Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md`
-  (mirroring the `.sora` example added in this change).
+  writes a Markdown annex under `docs/source/sns/reports/<suffix>/<cycle>.md`.
 - Pass `--dashboard-artifact` to copy the export into
   `artifacts/sns/regulatory/<suffix>/<cycle>/` automatically so the annex
   references the canonical evidence path instead of your workstation file.
@@ -126,29 +125,15 @@ coverage required by SN-8.
   `docs/source/sns/reports/<name>_launch.md` note that records the selector
   samples, zonefile hashes, and GAR evidence.
 
-### 2.2 Pricing & coefficient cheatsheet
+### 2.2 Pricing and lease-policy preflight
 
-Base fees (USD equivalent, before suffix coefficient):
-
-| Label length | Base fee |
-|--------------|----------|
-| 3 | $240 |
-| 4 | $90 |
-| 5 | $30 |
-| 6–9 | $12 |
-| 10+ | $8 |
-
-Suffix coefficients (`Final fee = base × coefficient`):
-
-| Suffix | Coefficient |
-|--------|-------------|
-| `.sora` | 1.0× |
-| `.nexus` | 0.8× |
-| `.dao` | 1.3× |
-
-Term modifiers: 2‑year renewals receive −5 %; 5‑year renewals receive −12 %.
-Grace = 30 days, redemption = 60 days (20 % fee, min $5, max $200). Document
-any governance-approved deviations in the registrar’s onboarding ticket.
+Do not embed fee tables, suffix coefficients, term discounts, or lifecycle
+windows in onboarding collateral. Inspect the active SNS policy through the
+read-only policy surface and obtain an `AliasTransactionPlanV1` immediately
+before approval. The quote guard records the expected policy version, payment
+asset, maximum amount, and deadline; consensus recomputes and charges the exact
+amount. Record those live values and any planner blockers in the registrar's
+onboarding ticket.
 
 ### 2.3 Premium auctions vs renewals
 
@@ -158,9 +143,9 @@ any governance-approved deviations in the registrar’s onboarding ticket.
    `AliasIntentV1`/`EnsureAlias` flow, with any required endorsement validated
    before the atomic transaction executes. Publish the auction manifest under
    `docs/source/sns/reports/` for future audits.
-2. **Dutch reopen** — when grace + redemption elapse, the registrar publishes a
-   Dutch reopen manifest detailing the initial multiplier (10×) and daily decay
-   (15 %). Track the decay status in a read-only report keyed by the canonical
+2. **Dutch reopen** — when the policy-defined lifecycle permits reopening, the
+   registrar publishes the governed schedule without hard-coding multipliers
+   in client tooling. Track it in a read-only report keyed by the canonical
    auction record and resulting alias plan hash.
 3. **Renewals** — archive the verified renewal plan and ordinary transaction
    receipt. For auto-renew, also capture the configured revision and any native
@@ -180,13 +165,16 @@ any governance-approved deviations in the registrar’s onboarding ticket.
   logs.
 - Use `irohad --check-config` and the authenticated onboarding-readiness report
   as the preflight evidence for generated or manually operated peers.
+- Running `sns_bulk_onboard.py` without a mode flag only writes a verified plan.
+  An approved mutation must pass `--apply` explicitly; tokens and key material
+  remain outside the intent, plan, and command line.
 
 ### 2.5 Evidence checklist
 
 1. Ticket in the registrar tracker including suffix, contact, expected payment
    asset, policy version, and approved caps.
 2. DNS/resolver evidence bundle (`scripts/sns_zonefile_skeleton.py` output).
-3. Pricing worksheet referencing the tables above plus any negotiated overrides.
+3. Live policy snapshot plus the planner quote and quote-guard values.
 4. API smoke-test artefacts (signed plan, verified plan hash, and the single
    ordinary transaction result).
 5. Safe read-only report export stored under
@@ -201,7 +189,7 @@ any governance-approved deviations in the registrar’s onboarding ticket.
 | Publish portal page | Docs/DevRel | `npm run build` inside `docs/portal`, ensure `sns/kpi-dashboard` renders. |
 | Generate onboarding kit | DevRel | Copy this file, fill registrar-specific deltas, attach to ticket. |
 | DNS rehearsal | Networking/Ops | `scripts/sns_zonefile_skeleton.py` + `docs/source/sorafs_gateway_dns_owner_runbook.md` steps. |
-| Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py setup.json --plan-file setup.plan.json --plan-only` |
+| Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py setup.json --plan-file setup.plan.json` |
 | Governance evidence | Governance Council | File annex updates + attach dashboard exports and artefacts. |
 
 Run this checklist before activating every registrar or suffix. Attach the

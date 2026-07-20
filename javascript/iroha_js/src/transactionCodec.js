@@ -3,6 +3,7 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519 } from "./crypto.browser.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
   noritoEncodeInstructionBoxArchive,
   validateNoritoFrame,
@@ -47,6 +48,8 @@ const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
   "hex",
 );
 const MAX_BROWSER_INSTRUCTIONS = 64;
+const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
+const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
@@ -96,6 +99,26 @@ const INSTRUCTION_INPUT_FIELDS = new Set([
   "feePayment",
   "networkPrefix",
   "chainDiscriminant",
+]);
+const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
+  "chainId",
+  "authority",
+  "entries",
+  "metadata",
+  "creationTimeMs",
+  "ttlMs",
+  "nonce",
+  "feePayment",
+  "networkPrefix",
+  "chainDiscriminant",
+]);
+const BATCH_INSTRUCTION_ENTRY_FIELDS = new Set(["kind", "instruction"]);
+const BATCH_CONTRACT_CALL_ENTRY_FIELDS = new Set([
+  "kind",
+  "contractAddress",
+  "expectedCodeHash",
+  "entrypoint",
+  "arguments",
 ]);
 const FEE_PAYMENT_FIELDS = new Set([
   "payer",
@@ -1277,6 +1300,202 @@ function encodeInstructionTransactionPayload(normalized) {
   return payload;
 }
 
+function normalizeExecutableBatchTransactionInput(input, now) {
+  input = snapshotAllowedFields(
+    input,
+    EXECUTABLE_BATCH_INPUT_FIELDS,
+    "executable batch input",
+  );
+  const chainId = exactString(input.chainId, "chainId", {
+    maxBytes: MAX_CHAIN_ID_BYTES,
+  });
+  const requestedDiscriminant =
+    input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
+      ? fail(
+          "invalid_input",
+          "provide only one of networkPrefix or chainDiscriminant",
+        )
+      : input.networkPrefix ?? input.chainDiscriminant;
+  const authority = accountInfo(
+    input.authority,
+    "authority",
+    requestedDiscriminant === undefined
+      ? undefined
+      : normalizeNetworkPrefix(requestedDiscriminant, "networkPrefix"),
+  );
+  if (!Array.isArray(input.entries)) {
+    fail("invalid_input", "entries must be an array");
+  }
+  if (
+    input.entries.length === 0 ||
+    input.entries.length > MAX_BROWSER_INSTRUCTIONS
+  ) {
+    fail(
+      "bounds_exceeded",
+      `entries must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+    );
+  }
+  let containsContractCall = false;
+  const entries = input.entries.map((source, index) => {
+    source = assertPlainDataObject(source, `entries[${index}]`);
+    if (source.kind === "instruction") {
+      const entry = snapshotAllowedFields(
+        source,
+        BATCH_INSTRUCTION_ENTRY_FIELDS,
+        `entries[${index}]`,
+      );
+      let instruction;
+      try {
+        instruction = Buffer.from(
+          noritoEncodeInstructionBoxArchive(entry.instruction),
+        );
+      } catch (error) {
+        fail(
+          "unsupported_instruction",
+          `entries[${index}].instruction cannot be encoded canonically: ${error.message}`,
+        );
+      }
+      return { kind: "instruction", instruction };
+    }
+    if (source.kind !== "contractCall") {
+      fail(
+        "invalid_input",
+        `entries[${index}].kind must be instruction or contractCall`,
+      );
+    }
+    const entry = snapshotAllowedFields(
+      source,
+      BATCH_CONTRACT_CALL_ENTRY_FIELDS,
+      `entries[${index}]`,
+    );
+    containsContractCall = true;
+    const contractAddressLiteral = exactString(
+      entry.contractAddress,
+      `entries[${index}].contractAddress`,
+      { maxBytes: 256 },
+    );
+    let contractAddress;
+    try {
+      contractAddress = parseCanonicalContractAddress(
+        contractAddressLiteral,
+        `entries[${index}].contractAddress`,
+      ).literal;
+    } catch (error) {
+      fail(
+        "invalid_input",
+        error instanceof Error
+          ? error.message
+          : `entries[${index}].contractAddress is invalid`,
+      );
+    }
+    const expectedCodeHash = bytes(
+      entry.expectedCodeHash,
+      `entries[${index}].expectedCodeHash`,
+      { hex: true, maxBytes: 32 },
+    );
+    if (expectedCodeHash.length !== 32) {
+      fail(
+        "invalid_bytes",
+        `entries[${index}].expectedCodeHash must be exactly 32 bytes`,
+      );
+    }
+    if ((expectedCodeHash[31] & 1) === 0) {
+      fail(
+        "invalid_bytes",
+        `entries[${index}].expectedCodeHash must carry the canonical Iroha hash marker bit`,
+      );
+    }
+    const entrypoint = exactString(
+      entry.entrypoint,
+      `entries[${index}].entrypoint`,
+      { maxBytes: MAX_CONTRACT_ENTRYPOINT_BYTES },
+    );
+    const argumentBytes =
+      entry.arguments === undefined || entry.arguments === null
+        ? null
+        : bytes(entry.arguments, `entries[${index}].arguments`, {
+            maxBytes: MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
+          });
+    return {
+      kind: "contractCall",
+      contractAddress,
+      expectedCodeHash,
+      entrypoint,
+      arguments: argumentBytes,
+    };
+  });
+  const metadata = normalizeMetadata(input.metadata);
+  rejectLegacyFeeMetadata(metadata);
+  const feePayment = normalizeFeePayment(input.feePayment, authority);
+  if (containsContractCall && feePayment.gasLimit === null) {
+    fail(
+      "invalid_fee_payment",
+      "feePayment.gasLimit is required when entries contain a contract call",
+    );
+  }
+  const creationTimeMs = normalizeUnsigned(
+    input.creationTimeMs ?? now(),
+    UINT64_MAX,
+    "creationTimeMs",
+  );
+  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
+  if (ttlMs === 0n) ttlMs = 1n;
+  const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
+    nonZero: true,
+  });
+  return {
+    chainId,
+    authority,
+    entries,
+    feePayment,
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+  };
+}
+
+function contractInvocationArchive(invocation) {
+  const argumentsArchive =
+    invocation.arguments === null
+      ? null
+      : Buffer.concat([u64(invocation.arguments.length), invocation.arguments]);
+  return struct([
+    stringValue(invocation.contractAddress),
+    invocation.expectedCodeHash,
+    stringValue(invocation.entrypoint),
+    option(argumentsArchive),
+  ]);
+}
+
+function executableBatchEntryArchive(entry) {
+  if (entry.kind === "instruction") {
+    return Buffer.concat([u32(0), field(entry.instruction)]);
+  }
+  return Buffer.concat([u32(1), field(contractInvocationArchive(entry))]);
+}
+
+function encodeExecutableBatchTransactionPayload(normalized) {
+  const executable = Buffer.concat([
+    u32(4),
+    field(vector(normalized.entries.map(executableBatchEntryArchive))),
+  ]);
+  const payload = struct([
+    chainIdArchive(normalized.chainId),
+    accountArchive(normalized.authority),
+    u64(normalized.creationTimeMs),
+    executable,
+    option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
+    option(normalized.nonce === null ? null : u32(normalized.nonce)),
+    feePaymentArchive(normalized.feePayment),
+    metadataArchive(normalized.metadata),
+  ]);
+  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
+    fail("bounds_exceeded", `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
+  }
+  return payload;
+}
+
 function bytes(value, context, { hex = false, maxBytes } = {}) {
   if (Buffer.isBuffer(value)) {
     if (maxBytes !== undefined && value.length > maxBytes) {
@@ -1565,10 +1784,11 @@ function validateFeePaymentArchive(payload, context) {
     body.readField("chargeLimits"),
     `${context}.chargeLimits`,
   );
-  validateOption(body.readField("gasLimit"), 8, `${context}.gasLimit`, {
+  const gasLimit = validateOption(body.readField("gasLimit"), 8, `${context}.gasLimit`, {
     nonZero: true,
   });
   body.assertEof();
+  return { gasLimit };
 }
 
 function validateFrame(frame, context) {
@@ -1705,6 +1925,146 @@ function validateSmartContractDeploymentExecutable(payload, context) {
   }
   instructions.assertEof();
   executable.assertEof();
+}
+
+function validateCanonicalInstructionBox(payload, context) {
+  const instruction = new Reader(payload, context);
+  const wireId = validateStringArchive(
+    instruction.readField("wireId"),
+    `${context}.wireId`,
+    { maxBytes: 256 },
+  );
+  const frameContainer = new Reader(
+    instruction.readField("frameContainer"),
+    `${context}.frameContainer`,
+    false,
+  );
+  const frame = frameContainer.readField("frame");
+  frameContainer.assertEof();
+  instruction.assertEof();
+  try {
+    validateNoritoFrame(frame, {
+      context: `${context}.frame`,
+      expectedTypeName: wireId,
+      requireNonEmptyPayload: true,
+    });
+  } catch (error) {
+    fail(
+      "malformed_instruction",
+      `${context} has an invalid inner frame: ${error.message}`,
+    );
+  }
+}
+
+function validateContractArgumentOption(payload, context) {
+  const optionReader = new Reader(payload, context);
+  const tag = optionReader.readU8("tag");
+  if (tag === 0) {
+    optionReader.assertEof();
+    return;
+  }
+  if (tag !== 1) {
+    fail("malformed_payload", `${context} uses invalid option tag ${tag}`);
+  }
+  const record = new Reader(optionReader.readField("value"), `${context}.value`);
+  optionReader.assertEof();
+  const length = record.readU64("length");
+  if (length > BigInt(MAX_CONTRACT_ARGUMENT_RECORD_BYTES)) {
+    fail(
+      "bounds_exceeded",
+      `${context} exceeds ${MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes`,
+    );
+  }
+  record.readBytes(Number(length), "bytes");
+  record.assertEof();
+}
+
+function validateContractInvocationArchive(payload, context) {
+  const invocation = new Reader(payload, context);
+  const contractAddress = validateStringArchive(
+    invocation.readField("contractAddress"),
+    `${context}.contractAddress`,
+    { maxBytes: 256 },
+  );
+  exactString(contractAddress, `${context}.contractAddress`, { maxBytes: 256 });
+  try {
+    parseCanonicalContractAddress(contractAddress, `${context}.contractAddress`);
+  } catch (error) {
+    fail(
+      "malformed_payload",
+      error instanceof Error
+        ? error.message
+        : `${context}.contractAddress is invalid`,
+    );
+  }
+  const expectedCodeHash = invocation.readField("expectedCodeHash");
+  if (expectedCodeHash.length !== 32 || (expectedCodeHash[31] & 1) === 0) {
+    fail(
+      "malformed_payload",
+      `${context}.expectedCodeHash must be a canonical 32-byte Iroha hash`,
+    );
+  }
+  const entrypoint = validateStringArchive(
+    invocation.readField("entrypoint"),
+    `${context}.entrypoint`,
+    { maxBytes: MAX_CONTRACT_ENTRYPOINT_BYTES },
+  );
+  exactString(entrypoint, `${context}.entrypoint`, {
+    maxBytes: MAX_CONTRACT_ENTRYPOINT_BYTES,
+  });
+  validateContractArgumentOption(
+    invocation.readField("arguments"),
+    `${context}.arguments`,
+  );
+  invocation.assertEof();
+}
+
+function validateExecutableBatch(payload, context) {
+  const executable = new Reader(payload, context);
+  if (executable.readU32("variant") !== 4) {
+    fail("unsupported_executable", `${context} must use Executable::Batch`);
+  }
+  const entries = new Reader(
+    executable.readField("entries"),
+    `${context}.entries`,
+  );
+  const count = entries.readU64("count");
+  if (count === 0n || count > BigInt(MAX_BROWSER_INSTRUCTIONS)) {
+    fail(
+      "bounds_exceeded",
+      `${context} must contain 1..=${MAX_BROWSER_INSTRUCTIONS} entries`,
+    );
+  }
+  let containsContractCall = false;
+  for (let index = 0; index < Number(count); index += 1) {
+    const entry = new Reader(
+      entries.readField(`item[${index}]`),
+      `${context}.entries[${index}]`,
+    );
+    const tag = entry.readU32("variant");
+    const value = entry.readField("value");
+    entry.assertEof();
+    if (tag === 0) {
+      validateCanonicalInstructionBox(
+        value,
+        `${context}.entries[${index}].instruction`,
+      );
+    } else if (tag === 1) {
+      containsContractCall = true;
+      validateContractInvocationArchive(
+        value,
+        `${context}.entries[${index}].contractCall`,
+      );
+    } else {
+      fail(
+        "unsupported_executable",
+        `${context}.entries[${index}] uses unsupported variant ${tag}`,
+      );
+    }
+  }
+  entries.assertEof();
+  executable.assertEof();
+  return { containsContractCall };
 }
 
 function validateOption(payload, expectedLength, context, { nonZero = false } = {}) {
@@ -1881,20 +2241,39 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
   if (creationTime.length !== 8) {
     fail("malformed_payload", "transaction payload.creationTimeMs must be a u64");
   }
-  validateSmartContractDeploymentExecutable(
-    reader.readField("executable"),
-    "transaction payload.executable",
-  );
+  const executable = reader.readField("executable");
+  if (executable.length < 4) {
+    fail("malformed_payload", "transaction payload.executable is truncated");
+  }
+  let batchValidation;
+  if (executable.readUInt32LE(0) === 4) {
+    batchValidation = validateExecutableBatch(
+      executable,
+      "transaction payload.executable",
+    );
+  } else {
+    validateSmartContractDeploymentExecutable(
+      executable,
+      "transaction payload.executable",
+    );
+    batchValidation = { containsContractCall: false };
+  }
   validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
     nonZero: true,
   });
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
-  validateFeePaymentArchive(
+  const feePayment = validateFeePaymentArchive(
     reader.readField("feePayment"),
     "transaction payload.feePayment",
   );
+  if (batchValidation.containsContractCall && feePayment.gasLimit === null) {
+    fail(
+      "invalid_fee_payment",
+      "transaction payload feePayment.gasLimit is required for contract calls",
+    );
+  }
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
       reader.readField("metadata"),
@@ -1982,6 +2361,20 @@ export function buildBrowserTransferPayload(input) {
 export function buildBrowserInstructionTransactionPayload(input) {
   const normalized = normalizeInstructionTransactionInput(input, Date.now);
   const payload = encodeInstructionTransactionPayload(normalized);
+  validateInstructionTransactionPayload(payload, normalized.authority.literal);
+  return payload;
+}
+
+/**
+ * Build a canonical ordered `Executable::Batch` payload containing native
+ * instructions and/or deployed-contract calls.
+ *
+ * @param {object} input
+ * @returns {Buffer}
+ */
+export function buildBrowserExecutableBatchPayload(input) {
+  const normalized = normalizeExecutableBatchTransactionInput(input, Date.now);
+  const payload = encodeExecutableBatchTransactionPayload(normalized);
   validateInstructionTransactionPayload(payload, normalized.authority.literal);
   return payload;
 }
@@ -2343,6 +2736,27 @@ export function finalizeBrowserInstructionTransaction(
   };
 }
 
+/** Validate an externally signed mixed executable-batch payload. */
+export function validateBrowserExecutableBatchSignable(
+  signable,
+  constraints = {},
+) {
+  return validateBrowserInstructionTransactionSignable(signable, constraints);
+}
+
+/** Verify and finalize an externally signed mixed executable-batch payload. */
+export function finalizeBrowserExecutableBatchTransaction(
+  signable,
+  signature,
+  signingPublicKey,
+) {
+  return finalizeBrowserInstructionTransaction(
+    signable,
+    signature,
+    signingPublicKey,
+  );
+}
+
 /**
  * Compute the canonical pipeline hash of exact versioned SignedTransaction bytes.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
@@ -2408,11 +2822,15 @@ export function browserSignedTransactionHashHex(signedTransaction) {
 export const browserTransactionCodec = Object.freeze({
   buildTransferPayload: buildBrowserTransferPayload,
   buildInstructionPayload: buildBrowserInstructionTransactionPayload,
+  buildExecutableBatchPayload: buildBrowserExecutableBatchPayload,
   payloadHashHex: browserTransactionPayloadHashHex,
   finalizeSignedTransaction: finalizeBrowserSignedTransaction,
   finalizeInstructionTransaction: finalizeBrowserInstructionTransaction,
+  finalizeExecutableBatchTransaction:
+    finalizeBrowserExecutableBatchTransaction,
   validateSignable: validateBrowserTransferSignable,
   validateInstructionSignable: validateBrowserInstructionTransactionSignable,
+  validateExecutableBatchSignable: validateBrowserExecutableBatchSignable,
 });
 
 export { BrowserTransactionCodecError };

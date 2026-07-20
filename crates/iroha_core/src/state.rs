@@ -393,6 +393,18 @@ pub(crate) mod storage_transactions;
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 4_000_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 
+const fn trigger_batch_gas_budget(remaining_block_budget: u64) -> u64 {
+    if remaining_block_budget == u64::MAX {
+        DEFAULT_TRIGGER_GAS_LIMIT
+    } else {
+        remaining_block_budget
+    }
+}
+
+const fn remaining_trigger_batch_gas(batch_gas_limit: u64, batch_gas_used: u64) -> u64 {
+    batch_gas_limit.saturating_sub(batch_gas_used)
+}
+
 enum ResolvedIvmTriggerProgram {
     Contract(Arc<ivm::PreparedContract>),
     Generic(crate::smartcontracts::ivm::cache::GenericProgramSummary),
@@ -47314,7 +47326,10 @@ impl<'state> StateBlock<'state> {
                         &tx,
                     );
                 match tx.instructions() {
-                    Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+                    Executable::ContractCall(_)
+                    | Executable::Batch(_)
+                    | Executable::Ivm(_)
+                    | Executable::IvmProved(_) => {
                         let executor = transaction.world.executor.clone();
                         let ivm_cache = transaction.ivm_cache;
                         let mut ivm_cache = ivm_cache.lock();
@@ -58257,6 +58272,113 @@ impl StateTransaction<'_, '_> {
                     None,
                 )
             }
+            ExecutableRef::Batch(items) => {
+                if items.is_empty() {
+                    return Err(ValidationFail::NotPermitted(
+                        "trigger executable batch must not be empty".to_owned(),
+                    )
+                    .into());
+                }
+
+                let explicit_instructions: Vec<_> = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                            instruction,
+                        ) => Some(instruction.clone()),
+                        iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect();
+                let instruction_groups = std::collections::BTreeMap::from([(
+                    authority.clone(),
+                    explicit_instructions.clone(),
+                )]);
+                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                    &instruction_groups,
+                    self,
+                    None,
+                )?;
+
+                let explicit_gas = crate::gas::meter_instructions(&explicit_instructions);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block.saturating_sub(
+                        self.gas_used_in_block_so_far
+                            .saturating_add(self.last_tx_gas_used),
+                    )
+                };
+                let batch_gas_limit = trigger_batch_gas_budget(remaining_block_budget);
+                if explicit_gas > batch_gas_limit {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "trigger executable batch exceeds its shared gas budget: {explicit_gas} > {batch_gas_limit}"
+                    ))
+                    .into());
+                }
+
+                let batch_result = (|| -> Result<ExecutionStep, ValidationFail> {
+                    self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(explicit_gas);
+                    let mut batch_gas_used = explicit_gas;
+                    let mut executed_instructions = Vec::new();
+                    let executor = self.world.executor.clone();
+                    let logical_time_ms =
+                        u64::try_from(self._curr_block.creation_time().as_millis())
+                            .expect("block creation timestamp must fit into u64");
+                    let default_nft_seq_base = self._curr_block.height().get().saturating_mul(256);
+                    let mut nft_seq_base = nft_seq_base_override.unwrap_or(default_nft_seq_base);
+
+                    for (item_index, item) in items.iter().enumerate() {
+                        match item {
+                            iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                                instruction,
+                            ) => {
+                                executor.execute_transaction_instruction(
+                                    self,
+                                    authority,
+                                    instruction.clone(),
+                                    item_index,
+                                    None,
+                                )?;
+                                executed_instructions.push(instruction.clone());
+                            }
+                            iroha_data_model::transaction::ExecutableBatchItem::ContractCall(
+                                invocation,
+                            ) => {
+                                let remaining =
+                                    remaining_trigger_batch_gas(batch_gas_limit, batch_gas_used);
+                                let ivm_cache = self.ivm_cache;
+                                let resolved = {
+                                    let mut cache = ivm_cache.lock();
+                                    executor
+                                        .resolve_contract_invocation(self, invocation, &mut cache)?
+                                };
+                                debug_assert!(
+                                    ivm_cache.try_lock().is_some(),
+                                    "trigger IVM cache must be released before guest effects apply"
+                                );
+                                let outcome = executor.execute_resolved_contract_invocation(
+                                    self,
+                                    authority,
+                                    invocation,
+                                    resolved,
+                                    remaining,
+                                    logical_time_ms,
+                                    Some((id, nft_seq_base)),
+                                )?;
+                                executed_instructions.extend(outcome.executed_instructions);
+                                batch_gas_used = batch_gas_used.saturating_add(outcome.gas_used);
+                                nft_seq_base = outcome
+                                    .next_nft_sequence
+                                    .expect("trigger contract invocation returns its NFT sequence");
+                            }
+                        }
+                    }
+                    let step = ExecutionStep(ConstVec::from(executed_instructions));
+                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                    Ok(step)
+                })();
+                (batch_result, None)
+            }
             ExecutableRef::ContractCall(invocation) => {
                 let identity = crate::smartcontracts::code::fetch_bound_contract_identity(
                     self,
@@ -58749,6 +58871,17 @@ impl StateTransaction<'_, '_> {
     fn execution_step_from_executable(executable: &ExecutableRef) -> ExecutionStep {
         match executable {
             ExecutableRef::Instructions(instructions) => ExecutionStep(instructions.clone()),
+            ExecutableRef::Batch(items) => ExecutionStep(ConstVec::from(
+                items
+                    .iter()
+                    .filter_map(|item| match item {
+                        iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                            instruction,
+                        ) => Some(instruction.clone()),
+                        iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>(),
+            )),
             ExecutableRef::ContractCall(_) | ExecutableRef::Ivm(_) => {
                 ExecutionStep(ConstVec::new_empty())
             }
@@ -58816,7 +58949,10 @@ impl StateTransaction<'_, '_> {
                 )
                 .expect("should be no errors");
             }
-            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+            Executable::ContractCall(_)
+            | Executable::Batch(_)
+            | Executable::Ivm(_)
+            | Executable::IvmProved(_) => {
                 panic!("stateful IVM executables must replay through Executor::execute_transaction")
             }
         }
@@ -61645,6 +61781,137 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    #[test]
+    fn trigger_batch_gas_budget_is_shared_across_items() {
+        assert_eq!(
+            trigger_batch_gas_budget(u64::MAX),
+            DEFAULT_TRIGGER_GAS_LIMIT
+        );
+        assert_eq!(trigger_batch_gas_budget(125), 125);
+        assert_eq!(remaining_trigger_batch_gas(125, 25), 100);
+        assert_eq!(remaining_trigger_batch_gas(125, 125), 0);
+        assert_eq!(remaining_trigger_batch_gas(125, 200), 0);
+    }
+
+    #[test]
+    fn trigger_batch_contract_calls_advance_nft_sequence() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEvent,
+            transaction::{ExecutableBatchItem, executable::ContractInvocation},
+        };
+        use iroha_test_samples::ALICE_KEYPAIR;
+
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku SequentialNfts {
+  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+    ledger::nft::create_for_all_users();
+  }
+}
+"#,
+            )
+            .expect("compile sequential NFT contract");
+        let authority = ALICE_ID.clone();
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            95,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive sequential NFT contract address");
+        let contract_authority = contract_address.subject_id();
+        let domain =
+            Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&contract_authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let contract_account = Account::new(contract_authority.clone()).build(&contract_authority);
+        let mut world = World::with([domain], [authority_account, contract_account], []);
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "run".to_owned(),
+            }
+            .into();
+        world.account_permissions.insert(
+            contract_authority.clone(),
+            BTreeSet::from([entrypoint_permission]),
+        );
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut state_block =
+            state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = state_block.transaction();
+        let invocation = ContractInvocation {
+            contract_address,
+            expected_code_hash: code_hash,
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let executable = ExecutableRef::Batch(ConstVec::from(vec![
+            ExecutableBatchItem::ContractCall(invocation.clone()),
+            ExecutableBatchItem::ContractCall(invocation),
+        ]));
+        let trigger_id: TriggerId = "sequential_nft_batch".parse().expect("valid trigger id");
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: contract_authority.clone(),
+            args: Json::default(),
+        };
+        let accounts = state_transaction.accounts_snapshot();
+        let nft_seq_base = 100_u64;
+
+        state_transaction
+            .execute_trigger(
+                &trigger_id,
+                &contract_authority,
+                &executable,
+                event.into(),
+                0,
+                Some(nft_seq_base),
+            )
+            .expect("both contract-call items must use disjoint NFT sequences");
+
+        let mut expected_sequence = nft_seq_base;
+        let mut expected_nfts = Vec::new();
+        for _ in 0..2 {
+            for account in accounts.iter().take(256) {
+                let name = format!(
+                    "nft_number_{}_for_{}",
+                    expected_sequence,
+                    account.signatory()
+                )
+                .parse()
+                .expect("fixture account produces a valid NFT name");
+                expected_nfts.push(NftId::of(iroha_genesis::GENESIS_DOMAIN_ID.clone(), name));
+                expected_sequence = expected_sequence
+                    .checked_add(1)
+                    .expect("fixture NFT sequence does not overflow");
+            }
+        }
+        assert_eq!(
+            state_transaction.world.nfts.iter().count(),
+            expected_nfts.len(),
+            "each contract-call item must register its own NFT range"
+        );
+        for nft_id in expected_nfts {
+            assert!(
+                state_transaction.world.nfts.get(&nft_id).is_some(),
+                "missing NFT from the advanced sequence: {nft_id}"
+            );
+        }
+    }
 
     #[test]
     fn fallible_state_constructor_rejects_poisoned_kura_before_initialization() {

@@ -3265,6 +3265,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.nft_seq = base;
     }
 
+    /// Return the next deterministic NFT sequence after this host's completed execution.
+    #[must_use]
+    pub(crate) fn next_nft_sequence(&self) -> u64 {
+        self.nft_seq
+    }
+
     /// Update cryptography configuration and propagate toggles to the helper host.
     pub fn set_crypto_config(&mut self, crypto: Arc<iroha_config::parameters::actual::Crypto>) {
         self.crypto = crypto;
@@ -19974,7 +19980,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(quote, vm.remaining_gas());
         assert!(actual <= quote);
         assert_eq!(host.queued.len(), 512, "at most 256 NFT pairs are queued");
-        assert_eq!(host.nft_seq, 256);
+        assert_eq!(host.next_nft_sequence(), 256);
 
         let mut exhausted = CoreHost::with_accounts(
             authority,
@@ -19994,7 +20000,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(exact, actual);
         assert!(actual <= quote);
         assert_eq!(exhausted.queued.len(), 2);
-        assert_eq!(exhausted.nft_seq, u64::MAX);
+        assert_eq!(exhausted.next_nft_sequence(), u64::MAX);
 
         exhausted.queued.clear();
         let quote = exhausted

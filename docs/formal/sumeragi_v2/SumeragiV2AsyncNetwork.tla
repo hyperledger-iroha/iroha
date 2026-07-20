@@ -50,12 +50,17 @@ lane-local wire ceilings; that class/byte correspondence is an explicit
 production-refinement premise rather than a theorem of this byte-abstract
 module.
 
-`AsyncNetworkItem.source` is the authenticated resource-owning hop in this
-direct-origin abstraction.  Production additionally carries a possibly
-different semantic origin for validation, response routing, and exact-wire
-coalescing.  Establishing that relay-controlled origin churn cannot multiply
-source count/byte ownership, while distinct legitimate origins are not
-incorrectly coalesced, is an unassigned production-refinement proposition.
+`AsyncNetworkItem.source` is the authenticated resource-owning hop.  Canonical
+request identity deliberately excludes that source and every process-local
+route ordinal.  `SumeragiV2AsyncNetworkReplyRoutes!AsyncProductionSpec`
+composes a bounded per-authenticated-source ownership machine with this
+consensus scheduler: each source has an
+independent message/chunk cursor and tenure-bound ticket, while immutable
+payload materialization is shared by semantic identity.  Exact retry, later
+refresh, and reconnect preserve progress; only a newly observed alternate
+source starts at item zero.  The source capacity is derived from the validator/source geometry and
+the exact-output corridor fails configuration when it cannot reserve every
+source.
 
 An emitted Core envelope remains in immutable authentication history when a
 hidden packet is lost before GST.  Retransmission scans only the reducer's
@@ -133,6 +138,18 @@ AsyncChunks == 1..AsyncChunkCount
 AsyncHeartbeatSubject == CHOOSE subject \in ValidSubjects: TRUE
 AsyncUntrustedSource == N
 AsyncIngressSources == ValidatorIds \cup {AsyncUntrustedSource}
+
+AsyncReplyRequestKinds ==
+  {"CertifiedRequest", "CommitCertificateRequest"}
+
+AsyncReplySourceOrder == [index \in 1..N |-> index - 1]
+AsyncReplySourceCapacity == Cardinality(ValidatorIds)
+
+\* The same 4N+2 ingress geometry which protects every authenticated source's
+\* exact-output occurrence must contain at least one route owner per source.
+\* This is a configuration equation, not an eviction fallback.
+AsyncReplyExactOutputCorridorCapacity ==
+  (AsyncIngressCapacity - 2) \div 4
 
 \* The Rust/Norito maximal structural fixture covers 128 signer indices, a
 \* maximum-size PrepareQC aggregate signature, and a maximum-size timeout-vote
@@ -230,6 +247,9 @@ AsyncConfiguration ==
   /\ AsyncCompletionReserve >= 1
   /\ AsyncIngressCapacity \in Nat \ {0}
   /\ AsyncIngressCapacity >= 4 * N + 2
+  /\ AsyncReplySourceCapacity = N
+  /\ AsyncReplyExactOutputCorridorCapacity >=
+       AsyncReplySourceCapacity
   /\ AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve
   /\ AsyncIoAuxCapacity \in Nat \ {0}
   /\ AsyncIoWorkCapacity \in Nat \ {0}
@@ -261,6 +281,19 @@ AsyncBodyEnvelopeSet ==
   [recipient: ValidatorIds, height: Heights, view: Views,
    subject: Subjects, chunk: 0..AsyncChunkCount,
    nonce: 0..(AsyncIngressCapacity - 1)]
+
+AsyncReplyRequestEnvelopeSet ==
+  [recipient: ValidatorIds, height: Heights, view: Views,
+   subject: Subjects, chunk: {NoAsyncChunk},
+   nonce: 0..(AsyncIngressCapacity - 1)]
+
+AsyncReplySemanticIdentity(kind, envelope) ==
+  [kind |-> kind, envelope |-> envelope]
+
+AsyncReplySemanticIdentities ==
+  {AsyncReplySemanticIdentity(kind, envelope):
+     kind \in AsyncReplyRequestKinds,
+     envelope \in AsyncReplyRequestEnvelopeSet}
 
 AsyncNetworkItem(kind, source, envelope) ==
   [kind |-> kind, source |-> source, envelope |-> envelope]
@@ -926,6 +959,50 @@ InstallCommitSignSuccessor(command) ==
        signRequest.vote.subject, signRequest.vote.subject)
 
 (***************************************************************************
+Production retains the full `durable.locked()` PrepareQC.  This Core model
+abstracts a TC's high certificate to rank/subject, so select one exact matching
+QcRecord and freeze it into the recovery candidate's evidence.  Distinguishing
+different signer-set encodings of the same certified rank/subject remains a
+separate TC/QC production-refinement obligation; no liveness-only state is
+introduced here to pretend that projection has already been proved.
+***************************************************************************)
+
+InstallResultingLockedPrepareQCs(command) ==
+  {qc \in prepareQCs:
+    \E installRequest \in InstallRequests(command):
+      /\ qc.context = context
+      /\ qc.phase = "Prepare"
+      /\ qc.view = ResultingInstallLockRank(
+                       installRequest.node, installRequest.tc)
+      /\ qc.subject = ResultingInstallLockSubject(
+                          installRequest.node, installRequest.tc)
+      /\ \/ /\ qc.view = TcHighRank(installRequest.tc)
+                /\ qc.subject = TcHighSubject(installRequest.tc)
+         \/ HistoricalLockedPrepareRecoveryProvenance(
+              installRequest.node, qc)}
+
+InstallLockedFetchSuccessor(command) ==
+  LET qc == CHOOSE candidateQc \in
+                     InstallResultingLockedPrepareQCs(command): TRUE
+  IN AsyncCandidateAtConsumer(
+       "Completion", "FetchBody", command.node, qc.context.height,
+       qc.view, qc.subject, NoAsyncItem, command.view + 1,
+       IF generation[command.node] < MaxGeneration
+       THEN generation[command.node] + 1
+       ELSE generation[command.node],
+       qc, qc.subject, qc.subject, qc.subject)
+
+InstallLockedFetchSuccessors(command) ==
+  IF InstallResultingLockedPrepareQCs(command) = {}
+  THEN <<>>
+  ELSE <<InstallLockedFetchSuccessor(command)>>
+
+InstallCommitSignSuccessors(command) ==
+  IF InstallCommitSignRequests(command) = {}
+  THEN <<>>
+  ELSE <<InstallCommitSignSuccessor(command)>>
+
+(***************************************************************************
 `AppendCausalSuccessors` is conjoined with `PersistInstallTC`, so its
 constructors evaluate in the pre-state.  Derive the AssembleBody subject from
 the exact pending TC to predict the post-install high reference; using the
@@ -953,22 +1030,57 @@ InstallProposalSuccessor(command) ==
        command.evidence, subject, subject, subject)
 
 (***************************************************************************
-The reducer exposes the exact active locked Commit re-sign as the first
-causal completion after TC acknowledgement.  The ordinary next-view proposal
-path follows it.  When the TC promoted a lock that has no matching local
-Commit intent, there is no synthetic signing successor at installation: the
-exact historical body must pass StoreBody -> ValidateBody, whose successor
-then enters the ordinary WAL-backed BeginLockCommit path.
+TC acknowledgement clears production `body_work`, emits exact locked-body
+Fetch before driving the active signature queue, and then resumes ordinary
+next-view proposal work.  The Fetch is emitted for every resulting lock,
+including one which already has a durable Commit intent; exact candidate
+coalescing prevents duplicate scheduler ownership.  A lock without an intent
+passes Fetch/Store/Validate before the ordinary WAL-backed BeginLockCommit.
 ***************************************************************************)
 InstallCommandSuccessors(command) ==
-  IF InstallCommitSignRequests(command) = {}
-  THEN <<InstallProposalSuccessor(command)>>
-  ELSE <<InstallCommitSignSuccessor(command),
-         InstallProposalSuccessor(command)>>
+  InstallLockedFetchSuccessors(command)
+    \o InstallCommitSignSuccessors(command)
+    \o <<InstallProposalSuccessor(command)>>
 
 DecisionFetchFrontier(command) ==
-  /\ command.kind = "FetchBody"
-  /\ ExactDecidedLocalBody(command.node, command.view, command.subject)
+  \E qc \in DecisionQcValues:
+    /\ command.kind = "FetchBody"
+    /\ command.node \in ValidatorIds
+    /\ command.height = qc.context.height
+    /\ command.view = qc.view
+    /\ command.subject = qc.subject
+    /\ command.evidence = qc
+    /\ DecisionCertifiedBodyRecoveryAuthority(command.node, qc)
+
+HistoricalLockedFetchFrontier(command) ==
+  \E qc \in prepareQCs:
+    /\ command.kind = "FetchBody"
+    /\ command.node \in ValidatorIds
+    /\ command.height = qc.context.height
+    /\ command.view = qc.view
+    /\ command.subject = qc.subject
+    /\ command.evidence = qc
+    /\ HistoricalLockedPrepareSource(command.node, qc)
+
+CertifiedRecoveryFetchFrontier(command) ==
+  \/ DecisionFetchFrontier(command)
+  \/ HistoricalLockedFetchFrontier(command)
+
+PersistDecisionRequests(command) ==
+  {request \in pendingDecision:
+    /\ request.node = command.node
+    /\ request.qc.context.height = command.height
+    /\ request.qc.view = command.view
+    /\ request.qc.subject = command.subject}
+
+PersistDecisionFetchSuccessor(command) ==
+  LET request == CHOOSE entry \in PersistDecisionRequests(command): TRUE
+      qc == request.qc
+  IN AsyncCandidateAtConsumer(
+       "Completion", "FetchBody", request.node, qc.context.height,
+       qc.view, qc.subject, NoAsyncItem, command.consumerView,
+       command.consumerGeneration, qc,
+       qc.subject, qc.subject, qc.subject)
 
 (***************************************************************************
 Closed inventory of reducer parents which can emit a causal successor.
@@ -1005,7 +1117,7 @@ CommandSuccessors(command) ==
     [] command.kind = "DeliverChunk" ->
          <<CausalCandidate("Completion", "FetchBody", command)>>
     [] command.kind = "FetchBody" ->
-         IF DecisionFetchFrontier(command)
+         IF CertifiedRecoveryFetchFrontier(command)
          THEN IF BodyHeldBy(durableBodies, command.node, context,
                             command.view, command.subject)
               THEN <<CausalCandidate("Completion", "ValidateBody", command)>>
@@ -1047,7 +1159,9 @@ CommandSuccessors(command) ==
     [] command.kind = "BeginDecision" ->
          <<CausalCandidate("Completion", "PersistDecision", command)>>
     [] command.kind = "PersistDecision" ->
-         <<CausalCandidate("Completion", "FetchBody", command)>>
+         IF PersistDecisionRequests(command) = {}
+         THEN <<>>
+         ELSE <<PersistDecisionFetchSuccessor(command)>>
     [] command.kind = "BeginTimeout" ->
          <<CausalCandidate("Completion", "PersistTimeout", command)>>
     [] command.kind = "PersistTimeout" ->
@@ -1504,6 +1618,14 @@ PublishCommitCertificateRequests(items) ==
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
   /\ UNCHANGED asyncRetainedControl
 
+CertifiedRequestSurvivesInstall(item, node, tc) ==
+  IF item.kind # "CertifiedRequest" \/ item.source # node
+  THEN TRUE
+  ELSE /\ ResultingInstallLockRank(node, tc) # NoRank
+       /\ item.envelope.height = context.height
+       /\ item.envelope.view = ResultingInstallLockRank(node, tc)
+       /\ item.envelope.subject = ResultingInstallLockSubject(node, tc)
+
 PersistInstalledControl(node, items, broadcast) ==
   /\ asyncRetainedControl' =
        InstalledControl(asyncRetainedControl, node, items)
@@ -1514,6 +1636,29 @@ PersistInstalledControl(node, items, broadcast) ==
        THEN asyncTransport \cup PacketsForItems(items)
        ELSE asyncTransport
   /\ UNCHANGED asyncActiveRequests
+
+(***************************************************************************
+Installing a TC replaces production's volatile body-work owner.  Retire only
+this node's certified requests for superseded lock identities; immutable sent
+history and already in-flight packet occurrences remain authentication facts
+and are harmless because response admission rechecks the current authority.
+
+Keep PersistInstalledControl as the generic retained-control helper used by
+existing proof decompositions; this install-specific wrapper owns the request
+lifecycle change without altering that helper's arity or meaning.
+***************************************************************************)
+PersistInstalledControlAfterInstall(node, tc, items, broadcast) ==
+  /\ asyncRetainedControl' =
+       InstalledControl(asyncRetainedControl, node, items)
+  /\ asyncSentItems' =
+       IF broadcast THEN asyncSentItems \cup items ELSE asyncSentItems
+  /\ asyncTransport' =
+       IF broadcast
+       THEN asyncTransport \cup PacketsForItems(items)
+       ELSE asyncTransport
+  /\ asyncActiveRequests' =
+       {item \in asyncActiveRequests:
+          CertifiedRequestSurvivesInstall(item, node, tc)}
 
 PersistDecisionControl(items, broadcast) ==
   /\ asyncRetainedControl' =
@@ -1622,7 +1767,7 @@ RegularCoreCommand(command) ==
                             request.proposal.subject)
           /\ PersistProposal(request)
   \/ /\ command.kind = "FetchBody"
-     /\ ~DecisionFetchFrontier(command)
+     /\ ~CertifiedRecoveryFetchFrontier(command)
      /\ HeldChunksFor(command.node, command.view, command.subject) =
           AsyncChunks
      /\ ~BodyHeldBy(durableBodies, command.node, context,
@@ -1647,6 +1792,9 @@ RegularCoreCommand(command) ==
         \/ \E qc \in DecisionQcValues:
              /\ CommandMatches(command, command.node, qc.view, qc.subject)
              /\ ValidateDecidedBody(command.node, qc)
+        \/ \E qc \in prepareQCs:
+             /\ CommandMatches(command, command.node, qc.view, qc.subject)
+             /\ ValidateLockedBody(command.node, qc)
   \/ /\ command.kind = "BeginPrepare"
      /\ \E proposal \in SeenProposalValues:
           /\ CommandMatches(command, command.node, proposal.view,
@@ -1698,8 +1846,9 @@ RegularCoreCommand(command) ==
      /\ command.item.envelope.recipient = command.node
      /\ command.item.envelope.view = command.view
      /\ command.item.envelope.subject = command.subject
-     /\ \E qc \in DecisionQcValues:
+     /\ \E qc \in DecisionQcValues \cup prepareQCs:
           /\ CommandMatches(command, command.node, qc.view, qc.subject)
+          /\ CertifiedBodyRecoveryAuthority(command.node, qc)
           /\ command.item.source \in qc.signers
           /\ FetchCertifiedBody(command.node, qc)
 
@@ -1773,8 +1922,9 @@ ExecutePersistInstall(command) ==
        /\ command.node = request.node
        /\ command.view = request.tc.view
        /\ PersistInstallTC(request)
-       /\ PersistInstalledControl(
-            request.node, TcOutbox(request.node, request.tc),
+       /\ PersistInstalledControlAfterInstall(
+            request.node, request.tc,
+            TcOutbox(request.node, request.tc),
             request.rebroadcast)
   /\ asyncNodeDeadlines' =
        [asyncNodeDeadlines EXCEPT
@@ -1804,42 +1954,39 @@ ExecuteRequestCertifiedBody(command) ==
   /\ command.kind = "RequestCertifiedBody"
   /\ ~BodyHeldBy(durableBodies, command.node, context, command.view,
                   command.subject)
-  /\ \E decision \in decisions:
-       /\ decision.node = command.node
-       /\ decision.qc.context = context
-       /\ decision.qc.view = command.view
-       /\ decision.qc.subject = command.subject
-       /\ decision.qc.phase = "Commit"
+  /\ \E qc \in DecisionQcValues \cup prepareQCs:
+       /\ CommandMatches(command, command.node, qc.view, qc.subject)
+       /\ command.evidence = qc
+       /\ CertifiedBodyRecoveryAuthority(command.node, qc)
        /\ UNCHANGED vars
        /\ PublishCertifiedRequests(
-            CertifiedRequestOutbox(command.node, decision.qc))
+            CertifiedRequestOutbox(command.node, qc))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
 
 (***************************************************************************
-The reducer owns one Decision `FetchBody` frontier.  The adapter resolves it
-from the reopened durable catalog when possible; otherwise the same frontier
-opens the certified request lifecycle.  Later Store/Validate/Apply work is
-emitted only by the resulting body state transitions.
+The reducer owns one certificate-backed `FetchBody` frontier, authorized by
+either a durable Commit Decision or the exact TC-installed locked PrepareQC.
+The adapter resolves it from the reopened durable catalog when possible;
+otherwise the same frontier opens the certified request lifecycle.  Later
+Store/Validate/Apply-or-Commit work is emitted only by body-state transitions.
 ***************************************************************************)
 ExecuteDecisionFetch(command) ==
-  /\ DecisionFetchFrontier(command)
+  /\ CertifiedRecoveryFetchFrontier(command)
   /\ IF BodyHeldBy(durableBodies, command.node, context, command.view,
                     command.subject)
      THEN /\ UNCHANGED vars
           /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
                           asyncActiveRequests, asyncTransport>>
-     ELSE \E decision \in decisions:
-            /\ decision.node = command.node
-            /\ decision.qc.context = context
-            /\ decision.qc.view = command.view
-            /\ decision.qc.subject = command.subject
-            /\ decision.qc.phase = "Commit"
+     ELSE \E qc \in DecisionQcValues \cup prepareQCs:
+            /\ CommandMatches(command, command.node, qc.view, qc.subject)
+            /\ command.evidence = qc
+            /\ CertifiedBodyRecoveryAuthority(command.node, qc)
             /\ UNCHANGED vars
             /\ PublishCertifiedRequests(
-                 CertifiedRequestOutbox(command.node, decision.qc))
+                 CertifiedRequestOutbox(command.node, qc))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                   asyncRetransmitDeadlines,
                   asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
@@ -2311,11 +2458,11 @@ IngressItemAt(node, index) ==
 
 CertifiedRequestAuthorized(item) ==
   /\ item.kind = "CertifiedRequest"
-  /\ \E qc \in commitQCs:
-       /\ qc.context = context
+  /\ \E qc \in DecisionQcValues \cup prepareQCs:
+       /\ CertifiedBodyRecoveryAuthority(item.source, qc)
+       /\ item.envelope.height = qc.context.height
        /\ qc.view = item.envelope.view
        /\ qc.subject = item.envelope.subject
-       /\ qc.phase = "Commit"
        /\ item.envelope.recipient \in qc.signers
 
 MatchingCertifiedRequests(response) ==
@@ -2329,13 +2476,12 @@ MatchingCertifiedRequests(response) ==
 CertifiedResponseAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ MatchingCertifiedRequests(item) # {}
-  /\ \E decision \in decisions:
-       /\ decision.node = item.envelope.recipient
-       /\ decision.qc.context = context
-       /\ decision.qc.view = item.envelope.view
-       /\ decision.qc.subject = item.envelope.subject
-       /\ decision.qc.phase = "Commit"
-       /\ item.source \in decision.qc.signers
+  /\ \E qc \in DecisionQcValues \cup prepareQCs:
+       /\ CertifiedBodyRecoveryAuthority(item.envelope.recipient, qc)
+       /\ item.envelope.height = qc.context.height
+       /\ item.envelope.view = qc.view
+       /\ item.envelope.subject = qc.subject
+       /\ item.source \in qc.signers
 
 CommitCertificateRequestAuthorized(item) ==
   /\ item.kind = "CommitCertificateRequest"
@@ -2927,6 +3073,38 @@ TimeoutCausalCommand(node) ==
                   highestSubject[node])
 
 (***************************************************************************
+The reducer derives historical locked-body retry work from durable lock state
+on every RetransmitElapsed event.  The timer is the handoff authority; once it
+fires, exact current-consumer Completion ownership is installed in the normal
+causal scheduler.  No permanent ghost recovery owner is introduced.
+***************************************************************************)
+
+HistoricalLockedRetransmitQCs(node) ==
+  {qc \in prepareQCs:
+    /\ HistoricalLockedPrepareSource(node, qc)
+    /\ ~BodyValidatedBy(validatedBodies, node, context, qc.view,
+                         generation[node], qc.subject)}
+
+HistoricalLockedRetransmitCandidate(node) ==
+  LET qc == CHOOSE candidateQc \in
+                     HistoricalLockedRetransmitQCs(node): TRUE
+  IN AsyncCandidateAtConsumer(
+       "Completion", "FetchBody", node, qc.context.height,
+       qc.view, qc.subject, NoAsyncItem, nodeView[node], generation[node],
+       qc, qc.subject, qc.subject, qc.subject)
+
+HistoricalLockedRetransmitSuccessors(node) ==
+  IF HistoricalLockedRetransmitQCs(node) = {}
+  THEN <<>>
+  ELSE FreshCandidateSequence(
+         HistoricalLockedRetransmitCandidate(node))
+
+AppendHistoricalLockedRetransmitSuccessors(node) ==
+  asyncCausalQueues' =
+    [asyncCausalQueues EXCEPT
+       ![node] = @ \o HistoricalLockedRetransmitSuccessors(node)]
+
+(***************************************************************************
 The same rigid-witness rule is required for the parameterized timeout action.
 Runtime callers select nodes from ValidatorIds, making this equivalent to the
 direct ENABLED BeginTimeout(node) test on every reachable state.
@@ -3014,7 +3192,9 @@ DirectRetransmitStep(node) ==
        IF NodeIdle(node)
        THEN [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
        ELSE asyncDeferredDrainOwed
-  /\ LeaveCausalQueues
+  /\ IF NodeIdle(node)
+     THEN AppendHistoricalLockedRetransmitSuccessors(node)
+     ELSE LeaveCausalQueues
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
                  asyncTimeoutEmitted,
                  asyncNodeDeadlines, asyncIngressLanes,
@@ -3064,7 +3244,7 @@ DeferredRetransmitStep(node) ==
                  asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
-  /\ LeaveCausalQueues
+  /\ AppendHistoricalLockedRetransmitSuccessors(node)
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                  asyncFifoOwed,
                  asyncTimeoutEmitted, asyncNodeDeadlines,
@@ -4479,6 +4659,8 @@ BusyCompletionCandidates(node) ==
   {candidate \in ActiveBusyCompletionCarrier:
      /\ candidate.node = node
      /\ candidate.class = "Completion"
+     /\ candidate.height = context.height
+     /\ CandidateConsumerCurrent(candidate)
      /\ candidate.item = NoAsyncItem
      /\ \/ \E request \in pendingProposal:
               /\ request.node = node

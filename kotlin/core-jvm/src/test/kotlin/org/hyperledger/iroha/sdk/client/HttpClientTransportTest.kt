@@ -31,6 +31,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -2843,6 +2844,107 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun sponsoredOnboardingApplyBindsReceiptStatusHashAndDisposition() {
+        val fixture = onboardingFixture(AliasPlanDispositionV1.CREATE)
+        val token = "onboarding-token-value-1234567890abcd"
+        val hash = "ab".repeat(32)
+        val queuedBody = onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasPlanDispositionV1.CREATE,
+        )
+        val applied = HttpClientTransport.withExecutor(
+            StubResponseExecutor(202, queuedBody),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        ).applySponsoredAccountOnboarding(
+            fixture.receipt,
+            token,
+            fixture.authority,
+        ).join()
+        assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status)
+        assertEquals(hash, applied.transactionHashHex)
+
+        val unchangedBody = onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        val invalidResponses = listOf(
+            200 to queuedBody,
+            201 to queuedBody,
+            202 to unchangedBody,
+            200 to onboardingApplyResponse(
+                AccountAddress.fromAccount(ByteArray(32) { 0x43.toByte() }, "ed25519")
+                    .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+                fixture.alias,
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasPlanDispositionV1.NO_OP,
+            ),
+            200 to onboardingApplyResponse(
+                fixture.accountId,
+                "substituted@paynet",
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasPlanDispositionV1.NO_OP,
+            ),
+            202 to onboardingApplyResponse(
+                fixture.accountId,
+                fixture.alias,
+                hash,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasPlanDispositionV1.REPAIR,
+            ),
+            202 to onboardingApplyResponse(
+                fixture.accountId,
+                fixture.alias,
+                null,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasPlanDispositionV1.CREATE,
+            ),
+        )
+        invalidResponses.forEach { (statusCode, responseBody) ->
+            val failure = assertFailsWith<CompletionException> {
+                HttpClientTransport.withExecutor(
+                    StubResponseExecutor(statusCode, responseBody),
+                    ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+                ).applySponsoredAccountOnboarding(
+                    fixture.receipt,
+                    token,
+                    fixture.authority,
+                ).join()
+            }
+            assertTrue(failure.cause is IllegalArgumentException)
+        }
+
+        val noOpFixture = onboardingFixture(AliasPlanDispositionV1.NO_OP)
+        val invalidTransition = assertFailsWith<CompletionException> {
+            HttpClientTransport.withExecutor(
+                StubResponseExecutor(
+                    202,
+                    onboardingApplyResponse(
+                        noOpFixture.accountId,
+                        noOpFixture.alias,
+                        hash,
+                        AccountOnboardingStatusV1.QUEUED,
+                        AliasPlanDispositionV1.CREATE,
+                    ),
+                ),
+                ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            ).applySponsoredAccountOnboarding(
+                noOpFixture.receipt,
+                token,
+                noOpFixture.authority,
+            ).join()
+        }
+        assertTrue(invalidTransition.cause is IllegalArgumentException)
+    }
+
+    @Test
     fun typedRestrictedAliasListsSendCanonicalRequestHeaders() {
         val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -3483,6 +3585,7 @@ class HttpClientTransportTest {
             TransactionPayload(
                 chainId = String.format("%08x", seed),
                 creationTimeMs = 1_700_000_000_000L + seed,
+                executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,
                 nonce = seed + 1,
                 feePayment = testFeePayment(),
@@ -3595,6 +3698,88 @@ class HttpClientTransportTest {
         signer.update(hash, 0, hash.size)
         return AccountOnboardingPlanReceiptV1(body, hex(hash), hex(signer.generateSignature()))
     }
+
+    private fun onboardingFixture(disposition: AliasPlanDispositionV1): OnboardingFixture {
+        val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
+        val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val accountId = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val alias = ResolvedAccountAliasV1(
+            AccountAliasName.parse("merchant@banka.paynet"),
+            7L,
+        )
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(
+                alias,
+                accountId,
+                AccountProvisionV1.CREATE,
+                AccountAliasRoleV1.PRIMARY,
+            ),
+        )
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val guard = AliasQuoteGuardV1(
+            3,
+            AssetDefinitionIdEncoder.encodeFromBytes(assetBytes),
+            "5",
+            1_700_000_100_000L,
+        )
+        val body = AccountOnboardingPlanBodyV1(
+            1,
+            AccountOnboardingPlanRequestV1(alias.canonicalName.canonicalText(), accountId),
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            AliasPlanResourceV1(
+                intent,
+                disposition,
+                null,
+                if (disposition == AliasPlanDispositionV1.NO_OP) null else 0,
+            ),
+            AliasLeaseAcquisitionV1(1),
+            guard,
+            if (disposition == AliasPlanDispositionV1.NO_OP) {
+                emptyList()
+            } else {
+                listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(4, 5, 6)))
+            },
+            null,
+            guard.validUntilMs,
+        )
+        return OnboardingFixture(
+            signedOnboardingReceipt(body, signer),
+            authority,
+            accountId,
+            alias.canonicalName.canonicalText(),
+        )
+    }
+
+    private fun onboardingApplyResponse(
+        accountId: String,
+        alias: String,
+        transactionHashHex: String?,
+        status: AccountOnboardingStatusV1,
+        disposition: AliasPlanDispositionV1,
+    ): ByteArray {
+        val response = linkedMapOf<String, Any?>(
+            "account_id" to accountId,
+            "alias" to alias,
+            "status" to status.wireValue,
+            "disposition" to disposition.toJsonMap(),
+        )
+        if (transactionHashHex != null) response["tx_hash_hex"] = transactionHashHex
+        return JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private data class OnboardingFixture(
+        val receipt: AccountOnboardingPlanReceiptV1,
+        val authority: String,
+        val accountId: String,
+        val alias: String,
+    )
 
     private fun sha256Hex(bytes: ByteArray): String =
         hex(MessageDigest.getInstance("SHA-256").digest(bytes))

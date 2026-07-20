@@ -15,7 +15,11 @@ public final class AccountAliasIndexResolution {
   public AccountAliasIndexResolution(
       final BigInteger index, final String alias, final String accountId, final String source) {
     this.index = AccountAliasUInt64.require(index, "index");
-    this.alias = AccountAliasName.parse(alias).canonicalText();
+    final String canonicalAlias = AccountAliasName.parse(alias).canonicalText();
+    if (!canonicalAlias.equals(alias)) {
+      throw new IllegalArgumentException("alias must use its canonical representation");
+    }
+    this.alias = canonicalAlias;
     this.accountId = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     this.source = source == null ? null : AccountAliasesByAccount.requireExactText(source, "source");
   }

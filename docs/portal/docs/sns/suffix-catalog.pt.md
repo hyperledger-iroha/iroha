@@ -2,88 +2,22 @@
 lang: pt
 direction: ltr
 source: docs/portal/docs/sns/suffix-catalog.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: d23c9d6a77942b5918b933631b890addbc0ecdfef51e9ff427a4069d2cc37902
-source_last_modified: "2025-11-15T16:27:31.089720+00:00"
-translation_last_reviewed: 2026-01-01
 ---
 
-# Catalogo de sufixos do Sora Name Service
+# Static SNS suffix catalog retired
 
-O roadmap do SNS acompanha cada sufixo aprovado (SN-1/SN-2). Esta pagina espelha
-o catalogo fonte da verdade para que operadores que executam registrars, DNS
-gateways ou tooling de wallets carreguem os mesmos parametros sem raspar docs de
-status.
+> Safety notice (2026-07-19): the former localization contained a fixed
+> `.sora` / `.nexus` / `.dao` table and numeric 1/2/3 mappings that are not
+> part of the first-release alias model. Do not use an archived copy as runtime
+> configuration or provisioning input.
 
-- **Snapshot:** [`docs/examples/sns/suffix_catalog_v1.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/examples/sns/suffix_catalog_v1.json)
-- **Consumidores:** `iroha sns policy`, kits de onboarding SNS, dashboards KPI e
-  scripts de release DNS/Gateway leem o mesmo bundle JSON.
-- **Status:** `active` (registros permitidos), `paused` (temporariamente bloqueado),
-  `revoked` (anunciado mas nao disponivel no momento).
+External alias names are catalog-free. Text-to-`DataSpaceId` mappings are
+resolved from configured static mappings and active SNS records, and live SNS
+policies are available only through the read-only policy surface. Setup and
+lifecycle changes use the signed `iroha app alias` planner workflow; there are
+no SNS mutation routes.
 
-## Esquema do catalogo
-
-| Campo | Tipo | Descricao |
-|-------|------|-----------|
-| `suffix` | string | Sufixo legivel por humanos com ponto inicial. |
-| `suffix_id` | `u16` | Identificador armazenado no ledger em `SuffixPolicyV1::suffix_id`. |
-| `status` | enum | `active`, `paused` ou `revoked` descrevendo a prontidao de lancamento. |
-| `steward_account` | string | Conta responsavel pela stewardship (corresponde aos hooks de politica do registrar). |
-| `fund_splitter_account` | string | Conta que recebe pagamentos antes do roteamento conforme `fee_split`. |
-| `payment_asset_id` | string | Ativo usado para settlement (`61CtjvNd9T3THAR65GsMVHr82Bjc` para a coorte inicial). |
-| `min_term_years` / `max_term_years` | integer | Limites de termo de compra da politica. |
-| `grace_period_days` / `redemption_period_days` | integer | Janelas de seguranca de renovacao aplicadas pelo Torii. |
-| `referral_cap_bps` | integer | Carve-out maximo de referral permitido pela governanca (basis points). |
-| `reserved_labels` | array | Objetos de label protegidos por governanca `{label, assigned_to, release_at_ms, note}`. |
-| `pricing` | array | Objetos de tier com `label_regex`, `base_price`, `auction_kind` e limites de duracao. |
-| `fee_split` | object | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` divisao em basis points. |
-| `policy_version` | integer | Contador monotono incrementado quando a governanca edita a politica. |
-
-## Catalogo atual
-
-| Sufixo | ID (`hex`) | Steward | Fund splitter | Status | Ativo de pagamento | Limite de referral (bps) | Termo (min - max anos) | Grace / Redemption (dias) | Tiers de preco (regex -> preco base / leilao) | Labels reservados | Divisao de fees (T/S/R/E bps) | Versao de politica |
-|--------|------------|---------|---------------|--------|-------------------|--------------------------|------------------------|---------------------------|-----------------------------------------------|------------------|------------------------------|-------------------|
-| `.sora` | `0x0001` | `<i105-account-id>` | `<i105-account-id>` | Ativo | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> <i105-account-id>` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `<i105-account-id>` | `<i105-account-id>` | Pausado | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> <i105-account-id>`, `guardian -> <i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `<i105-account-id>` | `<i105-account-id>` | Revogado | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
-
-## Trecho JSON
-
-```json
-{
-  "version": 1,
-  "generated_at": "2026-05-01T00:00:00Z",
-  "suffixes": [
-    {
-      "suffix": ".sora",
-      "suffix_id": 1,
-      "status": "active",
-      "fund_splitter_account": "<i105-account-id>",
-      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
-      "referral_cap_bps": 500,
-      "pricing": [
-        {
-          "tier_id": 0,
-          "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
-          "auction_kind": "vickrey_commit_reveal",
-          "min_duration_years": 1,
-          "max_duration_years": 5
-        }
-      ],
-      "...": "see docs/examples/sns/suffix_catalog_v1.json for the full record"
-    }
-  ]
-}
-```
-
-## Notas de automacao
-
-1. Carregar o snapshot JSON e fazer hash/assinar antes de distribuir aos operadores.
-2. Tooling do registrar deve expor `suffix_id`, limites de termo e precos do
-   catalogo quando uma requisicao atingir `/v1/sns/*`.
-3. Helpers DNS/Gateway leem os metadados de labels reservados ao gerar templates
-   GAR para que respostas DNS continuem alinhadas aos controles de governanca.
-4. Jobs de anexos KPI marcam exports de dashboards com metadados de sufixo para que
-   alertas correspondam ao estado de lancamento registrado aqui.
+Use the current canonical English guide:
+[`suffix-catalog.md`](./suffix-catalog.md).

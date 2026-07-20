@@ -17,7 +17,7 @@ use iroha_config::parameters::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy, SoranetVpn,
     },
-    defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
+    defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
@@ -1367,7 +1367,9 @@ async fn two_networks() {
         allow_cidrs: vec![],
         deny_cidrs: vec![],
         disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
+        // `max_frame_bytes` is the encrypted ceiling, while topic caps are
+        // plaintext. Reserve the fixed ChaCha20-Poly1305 nonce and tag.
+        max_frame_bytes: 1_048_576 + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
         tcp_nodelay: true,
         tcp_keepalive: None,
         max_frame_bytes_consensus: 262_144,
@@ -1508,7 +1510,9 @@ async fn two_networks() {
         allow_cidrs: vec![],
         deny_cidrs: vec![],
         disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
+        // `max_frame_bytes` is the encrypted ceiling, while topic caps are
+        // plaintext. Reserve the fixed ChaCha20-Poly1305 nonce and tag.
+        max_frame_bytes: 1_048_576 + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
         tcp_nodelay: true,
         tcp_keepalive: None,
         max_frame_bytes_consensus: 262_144,

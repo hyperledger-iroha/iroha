@@ -37,10 +37,13 @@ export {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserExecutableBatchPayload,
   buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserExecutableBatchTransaction,
   finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserExecutableBatchSignable,
   validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";

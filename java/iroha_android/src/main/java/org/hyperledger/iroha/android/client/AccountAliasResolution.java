@@ -1,7 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
 import java.math.BigInteger;
-import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.alias.AccountAliasName;
 
 /** Parsed payload for account alias resolution (`/v1/aliases/resolve`). */
 public final class AccountAliasResolution {
@@ -12,10 +13,14 @@ public final class AccountAliasResolution {
 
   public AccountAliasResolution(
       final String alias, final String accountId, final BigInteger index, final String source) {
-    this.alias = Objects.requireNonNull(alias, "alias");
-    this.accountId = Objects.requireNonNull(accountId, "accountId");
+    final String canonicalAlias = AccountAliasName.parse(alias).canonicalText();
+    if (!canonicalAlias.equals(alias)) {
+      throw new IllegalArgumentException("alias must use its canonical representation");
+    }
+    this.alias = canonicalAlias;
+    this.accountId = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     this.index = index == null ? null : AccountAliasUInt64.require(index, "index");
-    this.source = source;
+    this.source = source == null ? null : AccountAliasesByAccount.requireExactText(source, "source");
   }
 
   public String alias() {

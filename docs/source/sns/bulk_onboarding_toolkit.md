@@ -59,14 +59,13 @@ Each entry is the exact JSON shape of `EnsureAlias`. The wrapper concatenates
 `AliasSetupPlanRequestV1.intents`. Duplicate resources and unknown fields fail
 locally before a request is signed.
 
-## Plan only
+## Planning (default)
 
 ```bash
 python3 scripts/sns_bulk_onboard.py setup.json \
   --config client.toml \
   --iroha-cli ./target/release/iroha \
-  --plan-file setup.plan.json \
-  --plan-only
+  --plan-file setup.plan.json
 ```
 
 The wrapper invokes:
@@ -82,15 +81,19 @@ and frames, and writes the plan with mode `0600` on Unix. Subprocess output is
 not copied into receipts, avoiding accidental exposure of unrelated client
 configuration.
 
+Planning is read-only by default. It writes the verified plan but never signs or
+submits a transaction.
+
 ## Atomic apply
 
-Omit `--plan-only` to submit the verified plan:
+Pass `--apply` explicitly to submit the verified plan:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py setup.json \
   --config client.toml \
   --iroha-cli ./target/release/iroha \
-  --plan-file setup.plan.json
+  --plan-file setup.plan.json \
+  --apply
 ```
 
 Apply verifies the plan again and submits the entire framed instruction vector

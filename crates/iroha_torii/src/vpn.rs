@@ -25,7 +25,7 @@ use iroha_data_model::{
         VpnLeaseStatusV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherV1,
         derive_vpn_session_address_plan_v1,
     },
-    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
@@ -1138,13 +1138,8 @@ fn verify_vpn_payment(
             "vpn payment transaction authority does not match signed account",
         ));
     }
-    let Executable::Instructions(instructions) = tx.instructions() else {
-        return Err(not_permitted_error(
-            "vpn payment transaction must be a native instruction transaction",
-        ));
-    };
     let mut matched = false;
-    for instruction in instructions {
+    for instruction in tx.instructions().explicit_instructions() {
         let Some(open) = instruction.as_any().downcast_ref::<OpenVpnLeaseEscrow>() else {
             continue;
         };
@@ -1155,7 +1150,7 @@ fn verify_vpn_payment(
     }
     if !matched {
         return Err(not_permitted_error(
-            "vpn payment transaction must open the quoted native XOR VPN lease escrow",
+            "vpn payment transaction must explicitly open the quoted native XOR VPN lease escrow",
         ));
     }
     Ok(())

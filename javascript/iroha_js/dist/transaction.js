@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { getNativeBinding } from "./native.js";
 import {
   CRYPTO_ALGORITHMS,
@@ -158,6 +159,109 @@ function serializeInstructionPayloads(instructions, context) {
       `${context ?? "instructions"}[${index}] must be an object or JSON string`,
     );
   });
+}
+
+const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
+
+function normalizeExecutableBatchHash(value, context) {
+  let hash;
+  if (typeof value === "string") {
+    const literal = value.startsWith("0x") ? value.slice(2) : value;
+    if (!/^[0-9a-fA-F]{64}$/u.test(literal)) {
+      throw new TypeError(`${context} must be exactly 32 hexadecimal bytes`);
+    }
+    hash = Buffer.from(literal, "hex");
+  } else {
+    hash = toBuffer(value, context);
+  }
+  if (hash.length !== 32) {
+    throw new TypeError(`${context} must be exactly 32 bytes`);
+  }
+  if ((hash[31] & 1) === 0) {
+    throw new TypeError(`${context} must carry the canonical Iroha hash marker bit`);
+  }
+  return hash;
+}
+
+function serializeExecutableBatchEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new TypeError("entries must be a non-empty array");
+  }
+  let containsContractCall = false;
+  const serialized = entries.map((value, index) => {
+    const entry = normalizePlainObject(value, `entries[${index}]`);
+    if (entry.kind === "instruction") {
+      if (entry.instruction === undefined) {
+        throw new TypeError(`entries[${index}].instruction is required`);
+      }
+      const instruction = entry.instruction;
+      if (
+        typeof instruction !== "string" &&
+        (!instruction || typeof instruction !== "object" || Array.isArray(instruction))
+      ) {
+        throw new TypeError(
+          `entries[${index}].instruction must be an object or JSON string`,
+        );
+      }
+      return JSON.stringify({ kind: "instruction", instruction });
+    }
+    if (entry.kind !== "contractCall") {
+      throw new TypeError(
+        `entries[${index}].kind must be instruction or contractCall`,
+      );
+    }
+    containsContractCall = true;
+    const contractAddress = parseCanonicalContractAddress(
+      entry.contractAddress,
+      `entries[${index}].contractAddress`,
+    ).literal;
+    if (
+      typeof entry.entrypoint !== "string" ||
+      entry.entrypoint.length === 0 ||
+      entry.entrypoint.trim() !== entry.entrypoint
+    ) {
+      throw new TypeError(
+        `entries[${index}].entrypoint must be a non-empty exact string`,
+      );
+    }
+    const expectedCodeHash = normalizeExecutableBatchHash(
+      entry.expectedCodeHash,
+      `entries[${index}].expectedCodeHash`,
+    );
+    const argumentsBytes =
+      entry.arguments === undefined || entry.arguments === null
+        ? null
+        : toBuffer(entry.arguments, `entries[${index}].arguments`);
+    if (
+      argumentsBytes !== null &&
+      argumentsBytes.length > MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+    ) {
+      throw new RangeError(
+        `entries[${index}].arguments exceeds ${MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes`,
+      );
+    }
+    return JSON.stringify({
+      kind: "contractCall",
+      contractAddress,
+      expectedCodeHash: expectedCodeHash.toString("hex").toUpperCase(),
+      entrypoint: entry.entrypoint,
+      arguments: argumentsBytes === null ? null : Array.from(argumentsBytes),
+    });
+  });
+  return { serialized, containsContractCall };
+}
+
+function requireExecutableBatchGasLimit(feePayment, containsContractCall) {
+  const feePaymentJson = feePaymentIntentToNoritoJson(feePayment);
+  if (
+    containsContractCall &&
+    JSON.parse(feePaymentJson).value.gas_limit === null
+  ) {
+    throw new TypeError(
+      "feePayment.gasLimit is required when entries contain a contract call",
+    );
+  }
+  return feePaymentJson;
 }
 
 function normalizeMetadataPayload(metadata, context) {
@@ -643,6 +747,68 @@ export function buildTransaction(input) {
 }
 
 /**
+ * Build and sign one ordered, atomic mix of native instructions and deployed
+ * contract calls. Instruction-only callers should keep using
+ * {@link buildTransaction} to preserve the legacy executable wire tag.
+ *
+ * @param {object} input
+ * @returns {{signedTransaction: Buffer, hash: Buffer}}
+ */
+export function buildExecutableBatchTransaction(input) {
+  const native = resolveNativeBinding();
+  if (
+    !native ||
+    typeof native.buildExecutableBatchTransaction !== "function"
+  ) {
+    throw new Error(
+      "native binding 'build_executable_batch_transaction' is unavailable",
+    );
+  }
+  const {
+    chainId,
+    authority,
+    entries,
+    feePayment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
+  const { serialized, containsContractCall } =
+    serializeExecutableBatchEntries(entries);
+  const feePaymentJson = requireExecutableBatchGasLimit(
+    feePayment,
+    containsContractCall,
+  );
+  const result = native.buildExecutableBatchTransaction(
+    chainId,
+    normalizeAuthority(authority),
+    serialized,
+    feePaymentJson,
+    normalizeMetadataPayload(metadata, "transaction metadata"),
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    toBuffer(privateKey, "privateKey"),
+    privateKeyAlgorithm,
+  );
+  const signed =
+    result?.signed_transaction ?? result?.signedTransaction ?? null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
+  if (!signed || !hashBytes) {
+    throw new Error(
+      "native binding 'build_executable_batch_transaction' returned missing fields",
+    );
+  }
+  return {
+    signedTransaction: Buffer.from(signed),
+    hash: Buffer.from(hashBytes),
+  };
+}
+
+/**
  * Build, but do not sign, the exact payload submitted to `/v1/fees/quote`.
  * Only the returned payload's `fee_payment` field may be replaced before
  * calling {@link signQuotedTransactionPayload}.
@@ -690,6 +856,55 @@ export function buildTransactionPayload(input) {
   if (typeof payloadJson !== "string" || !payloadBytes || !payloadHash) {
     throw new Error(
       "native binding 'build_transaction_payload' returned missing fields",
+    );
+  }
+  return {
+    payload: JSON.parse(payloadJson),
+    payloadJson,
+    payloadBytes: Buffer.from(payloadBytes),
+    payloadHash: Buffer.from(payloadHash),
+  };
+}
+
+/** Build an exact unsigned ordered mixed executable-batch payload. */
+export function buildExecutableBatchTransactionPayload(input) {
+  const native = resolveNativeBinding();
+  if (
+    !native ||
+    typeof native.buildExecutableBatchTransactionPayload !== "function"
+  ) {
+    throw new Error(
+      "native binding 'build_executable_batch_transaction_payload' is unavailable",
+    );
+  }
+  const {
+    chainId,
+    authority,
+    entries,
+    feePayment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+  } = input;
+  const { serialized, containsContractCall } =
+    serializeExecutableBatchEntries(entries);
+  const result = native.buildExecutableBatchTransactionPayload(
+    chainId,
+    normalizeAuthority(authority),
+    serialized,
+    requireExecutableBatchGasLimit(feePayment, containsContractCall),
+    normalizeMetadataPayload(metadata, "transaction metadata"),
+    creationTimeMs,
+    ttlMs,
+    nonce,
+  );
+  const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
+  const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
+  const payloadHash = result?.payload_hash ?? result?.payloadHash ?? null;
+  if (typeof payloadJson !== "string" || !payloadBytes || !payloadHash) {
+    throw new Error(
+      "native binding 'build_executable_batch_transaction_payload' returned missing fields",
     );
   }
   return {

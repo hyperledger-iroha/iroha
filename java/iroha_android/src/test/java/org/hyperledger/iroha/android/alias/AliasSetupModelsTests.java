@@ -569,6 +569,144 @@ public final class AliasSetupModelsTests {
   }
 
   @Test
+  public void onboardingResponseRequiresExactStatusHashAndDispositionSemantics()
+      throws Exception {
+    final String hash = "ab".repeat(32);
+    final String account = account(0x22);
+
+    new AccountOnboardingResponseV1(
+        account,
+        "merchant@banka.paynet",
+        hash,
+        AccountOnboardingStatusV1.QUEUED,
+        AliasSetupModels.AliasPlanDispositionV1.CREATE);
+    new AccountOnboardingResponseV1(
+        account,
+        "merchant@banka.paynet",
+        hash,
+        AccountOnboardingStatusV1.REPAIRED,
+        AliasSetupModels.AliasPlanDispositionV1.REPAIR);
+    new AccountOnboardingResponseV1(
+        account,
+        "merchant@banka.paynet",
+        hash,
+        AccountOnboardingStatusV1.REPAIRED,
+        AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    new AccountOnboardingResponseV1(
+        account,
+        "merchant@banka.paynet",
+        null,
+        AccountOnboardingStatusV1.UNCHANGED,
+        AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+
+    expectIllegalArgument(
+        () ->
+            new AccountOnboardingResponseV1(
+                account,
+                "merchant@banka.paynet",
+                hash,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasSetupModels.AliasPlanDispositionV1.REPAIR));
+    expectIllegalArgument(
+        () ->
+            new AccountOnboardingResponseV1(
+                account,
+                "merchant@banka.paynet",
+                hash,
+                AccountOnboardingStatusV1.REPAIRED,
+                AliasSetupModels.AliasPlanDispositionV1.CREATE));
+    expectIllegalArgument(
+        () ->
+            new AccountOnboardingResponseV1(
+                account,
+                "merchant@banka.paynet",
+                hash,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasSetupModels.AliasPlanDispositionV1.NO_OP));
+    expectIllegalArgument(
+        () ->
+            new AccountOnboardingResponseV1(
+                account,
+                "merchant@banka.paynet",
+                null,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasSetupModels.AliasPlanDispositionV1.CREATE));
+    expectIllegalArgument(
+        () ->
+            new AccountOnboardingResponseV1(
+                account,
+                "Merchant@Banka.Paynet",
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasSetupModels.AliasPlanDispositionV1.NO_OP));
+  }
+
+  @Test
+  public void onboardingResponseVerifierBindsReceiptAndHttpStatus() throws Exception {
+    final AccountOnboardingPlanReceiptV1 createReceipt =
+        new AccountOnboardingPlanReceiptV1(
+            onboardingBody(account(0x11), "test-chain"), "03".repeat(32), "AA");
+    final AccountOnboardingResponseV1 unchanged =
+        new AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    assert unchanged
+        == AccountOnboardingResponseVerifier.requireValidForReceipt(
+            createReceipt, unchanged, 200);
+
+    final AccountOnboardingResponseV1 queued =
+        new AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            "ab".repeat(32),
+            AccountOnboardingStatusV1.QUEUED,
+            AliasSetupModels.AliasPlanDispositionV1.CREATE);
+    assert queued
+        == AccountOnboardingResponseVerifier.requireValidForReceipt(
+            createReceipt, queued, 202);
+
+    expectIllegalArgument(
+        () -> AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 200));
+    final AccountOnboardingResponseV1 substituted =
+        new AccountOnboardingResponseV1(
+            account(0x23),
+            "merchant@banka.paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    expectIllegalArgument(
+        () ->
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                createReceipt, substituted, 200));
+
+    final AccountOnboardingPlanReceiptV1 noOpReceipt =
+        new AccountOnboardingPlanReceiptV1(
+            onboardingBody(
+                account(0x11),
+                "test-chain",
+                AliasSetupModels.AliasPlanDispositionV1.NO_OP),
+            "04".repeat(32),
+            "AA");
+    final AccountOnboardingResponseV1 ancillaryRepair =
+        new AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            "cd".repeat(32),
+            AccountOnboardingStatusV1.REPAIRED,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
+    assert ancillaryRepair
+        == AccountOnboardingResponseVerifier.requireValidForReceipt(
+            noOpReceipt, ancillaryRepair, 202);
+    expectIllegalArgument(
+        () ->
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                noOpReceipt, queued, 202));
+  }
+
+  @Test
   public void onboardingReceiptVerifiesCanonicalBodyAndRejectsTamperOrWrongAuthority()
       throws Exception {
     final Ed25519PrivateKeyParameters signer =
@@ -699,6 +837,15 @@ public final class AliasSetupModelsTests {
 
   private static AccountOnboardingPlanBodyV1 onboardingBody(
       final String authority, final String chainId) throws Exception {
+    return onboardingBody(
+        authority, chainId, AliasSetupModels.AliasPlanDispositionV1.CREATE);
+  }
+
+  private static AccountOnboardingPlanBodyV1 onboardingBody(
+      final String authority,
+      final String chainId,
+      final AliasSetupModels.AliasPlanDispositionV1 disposition)
+      throws Exception {
     final AliasSetupModels.AccountAliasIntent intent = accountIntent();
     return new AccountOnboardingPlanBodyV1(
         1,
@@ -710,12 +857,17 @@ public final class AliasSetupModelsTests {
         chainId,
         new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
         new AliasSetupModels.AliasPlanResourceV1(
-            intent, AliasSetupModels.AliasPlanDispositionV1.CREATE, null, 0L),
+            intent,
+            disposition,
+            null,
+            disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP ? null : 0L),
         new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
         guard(),
-        Collections.singletonList(
-            new AliasSetupModels.AliasFramedInstructionV1(
-                EnsureAlias.WIRE_ID, sharedEnsureFrame())),
+        disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP
+            ? Collections.emptyList()
+            : Collections.singletonList(
+                new AliasSetupModels.AliasFramedInstructionV1(
+                    EnsureAlias.WIRE_ID, sharedEnsureFrame())),
         null,
         50_000);
   }
@@ -782,6 +934,15 @@ public final class AliasSetupModelsTests {
       bytes[index] = (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
     }
     return bytes;
+  }
+
+  private static void expectIllegalArgument(final Runnable action) {
+    try {
+      action.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      // Expected.
+    }
   }
 
   private static String expectedWireId(final String name) {

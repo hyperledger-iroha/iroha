@@ -8267,7 +8267,7 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8331,7 +8331,7 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8420,7 +8420,7 @@ test("submitTransactionBatch uses native framed Norito batch encoder when availa
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8538,7 +8538,7 @@ test("submitTransactionBatch rejects native batch encoder failures without posti
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8588,7 +8588,7 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8729,7 +8729,7 @@ test("submitTransaction deframes NRT0 payloads before posting versioned pipeline
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8777,7 +8777,7 @@ test("submitTransaction retries transient failures via pipeline profile", async 
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8828,7 +8828,7 @@ test("submitTransaction retries broken pipe failures via pipeline profile", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8879,7 +8879,7 @@ test("submitTransaction retries broken pipe failures without an explicit error c
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8940,7 +8940,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8998,7 +8998,7 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9080,7 +9080,7 @@ test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9140,7 +9140,7 @@ test("submitTransaction preserves native versioned transaction payload", async (
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9197,7 +9197,7 @@ test("submitTransaction falls back when native transaction encoder rejects opaqu
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9255,7 +9255,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -12534,7 +12534,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       status: 200,
       jsonData: {
         abi_version: 1,
-        data_model_version: 1,
+        data_model_version: 3,
         crypto: {
           sm: {
             enabled: true,
@@ -12562,7 +12562,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
   const result = await client.getNodeCapabilities();
   assert.deepEqual(result, {
     abiVersion: 1,
-    dataModelVersion: 1,
+    dataModelVersion: 3,
     crypto: {
       sm: {
         enabled: true,
@@ -12592,7 +12592,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
       status: 200,
       jsonData: {
         abi_version: 1.5,
-        data_model_version: 1,
+        data_model_version: 3,
         crypto: {
           sm: {
             enabled: true,
@@ -25798,7 +25798,7 @@ test("http errors surface reject header codes", async () => {
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -25866,7 +25866,7 @@ function requireSorafsNative(t) {
 function validNodeCapabilitiesPayload() {
   return {
     abi_version: 1,
-    data_model_version: 1,
+    data_model_version: 3,
     crypto: {
       sm: {
         enabled: false,

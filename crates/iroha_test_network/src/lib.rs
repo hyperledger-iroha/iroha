@@ -51,11 +51,6 @@ use iroha_core::sumeragi::consensus::{
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
 };
-#[cfg(test)]
-use iroha_data_model::{
-    da::commitment::DaProofPolicyBundle,
-    isi::register::RegisterBox,
-};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -85,6 +80,8 @@ use iroha_data_model::{
     transaction::signed::TransactionResultInner,
     trigger::DataTriggerSequence,
 };
+#[cfg(test)]
+use iroha_data_model::{da::commitment::DaProofPolicyBundle, isi::register::RegisterBox};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
@@ -103,11 +100,12 @@ use norito::json::{self, Value as JsonValue};
 // no external dependency needed: versioned encoding is a single leading byte (1)
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
+    net::{TcpListener as TokioTcpListener, TcpStream},
     process::Child,
     runtime::{self, Runtime},
     sync::{Mutex, Notify, broadcast, oneshot, watch},
-    task::{JoinSet, spawn_blocking},
+    task::{JoinHandle, JoinSet, spawn_blocking},
     time::timeout,
 };
 use toml::{Table, Value, map::Entry};
@@ -2334,7 +2332,13 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
 /// Network of peers
 pub struct Network {
     env: Environment,
+    // Keep this field as the validator roster: `peers()` predates observer
+    // support and many consensus tests intentionally use its length as quorum
+    // input.
     peers: Vec<NetworkPeer>,
+    observers: Vec<NetworkPeer>,
+    observer_advertised_p2p_addresses: HashMap<PeerId, SocketAddr>,
+    observer_slow_reader_relays: Option<ObserverSlowReaderRelays>,
     next_peer_index: AtomicUsize,
 
     block_cadence: Duration,
@@ -2361,9 +2365,17 @@ pub struct Network {
 
 impl Drop for Network {
     fn drop(&mut self) {
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.abort();
+        }
         let keep_tempdir = std::env::var_os(KEEP_TEMPDIR_ENV).is_some();
-        if self.peers.iter().any(|peer| peer.is_running()) {
-            let peers = self.peers.clone();
+        if self
+            .peers
+            .iter()
+            .chain(&self.observers)
+            .any(NetworkPeer::is_running)
+        {
+            let peers = self.peers.iter().chain(&self.observers).cloned().collect();
             let dir = self.env.dir.clone();
             let keep = keep_tempdir;
             std::thread::spawn(move || match runtime::Runtime::new() {
@@ -2443,7 +2455,9 @@ impl Network {
     fn log_startup_diagnostics(&self) {
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
-            total_peers = self.peers.len(),
+            validators = self.peers.len(),
+            observers = self.observers.len(),
+            total_peers = self.peers.len().saturating_add(self.observers.len()),
             consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
@@ -2460,7 +2474,7 @@ impl Network {
         );
     }
 
-    /// Add a peer to the network.
+    /// Add a validator peer to the network and its genesis topology.
     pub fn add_peer(&mut self, peer: &NetworkPeer) {
         self.peers.push(peer.clone());
         if let Some(pop) = peer.genesis_pop() {
@@ -2470,7 +2484,7 @@ impl Network {
         self.cached_genesis_augmented = OnceLock::new();
     }
 
-    /// Remove a peer from the network.
+    /// Remove a validator peer from the network and its genesis topology.
     pub fn remove_peer(&mut self, peer: &NetworkPeer) {
         self.peers.retain(|x| x != peer);
         if let Some(bls_pk) = peer.bls_public_key() {
@@ -2482,12 +2496,83 @@ impl Network {
         self.cached_genesis_augmented = OnceLock::new();
     }
 
-    /// Access network peers
+    /// Access voting validator peers.
+    ///
+    /// This preserves the pre-observer meaning of `peers()`: callers may use
+    /// its length for consensus quorum calculations without counting replicas.
     pub fn peers(&self) -> &Vec<NetworkPeer> {
         &self.peers
     }
 
-    /// Get the next peer in deterministic round-robin order.
+    /// Access voting validator peers explicitly.
+    pub fn validators(&self) -> &[NetworkPeer] {
+        &self.peers
+    }
+
+    /// Access signed, non-voting observer replicas.
+    pub fn observers(&self) -> &[NetworkPeer] {
+        &self.observers
+    }
+
+    /// Snapshot transparent slow-reader relay activity, when the harness hook is enabled.
+    pub fn observer_slow_reader_relay_stats(&self) -> Option<ObserverSlowReaderRelayStats> {
+        self.observer_slow_reader_relays
+            .as_ref()
+            .map(ObserverSlowReaderRelays::stats)
+    }
+
+    /// Snapshot transparent slow-reader relay activity for one observer.
+    pub fn observer_slow_reader_relay_stats_for(
+        &self,
+        observer: &PeerId,
+    ) -> Option<ObserverSlowReaderRelayStats> {
+        self.observer_slow_reader_relays
+            .as_ref()?
+            .stats_for(observer)
+    }
+
+    /// Pause or resume validator-to-observer forwarding on every transparent
+    /// slow-reader relay. Returns `false` when this network has no relay hook.
+    pub fn set_observer_slow_reader_relays_paused(&self, paused: bool) -> bool {
+        let Some(relays) = &self.observer_slow_reader_relays else {
+            return false;
+        };
+        relays.set_paused(paused);
+        true
+    }
+
+    /// Iterate over validators followed by observers in stable builder order.
+    pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
+        self.peers.iter().chain(&self.observers)
+    }
+
+    fn advertised_p2p_address(&self, peer: &NetworkPeer) -> SocketAddr {
+        self.observer_advertised_p2p_addresses
+            .get(&peer.network_peer_id())
+            .cloned()
+            .unwrap_or_else(|| peer.p2p_address())
+    }
+
+    fn observer_start_layer(&self, peer: &NetworkPeer) -> Table {
+        let Some(published_address) = self
+            .observer_advertised_p2p_addresses
+            .get(&peer.network_peer_id())
+        else {
+            return observer_role_layer();
+        };
+        let outbound_delay_ms = i64::try_from(OBSERVER_RELAY_OUTBOUND_DIAL_DELAY.as_millis())
+            .expect("bounded observer relay dial delay fits i64 milliseconds");
+        observer_role_layer()
+            .write(
+                ["network", "public_address"],
+                published_address.to_literal(),
+            )
+            // Keep observer-initiated dials from creating a direct session that
+            // bypasses the advertised relay during the bounded integration run.
+            .write(["network", "connect_startup_delay_ms"], outbound_delay_ms)
+    }
+
+    /// Get the next validator in deterministic round-robin order.
     pub fn peer(&self) -> &NetworkPeer {
         let len = self.peers.len();
         assert!(len > 0, "there is at least one peer");
@@ -2528,14 +2613,9 @@ impl Network {
     where
         I: IntoIterator<Item = usize>,
     {
-        if self
-            .peers
-            .iter()
-            .all(NetworkPeer::should_run_bind_preflight)
-        {
+        if self.all_peers().all(NetworkPeer::should_run_bind_preflight) {
             let preflight = preflight_bind_addresses(
-                self.peers
-                    .iter()
+                self.all_peers()
                     .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
             );
             if let Err(err) = preflight {
@@ -2549,7 +2629,7 @@ impl Network {
             .peers
             .first()
             .map_or(Program::Irohad, |peer| peer.program);
-        if self.peers.iter().any(|peer| peer.program != program) {
+        if self.all_peers().any(|peer| peer.program != program) {
             return Err(eyre!(
                 "all peers in one test network must use the same daemon program"
             ));
@@ -2571,6 +2651,13 @@ impl Network {
             ));
         }
 
+        // Bind every published observer endpoint before validators start. The
+        // relay retains accepted sockets and retries the private upstream until
+        // the validators-first bootstrap reaches the observer stage.
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.start().await?;
+        }
+
         let genesis_block = Arc::new(self.genesis());
         let genesis_order = Arc::new(submitters.clone());
         let genesis_lookup = Arc::new(
@@ -2582,7 +2669,9 @@ impl Network {
         );
         let startup_timeout = self.peer_startup_timeout();
         info!(
-            total_peers = self.peers.len(),
+            validators = self.peers.len(),
+            observers = self.observers.len(),
+            total_peers = self.peers.len().saturating_add(self.observers.len()),
             genesis_submitters = ?submitters,
             ?startup_timeout,
             "bootstrapping test network",
@@ -2592,7 +2681,7 @@ impl Network {
 
         let start_instant = Instant::now();
 
-        let start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
+        let validator_start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
             let genesis_lookup = genesis_lookup.clone();
             let genesis_order = genesis_order.clone();
             let genesis_block = genesis_block.clone();
@@ -2660,12 +2749,56 @@ impl Network {
             }
         });
 
-        match timeout(
-            startup_timeout,
-            futures::future::try_join_all(start_futures),
-        )
-        .await
-        {
+        let bootstrap = async {
+            futures::future::try_join_all(validator_start_futures).await?;
+
+            // Observers are started only after the validator set has committed
+            // the one canonical genesis. They receive the same signed block but
+            // a node-local role override, so their BLS identities authenticate
+            // P2P and block sync without enabling proposal or voting paths.
+            let observer_start_futures =
+                self.observers
+                    .iter()
+                    .enumerate()
+                    .map(|(observer_index, peer)| {
+                        let genesis_block = genesis_block.clone();
+                        let observer_role = self.observer_start_layer(peer);
+                        async move {
+                            let index = self.peers.len().saturating_add(observer_index);
+                            let mnemonic = peer.mnemonic().to_string();
+                            let delay = Duration::from_millis(200)
+                                .checked_mul(
+                                    u32::try_from(observer_index.saturating_add(1))
+                                        .expect("bounded observer index fits u32"),
+                                )
+                                .unwrap_or(Duration::from_secs(u64::MAX));
+                            if delay > Duration::ZERO {
+                                tokio::time::sleep(delay).await;
+                            }
+                            info!(
+                                index,
+                                %mnemonic,
+                                role = "observer",
+                                "starting signed observer replica"
+                            );
+                            peer.start_checked(
+                                self.config_layers()
+                                    .chain(iter::once(Cow::Owned(observer_role))),
+                                Some(genesis_block.as_ref()),
+                            )
+                            .await?;
+                            Self::wait_for_block_1_with_watchdog(
+                                peer, index, &mnemonic, "observer",
+                            )
+                            .await?;
+                            Ok::<(), color_eyre::Report>(())
+                        }
+                    });
+            futures::future::try_join_all(observer_start_futures).await?;
+            Ok::<(), color_eyre::Report>(())
+        };
+
+        match timeout(startup_timeout, bootstrap).await {
             Ok(result) => match result {
                 Ok(_) => {
                     self.verify_post_genesis_liveness().await?;
@@ -2699,11 +2832,11 @@ impl Network {
 
     async fn verify_post_genesis_liveness(&self) -> Result<()> {
         let window = post_genesis_liveness_window_env();
-        if window == Duration::ZERO || self.peers.is_empty() {
+        if window == Duration::ZERO || self.all_peers().next().is_none() {
             return Ok(());
         }
 
-        let futures = self.peers.iter().enumerate().map(|(index, peer)| {
+        let futures = self.all_peers().enumerate().map(|(index, peer)| {
             let mnemonic = peer.mnemonic().to_string();
             let stdout = peer.latest_stdout_log_path();
             let stderr = peer.latest_stderr_log_path();
@@ -2932,7 +3065,7 @@ impl Network {
         let base = self
             .peer_startup_timeout_override
             .unwrap_or_else(peer_start_timeout_env);
-        let peers = self.peers.len() as u128;
+        let peers = self.peers.len().saturating_add(self.observers.len()) as u128;
         if peers == 0 {
             return base;
         }
@@ -2949,8 +3082,7 @@ impl Network {
 
     /// Capture a human-readable snapshot of the current startup state for all peers.
     pub fn startup_snapshot(&self) -> Vec<PeerStartupState> {
-        self.peers
-            .iter()
+        self.all_peers()
             .enumerate()
             .map(|(index, peer)| peer.startup_state(index))
             .collect()
@@ -2979,7 +3111,7 @@ impl Network {
 
     /// Torii URLs for all peers in the network.
     pub fn torii_urls(&self) -> Vec<String> {
-        self.peers.iter().map(NetworkPeer::torii_url).collect()
+        self.all_peers().map(NetworkPeer::torii_url).collect()
     }
 
     /// Base configuration of all peers.
@@ -3024,6 +3156,9 @@ impl Network {
             let mut trusted_peers_pop: Vec<Value> = Vec::new();
             let mut seen = HashSet::new();
 
+            // Only validators carry a PoP into the consensus roster. Observers
+            // remain BLS-authenticated trusted peers but deliberately have no
+            // `trusted_peers_pop` entry.
             for peer in self.peers.iter().chain(extra.into_iter()) {
                 let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop())
                 else {
@@ -3177,19 +3312,20 @@ impl Network {
 
     /// Shutdown running peers
     pub async fn shutdown(&self) -> &Self {
-        self.peers
-            .iter()
+        self.all_peers()
             .map(|peer| peer.shutdown_if_started())
             .collect::<FuturesUnordered<_>>()
             .collect::<Vec<_>>()
             .await;
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.shutdown().await;
+        }
         self
     }
 
     fn trusted_peers(&self) -> UniqueVec<Peer> {
-        self.peers
-            .iter()
-            .map(|x| Peer::new(x.p2p_address(), x.network_peer_id()))
+        self.all_peers()
+            .map(|peer| Peer::new(self.advertised_p2p_address(peer), peer.network_peer_id()))
             .collect()
     }
 
@@ -3214,7 +3350,7 @@ impl Network {
     }
 
     pub async fn ensure_blocks_with<F: Fn(BlockHeight) -> bool>(&self, f: F) -> Result<&Self> {
-        let running_peers: Vec<_> = self.peers.iter().filter(|peer| peer.is_running()).collect();
+        let running_peers: Vec<_> = self.all_peers().filter(|peer| peer.is_running()).collect();
         if running_peers.is_empty() {
             return Ok(self);
         }
@@ -3290,7 +3426,7 @@ impl Network {
         let deadline = Instant::now() + self.sync_timeout();
         loop {
             let mut satisfied = true;
-            for peer in self.peers.iter().filter(|peer| peer.is_running()) {
+            for peer in self.all_peers().filter(|peer| peer.is_running()) {
                 match peer.status().await {
                     Ok(status) => {
                         if status.blocks_non_empty < height {
@@ -3996,6 +4132,680 @@ async fn drain_log_lines<R, F>(
     }
 }
 
+/// Bounded recipe for adding signed, non-voting P2P observers to a test network.
+///
+/// The descriptor contains only a count. Observer identities and all private
+/// key material are created later inside [`NetworkPeer`] instances and never
+/// enter this public bootstrap value or the shared trusted-peer layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObserverP2pBootstrap {
+    observer_count: NonZero<usize>,
+}
+
+/// Validation error for [`ObserverP2pBootstrap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObserverP2pBootstrapError {
+    /// At least one observer must be requested when the bootstrap is enabled.
+    ZeroObservers,
+    /// The observer count alone exceeds the production core-profile connection cap.
+    ObserverCountExceedsConnectionCapacity {
+        /// Requested observer replicas.
+        requested: usize,
+        /// Maximum observer replicas possible beside one validator.
+        maximum: usize,
+    },
+    /// Validator and observer counts could not be added without overflow.
+    ParticipantCountOverflow {
+        /// Voting validator count.
+        validators: usize,
+        /// Requested observer count.
+        observers: usize,
+    },
+    /// A full trusted-peer fanout would exceed the configured connection cap.
+    FanoutExceedsConnectionCapacity {
+        /// Voting validator count.
+        validators: usize,
+        /// Requested observer count.
+        observers: usize,
+        /// Connections required per participant for full localnet fanout.
+        required: usize,
+        /// Available total-connection capacity per participant.
+        capacity: usize,
+    },
+}
+
+impl fmt::Display for ObserverP2pBootstrapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroObservers => write!(f, "observer bootstrap count must be non-zero"),
+            Self::ObserverCountExceedsConnectionCapacity { requested, maximum } => write!(
+                f,
+                "observer bootstrap count {requested} exceeds the core P2P connection capacity {maximum}"
+            ),
+            Self::ParticipantCountOverflow {
+                validators,
+                observers,
+            } => write!(
+                f,
+                "validator count {validators} plus observer count {observers} overflows usize"
+            ),
+            Self::FanoutExceedsConnectionCapacity {
+                validators,
+                observers,
+                required,
+                capacity,
+            } => write!(
+                f,
+                "{validators} validators plus {observers} observers require {required} connections per peer, above capacity {capacity}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObserverP2pBootstrapError {}
+
+impl ObserverP2pBootstrap {
+    /// Construct a bounded observer recipe.
+    ///
+    /// The upper bound is derived from the production core lane profile's
+    /// total-connection capacity. [`NetworkBuilder`] performs the stricter
+    /// validator-aware full-fanout check when the recipe is attached and built.
+    ///
+    /// # Errors
+    /// Returns an error for zero or for a count that cannot fit beside even one
+    /// validator under the core P2P connection cap.
+    pub fn new(observer_count: usize) -> std::result::Result<Self, ObserverP2pBootstrapError> {
+        let observer_count =
+            NonZero::new(observer_count).ok_or(ObserverP2pBootstrapError::ZeroObservers)?;
+        let maximum = Self::connection_capacity();
+        if observer_count.get() > maximum {
+            return Err(
+                ObserverP2pBootstrapError::ObserverCountExceedsConnectionCapacity {
+                    requested: observer_count.get(),
+                    maximum,
+                },
+            );
+        }
+        Ok(Self { observer_count })
+    }
+
+    /// Number of observer replicas requested by this recipe.
+    pub const fn observer_count(self) -> usize {
+        self.observer_count.get()
+    }
+
+    /// Production core-profile total-connection capacity used by the harness.
+    pub const fn connection_capacity() -> usize {
+        iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS
+    }
+
+    fn validate_for_validators(
+        self,
+        validators: usize,
+        capacity: usize,
+    ) -> std::result::Result<usize, ObserverP2pBootstrapError> {
+        let observers = self.observer_count();
+        let participants = validators.checked_add(observers).ok_or(
+            ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators,
+                observers,
+            },
+        )?;
+        let required = participants.checked_sub(1).ok_or(
+            ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators,
+                observers,
+            },
+        )?;
+        if required > capacity {
+            return Err(ObserverP2pBootstrapError::FanoutExceedsConnectionCapacity {
+                validators,
+                observers,
+                required,
+                capacity,
+            });
+        }
+        Ok(participants)
+    }
+}
+
+const OBSERVER_SLOW_READER_MAX_CHUNK_BYTES: usize = 64 * 1024;
+const OBSERVER_SLOW_READER_MAX_DELAY: Duration = Duration::from_secs(1);
+const OBSERVER_RELAY_UPSTREAM_RETRY_DELAY: Duration = Duration::from_millis(25);
+const OBSERVER_RELAY_OUTBOUND_DIAL_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Bounded transparent-relay settings for observer slow-reader tests.
+///
+/// The relay does not decode or alter P2P traffic. It only limits each read
+/// from a validator-facing TCP socket and delays forwarding that ciphertext to
+/// the real observer listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObserverSlowReaderRelayConfig {
+    read_chunk_bytes: NonZero<usize>,
+    read_delay: Duration,
+}
+
+/// Validation error for [`ObserverSlowReaderRelayConfig`] or its builder hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObserverSlowReaderRelayError {
+    /// A relay was requested before any observer bootstrap was attached.
+    MissingObserverBootstrap,
+    /// A read chunk must contain at least one byte.
+    ZeroReadChunkBytes,
+    /// A read chunk exceeded the bounded relay allocation limit.
+    ReadChunkBytesExceedsLimit {
+        /// Requested bytes per read.
+        requested: usize,
+        /// Maximum bytes per read.
+        maximum: usize,
+    },
+    /// Each forwarded read must have a non-zero delay.
+    ZeroReadDelay,
+    /// The per-read delay exceeded the bounded test-harness limit.
+    ReadDelayExceedsLimit {
+        /// Requested delay.
+        requested: Duration,
+        /// Maximum delay.
+        maximum: Duration,
+    },
+}
+
+impl fmt::Display for ObserverSlowReaderRelayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingObserverBootstrap => {
+                write!(
+                    f,
+                    "observer slow-reader relays require an observer bootstrap"
+                )
+            }
+            Self::ZeroReadChunkBytes => write!(f, "observer relay read chunk must be non-zero"),
+            Self::ReadChunkBytesExceedsLimit { requested, maximum } => write!(
+                f,
+                "observer relay read chunk {requested} exceeds the {maximum}-byte limit"
+            ),
+            Self::ZeroReadDelay => write!(f, "observer relay read delay must be non-zero"),
+            Self::ReadDelayExceedsLimit { requested, maximum } => write!(
+                f,
+                "observer relay read delay {requested:?} exceeds the {maximum:?} limit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObserverSlowReaderRelayError {}
+
+impl ObserverSlowReaderRelayConfig {
+    /// Construct bounded transparent-relay settings.
+    ///
+    /// # Errors
+    /// Returns an error for a zero or over-limit read chunk, or a zero or
+    /// over-limit delay.
+    pub fn new(
+        read_chunk_bytes: usize,
+        read_delay: Duration,
+    ) -> std::result::Result<Self, ObserverSlowReaderRelayError> {
+        let read_chunk_bytes = NonZero::new(read_chunk_bytes)
+            .ok_or(ObserverSlowReaderRelayError::ZeroReadChunkBytes)?;
+        if read_chunk_bytes.get() > OBSERVER_SLOW_READER_MAX_CHUNK_BYTES {
+            return Err(ObserverSlowReaderRelayError::ReadChunkBytesExceedsLimit {
+                requested: read_chunk_bytes.get(),
+                maximum: OBSERVER_SLOW_READER_MAX_CHUNK_BYTES,
+            });
+        }
+        if read_delay == Duration::ZERO {
+            return Err(ObserverSlowReaderRelayError::ZeroReadDelay);
+        }
+        if read_delay > OBSERVER_SLOW_READER_MAX_DELAY {
+            return Err(ObserverSlowReaderRelayError::ReadDelayExceedsLimit {
+                requested: read_delay,
+                maximum: OBSERVER_SLOW_READER_MAX_DELAY,
+            });
+        }
+        Ok(Self {
+            read_chunk_bytes,
+            read_delay,
+        })
+    }
+
+    /// Maximum read-chunk allocation accepted by the harness.
+    pub const fn maximum_read_chunk_bytes() -> usize {
+        OBSERVER_SLOW_READER_MAX_CHUNK_BYTES
+    }
+
+    /// Maximum per-read delay accepted by the harness.
+    pub const fn maximum_read_delay() -> Duration {
+        OBSERVER_SLOW_READER_MAX_DELAY
+    }
+
+    /// Bytes read from the validator-facing socket per delayed operation.
+    pub const fn read_chunk_bytes(self) -> usize {
+        self.read_chunk_bytes.get()
+    }
+
+    /// Delay applied to each non-empty validator-to-observer read.
+    pub const fn read_delay(self) -> Duration {
+        self.read_delay
+    }
+}
+
+/// Snapshot of transparent observer-relay activity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObserverSlowReaderRelayStats {
+    /// Validator-facing TCP connections accepted by the relays.
+    pub accepted_connections: u64,
+    /// Accepted connections paired with a real observer listener.
+    pub upstream_connections: u64,
+    /// Failed upstream connection attempts while waiting for observers to start.
+    pub upstream_connect_retries: u64,
+    /// Non-empty validator-to-observer reads subjected to the configured delay.
+    pub delayed_reads: u64,
+    /// Unmodified validator-to-observer ciphertext bytes forwarded upstream.
+    pub forwarded_to_observers_bytes: u64,
+}
+
+#[derive(Debug, Default)]
+struct ObserverSlowReaderRelayCounters {
+    accepted_connections: AtomicU64,
+    upstream_connections: AtomicU64,
+    upstream_connect_retries: AtomicU64,
+    delayed_reads: AtomicU64,
+    forwarded_to_observers_bytes: AtomicU64,
+}
+
+impl ObserverSlowReaderRelayCounters {
+    fn snapshot(&self) -> ObserverSlowReaderRelayStats {
+        ObserverSlowReaderRelayStats {
+            accepted_connections: self.accepted_connections.load(Ordering::Relaxed),
+            upstream_connections: self.upstream_connections.load(Ordering::Relaxed),
+            upstream_connect_retries: self.upstream_connect_retries.load(Ordering::Relaxed),
+            delayed_reads: self.delayed_reads.load(Ordering::Relaxed),
+            forwarded_to_observers_bytes: self.forwarded_to_observers_bytes.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ObserverSlowReaderRelayRoute {
+    peer_id: PeerId,
+    published_address: SocketAddr,
+    upstream_address: SocketAddr,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    _published_port: AllocatedPort,
+}
+
+#[derive(Debug, Default)]
+struct ObserverSlowReaderRelayRuntime {
+    shutdown: Option<watch::Sender<bool>>,
+    listeners: Vec<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+struct ObserverSlowReaderRelays {
+    config: ObserverSlowReaderRelayConfig,
+    routes: Vec<ObserverSlowReaderRelayRoute>,
+    published_addresses: HashMap<PeerId, SocketAddr>,
+    running: AtomicBool,
+    paused: watch::Sender<bool>,
+    runtime: StdMutex<ObserverSlowReaderRelayRuntime>,
+}
+
+impl ObserverSlowReaderRelays {
+    fn new(observers: &[NetworkPeer], config: ObserverSlowReaderRelayConfig) -> Self {
+        let routes = observers
+            .iter()
+            .map(|observer| {
+                let published_port = AllocatedPort::new();
+                let published_address = socket_addr!(127.0.0.1:*published_port);
+                ObserverSlowReaderRelayRoute {
+                    peer_id: observer.network_peer_id(),
+                    published_address,
+                    upstream_address: observer.p2p_address(),
+                    counters: Arc::new(ObserverSlowReaderRelayCounters::default()),
+                    _published_port: published_port,
+                }
+            })
+            .collect::<Vec<_>>();
+        let published_addresses = routes
+            .iter()
+            .map(|route| (route.peer_id.clone(), route.published_address.clone()))
+            .collect();
+        let (paused, _) = watch::channel(false);
+        Self {
+            config,
+            routes,
+            published_addresses,
+            running: AtomicBool::new(false),
+            paused,
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        }
+    }
+
+    fn published_addresses(&self) -> HashMap<PeerId, SocketAddr> {
+        self.published_addresses.clone()
+    }
+
+    fn stats(&self) -> ObserverSlowReaderRelayStats {
+        self.routes.iter().fold(
+            ObserverSlowReaderRelayStats::default(),
+            |mut aggregate, route| {
+                let route = route.counters.snapshot();
+                aggregate.accepted_connections = aggregate
+                    .accepted_connections
+                    .saturating_add(route.accepted_connections);
+                aggregate.upstream_connections = aggregate
+                    .upstream_connections
+                    .saturating_add(route.upstream_connections);
+                aggregate.upstream_connect_retries = aggregate
+                    .upstream_connect_retries
+                    .saturating_add(route.upstream_connect_retries);
+                aggregate.delayed_reads =
+                    aggregate.delayed_reads.saturating_add(route.delayed_reads);
+                aggregate.forwarded_to_observers_bytes = aggregate
+                    .forwarded_to_observers_bytes
+                    .saturating_add(route.forwarded_to_observers_bytes);
+                aggregate
+            },
+        )
+    }
+
+    fn stats_for(&self, peer_id: &PeerId) -> Option<ObserverSlowReaderRelayStats> {
+        self.routes
+            .iter()
+            .find(|route| &route.peer_id == peer_id)
+            .map(|route| route.counters.snapshot())
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.paused.send_replace(paused);
+    }
+
+    async fn start(&self) -> Result<()> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .expect("observer relay runtime should not be poisoned");
+        if self.running.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let mut bound = Vec::with_capacity(self.routes.len());
+        for route in &self.routes {
+            match TcpListener::bind(route.published_address.to_string()).and_then(|listener| {
+                listener.set_nonblocking(true)?;
+                TokioTcpListener::from_std(listener)
+            }) {
+                Ok(listener) => bound.push((listener, route)),
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "failed to bind observer slow-reader relay {} for {}",
+                            route.published_address, route.peer_id
+                        )
+                    });
+                }
+            }
+        }
+
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let listeners = bound
+            .into_iter()
+            .map(|(listener, route)| {
+                let counters = Arc::clone(&route.counters);
+                let config = self.config;
+                let shutdown_rx = shutdown_rx.clone();
+                let paused = self.paused.subscribe();
+                let peer_id = route.peer_id.clone();
+                let published_address = route.published_address.clone();
+                let upstream_address = route.upstream_address.clone();
+                tokio::spawn(async move {
+                    run_observer_slow_reader_listener(
+                        listener,
+                        peer_id,
+                        published_address,
+                        upstream_address,
+                        config,
+                        counters,
+                        shutdown_rx,
+                        paused,
+                    )
+                    .await;
+                })
+            })
+            .collect();
+        runtime.shutdown = Some(shutdown);
+        runtime.listeners = listeners;
+        self.running.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn shutdown(&self) {
+        let listeners = self.signal_shutdown_and_take_listeners();
+        for listener in listeners {
+            let _ = listener.await;
+        }
+    }
+
+    fn abort(&self) {
+        for listener in self.signal_shutdown_and_take_listeners() {
+            listener.abort();
+        }
+    }
+
+    fn signal_shutdown_and_take_listeners(&self) -> Vec<JoinHandle<()>> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .expect("observer relay runtime should not be poisoned");
+        self.running.store(false, Ordering::Release);
+        if let Some(shutdown) = runtime.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        std::mem::take(&mut runtime.listeners)
+    }
+}
+
+impl Drop for ObserverSlowReaderRelays {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+async fn run_observer_slow_reader_listener(
+    listener: TokioTcpListener,
+    peer_id: PeerId,
+    published_address: SocketAddr,
+    upstream_address: SocketAddr,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    paused: watch::Receiver<bool>,
+) {
+    let mut connections = JoinSet::new();
+    loop {
+        let accepted = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+            accepted = listener.accept() => accepted,
+            Some(result) = connections.join_next(), if !connections.is_empty() => {
+                if let Err(error) = result {
+                    debug!(%error, %peer_id, "observer relay connection task failed");
+                }
+                continue;
+            }
+        };
+        let (client, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                warn!(%error, %peer_id, %published_address, "observer relay accept failed");
+                break;
+            }
+        };
+        counters
+            .accepted_connections
+            .fetch_add(1, Ordering::Relaxed);
+        let connection_counters = Arc::clone(&counters);
+        let connection_shutdown = shutdown.clone();
+        let connection_paused = paused.clone();
+        let connection_peer_id = peer_id.clone();
+        let connection_upstream = upstream_address.clone();
+        connections.spawn(async move {
+            run_observer_slow_reader_connection(
+                client,
+                connection_peer_id,
+                connection_upstream,
+                config,
+                connection_counters,
+                connection_shutdown,
+                connection_paused,
+            )
+            .await;
+        });
+    }
+    connections.shutdown().await;
+}
+
+async fn run_observer_slow_reader_connection(
+    client: TcpStream,
+    peer_id: PeerId,
+    upstream_address: SocketAddr,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    paused: watch::Receiver<bool>,
+) {
+    let upstream = loop {
+        let connect = TcpStream::connect(upstream_address.to_string());
+        match tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+                continue;
+            }
+            connected = connect => connected,
+        } {
+            Ok(upstream) => break upstream,
+            Err(_error) => {
+                counters
+                    .upstream_connect_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                tokio::select! {
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            return;
+                        }
+                    }
+                    () = tokio::time::sleep(OBSERVER_RELAY_UPSTREAM_RETRY_DELAY) => {}
+                }
+            }
+        }
+    };
+    counters
+        .upstream_connections
+        .fetch_add(1, Ordering::Relaxed);
+
+    let (client_read, mut client_write) = client.into_split();
+    let (mut upstream_read, upstream_write) = upstream.into_split();
+    let delayed = slow_copy_observer_ciphertext(
+        client_read,
+        upstream_write,
+        config,
+        Arc::clone(&counters),
+        shutdown.clone(),
+        paused,
+    );
+    let returned = tokio::io::copy(&mut upstream_read, &mut client_write);
+    tokio::pin!(delayed);
+    tokio::pin!(returned);
+    tokio::select! {
+        changed = shutdown.changed() => {
+            let _ = changed;
+        }
+        result = &mut delayed => {
+            if let Err(error) = result {
+                debug!(%error, %peer_id, "observer relay delayed direction closed");
+            }
+        }
+        result = &mut returned => {
+            if let Err(error) = result {
+                debug!(%error, %peer_id, "observer relay return direction closed");
+            }
+        }
+    }
+}
+
+async fn slow_copy_observer_ciphertext<R, W>(
+    mut reader: R,
+    mut writer: W,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    mut paused: watch::Receiver<bool>,
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buffer = vec![0_u8; config.read_chunk_bytes()];
+    loop {
+        let read = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+                continue;
+            }
+            read = reader.read(&mut buffer) => read?,
+        };
+        if read == 0 {
+            return Ok(());
+        }
+        counters.delayed_reads.fetch_add(1, Ordering::Relaxed);
+        loop {
+            let forwarding_is_paused = *paused.borrow();
+            if !forwarding_is_paused {
+                break;
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(());
+                    }
+                }
+                changed = paused.changed() => {
+                    if changed.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            () = tokio::time::sleep(config.read_delay()) => {}
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            result = writer.write_all(&buffer[..read]) => result?,
+        }
+        counters
+            .forwarded_to_observers_bytes
+            .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+}
+
 /// Builder of [`Network`].
 ///
 /// Cloning copies only the deterministic network recipe. Every call to
@@ -4004,6 +4814,8 @@ async fn drain_log_lines<R, F>(
 #[derive(Clone)]
 pub struct NetworkBuilder {
     n_peers: usize,
+    observer_p2p_bootstrap: Option<ObserverP2pBootstrap>,
+    observer_slow_reader_relays: Option<ObserverSlowReaderRelayConfig>,
     config_layers: Vec<Table>,
     block_cadence: Option<Duration>,
     sync_timeout: Option<Duration>,
@@ -4082,14 +4894,37 @@ fn trusted_peers_layer_for_parse(
     peers: &[NetworkPeer],
     auto_populate_trusted_peer_pops: bool,
 ) -> Table {
-    let trusted_peers: Vec<String> = peers
+    trusted_peers_layer_for_parse_with_observers(peers, &[], auto_populate_trusted_peer_pops)
+}
+
+fn trusted_peers_layer_for_parse_with_observers(
+    validators: &[NetworkPeer],
+    observers: &[NetworkPeer],
+    auto_populate_trusted_peer_pops: bool,
+) -> Table {
+    trusted_peers_layer_for_parse_with_observer_addresses(
+        validators,
+        observers,
+        &HashMap::new(),
+        auto_populate_trusted_peer_pops,
+    )
+}
+
+fn trusted_peers_layer_for_parse_with_observer_addresses(
+    validators: &[NetworkPeer],
+    observers: &[NetworkPeer],
+    observer_advertised_p2p_addresses: &HashMap<PeerId, SocketAddr>,
+    auto_populate_trusted_peer_pops: bool,
+) -> Table {
+    let trusted_peers: Vec<String> = validators
         .iter()
+        .chain(observers)
         .map(|peer| {
-            format!(
-                "{}@{}",
-                peer.network_peer_id(),
-                peer.p2p_address().to_literal()
-            )
+            let address = observer_advertised_p2p_addresses
+                .get(&peer.network_peer_id())
+                .cloned()
+                .unwrap_or_else(|| peer.p2p_address());
+            format!("{}@{}", peer.network_peer_id(), address.to_literal())
         })
         .collect();
     let mut base_layer = Table::new().write(["trusted_peers"], trusted_peers);
@@ -4098,7 +4933,7 @@ fn trusted_peers_layer_for_parse(
         let mut trusted_peers_pop: Vec<Value> = Vec::new();
         let mut seen = HashSet::new();
 
-        for peer in peers {
+        for peer in validators {
             let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop()) else {
                 continue;
             };
@@ -4121,6 +4956,10 @@ fn trusted_peers_layer_for_parse(
     }
 
     base_layer
+}
+
+fn observer_role_layer() -> Table {
+    Table::new().write(["sumeragi", "role"], "observer")
 }
 
 // Deterministic BLS keypair/PoP so consensus validation doesn't reject profile detection defaults.
@@ -4860,6 +5699,8 @@ impl NetworkBuilder {
         // the protocol default when timing fidelity matters more than test speed.
         let mut builder = Self {
             n_peers: DEFAULT_NETWORK_PEERS,
+            observer_p2p_bootstrap: None,
+            observer_slow_reader_relays: None,
             config_layers: vec![],
             block_cadence: Some(LOCALNET_BLOCK_CADENCE),
             sync_timeout: None,
@@ -4907,8 +5748,54 @@ impl NetworkBuilder {
     /// One by default.
     pub fn with_peers(mut self, n_peers: usize) -> Self {
         assert_ne!(n_peers, 0);
+        if let Some(bootstrap) = self.observer_p2p_bootstrap {
+            bootstrap
+                .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
+                .unwrap_or_else(|error| {
+                    panic!("invalid observer bootstrap after peer change: {error}")
+                });
+        }
         self.n_peers = n_peers;
         self
+    }
+
+    /// Add a bounded set of signed, non-voting observer replicas.
+    ///
+    /// Observers become trusted P2P participants but are excluded from genesis
+    /// topology and `trusted_peers_pop`. Their private keys stay owned by the
+    /// generated [`NetworkPeer`] values.
+    ///
+    /// # Errors
+    /// Returns an error when the current validator count plus observers cannot
+    /// fit a full localnet fanout under the production core P2P connection cap.
+    pub fn with_observer_p2p_bootstrap(
+        mut self,
+        bootstrap: ObserverP2pBootstrap,
+    ) -> std::result::Result<Self, ObserverP2pBootstrapError> {
+        bootstrap
+            .validate_for_validators(self.n_peers, ObserverP2pBootstrap::connection_capacity())?;
+        self.observer_p2p_bootstrap = Some(bootstrap);
+        Ok(self)
+    }
+
+    /// Route every signed observer through a bounded transparent slow-reader relay.
+    ///
+    /// The hook is intended for P2P backpressure integration tests. Relay
+    /// addresses replace observer listener addresses in all shared trusted-peer
+    /// layers, while encrypted production traffic is forwarded unchanged.
+    ///
+    /// # Errors
+    /// Returns an error unless [`Self::with_observer_p2p_bootstrap`] was called
+    /// first.
+    pub fn with_observer_slow_reader_relays(
+        mut self,
+        config: ObserverSlowReaderRelayConfig,
+    ) -> std::result::Result<Self, ObserverSlowReaderRelayError> {
+        if self.observer_p2p_bootstrap.is_none() {
+            return Err(ObserverSlowReaderRelayError::MissingObserverBootstrap);
+        }
+        self.observer_slow_reader_relays = Some(config);
+        Ok(self)
     }
 
     /// Use a separately built, feature-isolated daemon with receiver-local
@@ -4946,6 +5833,13 @@ impl NetworkBuilder {
     pub fn with_min_peers(mut self, min_peers: usize) -> Self {
         assert_ne!(min_peers, 0);
         if self.n_peers < min_peers {
+            if let Some(bootstrap) = self.observer_p2p_bootstrap {
+                bootstrap
+                    .validate_for_validators(min_peers, ObserverP2pBootstrap::connection_capacity())
+                    .unwrap_or_else(|error| {
+                        panic!("invalid observer bootstrap after minimum peer change: {error}")
+                    });
+            }
             self.n_peers = min_peers;
         }
         self
@@ -5216,6 +6110,8 @@ impl NetworkBuilder {
     fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             n_peers,
+            observer_p2p_bootstrap,
+            observer_slow_reader_relays,
             mut config_layers,
             block_cadence,
             sync_timeout,
@@ -5233,6 +6129,15 @@ impl NetworkBuilder {
             consensus_message_control,
             initial_consensus_message_control,
         } = self;
+        let observer_count = observer_p2p_bootstrap.map_or(0, |bootstrap| {
+            bootstrap
+                .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
+                .unwrap_or_else(|error| panic!("invalid observer P2P bootstrap: {error}"));
+            bootstrap.observer_count()
+        });
+        let participant_count = n_peers
+            .checked_add(observer_count)
+            .expect("validated observer participant count cannot overflow");
         // A builder is a reusable network recipe. Allocate the environment only
         // when the recipe is built so retrying a cloned recipe cannot inherit a
         // previous attempt's peer directories, Kura state, logs, or ports.
@@ -5289,6 +6194,29 @@ impl NetworkBuilder {
             })
             .collect();
 
+        let mut observers: Vec<_> = (0..observer_count)
+            .map(|i| {
+                let seed = seed.as_ref().map(|x| format!("{x}-observer-{i}"));
+                NetworkPeerBuilder::new()
+                    .with_seed(seed.as_ref().map(|x| x.as_bytes()))
+                    .build_with_program(
+                        &env,
+                        if consensus_message_control {
+                            Program::IrohadMessageControl
+                        } else {
+                            Program::Irohad
+                        },
+                    )
+            })
+            .collect();
+
+        let observer_slow_reader_relays = observer_slow_reader_relays
+            .map(|config| ObserverSlowReaderRelays::new(&observers, config));
+        let observer_advertised_p2p_addresses = observer_slow_reader_relays
+            .as_ref()
+            .map(ObserverSlowReaderRelays::published_addresses)
+            .unwrap_or_default();
+
         let peer_ids: UniqueVec<PeerId> = peers.iter().map(NetworkPeer::id).collect();
         let collected_entries: Vec<GenesisTopologyEntry> =
             peers.iter().filter_map(NetworkPeer::genesis_pop).collect();
@@ -5313,6 +6241,16 @@ impl NetworkBuilder {
                     .stage_initial_rules(&rules, initial.queue_capacity)
                     .expect("stage valid initial consensus message-control rules");
             }
+            for observer in &mut observers {
+                let control = observer
+                    .consensus_message_control
+                    .as_mut()
+                    .and_then(Arc::get_mut)
+                    .expect("new controlled observer must uniquely own its controller");
+                control
+                    .stage_initial_rules(&[], initial.queue_capacity)
+                    .expect("stage empty observer message-control rules");
+            }
         }
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         config_layers_for_parse.push(
@@ -5323,8 +6261,10 @@ impl NetworkBuilder {
                     genesis_key_pair.public_key().to_string(),
                 ),
         );
-        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+        config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
+            &observers,
+            &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
         ));
         config_layers_for_parse.extend(config_layers.iter().cloned());
@@ -5565,16 +6505,15 @@ impl NetworkBuilder {
 
         let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
             .expect("block gossip period fits in i64 milliseconds");
+        let participant_fanout = i64::try_from(participant_count)
+            .expect("bounded observer participant count fits in i64");
         let mut base_layer =
             config::base_iroha_config().write("chain", consensus_chain_id.to_string());
         base_layer = base_layer
             .write(["network", "block_gossip_period_ms"], gossip_ms)
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
             // integration scenarios (NPoS liveness and certified-body recovery).
-            .write(
-                ["network", "block_gossip_size"],
-                i64::try_from(peers.len()).unwrap_or(i64::MAX),
-            );
+            .write(["network", "block_gossip_size"], participant_fanout);
         base_layer = base_layer
             .write(["sumeragi", "queues", "bodies"], 512i64)
             // Test networks always provision BLS validator keys; drop the HSM binding requirement
@@ -5595,8 +6534,10 @@ impl NetworkBuilder {
         // genesis commitment must include the exact runtime pipeline and Nexus
         // projection, including config layers injected for NPoS bootstrap.
         let mut final_config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
-        final_config_layers_for_parse.push(trusted_peers_layer_for_parse(
+        final_config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
+            &observers,
+            &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
         ));
         final_config_layers_for_parse.push(base_layer.clone());
@@ -5604,6 +6545,18 @@ impl NetworkBuilder {
         let resolved_genesis_config = peers
             .first()
             .and_then(|peer| resolve_actual_config(peer, &final_config_layers_for_parse));
+        if let Some(bootstrap) = observer_p2p_bootstrap {
+            let configured_capacity = resolved_genesis_config
+                .as_ref()
+                .and_then(|config| config.network.max_total_connections)
+                .map_or_else(ObserverP2pBootstrap::connection_capacity, NonZero::get)
+                .min(ObserverP2pBootstrap::connection_capacity());
+            bootstrap
+                .validate_for_validators(n_peers, configured_capacity)
+                .unwrap_or_else(|error| {
+                    panic!("observer P2P fanout exceeds effective network capacity: {error}")
+                });
+        }
 
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
         // so consensus metadata is consistent with the final submitted genesis layout.
@@ -5811,6 +6764,9 @@ impl NetworkBuilder {
         Network {
             env,
             peers,
+            observers,
+            observer_advertised_p2p_addresses,
+            observer_slow_reader_relays,
             next_peer_index: AtomicUsize::new(0),
             block_cadence,
             block_sync_gossip_period,
@@ -8742,7 +9698,7 @@ mod tests {
         },
         isi::{Instruction, SetParameter},
         parameter::{Parameter, system::consensus_metadata},
-        transaction::Executable,
+        transaction::{Executable, ExecutableBatchItem},
     };
     use iroha_version::{Version, codec::EncodeVersioned};
     use tempfile::tempdir;
@@ -11004,6 +11960,16 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::Batch(items) => items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .map(|set| set.inner().clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect(),
                 Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
@@ -11596,6 +12562,522 @@ exit 0
             layer_without_pop.get("trusted_peers_pop").is_none(),
             "trusted_peers_pop should be omitted when auto-populate is disabled"
         );
+    }
+
+    #[test]
+    fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster() {
+        let bootstrap = ObserverP2pBootstrap::new(5).expect("five observers fit the core profile");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster
+                ))
+                .with_observer_p2p_bootstrap(bootstrap)
+                .expect("four validators and five observers fit the P2P cap"),
+        );
+
+        assert_eq!(network.peers().len(), 4);
+        assert_eq!(network.validators().len(), 4);
+        assert_eq!(network.observers().len(), 5);
+        assert_eq!(network.all_peers().count(), 9);
+        assert_eq!(network.topology_entries().len(), 4);
+
+        let validator_keys = network
+            .validators()
+            .iter()
+            .map(|peer| {
+                peer.bls_public_key()
+                    .expect("validator has BLS identity")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        let observer_keys = network
+            .observers()
+            .iter()
+            .map(|peer| {
+                peer.bls_public_key()
+                    .expect("observer has signed BLS identity")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        let topology_keys = network
+            .topology_entries()
+            .iter()
+            .map(|entry| entry.peer.public_key.to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(topology_keys, validator_keys);
+        assert!(topology_keys.is_disjoint(&observer_keys));
+
+        let trusted_layer = network
+            .config_layers()
+            .next()
+            .expect("trusted peer layer")
+            .into_owned();
+        let trusted = trusted_layer
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peer array");
+        assert_eq!(trusted.len(), 9);
+        for peer in network.all_peers() {
+            let expected = format!(
+                "{}@{}",
+                peer.network_peer_id(),
+                peer.p2p_address().to_literal()
+            );
+            assert!(
+                trusted
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(&expected))
+            );
+        }
+
+        let pop_keys = trusted_layer
+            .get("trusted_peers_pop")
+            .and_then(Value::as_array)
+            .expect("validator PoP array")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("public_key")
+                    .and_then(Value::as_str)
+                    .expect("PoP public key")
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pop_keys, validator_keys);
+        assert!(pop_keys.is_disjoint(&observer_keys));
+
+        let resolved_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
+            .expect("validator config accepts trusted observers without PoPs");
+        let resolved_trusted = resolved.common.trusted_peers.value();
+        assert_eq!(resolved_trusted.others.len(), 8);
+        assert_eq!(resolved_trusted.pops.len(), 4);
+
+        let role = observer_role_layer();
+        assert_eq!(
+            get_nested_value(&role, &["sumeragi", "role"]).and_then(Value::as_str),
+            Some("observer")
+        );
+    }
+
+    #[test]
+    fn observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets() {
+        let seed =
+            stringify!(observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets);
+        let recipe = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed(seed)
+            .with_observer_p2p_bootstrap(
+                ObserverP2pBootstrap::new(5).expect("bounded observer recipe"),
+            )
+            .expect("bounded participant fanout");
+
+        let first = build_with_isolated_permit(recipe.clone());
+        let first_validators = first
+            .validators()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let first_observers = first
+            .observers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let serialized = first
+            .config_layers()
+            .map(|layer| toml::to_string(layer.as_ref()).expect("serialize shared test layer"))
+            .collect::<String>();
+        for peer in first.all_peers() {
+            let consensus_secret = ExposedPrivateKey(
+                peer.bls_key_pair()
+                    .expect("participant has a BLS keypair")
+                    .private_key()
+                    .clone(),
+            )
+            .to_string();
+            let streaming_secret =
+                ExposedPrivateKey(peer.streaming_key_pair().private_key().clone()).to_string();
+            assert!(!serialized.contains(&consensus_secret));
+            assert!(!serialized.contains(&streaming_secret));
+        }
+        drop(first);
+
+        let second = build_with_isolated_permit(recipe);
+        assert_eq!(
+            second
+                .validators()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            first_validators
+        );
+        assert_eq!(
+            second
+                .observers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            first_observers
+        );
+
+        let descriptor = ObserverP2pBootstrap::new(5).expect("bounded observer recipe");
+        assert_eq!(
+            format!("{descriptor:?}"),
+            "ObserverP2pBootstrap { observer_count: 5 }"
+        );
+    }
+
+    #[test]
+    fn observer_bootstrap_bounds_fail_closed() {
+        assert_eq!(
+            ObserverP2pBootstrap::new(0),
+            Err(ObserverP2pBootstrapError::ZeroObservers)
+        );
+        let capacity = ObserverP2pBootstrap::connection_capacity();
+        let above_capacity = capacity.checked_add(1).expect("test capacity fits usize");
+        assert_eq!(
+            ObserverP2pBootstrap::new(above_capacity),
+            Err(
+                ObserverP2pBootstrapError::ObserverCountExceedsConnectionCapacity {
+                    requested: above_capacity,
+                    maximum: capacity,
+                }
+            )
+        );
+
+        let bootstrap = ObserverP2pBootstrap::new(1).expect("one observer is valid alone");
+        assert_eq!(
+            bootstrap.validate_for_validators(usize::MAX, capacity),
+            Err(ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators: usize::MAX,
+                observers: 1,
+            })
+        );
+        assert_eq!(
+            bootstrap.validate_for_validators(above_capacity, capacity),
+            Err(ObserverP2pBootstrapError::FanoutExceedsConnectionCapacity {
+                validators: above_capacity,
+                observers: 1,
+                required: above_capacity,
+                capacity,
+            })
+        );
+        assert!(
+            NetworkBuilder::new()
+                .with_peers(capacity)
+                .with_observer_p2p_bootstrap(bootstrap)
+                .is_ok(),
+            "one validator-facing connection at the exact cap remains valid"
+        );
+        assert!(
+            NetworkBuilder::new()
+                .with_peers(above_capacity)
+                .with_observer_p2p_bootstrap(bootstrap)
+                .is_err(),
+            "one participant above the full-fanout cap must be rejected"
+        );
+    }
+
+    #[test]
+    fn observer_slow_reader_relay_rewrites_only_observer_addresses_without_leaking_targets() {
+        let config = ObserverSlowReaderRelayConfig::new(1_024, Duration::from_millis(2))
+            .expect("bounded relay config");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    observer_slow_reader_relay_rewrites_only_observer_addresses_without_leaking_targets
+                ))
+                .with_observer_p2p_bootstrap(
+                    ObserverP2pBootstrap::new(5).expect("bounded observer recipe"),
+                )
+                .expect("bounded participant fanout")
+                .with_observer_slow_reader_relays(config)
+                .expect("observer bootstrap precedes relay config"),
+        );
+
+        let relays = network
+            .observer_slow_reader_relays
+            .as_ref()
+            .expect("relay harness is present");
+        assert!(network.set_observer_slow_reader_relays_paused(true));
+        assert!(*relays.paused.borrow());
+        assert!(network.set_observer_slow_reader_relays_paused(false));
+        assert!(!*relays.paused.borrow());
+        assert_eq!(relays.routes.len(), network.observers().len());
+        assert_eq!(
+            network.observer_slow_reader_relay_stats(),
+            Some(ObserverSlowReaderRelayStats::default())
+        );
+        for observer in network.observers() {
+            assert_eq!(
+                network.observer_slow_reader_relay_stats_for(&observer.id()),
+                Some(ObserverSlowReaderRelayStats::default())
+            );
+        }
+        assert_eq!(
+            network.observer_slow_reader_relay_stats_for(&network.validators()[0].id()),
+            None
+        );
+
+        let trusted_layer = network
+            .config_layers()
+            .next()
+            .expect("trusted peer layer")
+            .into_owned();
+        let trusted = trusted_layer
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peer array");
+        assert_eq!(trusted.len(), network.all_peers().count());
+
+        for (index, peer) in network.all_peers().enumerate() {
+            let advertised = network.advertised_p2p_address(peer);
+            let advertised_literal = advertised.to_literal();
+            let expected = format!("{}@{}", peer.network_peer_id(), advertised_literal);
+            assert_eq!(trusted[index].as_str(), Some(expected.as_str()));
+            if network.observers().contains(peer) {
+                assert_ne!(advertised, peer.p2p_address());
+                let real = peer.p2p_address().to_literal();
+                assert!(
+                    trusted.iter().all(|entry| {
+                        entry
+                            .as_str()
+                            .is_none_or(|literal| !literal.contains(&real))
+                    }),
+                    "real observer listener {real} leaked into trusted peers"
+                );
+
+                let observer_layer = network.observer_start_layer(peer);
+                assert_eq!(
+                    get_nested_value(&observer_layer, &["network", "public_address"])
+                        .and_then(Value::as_str),
+                    Some(advertised_literal.as_str())
+                );
+                assert_eq!(
+                    get_nested_value(&observer_layer, &["network", "connect_startup_delay_ms"])
+                        .and_then(Value::as_integer),
+                    Some(
+                        i64::try_from(OBSERVER_RELAY_OUTBOUND_DIAL_DELAY.as_millis())
+                            .expect("test delay fits i64")
+                    )
+                );
+            } else {
+                assert_eq!(advertised, peer.p2p_address());
+            }
+        }
+    }
+
+    #[test]
+    fn observer_slow_reader_relay_config_is_bounded_and_requires_observers() {
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(0, Duration::from_millis(1)),
+            Err(ObserverSlowReaderRelayError::ZeroReadChunkBytes)
+        );
+        let above_chunk = ObserverSlowReaderRelayConfig::maximum_read_chunk_bytes()
+            .checked_add(1)
+            .expect("chunk limit fits usize");
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(above_chunk, Duration::from_millis(1)),
+            Err(ObserverSlowReaderRelayError::ReadChunkBytesExceedsLimit {
+                requested: above_chunk,
+                maximum: ObserverSlowReaderRelayConfig::maximum_read_chunk_bytes(),
+            })
+        );
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(1, Duration::ZERO),
+            Err(ObserverSlowReaderRelayError::ZeroReadDelay)
+        );
+        let above_delay = ObserverSlowReaderRelayConfig::maximum_read_delay()
+            .checked_add(Duration::from_nanos(1))
+            .expect("delay limit can be incremented");
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(1, above_delay),
+            Err(ObserverSlowReaderRelayError::ReadDelayExceedsLimit {
+                requested: above_delay,
+                maximum: ObserverSlowReaderRelayConfig::maximum_read_delay(),
+            })
+        );
+
+        let valid = ObserverSlowReaderRelayConfig::new(1, Duration::from_millis(1))
+            .expect("minimum bounded config");
+        assert!(matches!(
+            NetworkBuilder::new().with_observer_slow_reader_relays(valid),
+            Err(ObserverSlowReaderRelayError::MissingObserverBootstrap)
+        ));
+    }
+
+    #[tokio::test]
+    async fn observer_slow_reader_relay_is_byte_transparent_and_joins_active_connection() {
+        if skip_network_tests(
+            "observer_slow_reader_relay_is_byte_transparent_and_joins_active_connection",
+        ) {
+            return;
+        }
+
+        let upstream_listener = TokioTcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock observer listener");
+        let upstream_address = SocketAddr::from(
+            upstream_listener
+                .local_addr()
+                .expect("mock observer listener has an address"),
+        );
+        let published_port = AllocatedPort::new();
+        let published_address = socket_addr!(127.0.0.1:*published_port);
+        let config = ObserverSlowReaderRelayConfig::new(31, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let (paused, _) = watch::channel(false);
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: vec![ObserverSlowReaderRelayRoute {
+                peer_id: peer_id.clone(),
+                published_address: published_address.clone(),
+                upstream_address,
+                counters: Arc::clone(&counters),
+                _published_port: published_port,
+            }],
+            published_addresses: HashMap::from([(peer_id.clone(), published_address.clone())]),
+            running: AtomicBool::new(false),
+            paused,
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        relays.start().await.expect("start transparent relay");
+        relays.start().await.expect("repeated start is idempotent");
+
+        let payload = (0_u32..4_096)
+            .map(|index| index.wrapping_mul(73).wrapping_add(19).to_le_bytes()[0])
+            .collect::<Vec<_>>();
+        let reply = vec![0x00, 0xFF, 0xC3, 0x28, 0x80, 0x01, 0xFE, 0x7F];
+        let expected_payload = payload.clone();
+        let expected_reply = reply.clone();
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("relay connects to mock observer");
+            let mut received = vec![0_u8; expected_payload.len()];
+            socket
+                .read_exact(&mut received)
+                .await
+                .expect("mock observer receives complete opaque payload");
+            assert_eq!(received, expected_payload);
+            socket
+                .write_all(&expected_reply)
+                .await
+                .expect("mock observer returns opaque response");
+            let mut trailing = [0_u8; 1];
+            assert_eq!(
+                socket
+                    .read(&mut trailing)
+                    .await
+                    .expect("observe relay connection shutdown"),
+                0,
+                "relay shutdown must close its active upstream connection",
+            );
+        });
+
+        let mut client = TcpStream::connect(published_address.to_string())
+            .await
+            .expect("connect validator side to relay");
+        relays.set_paused(true);
+        client
+            .write_all(&payload)
+            .await
+            .expect("send opaque validator payload");
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if counters.delayed_reads.load(Ordering::Relaxed) > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("relay reached its deterministic forwarding pause");
+        assert_eq!(
+            counters
+                .forwarded_to_observers_bytes
+                .load(Ordering::Relaxed),
+            0,
+            "paused relay must not forward a byte it has already read",
+        );
+        relays.set_paused(false);
+        let mut received_reply = vec![0_u8; reply.len()];
+        timeout(
+            Duration::from_secs(5),
+            client.read_exact(&mut received_reply),
+        )
+        .await
+        .expect("relay response stayed within the test bound")
+        .expect("receive complete opaque observer response");
+        assert_eq!(received_reply, reply);
+
+        timeout(Duration::from_secs(2), relays.shutdown())
+            .await
+            .expect("relay listener and active child joined within the shutdown bound");
+        timeout(Duration::from_secs(2), upstream)
+            .await
+            .expect("mock observer saw connection closure within the shutdown bound")
+            .expect("mock observer task did not panic");
+        assert!(!relays.running.load(Ordering::Acquire));
+        assert!(
+            TcpStream::connect(published_address.to_string())
+                .await
+                .is_err(),
+            "shutdown must release the published listener"
+        );
+
+        let stats = counters.snapshot();
+        assert_eq!(stats.accepted_connections, 1);
+        assert_eq!(stats.upstream_connections, 1);
+        assert!(stats.delayed_reads > 1);
+        assert_eq!(
+            stats.forwarded_to_observers_bytes,
+            u64::try_from(payload.len()).expect("test payload length fits u64")
+        );
+        assert_eq!(relays.stats_for(&peer_id), Some(stats));
+    }
+
+    #[test]
+    fn legacy_builder_has_no_observers_and_preserves_validator_peer_semantics() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        assert_eq!(network.peers().as_slice(), network.validators());
+        assert!(network.observers().is_empty());
+        assert!(!network.set_observer_slow_reader_relays_paused(true));
+        assert_eq!(network.all_peers().count(), network.peers().len());
+        assert_eq!(network.torii_urls().len(), network.peers().len());
+        assert_eq!(network.topology_entries().len(), network.peers().len());
+        assert!(network.observer_advertised_p2p_addresses.is_empty());
+        assert_eq!(network.observer_slow_reader_relay_stats(), None);
+        let trusted = network
+            .config_layers()
+            .next()
+            .expect("trusted layer")
+            .into_owned();
+        let entries = trusted
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peers");
+        for peer in network.peers() {
+            let expected = format!(
+                "{}@{}",
+                peer.network_peer_id(),
+                peer.p2p_address().to_literal()
+            );
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(&expected))
+            );
+        }
     }
 
     #[test]

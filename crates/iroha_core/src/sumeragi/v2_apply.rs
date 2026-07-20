@@ -13,7 +13,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
-    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
+    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
     merge::MergeLedgerEntry,
     transaction::SignedTransaction,
@@ -23,13 +23,25 @@ use thiserror::Error;
 
 use super::{
     network_topology::Topology,
-    v2_body_store::{BodyValidationError, V2BodyStore},
-    v2_effects::{ApplyTask, DurableApplyCompletion},
+    v2_body_store::{BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
+    v2_core::{
+        CanonicalIdentityProjection, EventTag, IDENTITY_DOMAIN_CONTEXT,
+        IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
+        IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+        IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+        IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT,
+        IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
+        IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        ProductionApplicationTraceProjection, ProductionDecisionIdentityProjection,
+        ProductionDurableBodyIdentityProjection, ProductionQuorumCertificateIdentityProjection,
+        TagProjection, production_application_trace_refines_decision_completion_kernel,
+    },
+    v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
 };
 use crate::{
     EventsSender,
     block::{BlockValidationError, ValidBlock},
-    kura::{CommitManifest, Kura},
+    kura::{CommitManifest, Kura, KuraV2CommitReceipt},
     queue::{LaneQueueReservationError, LaneQueueReservationOutcome, Queue, RoutingDecision},
     state::{MergeLedgerCommitError, MergeLedgerPublicationMode, State},
 };
@@ -218,6 +230,438 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     Ok((finalized_committed, released_orphans))
 }
 
+fn application_typed_identity<T>(
+    domain: u8,
+    kind: u8,
+    hash: HashOf<T>,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn application_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
+}
+
+fn application_decision_projection(
+    decision: wire::QuorumCertificateRef,
+) -> ProductionDecisionIdentityProjection {
+    ProductionDecisionIdentityProjection {
+        context_id: application_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            decision.round.context_id.0,
+        ),
+        height: decision.round.height,
+        view: decision.round.view,
+        phase: decision.phase as u8,
+        subject: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&decision.subject),
+        ),
+        block_hash: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            decision.subject.block_hash,
+        ),
+        payload_hash: application_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            decision.subject.payload_hash,
+        ),
+        execution_commitment: application_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTION_COMMITMENT,
+            HashOf::new(&decision.execution_commitment),
+        ),
+        executed_block_wire_hash: application_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+            decision.execution_commitment.executed_block_wire_hash,
+        ),
+    }
+}
+
+fn application_certificate_projection(
+    certificate: &wire::QuorumCertificate,
+) -> Option<ProductionQuorumCertificateIdentityProjection> {
+    Some(ProductionQuorumCertificateIdentityProjection {
+        decision: application_decision_projection(certificate.as_ref()),
+        certificate: application_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_QUORUM_CERTIFICATE,
+            HashOf::new(certificate),
+        ),
+        signer_count: u64::try_from(certificate.signers.len()).ok()?,
+        aggregate_signature_len: u64::try_from(certificate.aggregate_signature.len()).ok()?,
+    })
+}
+
+fn application_body_projection(
+    receipt: &ValidatedBodyReceipt,
+) -> ProductionDurableBodyIdentityProjection {
+    let durable = receipt.durable();
+    let subject = durable.subject();
+    ProductionDurableBodyIdentityProjection {
+        context_id: application_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            durable.context_id().0,
+        ),
+        height: durable.round().height,
+        view: durable.round().view,
+        subject: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&subject),
+        ),
+        block_hash: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            subject.block_hash,
+        ),
+        payload_hash: application_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            subject.payload_hash,
+        ),
+        manifest: application_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_PAYLOAD_MANIFEST,
+            durable.manifest_hash(),
+        ),
+        frame: application_hash_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_DURABLE_BODY_FRAME,
+            durable.frame_hash(),
+        ),
+    }
+}
+
+/// Complete native identity crossing the durable application boundary.
+///
+/// The type is process-local and intentionally has no codec implementation.
+/// It retains full typed consensus and durability evidence. Canonical proposal,
+/// executed-block, body-frame, and artifact links use the existing native
+/// 256-bit hash values without projection or truncation; those comparisons rely
+/// on the repository's reviewed collision-resistance contract.
+#[derive(Clone, Debug)]
+#[must_use]
+pub(crate) struct DurableApplicationEvidence {
+    task_tag: EventTag,
+    task_generation: u64,
+    task_work_id: EffectWorkId,
+    context: wire::HeightContext,
+    commit_qc: wire::QuorumCertificate,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+    validated_receipt: ValidatedBodyReceipt,
+    validated_manifest_hash: HashOf<wire::PayloadManifest>,
+    validated_body_frame_hash: Hash,
+    proposal_block_hash: HashOf<BlockHeader>,
+    canonical_proposal_wire_hash: Hash,
+    committed_block_hash: HashOf<BlockHeader>,
+    executed_block_wire_hash: Hash,
+    kura_receipt: KuraV2CommitReceipt,
+    artifact: wire::finality::V2FinalityArtifact,
+    artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
+    completion_work_id: EffectWorkId,
+    state_height_after: usize,
+}
+
+impl DurableApplicationEvidence {
+    /// Reducer incarnation which created the Apply task.
+    pub(crate) const fn task_tag(&self) -> EventTag {
+        self.task_tag
+    }
+
+    /// Actor-local task generation, distinct from consensus view.
+    pub(crate) const fn task_generation(&self) -> u64 {
+        self.task_generation
+    }
+
+    /// Stable asynchronous work owner assigned to the Apply task.
+    pub(crate) const fn task_work_id(&self) -> EffectWorkId {
+        self.task_work_id
+    }
+
+    /// Complete immutable height context governing application.
+    pub(crate) const fn context(&self) -> &wire::HeightContext {
+        &self.context
+    }
+
+    /// Complete CommitQC, including canonical signers and aggregate signature.
+    pub(crate) const fn commit_qc(&self) -> &wire::QuorumCertificate {
+        &self.commit_qc
+    }
+
+    /// Exact round carried by the CommitQC.
+    pub(crate) const fn commit_round(&self) -> wire::ConsensusRound {
+        self.commit_qc.round
+    }
+
+    /// Exact phase carried by the CommitQC.
+    pub(crate) const fn commit_phase(&self) -> wire::GlobalPhase {
+        self.commit_qc.phase
+    }
+
+    /// Canonically ordered CommitQC signer indices.
+    pub(crate) fn commit_signers(&self) -> &[wire::ValidatorIndex] {
+        &self.commit_qc.signers
+    }
+
+    /// Complete CommitQC aggregate-signature evidence.
+    pub(crate) fn commit_aggregate_signature(&self) -> &[u8] {
+        &self.commit_qc.aggregate_signature
+    }
+
+    /// Exact decided subject repeated independently by the Apply task.
+    pub(crate) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Exact deterministic execution commitment authenticated by the CommitQC.
+    pub(crate) const fn execution_commitment(&self) -> wire::ExecutionCommitment {
+        self.execution_commitment
+    }
+
+    /// Durable validation receipt for the proposal bytes being applied.
+    pub(crate) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        &self.validated_receipt
+    }
+
+    /// Frozen context carried by the validated durable body receipt.
+    pub(crate) const fn validated_context_id(&self) -> wire::HeightContextId {
+        self.validated_receipt.durable().context_id()
+    }
+
+    /// Proposal round carried by the validated durable body receipt.
+    pub(crate) const fn validated_round(&self) -> wire::ConsensusRound {
+        self.validated_receipt.durable().round()
+    }
+
+    /// Proposal subject carried by the validated durable body receipt.
+    pub(crate) const fn validated_subject(&self) -> wire::BlockSubject {
+        self.validated_receipt.durable().subject()
+    }
+
+    /// Manifest identity carried by the validated durable body receipt.
+    pub(crate) const fn validated_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.validated_manifest_hash
+    }
+
+    /// Hash of the complete checksummed body frame that passed validation.
+    pub(crate) const fn validated_body_frame_hash(&self) -> Hash {
+        self.validated_body_frame_hash
+    }
+
+    /// Header identity of the resultless proposal loaded from the body store.
+    pub(crate) const fn proposal_block_hash(&self) -> HashOf<BlockHeader> {
+        self.proposal_block_hash
+    }
+
+    /// Hash of the exact canonical resultless proposal wire.
+    pub(crate) const fn canonical_proposal_wire_hash(&self) -> Hash {
+        self.canonical_proposal_wire_hash
+    }
+
+    /// Header identity of the canonical result-bearing committed block.
+    pub(crate) const fn committed_block_hash(&self) -> HashOf<BlockHeader> {
+        self.committed_block_hash
+    }
+
+    /// Hash of the exact canonical result-bearing committed block wire.
+    pub(crate) const fn executed_block_wire_hash(&self) -> Hash {
+        self.executed_block_wire_hash
+    }
+
+    /// Complete non-forgeable Kura finality receipt.
+    pub(crate) const fn kura_receipt(&self) -> &KuraV2CommitReceipt {
+        &self.kura_receipt
+    }
+
+    /// Height durably acknowledged by Kura.
+    pub(crate) fn kura_height(&self) -> u64 {
+        self.kura_receipt.height()
+    }
+
+    /// Canonical block header hash durably acknowledged by Kura.
+    pub(crate) fn kura_block_hash(&self) -> HashOf<BlockHeader> {
+        self.kura_receipt.block_hash()
+    }
+
+    /// Frozen height-context identifier durably acknowledged by Kura.
+    pub(crate) fn kura_context_id(&self) -> wire::HeightContextId {
+        self.kura_receipt.context_id()
+    }
+
+    /// Exact subject durably acknowledged by Kura.
+    pub(crate) fn kura_subject(&self) -> wire::BlockSubject {
+        self.kura_receipt.subject()
+    }
+
+    /// Exact CommitQC reference durably acknowledged by Kura.
+    pub(crate) fn kura_certificate(&self) -> wire::QuorumCertificateRef {
+        self.kura_receipt.certificate()
+    }
+
+    /// Exact finality-artifact identity durably acknowledged by Kura.
+    pub(crate) fn kura_artifact_hash(&self) -> HashOf<wire::finality::V2FinalityArtifact> {
+        self.kura_receipt.artifact_hash()
+    }
+
+    /// Complete finality artifact stored beside the committed block.
+    pub(crate) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
+        &self.artifact
+    }
+
+    /// Native typed hash of the complete finality artifact.
+    pub(crate) const fn artifact_hash(&self) -> HashOf<wire::finality::V2FinalityArtifact> {
+        self.artifact_hash
+    }
+
+    /// Work identifier carried by the typed completion.
+    pub(crate) const fn completion_work_id(&self) -> EffectWorkId {
+        self.completion_work_id
+    }
+
+    /// Exact committed State height observed after all durable publications.
+    pub(crate) const fn state_height_after(&self) -> usize {
+        self.state_height_after
+    }
+
+    /// Project each independently retained application identity into the pure
+    /// production/Verus kernel. Cardinalities fail closed if they cannot be
+    /// represented by the shared fixed-width surface.
+    pub(crate) fn application_refinement_projection(
+        &self,
+    ) -> Option<ProductionApplicationTraceProjection> {
+        let context_id = application_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            self.context().id().0,
+        );
+        let artifact = self.artifact();
+        Some(ProductionApplicationTraceProjection {
+            task_tag: TagProjection {
+                height: self.task_tag().height(),
+                view: self.task_tag().view(),
+                generation: self.task_tag().generation().get(),
+            },
+            task_generation: self.task_generation(),
+            context_id,
+            context_height: self.context().height,
+            commit_qc: application_certificate_projection(self.commit_qc())?,
+            validated_body: application_body_projection(self.validated_receipt()),
+            validated_execution_commitment: application_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTION_COMMITMENT,
+                HashOf::new(&self.validated_receipt().execution_commitment()),
+            ),
+            proposal_block_hash: application_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                self.proposal_block_hash(),
+            ),
+            proposal_payload_hash: application_hash_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                self.canonical_proposal_wire_hash(),
+            ),
+            committed_block_hash: application_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                self.committed_block_hash(),
+            ),
+            executed_block_wire_hash: application_hash_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+                self.executed_block_wire_hash(),
+            ),
+            kura_decision: application_decision_projection(self.kura_certificate()),
+            kura_artifact_hash: application_typed_identity(
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_FINALITY_ARTIFACT,
+                self.kura_artifact_hash(),
+            ),
+            artifact_context_id: application_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                artifact.height_context.id().0,
+            ),
+            artifact_height: artifact.height,
+            artifact_subject: application_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                HashOf::new(&artifact.subject),
+            ),
+            artifact_block_hash: application_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                artifact.block_hash,
+            ),
+            artifact_commit_qc: application_certificate_projection(&artifact.commit_qc)?,
+            artifact_hash: application_typed_identity(
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_FINALITY_ARTIFACT,
+                self.artifact_hash(),
+            ),
+            state_height_after: u64::try_from(self.state_height_after()).ok()?,
+            task_work_id: self.task_work_id().get(),
+            completion_work_id: self.completion_work_id().get(),
+        })
+    }
+
+    /// Check every redundant task, wire, durability, and completion identity.
+    pub(crate) fn is_exact(&self) -> bool {
+        let context = self.context();
+        let certificate = self.commit_qc();
+        let artifact = self.artifact();
+        let Ok(context_height) = usize::try_from(context.height) else {
+            return false;
+        };
+        context.validate().is_ok()
+            && certificate.validate(context).is_ok()
+            && self.task_tag().height() == context.height
+            && self.task_tag().view() == self.commit_round().view
+            && self.task_tag().generation().get() == self.task_generation()
+            && self.commit_phase() == wire::GlobalPhase::Commit
+            && self.commit_round().context_id == context.id()
+            && self.commit_round().height == context.height
+            && certificate.subject == self.subject()
+            && certificate.execution_commitment == self.execution_commitment()
+            && self.commit_signers() == artifact.commit_qc.signers.as_slice()
+            && self.commit_aggregate_signature()
+                == artifact.commit_qc.aggregate_signature.as_slice()
+            && self.validated_context_id() == context.id()
+            && self.validated_round() == self.commit_round()
+            && self.validated_subject() == self.subject()
+            && self.validated_manifest_hash() == self.validated_receipt().durable().manifest_hash()
+            && self.validated_body_frame_hash() == self.validated_receipt().durable().frame_hash()
+            && self.validated_receipt().execution_commitment() == self.execution_commitment()
+            && self.proposal_block_hash() == self.subject().block_hash
+            && self.canonical_proposal_wire_hash() == self.subject().payload_hash
+            && self.committed_block_hash() == self.subject().block_hash
+            && self.executed_block_wire_hash()
+                == self.execution_commitment().executed_block_wire_hash
+            && self.kura_receipt().height() == self.kura_height()
+            && self.kura_height() == context.height
+            && self.kura_context_id() == context.id()
+            && self.kura_block_hash() == self.committed_block_hash()
+            && self.kura_subject() == self.subject()
+            && self.kura_certificate() == certificate.as_ref()
+            && self.kura_artifact_hash() == self.artifact_hash()
+            && &artifact.height_context == context
+            && artifact.height == context.height
+            && artifact.subject == self.subject()
+            && artifact.block_hash == self.committed_block_hash()
+            && &artifact.commit_qc == certificate
+            && HashOf::new(artifact) == self.artifact_hash()
+            && self.completion_work_id() == self.task_work_id()
+            && self.state_height_after() == context_height
+    }
+}
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -385,14 +829,15 @@ impl V2ApplyService {
             return Err(V2ApplyError::ExecutionCommitmentMismatch);
         }
         let body = body_store.load(task.validated_receipt().durable())?;
+        let proposal_block_hash = body.hash();
+        let canonical_proposal_wire_hash = body
+            .canonical_proposal_wire_hash()
+            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
         if !body.is_resultless_proposal()
-            || body.hash() != task.subject().block_hash
+            || proposal_block_hash != task.subject().block_hash
             || body.header().height().get() != context.height
             || body.header().prev_block_hash() != task.subject().parent_block_hash
-            || body
-                .canonical_proposal_wire_hash()
-                .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?
-                != task.subject().payload_hash
+            || canonical_proposal_wire_hash != task.subject().payload_hash
         {
             return Err(V2ApplyError::TaskMismatch);
         }
@@ -485,6 +930,10 @@ impl V2ApplyService {
             self.kura.store_block(Arc::clone(&committed))?;
             committed
         };
+        let committed_block_hash = committed_block.hash();
+        let executed_block_wire_hash = committed_block
+            .executed_block_wire_hash()
+            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
 
@@ -533,7 +982,60 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
-        Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
+        let artifact_hash = HashOf::new(&artifact);
+        let evidence = DurableApplicationEvidence {
+            task_tag: task.tag(),
+            task_generation: task.tag().generation().get(),
+            task_work_id: task.id(),
+            context: context.clone(),
+            commit_qc: task.certificate().clone(),
+            subject: task.subject(),
+            execution_commitment: task.validated_receipt().execution_commitment(),
+            validated_receipt: task.validated_receipt().clone(),
+            validated_manifest_hash: task.validated_receipt().durable().manifest_hash(),
+            validated_body_frame_hash: task.validated_receipt().durable().frame_hash(),
+            proposal_block_hash,
+            canonical_proposal_wire_hash,
+            committed_block_hash,
+            executed_block_wire_hash,
+            kura_receipt: receipt,
+            artifact,
+            artifact_hash,
+            completion_work_id: task.id(),
+            state_height_after: self.state.committed_height(),
+        };
+        self.finish_durable_apply_completion(evidence)
+    }
+
+    fn finish_durable_apply_completion(
+        &self,
+        evidence: DurableApplicationEvidence,
+    ) -> Result<DurableApplyCompletion, V2ApplyError> {
+        if !evidence.is_exact() {
+            return Err(V2ApplyError::committed_recovery_required(
+                "exact application evidence",
+                &"native identity mismatch after durable application",
+            ));
+        }
+        let application_trace = evidence
+            .application_refinement_projection()
+            .ok_or_else(|| {
+                V2ApplyError::committed_recovery_required(
+                    "application refinement evidence",
+                    &"native application identity cannot be represented losslessly",
+                )
+            })?;
+        if !production_application_trace_refines_decision_completion_kernel(application_trace) {
+            return Err(V2ApplyError::committed_recovery_required(
+                "application refinement evidence",
+                &"durable application does not refine its Decision completion",
+            ));
+        }
+        Ok(DurableApplyCompletion::new(
+            evidence.completion_work_id,
+            evidence.kura_receipt,
+            evidence.artifact,
+        ))
     }
 
     fn publish_committed_block_merge_entry(
@@ -933,7 +1435,9 @@ mod tests {
         queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
         state::{World, WorldReadOnly},
         sumeragi::{
-            v2_body_store::{BlockSignaturePolicy, V2BodyStore, ValidatedBodyReceipt},
+            v2_body_store::{
+                BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
+            },
             v2_effects::ApplyTask,
         },
         tx::AcceptedTransaction,
@@ -1394,6 +1898,200 @@ mod tests {
                 "Sumeragi v2 finality must not populate the legacy roster sidecar"
             );
         }
+    }
+
+    #[test]
+    fn durable_application_evidence_rejects_identity_mutations() {
+        let fixture = ApplyFixture::new();
+        let mut store = fixture.reopen_body_store();
+        let completion = fixture
+            .service
+            .execute(&fixture.context, &mut store, &fixture.task)
+            .expect("apply exact fixture");
+        let committed = fixture
+            .kura
+            .get_block(NonZeroUsize::new(1).expect("height"))
+            .expect("load committed block");
+        let artifact = completion.artifact().clone();
+        let evidence = DurableApplicationEvidence {
+            task_tag: fixture.task.tag(),
+            task_generation: fixture.task.tag().generation().get(),
+            task_work_id: fixture.task.id(),
+            context: fixture.context.clone(),
+            commit_qc: fixture.task.certificate().clone(),
+            subject: fixture.task.subject(),
+            execution_commitment: fixture.task.validated_receipt().execution_commitment(),
+            validated_receipt: fixture.task.validated_receipt().clone(),
+            validated_manifest_hash: fixture.task.validated_receipt().durable().manifest_hash(),
+            validated_body_frame_hash: fixture.task.validated_receipt().durable().frame_hash(),
+            proposal_block_hash: fixture.body.hash(),
+            canonical_proposal_wire_hash: fixture
+                .body
+                .canonical_proposal_wire_hash()
+                .expect("hash proposal wire"),
+            committed_block_hash: committed.hash(),
+            executed_block_wire_hash: committed
+                .executed_block_wire_hash()
+                .expect("hash executed wire"),
+            kura_receipt: completion.receipt().clone(),
+            artifact_hash: HashOf::new(&artifact),
+            artifact,
+            completion_work_id: completion.work_id(),
+            state_height_after: fixture.state.committed_height(),
+        };
+        assert!(evidence.is_exact());
+        assert_eq!(evidence.task_tag(), fixture.task.tag());
+        assert_eq!(
+            evidence.task_generation(),
+            fixture.task.tag().generation().get()
+        );
+        assert_eq!(evidence.task_work_id(), fixture.task.id());
+        assert_eq!(evidence.context(), &fixture.context);
+        assert_eq!(evidence.commit_qc(), fixture.task.certificate());
+        assert_eq!(evidence.commit_round(), fixture.task.certificate().round);
+        assert_eq!(evidence.commit_phase(), wire::GlobalPhase::Commit);
+        assert_eq!(
+            evidence.commit_signers(),
+            fixture.task.certificate().signers.as_slice()
+        );
+        assert_eq!(
+            evidence.commit_aggregate_signature(),
+            fixture.task.certificate().aggregate_signature.as_slice()
+        );
+        assert_eq!(evidence.subject(), fixture.task.subject());
+        assert_eq!(
+            evidence.execution_commitment(),
+            fixture.task.certificate().execution_commitment
+        );
+        assert_eq!(
+            evidence.validated_receipt(),
+            fixture.task.validated_receipt()
+        );
+        assert_eq!(
+            evidence.validated_context_id(),
+            fixture.task.validated_receipt().durable().context_id()
+        );
+        assert_eq!(
+            evidence.validated_round(),
+            fixture.task.validated_receipt().durable().round()
+        );
+        assert_eq!(evidence.validated_subject(), fixture.task.subject());
+        assert_eq!(
+            evidence.validated_manifest_hash(),
+            fixture.task.validated_receipt().durable().manifest_hash()
+        );
+        assert_eq!(
+            evidence.validated_body_frame_hash(),
+            fixture.task.validated_receipt().durable().frame_hash()
+        );
+        assert_eq!(evidence.proposal_block_hash(), fixture.body.hash());
+        assert_eq!(
+            evidence.canonical_proposal_wire_hash(),
+            fixture.manifest.subject.payload_hash
+        );
+        assert_eq!(evidence.committed_block_hash(), committed.hash());
+        assert_eq!(
+            evidence.executed_block_wire_hash(),
+            fixture
+                .task
+                .certificate()
+                .execution_commitment
+                .executed_block_wire_hash
+        );
+        assert_eq!(evidence.kura_height(), fixture.context.height);
+        assert_eq!(evidence.kura_block_hash(), committed.hash());
+        assert_eq!(evidence.kura_context_id(), fixture.context.id());
+        assert_eq!(evidence.kura_subject(), fixture.task.subject());
+        assert_eq!(
+            evidence.kura_certificate(),
+            fixture.task.certificate().as_ref()
+        );
+        assert_eq!(evidence.kura_artifact_hash(), evidence.artifact_hash());
+        assert_eq!(evidence.artifact(), completion.artifact());
+        assert_eq!(evidence.completion_work_id(), completion.work_id());
+        assert_eq!(evidence.state_height_after(), 1);
+        assert!(
+            fixture
+                .service
+                .finish_durable_apply_completion(evidence.clone())
+                .is_ok(),
+            "the exact native evidence must mint the typed completion"
+        );
+
+        let mut altered = evidence.clone();
+        altered.task_generation = altered
+            .task_generation
+            .checked_add(1)
+            .expect("fixture generation increment");
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.commit_qc.signers.swap(0, 1);
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.commit_qc.aggregate_signature.push(0xC1);
+        assert!(!altered.is_exact());
+
+        let alternate_durable = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.task.certificate().round,
+            fixture.task.subject(),
+            fixture.task.validated_receipt().durable().manifest_hash(),
+        );
+        assert_ne!(
+            alternate_durable.frame_hash(),
+            fixture.task.validated_receipt().durable().frame_hash()
+        );
+        let mut altered = evidence.clone();
+        altered.validated_receipt = ValidatedBodyReceipt::for_test_with_commitment(
+            alternate_durable,
+            evidence.execution_commitment(),
+        );
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.validated_manifest_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"altered validated manifest identity"));
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.validated_body_frame_hash = Hash::new(b"altered validated body frame identity");
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.canonical_proposal_wire_hash = Hash::new(b"altered proposal wire identity");
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.executed_block_wire_hash = Hash::new(b"altered executed wire identity");
+        assert!(!altered.is_exact());
+
+        let mut altered_artifact = evidence.artifact.clone();
+        altered_artifact.block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"altered Kura receipt block identity"));
+        let mut altered = evidence.clone();
+        altered.kura_receipt = KuraV2CommitReceipt::for_test(&altered_artifact);
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.artifact_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"altered finality artifact identity"));
+        assert!(!altered.is_exact());
+
+        let mut altered = evidence.clone();
+        altered.completion_work_id = EffectWorkId::for_test(2);
+        assert!(matches!(
+            fixture.service.finish_durable_apply_completion(altered),
+            Err(V2ApplyError::CommittedRecoveryRequired {
+                stage: "exact application evidence",
+                ..
+            })
+        ));
+
+        let mut altered = evidence;
+        altered.state_height_after = 2;
+        assert!(!altered.is_exact());
     }
 
     fn pending_merge_entry(

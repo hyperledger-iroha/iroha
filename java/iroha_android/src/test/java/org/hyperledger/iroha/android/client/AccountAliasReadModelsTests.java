@@ -86,6 +86,36 @@ public final class AccountAliasReadModelsTests {
     } catch (final IllegalArgumentException expected) {
       // Expected.
     }
+
+    for (final String retiredField :
+        Arrays.asList(
+            "\"accountId\":\"" + account() + "\"",
+            "\"account_ids\":[\"" + account() + "\"]",
+            "\"accountIds\":[\"" + account() + "\"]",
+            "\"unexpected\":true")) {
+      try {
+        AccountAliasJsonParser.parseResolution(
+            ("{\"alias\":\"merchant@paynet\",\"account_id\":\""
+                    + account()
+                    + "\","
+                    + retiredField
+                    + "}")
+                .getBytes(StandardCharsets.UTF_8));
+        throw new AssertionError("retired or unknown response field must fail");
+      } catch (final IllegalStateException expected) {
+        // Expected.
+      }
+    }
+    try {
+      AccountAliasJsonParser.parseResolution(
+          ("{\"alias\":\"Merchant@paynet\",\"account_id\":\""
+                  + account()
+                  + "\"}")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("noncanonical response alias must fail");
+    } catch (final IllegalArgumentException expected) {
+      // Expected.
+    }
   }
 
   private static String account() throws Exception {

@@ -52,6 +52,128 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(" " + new string('a', 64)));
         Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(" 0x0102", expectedLength: 2));
     }
+
+    [Fact]
+    public void ExecutableBatchEncodingPreservesInstructionCallInstructionOrder()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        var instruction = TransactionInstruction.TransferAsset(
+            FixtureAssetDefinitionId,
+            "1",
+            FixtureAccountId);
+        var hash = Enumerable.Repeat((byte)0xA5, 32).ToArray();
+        var invocation = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            hash,
+            "run",
+            [1, 2, 3]);
+        var encoded = context.EncodeExecutableBatch([
+            TransactionBatchEntry.Instruction(instruction),
+            TransactionBatchEntry.ContractCall(invocation),
+            TransactionBatchEntry.Instruction(instruction),
+        ]);
+
+        Assert.Equal(4U, BinaryPrimitives.ReadUInt32LittleEndian(encoded));
+        var sequenceOffset = 12;
+        Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(sequenceOffset)));
+        var cursor = sequenceOffset + 8;
+        var tags = new List<uint>();
+        for (var index = 0; index < 3; index++)
+        {
+            var itemLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(cursor)));
+            cursor += 8;
+            tags.Add(BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(cursor)));
+            cursor += itemLength;
+        }
+        Assert.Equal([0U, 1U, 0U], tags);
+        Assert.Equal(encoded.Length, cursor);
+
+        hash[0] = 0;
+        Assert.Equal(0xA5, invocation.ExpectedCodeHash[0]);
+
+        var emptyArguments = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            Enumerable.Repeat((byte)0xA5, 32).ToArray(),
+            "run",
+            Array.Empty<byte>());
+        Assert.NotNull(emptyArguments.Arguments);
+        Assert.Empty(emptyArguments.Arguments!);
+    }
+
+    [Fact]
+    public void ExecutableBatchBuilderRequiresGasAndEmitsCanonicalJsonShape()
+    {
+        var invocation = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            Enumerable.Repeat((byte)0x11, 32).ToArray(),
+            "run");
+        var missingGas = new TransactionBuilder(
+            FixtureChainId,
+            FixtureAccountId,
+            EmptyAuthorityFeePayment)
+            .AddContractCall(invocation);
+        Assert.Throws<InvalidOperationException>(() => missingGas.BuildUnsignedPayload());
+
+        var instruction = TransactionInstruction.TransferAsset(
+            FixtureAssetDefinitionId,
+            "1",
+            FixtureAccountId);
+        var payload = new TransactionBuilder(
+            FixtureChainId,
+            FixtureAccountId,
+            FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), gasLimit: 100_000))
+            .WithExecutableBatch([
+                TransactionBatchEntry.Instruction(instruction),
+                TransactionBatchEntry.ContractCall(invocation),
+                TransactionBatchEntry.Instruction(instruction),
+            ])
+            .SetCreationTimeMilliseconds(1_736_000_000_000)
+            .BuildUnsignedPayload();
+
+        var batch = Assert.IsType<JsonArray>(payload.Executable["Batch"]);
+        Assert.Equal(3, batch.Count);
+        Assert.NotNull(batch[0]!["Instruction"]);
+        Assert.NotNull(batch[1]!["ContractCall"]);
+        Assert.NotNull(batch[2]!["Instruction"]);
+        Assert.Matches(
+            "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            batch[1]!["ContractCall"]!["expected_code_hash"]!.GetValue<string>());
+        var json = JsonSerializer.Serialize(payload);
+        Assert.Contains("\"instructions\":{\"Batch\"", json);
+        Assert.DoesNotContain("\"Executable\"", json);
+    }
+
+    [Fact]
+    public void ContractInvocationRequiresCanonicalV1Bech32mAddress()
+    {
+        var hash = Enumerable.Repeat((byte)0x11, 32).ToArray();
+        var validAddresses = new[]
+        {
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+        };
+        foreach (var address in validAddresses)
+        {
+            _ = new TransactionContractInvocation(address, hash, "run");
+        }
+
+        var invalidAddresses = new[]
+        {
+            "abc",
+            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+        };
+        foreach (var address in invalidAddresses)
+        {
+            Assert.Throws<ArgumentException>(
+                () => new TransactionContractInvocation(address, hash, "run"));
+        }
+    }
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]

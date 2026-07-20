@@ -51,6 +51,7 @@ use iroha_data_model::{
     block::{ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole},
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
+        InstructionBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
@@ -60,7 +61,7 @@ use iroha_data_model::{
     },
     name::Name,
     transaction::{
-        Executable, TransactionEntrypoint, error::TransactionRejectionReason,
+        Executable, ExecutableBatchItem, TransactionEntrypoint, error::TransactionRejectionReason,
         signed::TransactionPayload,
     },
 };
@@ -1802,17 +1803,22 @@ impl Queue {
         let Some(signed) = tx.external() else {
             return false;
         };
+        let is_publish = |instruction: &InstructionBox| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                >()
+                .is_some()
+        };
         match signed.instructions() {
             Executable::Instructions(instructions) if !instructions.is_empty() => {
-                instructions.iter().all(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<
-                            iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
-                        >()
-                        .is_some()
-                })
+                instructions.iter().all(is_publish)
             }
+            Executable::Batch(items) if !items.is_empty() => items.iter().all(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => is_publish(instruction),
+                ExecutableBatchItem::ContractCall(_) => false,
+            }),
             _ => false,
         }
     }
@@ -2749,6 +2755,30 @@ impl Queue {
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
+                    Executable::Batch(items) => {
+                        if items.iter().any(|item| {
+                            matches!(item, ExecutableBatchItem::ContractCall(_))
+                        }) {
+                            crate::executor::transaction_gas_limit(signed).unwrap_or_else(|| {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas limit in fee payment intent while deriving mixed-batch proposal gas cost"
+                                );
+                                0
+                            })
+                        } else {
+                            let instructions: Vec<_> = items
+                                .iter()
+                                .filter_map(|item| match item {
+                                    ExecutableBatchItem::Instruction(instruction) => {
+                                        Some(instruction.clone())
+                                    }
+                                    ExecutableBatchItem::ContractCall(_) => None,
+                                })
+                                .collect();
+                            gas::meter_instructions(&instructions)
+                        }
+                    }
                 }
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
@@ -2769,6 +2799,31 @@ impl Queue {
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Batch(items) => {
+                        if items.iter().any(|item| {
+                            matches!(item, ExecutableBatchItem::ContractCall(_))
+                        }) {
+                            crate::executor::transaction_gas_limit(reveal.signed_transaction())
+                                .unwrap_or_else(|| {
+                                    warn!(
+                                        tx = %tx.hash(),
+                                        "missing gas limit in fee payment intent while deriving mixed-batch proposal gas cost for sealed reveal"
+                                    );
+                                    0
+                                })
+                        } else {
+                            let instructions: Vec<_> = items
+                                .iter()
+                                .filter_map(|item| match item {
+                                    ExecutableBatchItem::Instruction(instruction) => {
+                                        Some(instruction.clone())
+                                    }
+                                    ExecutableBatchItem::ContractCall(_) => None,
+                                })
+                                .collect();
+                            gas::meter_instructions(&instructions)
+                        }
                     }
                 }
             }
@@ -3029,10 +3084,7 @@ impl Queue {
     }
 
     fn tx_contains_runtime_upgrade_instruction(tx: &CheckedTransaction<'_>) -> bool {
-        let Executable::Instructions(instructions) = tx.as_ref().as_ref().instructions() else {
-            return false;
-        };
-        instructions.iter().any(|instruction| {
+        let contains = |instruction: &InstructionBox| {
             instruction
                 .as_any()
                 .downcast_ref::<ProposeRuntimeUpgrade>()
@@ -3045,7 +3097,15 @@ impl Queue {
                     .as_any()
                     .downcast_ref::<CancelRuntimeUpgrade>()
                     .is_some()
-        })
+        };
+        match tx.as_ref().as_ref().instructions() {
+            Executable::Instructions(instructions) => instructions.iter().any(contains),
+            Executable::Batch(items) => items.iter().any(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => contains(instruction),
+                ExecutableBatchItem::ContractCall(_) => false,
+            }),
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+        }
     }
 
     fn tx_touches_manifest_protected_namespace_surface(tx: &CheckedTransaction<'_>) -> bool {
@@ -3089,6 +3149,40 @@ impl Queue {
             }
             Executable::ContractCall(_) => {
                 contract_targets_seen = true;
+            }
+            Executable::Batch(items) => {
+                for item in items {
+                    match item {
+                        ExecutableBatchItem::ContractCall(_) => contract_targets_seen = true,
+                        ExecutableBatchItem::Instruction(instruction) => {
+                            if instruction
+                                .as_any()
+                                .downcast_ref::<ActivateContractInstance>()
+                                .is_some()
+                                || instruction
+                                    .as_any()
+                                    .downcast_ref::<CommitContractDeployment>()
+                                    .is_some()
+                                || instruction
+                                    .as_any()
+                                    .downcast_ref::<DeactivateContractInstance>()
+                                    .is_some()
+                            {
+                                contract_targets_seen = true;
+                            } else {
+                                let any = instruction.as_any();
+                                if any.is::<RegisterSmartContractCode>()
+                                    || any.is::<RegisterSmartContractBytes>()
+                                    || any.is::<UploadSmartContractCodeChunk>()
+                                    || any.is::<FinalizeSmartContractCodeUpload>()
+                                    || any.is::<RemoveSmartContractBytes>()
+                                {
+                                    register_code_seen = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
@@ -3295,6 +3389,46 @@ impl Queue {
             Executable::ContractCall(call) => {
                 contract_targets.insert(call.contract_address.clone());
             }
+            Executable::Batch(items) => {
+                for item in items {
+                    match item {
+                        ExecutableBatchItem::ContractCall(call) => {
+                            contract_targets.insert(call.contract_address.clone());
+                        }
+                        ExecutableBatchItem::Instruction(instruction) => {
+                            if let Some(commit) = instruction
+                                .as_any()
+                                .downcast_ref::<CommitContractDeployment>()
+                            {
+                                commit_deployment_count += 1;
+                                contract_targets.insert(commit.contract_address().clone());
+                            } else if let Some(activate) = instruction
+                                .as_any()
+                                .downcast_ref::<ActivateContractInstance>(
+                            ) {
+                                activate_seen = true;
+                                contract_targets.insert(activate.contract_address().clone());
+                            } else if let Some(deactivate) = instruction
+                                .as_any()
+                                .downcast_ref::<DeactivateContractInstance>(
+                            ) {
+                                deactivate_seen = true;
+                                contract_targets.insert(deactivate.contract_address().clone());
+                            } else {
+                                let any = instruction.as_any();
+                                if any.is::<RegisterSmartContractCode>()
+                                    || any.is::<RegisterSmartContractBytes>()
+                                    || any.is::<UploadSmartContractCodeChunk>()
+                                    || any.is::<FinalizeSmartContractCodeUpload>()
+                                    || any.is::<RemoveSmartContractBytes>()
+                                {
+                                    register_code_seen = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
 
@@ -3318,6 +3452,15 @@ impl Queue {
 
         let contract_instr_seen =
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
+        let explicit_contract_instruction_seen =
+            register_code_seen || commit_deployment_count > 0 || activate_seen || deactivate_seen;
+        let has_directly_addressed_call = match signed.instructions() {
+            Executable::ContractCall(_) => true,
+            Executable::Batch(items) => items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
+            Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+        };
 
         if !contract_instr_seen {
             return Ok(false);
@@ -3325,7 +3468,7 @@ impl Queue {
 
         if contract_instr_seen
             && metadata_governance_contract_address.is_none()
-            && !matches!(signed.instructions(), Executable::ContractCall(_))
+            && (!has_directly_addressed_call || explicit_contract_instruction_seen)
         {
             return Err(Self::enforcement_error(
                 alias,
@@ -4701,7 +4844,8 @@ impl Queue {
                         }
                         Executable::ContractCall(_)
                         | Executable::IvmProved(_)
-                        | Executable::Ivm(_) => false,
+                        | Executable::Ivm(_)
+                        | Executable::Batch(_) => false,
                     };
                 let governance_sensitive =
                     Self::tx_requires_manifest_validator_gating(rules, &checked);
@@ -7685,6 +7829,21 @@ impl Queue {
                     Executable::ContractCall(_) => {
                         crate::executor::transaction_gas_limit(signed).unwrap_or(0)
                     }
+                    Executable::Batch(items) => {
+                        if items
+                            .iter()
+                            .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+                        {
+                            crate::executor::transaction_gas_limit(signed).unwrap_or(0)
+                        } else {
+                            let instructions = signed
+                                .instructions()
+                                .explicit_instructions()
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            gas::meter_instructions(&instructions)
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
@@ -7703,6 +7862,23 @@ impl Queue {
                     Executable::ContractCall(_) => {
                         crate::executor::transaction_gas_limit(reveal.signed_transaction())
                             .unwrap_or(0)
+                    }
+                    Executable::Batch(items) => {
+                        if items
+                            .iter()
+                            .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+                        {
+                            crate::executor::transaction_gas_limit(reveal.signed_transaction())
+                                .unwrap_or(0)
+                        } else {
+                            let instructions = reveal
+                                .signed_transaction()
+                                .instructions()
+                                .explicit_instructions()
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            gas::meter_instructions(&instructions)
+                        }
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -12449,6 +12625,9 @@ pub mod tests {
             }
             iroha_data_model::transaction::Executable::ContractCall(_) => {
                 panic!("expected ISI transaction for gas test")
+            }
+            iroha_data_model::transaction::Executable::Batch(_) => {
+                panic!("expected legacy ISI transaction for gas test")
             }
             iroha_data_model::transaction::Executable::Ivm(_) => {
                 panic!("expected ISI transaction for gas test")

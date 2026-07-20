@@ -11,9 +11,10 @@ public sealed class TransactionBuilder
     private static readonly HashSet<string> RetiredFeeMetadataKeys =
         new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
 
-    private readonly List<TransactionInstruction> instructions = [];
+    private readonly List<TransactionBatchEntry> executableEntries = [];
     private readonly Dictionary<string, JsonNode?> metadata = new(StringComparer.Ordinal);
     private FeePaymentIntent feePayment;
+    private bool forceExecutableBatch;
 
     public TransactionBuilder(
         string chainId,
@@ -39,14 +40,40 @@ public sealed class TransactionBuilder
 
     public uint? Nonce { get; private set; }
 
-    public IReadOnlyList<TransactionInstruction> Instructions => instructions.ToArray();
+    public IReadOnlyList<TransactionInstruction> Instructions => executableEntries
+        .OfType<TransactionBatchEntry.InstructionEntry>()
+        .Select(static entry => entry.Value)
+        .ToArray();
+
+    public IReadOnlyList<TransactionBatchEntry> ExecutableEntries => executableEntries.ToArray();
 
     public IReadOnlyDictionary<string, JsonNode?> Metadata => SnapshotMetadata(metadata);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {
         ArgumentNullException.ThrowIfNull(instruction);
-        instructions.Add(instruction);
+        executableEntries.Add(TransactionBatchEntry.Instruction(instruction));
+        return this;
+    }
+
+    public TransactionBuilder AddContractCall(TransactionContractInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        executableEntries.Add(TransactionBatchEntry.ContractCall(invocation));
+        return this;
+    }
+
+    public TransactionBuilder WithExecutableBatch(IEnumerable<TransactionBatchEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var replacement = entries.ToArray();
+        if (replacement.Length == 0 || replacement.Any(static entry => entry is null))
+        {
+            throw new ArgumentException("Executable batches must contain at least one non-null item.", nameof(entries));
+        }
+        executableEntries.Clear();
+        executableEntries.AddRange(replacement);
+        forceExecutableBatch = true;
         return this;
     }
 
@@ -269,10 +296,11 @@ public sealed class TransactionBuilder
 
     public SignedTransactionEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
-        if (instructions.Count == 0)
+        if (executableEntries.Count == 0)
         {
-            throw new InvalidOperationException("Transactions must contain at least one instruction.");
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
         }
+        ValidateExecutableFeeIntent();
 
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
@@ -303,7 +331,10 @@ public sealed class TransactionBuilder
         payload.WriteField(context.EncodeChainId(ChainId));
         payload.WriteField(context.EncodeAccountId(AuthorityAccountId));
         payload.WriteField(context.EncodeUInt64(CreationTimeMilliseconds ?? (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-        payload.WriteField(context.EncodeInstructionsExecutable(instructions));
+        var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
+        payload.WriteField(forceExecutableBatch || contractCallPresent
+            ? context.EncodeExecutableBatch(executableEntries)
+            : context.EncodeInstructionsExecutable(Instructions));
         payload.WriteField(context.EncodeOption(TimeToLiveMilliseconds, context.EncodeUInt64));
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
         payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
@@ -316,22 +347,34 @@ public sealed class TransactionBuilder
     /// </summary>
     public UnsignedTransactionPayload BuildUnsignedPayload()
     {
-        if (instructions.Count == 0)
+        if (executableEntries.Count == 0)
         {
-            throw new InvalidOperationException("Transactions must contain at least one instruction.");
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
         }
+        ValidateExecutableFeeIntent();
 
         EnsureCreationTimeMilliseconds();
-        var encodedInstructions = new JsonArray(
-            instructions
-                .Select(instruction => JsonValue.Create(
-                    instruction.EncodeInstructionBoxBase64(AuthorityAccountId)))
-                .Cast<JsonNode?>()
-                .ToArray());
-        var executable = new JsonObject
+        var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
+        JsonObject executable;
+        if (forceExecutableBatch || contractCallPresent)
         {
-            ["Instructions"] = encodedInstructions,
-        };
+            executable = new JsonObject
+            {
+                ["Batch"] = new JsonArray(executableEntries.Select(EncodeBatchEntryJson).ToArray()),
+            };
+        }
+        else
+        {
+            executable = new JsonObject
+            {
+                ["Instructions"] = new JsonArray(
+                    Instructions
+                        .Select(instruction => JsonValue.Create(
+                            instruction.EncodeInstructionBoxBase64(AuthorityAccountId)))
+                        .Cast<JsonNode?>()
+                        .ToArray()),
+            };
+        }
         return new UnsignedTransactionPayload(
             ChainId,
             AuthorityAccountId,
@@ -362,6 +405,40 @@ public sealed class TransactionBuilder
     private void EnsureCreationTimeMilliseconds()
     {
         CreationTimeMilliseconds ??= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+
+    private JsonNode? EncodeBatchEntryJson(TransactionBatchEntry entry)
+    {
+        return entry switch
+        {
+            TransactionBatchEntry.InstructionEntry instruction => new JsonObject
+            {
+                ["Instruction"] = instruction.Value.EncodeInstructionBoxBase64(AuthorityAccountId),
+            },
+            TransactionBatchEntry.ContractCallEntry call => new JsonObject
+            {
+                ["ContractCall"] = new JsonObject
+                {
+                    ["contract_address"] = call.Invocation.ContractAddress,
+                    ["expected_code_hash"] = call.Invocation.ExpectedCodeHashLiteral,
+                    ["entrypoint"] = call.Invocation.Entrypoint,
+                    ["arguments"] = call.Invocation.Arguments is { } arguments
+                        ? new JsonArray(arguments.Select(static value => (JsonNode?)JsonValue.Create(value)).ToArray())
+                        : null,
+                },
+            },
+            _ => throw new InvalidOperationException("Unknown executable batch entry."),
+        };
+    }
+
+    private void ValidateExecutableFeeIntent()
+    {
+        if (executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry)
+            && feePayment.GasLimit is null)
+        {
+            throw new InvalidOperationException(
+                "Executable batches containing contract calls require a signature-bound gas limit.");
+        }
     }
 
     private static void RejectRetiredFeeMetadata(string key, string paramName)

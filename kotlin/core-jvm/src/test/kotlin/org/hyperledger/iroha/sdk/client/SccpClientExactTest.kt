@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.digests.KeccakDigest
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -65,6 +66,7 @@ class SccpClientExactTest {
             TransactionPayload(
                 authority = authority,
                 creationTimeMs = 7,
+                executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
             ),
         )
@@ -74,6 +76,7 @@ class SccpClientExactTest {
                 TransactionPayload(
                     authority = authority,
                     creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList(), 9),
                 ),
             ),
@@ -280,6 +283,7 @@ class SccpClientExactTest {
                 TransactionPayload(
                     authority = authority,
                     creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList()),
                 ),
             ),
@@ -368,6 +372,7 @@ class SccpClientExactTest {
             TransactionPayload(
                 authority = authority,
                 creationTimeMs = 7,
+                executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
             ),
         )
@@ -410,6 +415,7 @@ class SccpClientExactTest {
                 TransactionPayload(
                     authority = otherAuthority,
                     creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
                     feePayment = FeePaymentIntent.authority(emptyList()),
                 ),
             ),
@@ -1349,6 +1355,7 @@ class SccpClientExactTest {
         val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
             TransactionPayload(
                 creationTimeMs = 10,
+                executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
             ),
         )

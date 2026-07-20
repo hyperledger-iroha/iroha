@@ -162,6 +162,12 @@ WitnessNext ==
        WitnessMark("ValidateBody", node, WitnessNoNumber, proposal.view,
                    WitnessNoText, proposal.subject,
                    WitnessValidateBody(node, proposal))
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       WitnessMark("ValidateDecidedBody", node, WitnessNoNumber, qc.view,
+                   qc.phase, qc.subject, ValidateDecidedBody(node, qc))
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       WitnessMark("ValidateLockedBody", node, WitnessNoNumber, qc.view,
+                   qc.phase, qc.subject, ValidateLockedBody(node, qc))
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        WitnessMark("BeginPrepare", node, WitnessNoNumber, proposal.view, "Prepare",
                    proposal.subject, BeginPrepare(node, proposal))
@@ -239,7 +245,8 @@ WitnessNext ==
        WitnessMark("PersistInstallTC", request.node, WitnessNoNumber,
                    request.tc.view, WitnessNoText, WitnessNoText,
                    PersistInstallTC(request))
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
        WitnessMark("FetchCertifiedBody", node, WitnessNoNumber, qc.view, qc.phase,
                    qc.subject, FetchCertifiedBody(node, qc))
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:

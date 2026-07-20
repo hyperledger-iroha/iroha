@@ -275,6 +275,8 @@ DurableDecisionFrontierStutteringStep ==
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ValidateDecidedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       ValidateLockedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -307,7 +309,8 @@ DurableDecisionFrontierStutteringStep ==
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
   \/ \E request \in pendingInstallTC: PersistInstallTC(request)
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
@@ -329,7 +332,8 @@ BY IsaT(120)
        SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
        CompleteProposalSignature, ByzantineBroadcastProposal,
        DeliverProposal, FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, ValidateDecidedBody, RejectBody, BeginPrepare,
+       ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
+       BeginPrepare,
        PersistPrepare, CompleteVoteSignature, ByzantineBroadcastVote,
        DeliverVote, FormPrepareQC,
        ImportAuthenticatedCommitCertificate, DeliverQC,

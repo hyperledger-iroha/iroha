@@ -10,7 +10,9 @@ import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -35,12 +37,13 @@ import kotlin.test.assertTrue
 class NoritoJavaCodecAdapterParityTest {
     private val adapter = NoritoJavaCodecAdapter()
     private val testFeePayment = FeePaymentIntent.authority(emptyList())
+    private val testIvmFeePayment = FeePaymentIntent.authority(emptyList(), 1L)
 
     @Test
     fun `codec round-trips payload as bare payload`() {
         val instructions = "android-instructions".toByteArray()
         val payload = TransactionPayload(
-            feePayment = testFeePayment,
+            feePayment = testIvmFeePayment,
             chainId = "00000001",
             authority = sampleAuthority(0x11),
             creationTimeMs = 1_735_000_000_123L,
@@ -70,7 +73,7 @@ class NoritoJavaCodecAdapterParityTest {
             .fromAccount(publicKey, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = TransactionPayload(
-            feePayment = testFeePayment,
+            feePayment = testIvmFeePayment,
             chainId = "00000002",
             authority = authority,
             creationTimeMs = 1_735_000_000_456L,
@@ -112,7 +115,7 @@ class NoritoJavaCodecAdapterParityTest {
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
         val payload = TransactionPayload(
-            feePayment = testFeePayment,
+            feePayment = testIvmFeePayment,
             chainId = "00000003",
             authority = authority,
             creationTimeMs = 1_735_000_000_789L,
@@ -229,10 +232,90 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     @Test
+    fun `codec round-trips standalone contract calls`() {
+        val invocation = ContractInvocation(
+            contractAddress = CONTRACT_ADDRESS,
+            expectedCodeHash = fill(0x61, 32),
+            entrypoint = "contribute",
+            arguments = byteArrayOf(0x4B, 0x4F, 0x54, 0x4F),
+        )
+        val payload = TransactionPayload(
+            feePayment = FeePaymentIntent.authority(emptyList(), 50_000L),
+            chainId = "00000014",
+            authority = sampleAuthority(0x45),
+            creationTimeMs = 1_735_222_444_123L,
+            executable = Executable.contractCall(invocation),
+        )
+
+        val encoded = adapter.encodeTransaction(payload)
+        val decoded = adapter.decodeTransaction(encoded)
+
+        assertEquals(
+            invocation,
+            assertIs<Executable.ContractCall>(decoded.executable).invocation,
+        )
+        val executableDecoder = executableDecoder(encoded)
+        assertEquals(1L, NoritoAdapters.uint(32).decode(executableDecoder))
+    }
+
+    @Test
+    fun `codec round-trips mixed batches without reordering items`() {
+        val wirePayloadA = NoritoCodec.encode(
+            "batch-A",
+            "iroha.test.BatchA",
+            NoritoAdapters.stringAdapter(),
+        )
+        val wirePayloadB = NoritoCodec.encode(
+            "batch-B",
+            "iroha.test.BatchB",
+            NoritoAdapters.stringAdapter(),
+        )
+        val instructionA = InstructionBox.fromWirePayload("iroha.custom.batch.a", wirePayloadA)
+        val instructionB = InstructionBox.fromWirePayload("iroha.custom.batch.b", wirePayloadB)
+        val invocation = ContractInvocation(
+            contractAddress = CONTRACT_ADDRESS,
+            expectedCodeHash = fill(0x63, 32),
+            entrypoint = "mixed",
+            arguments = byteArrayOf(1, 3, 3, 7),
+        )
+        val payload = TransactionPayload(
+            feePayment = FeePaymentIntent.authority(emptyList(), 75_000L),
+            chainId = "00000015",
+            authority = sampleAuthority(0x46),
+            creationTimeMs = 1_735_222_555_123L,
+            executable = Executable.batchBuilder()
+                .addInstruction(instructionA)
+                .addContractCall(invocation)
+                .addInstruction(instructionB)
+                .build(),
+        )
+
+        val encoded = adapter.encodeTransaction(payload)
+        val decoded = adapter.decodeTransaction(encoded)
+        val entries = assertIs<Executable.Batch>(decoded.executable).entries
+
+        assertEquals(3, entries.size)
+        assertEquals(instructionA, assertIs<ExecutableBatchItem.Instruction>(entries[0]).instruction)
+        assertEquals(invocation, assertIs<ExecutableBatchItem.ContractCall>(entries[1]).invocation)
+        assertEquals(instructionB, assertIs<ExecutableBatchItem.Instruction>(entries[2]).instruction)
+
+        val executableDecoder = executableDecoder(encoded)
+        assertEquals(4L, NoritoAdapters.uint(32).decode(executableDecoder))
+        val batchField = readField(executableDecoder, "payload.executable.batch")
+        assertEquals(0, executableDecoder.remaining())
+        val batchDecoder = canonicalDecoder(batchField)
+        assertEquals(3L, batchDecoder.readLength(false))
+        assertBatchItemTag(batchDecoder, 0L, "batch[0]")
+        assertBatchItemTag(batchDecoder, 1L, "batch[1]")
+        assertBatchItemTag(batchDecoder, 0L, "batch[2]")
+        assertEquals(0, batchDecoder.remaining())
+    }
+
+    @Test
     fun `codec encodes chain id ivm and instruction layouts`() {
         val chainId = "00000003"
         val chainPayload = TransactionPayload(
-            feePayment = testFeePayment,
+            feePayment = testIvmFeePayment,
             chainId = chainId,
             authority = sampleAuthority(0x42),
             creationTimeMs = 1_735_000_000_789L,
@@ -249,7 +332,7 @@ class NoritoJavaCodecAdapterParityTest {
 
         val ivmBytes = byteArrayOf(0x01, 0x02, 0x03, 0x04)
         val ivmPayload = TransactionPayload(
-            feePayment = testFeePayment,
+            feePayment = testIvmFeePayment,
             chainId = "00000012",
             authority = sampleAuthority(0x43),
             creationTimeMs = 1_735_222_222_123L,
@@ -263,6 +346,7 @@ class NoritoJavaCodecAdapterParityTest {
         val ivmExecutableField = readField(ivmDecoder, "payload.executable")
         readField(ivmDecoder, "payload.time_to_live_ms")
         readField(ivmDecoder, "payload.nonce")
+        readField(ivmDecoder, "payload.fee_payment")
         readField(ivmDecoder, "payload.metadata")
         assertEquals(0, ivmDecoder.remaining())
 
@@ -302,6 +386,7 @@ class NoritoJavaCodecAdapterParityTest {
         val instructionExecutableField = readField(instructionDecoder, "payload.executable")
         readField(instructionDecoder, "payload.time_to_live_ms")
         readField(instructionDecoder, "payload.nonce")
+        readField(instructionDecoder, "payload.fee_payment")
         readField(instructionDecoder, "payload.metadata")
         assertEquals(0, instructionDecoder.remaining())
 
@@ -330,6 +415,22 @@ class NoritoJavaCodecAdapterParityTest {
         val length = decoder.readLength(decoder.compactLenActive())
         require(length <= Int.MAX_VALUE) { "$field length too large: $length" }
         return decoder.readBytes(length.toInt())
+    }
+
+    private fun executableDecoder(encodedPayload: ByteArray): NoritoDecoder {
+        val payloadDecoder = canonicalDecoder(encodedPayload)
+        readField(payloadDecoder, "payload.chain_id")
+        readField(payloadDecoder, "payload.authority")
+        readField(payloadDecoder, "payload.creation_time_ms")
+        return canonicalDecoder(readField(payloadDecoder, "payload.executable"))
+    }
+
+    private fun assertBatchItemTag(decoder: NoritoDecoder, expectedTag: Long, field: String) {
+        val itemPayload = readSequenceElement(decoder, decoder.compactLenActive(), field)
+        val itemDecoder = canonicalDecoder(itemPayload)
+        assertEquals(expectedTag, NoritoAdapters.uint(32).decode(itemDecoder), "$field tag")
+        readField(itemDecoder, "$field payload")
+        assertEquals(0, itemDecoder.remaining(), "$field should contain one variant payload")
     }
 
     private fun readSequenceElement(decoder: NoritoDecoder, compact: Boolean, field: String): ByteArray {
@@ -437,6 +538,8 @@ class NoritoJavaCodecAdapterParityTest {
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     companion object {
+        private const val CONTRACT_ADDRESS =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
     }

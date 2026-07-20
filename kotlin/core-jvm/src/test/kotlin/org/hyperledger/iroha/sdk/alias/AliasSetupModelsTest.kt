@@ -548,6 +548,145 @@ class AliasSetupModelsTest {
     }
 
     @Test
+    fun onboardingResponseRequiresExactStatusHashAndDispositionSemantics() {
+        val hash = "ab".repeat(32)
+        val account = account(0x22)
+
+        AccountOnboardingResponseV1(
+            account,
+            "merchant@banka.paynet",
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasPlanDispositionV1.CREATE,
+        )
+        AccountOnboardingResponseV1(
+            account,
+            "merchant@banka.paynet",
+            hash,
+            AccountOnboardingStatusV1.REPAIRED,
+            AliasPlanDispositionV1.REPAIR,
+        )
+        AccountOnboardingResponseV1(
+            account,
+            "merchant@banka.paynet",
+            hash,
+            AccountOnboardingStatusV1.REPAIRED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        AccountOnboardingResponseV1(
+            account,
+            "merchant@banka.paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+
+        listOf(
+            Triple(AccountOnboardingStatusV1.QUEUED, AliasPlanDispositionV1.REPAIR, hash),
+            Triple(AccountOnboardingStatusV1.REPAIRED, AliasPlanDispositionV1.CREATE, hash),
+            Triple(AccountOnboardingStatusV1.UNCHANGED, AliasPlanDispositionV1.NO_OP, hash),
+            Triple(AccountOnboardingStatusV1.QUEUED, AliasPlanDispositionV1.CREATE, null),
+        ).forEach { (status, disposition, transactionHash) ->
+            assertFailsWith<IllegalArgumentException> {
+                AccountOnboardingResponseV1(
+                    account,
+                    "merchant@banka.paynet",
+                    transactionHash,
+                    status,
+                    disposition,
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingResponseV1(
+                account,
+                "Merchant@Banka.Paynet",
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasPlanDispositionV1.NO_OP,
+            )
+        }
+    }
+
+    @Test
+    fun onboardingResponseVerifierBindsReceiptAndHttpStatus() {
+        val createReceipt = AccountOnboardingPlanReceiptV1(
+            onboardingBody(account(0x11)),
+            "03".repeat(32),
+            "AA",
+        )
+        val unchanged = AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        assertEquals(
+            unchanged,
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                createReceipt,
+                unchanged,
+                200,
+            ),
+        )
+
+        val queued = AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            "ab".repeat(32),
+            AccountOnboardingStatusV1.QUEUED,
+            AliasPlanDispositionV1.CREATE,
+        )
+        assertEquals(
+            queued,
+            AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 202),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 200)
+        }
+        val substituted = AccountOnboardingResponseV1(
+            account(0x23),
+            "merchant@banka.paynet",
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                createReceipt,
+                substituted,
+                200,
+            )
+        }
+
+        val noOpReceipt = AccountOnboardingPlanReceiptV1(
+            onboardingBody(account(0x11), disposition = AliasPlanDispositionV1.NO_OP),
+            "04".repeat(32),
+            "AA",
+        )
+        val ancillaryRepair = AccountOnboardingResponseV1(
+            account(0x22),
+            "merchant@banka.paynet",
+            "cd".repeat(32),
+            AccountOnboardingStatusV1.REPAIRED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        assertEquals(
+            ancillaryRepair,
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                noOpReceipt,
+                ancillaryRepair,
+                202,
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingResponseVerifier.requireValidForReceipt(noOpReceipt, queued, 202)
+        }
+    }
+
+    @Test
     fun onboardingReceiptVerifiesCanonicalBodyAndRejectsTamperOrWrongAuthority() {
         val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x51.toByte() }, 0)
         val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
@@ -723,6 +862,7 @@ class AliasSetupModelsTest {
     private fun onboardingBody(
         authority: String,
         chainId: String = "test-chain",
+        disposition: AliasPlanDispositionV1 = AliasPlanDispositionV1.CREATE,
     ): AccountOnboardingPlanBodyV1 {
         val intent = AliasIntentV1.AccountAlias(
             AliasAccountIntentV1(
@@ -741,10 +881,19 @@ class AliasSetupModelsTest {
             authority,
             chainId,
             AliasPlanAnchorV1(9, "01".repeat(32)),
-            AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
+            AliasPlanResourceV1(
+                intent,
+                disposition,
+                null,
+                if (disposition == AliasPlanDispositionV1.NO_OP) null else 0,
+            ),
             AliasLeaseAcquisitionV1(1),
             guard(),
-            listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, sharedEnsureFrame())),
+            if (disposition == AliasPlanDispositionV1.NO_OP) {
+                emptyList()
+            } else {
+                listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, sharedEnsureFrame()))
+            },
             null,
             50_000,
         )

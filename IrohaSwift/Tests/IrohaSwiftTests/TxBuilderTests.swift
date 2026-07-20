@@ -463,6 +463,140 @@ final class TxBuilderTests: XCTestCase {
         }
     }
 
+    func testBuildSignedExecutableBatchPreservesMixedOrderAndTag() throws {
+        try requireEd25519Encoder()
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let instruction = try TransactionInstructionFrame(
+            wireName: "iroha_data_model::isi::Log",
+            framedPayload: noritoEncode(
+                typeName: "iroha_data_model::isi::Log",
+                payload: Data([1, 2, 3]),
+                flags: 0
+            )
+        )
+        let invocation = try TransactionContractInvocation(
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            expectedCodeHash: Data(repeating: 0xA5, count: 32),
+            entrypoint: "run",
+            arguments: Data([4, 5, 6])
+        )
+        let sdk = IrohaSDK(
+            toriiClient: StubPipelineClient(),
+            baseURL: URL(string: "https://torii.example")!,
+            creationTimeProvider: { Self.fixtureCreationTimeMs }
+        )
+        let envelope = try sdk.buildSignedExecutableBatch(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            entries: [
+                .instruction(instruction),
+                .contractCall(invocation),
+                .instruction(instruction),
+            ],
+            feePayment: .authority(chargeLimits: [], gasLimit: 100_000),
+            ttlMs: 60,
+            nonce: 7,
+            keypair: keypair
+        )
+
+        var signedReader = CanonicalNoritoReader(data: envelope.signedTransaction)
+        _ = try signedReader.readField()
+        let payload = try signedReader.readField()
+        var payloadReader = CanonicalNoritoReader(data: payload)
+        _ = try payloadReader.readField()
+        _ = try payloadReader.readField()
+        _ = try payloadReader.readField()
+        let executable = try payloadReader.readField()
+        var executableReader = CanonicalNoritoReader(data: executable)
+        XCTAssertEqual(try executableReader.readUInt32LE(), 4)
+        let sequence = try executableReader.readField()
+        var sequenceReader = CanonicalNoritoReader(data: sequence)
+        XCTAssertEqual(try sequenceReader.readUInt64LE(), 3)
+        var first = CanonicalNoritoReader(data: try sequenceReader.readField())
+        var second = CanonicalNoritoReader(data: try sequenceReader.readField())
+        var third = CanonicalNoritoReader(data: try sequenceReader.readField())
+        XCTAssertEqual(try first.readUInt32LE(), 0)
+        XCTAssertEqual(try second.readUInt32LE(), 1)
+        XCTAssertEqual(try third.readUInt32LE(), 0)
+        XCTAssertEqual(sequenceReader.remaining(), 0)
+    }
+
+    func testExecutableBatchRejectsEmptyAndMissingContractGasLimit() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        XCTAssertThrowsError(try TransactionContractInvocation(
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            expectedCodeHash: Data(repeating: 0x10, count: 32),
+            entrypoint: "run"
+        )) { error in
+            XCTAssertEqual(error as? ExecutableBatchInputError, .invalidExpectedCodeHashMarker)
+        }
+        let invocation = try TransactionContractInvocation(
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            expectedCodeHash: Data(repeating: 0x11, count: 32),
+            entrypoint: "run"
+        )
+        let sdk = IrohaSDK(
+            toriiClient: StubPipelineClient(),
+            baseURL: URL(string: "https://torii.example")!,
+            creationTimeProvider: { Self.fixtureCreationTimeMs }
+        )
+
+        XCTAssertThrowsError(try sdk.buildSignedExecutableBatch(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            entries: [],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            keypair: keypair
+        )) { error in
+            XCTAssertEqual(error as? ExecutableBatchInputError, .emptyBatch)
+        }
+        XCTAssertThrowsError(try sdk.buildSignedExecutableBatch(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            entries: [.contractCall(invocation)],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            keypair: keypair
+        )) { error in
+            XCTAssertEqual(error as? ExecutableBatchInputError, .missingGasLimit)
+        }
+    }
+
+    func testContractInvocationRequiresCanonicalV1Bech32mAddress() throws {
+        let validAddresses = [
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+        ]
+        for address in validAddresses {
+            XCTAssertNoThrow(try TransactionContractInvocation(
+                contractAddress: address,
+                expectedCodeHash: Data(repeating: 0x11, count: 32),
+                entrypoint: "run"
+            ))
+        }
+
+        let invalidAddresses = [
+            "abc",
+            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+        ]
+        for address in invalidAddresses {
+            XCTAssertThrowsError(try TransactionContractInvocation(
+                contractAddress: address,
+                expectedCodeHash: Data(repeating: 0x11, count: 32),
+                entrypoint: "run"
+            )) { error in
+                XCTAssertEqual(error as? ExecutableBatchInputError, .invalidContractAddress)
+            }
+        }
+    }
+
     func testBuildAliasSetupPlanVerifiesAndSignsOneAtomicFrameVector() throws {
         try requireEd25519Encoder()
         let canonicalBody = Data([1, 3, 3, 7, 9])

@@ -5,6 +5,11 @@
 //! the authoritative branch relation shared by production and formal
 //! refinement.
 
+use super::refinement::{
+    ProductionSchedulerTraceProjection,
+    production_scheduler_trace_refines_protected_ownership_kernel,
+};
+
 // Constructor expressions are arguments because the ordinary Rust and Verus
 // instantiations use different result types. Keeping the branch conditions in
 // one macro prevents either side from silently changing timer/FIFO priority.
@@ -65,7 +70,7 @@ impl ScheduleState {
         periodic_timer_due: bool,
         fifo_ready: bool,
     ) -> (ScheduledWork, Self) {
-        schedule_select_body!(
+        let (selected, next) = schedule_select_body!(
             self.fifo_owed,
             timeout_due,
             periodic_timer_due,
@@ -84,7 +89,24 @@ impl ScheduleState {
             ),
             (ScheduledWork::Fifo, Self { fifo_owed: false }),
             (ScheduledWork::Idle, Self { fifo_owed: false }),
-        )
+        );
+        let scheduler_trace = ProductionSchedulerTraceProjection {
+            fifo_owed_before: self.fifo_owed,
+            timeout_due,
+            periodic_timer_due,
+            fifo_ready,
+            selected: match selected {
+                ScheduledWork::Timeout => 1,
+                ScheduledWork::PeriodicTimer => 2,
+                ScheduledWork::Fifo => 3,
+                ScheduledWork::Idle => 0,
+            },
+            fifo_owed_after: next.fifo_owed,
+        };
+        if !production_scheduler_trace_refines_protected_ownership_kernel(scheduler_trace) {
+            panic!("Sumeragi v2 scheduler lost the selected progress owner");
+        }
+        (selected, next)
     }
 }
 

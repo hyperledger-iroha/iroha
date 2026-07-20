@@ -1323,6 +1323,17 @@ enum SumeragiRelayClass {
     Lane,
 }
 
+/// Terminal disposition of one exact daemon relay occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SumeragiRelayTerminalOutcome {
+    /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
+    Delivered,
+    /// Its authenticated reply authority retired before ingress succeeded.
+    Retired,
+    /// Preparation, source release, or downstream admission failed.
+    Failed,
+}
+
 impl SumeragiRelayClass {
     const fn label(self) -> &'static str {
         match self {
@@ -1335,7 +1346,7 @@ impl SumeragiRelayClass {
 struct SumeragiRelayWorkItem {
     work: RelayWorkItem,
     skip_test_control: bool,
-    completion: Option<oneshot::Sender<bool>>,
+    completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 }
 
 impl SumeragiRelayWorkItem {
@@ -1348,12 +1359,221 @@ impl SumeragiRelayWorkItem {
     }
 
     #[cfg(feature = "test-network-message-control")]
-    fn released(work: RelayWorkItem, completion: oneshot::Sender<bool>) -> Self {
+    fn released(
+        work: RelayWorkItem,
+        completion: oneshot::Sender<SumeragiRelayTerminalOutcome>,
+    ) -> Self {
         Self {
             work,
             skip_test_control: true,
             completion: Some(completion),
         }
+    }
+}
+
+trait SumeragiReplyRouteLiveness {
+    fn is_active(&self) -> bool;
+}
+
+impl SumeragiReplyRouteLiveness for iroha_p2p::network::NetworkReplyRoute {
+    fn is_active(&self) -> bool {
+        iroha_p2p::network::NetworkReplyRoute::is_active(self)
+    }
+}
+
+fn sumeragi_reply_route_terminal_if_inactive<R: SumeragiReplyRouteLiveness>(
+    reply_route: &R,
+) -> Option<SumeragiRelayTerminalOutcome> {
+    (!reply_route.is_active()).then_some(SumeragiRelayTerminalOutcome::Retired)
+}
+
+#[cfg(feature = "test-network-message-control")]
+struct SumeragiRelayPreparationParts<R> {
+    peer: Peer,
+    authenticated_via: PeerId,
+    message: iroha_core::NetworkMessage,
+    size_bytes: usize,
+    reply_route: Option<R>,
+}
+
+#[cfg(feature = "test-network-message-control")]
+enum SumeragiRelayPreparationBoundary<R> {
+    Consumed,
+    Prepared(SumeragiRelayPreparationParts<R>),
+    RetiredInactiveReplyRoute,
+    Rejected(SumeragiRelayPreparationBoundaryError),
+}
+
+#[cfg(feature = "test-network-message-control")]
+enum SumeragiRelayPreparationBoundaryError {
+    InvalidPassDisposition,
+    Controller(consensus_message_control::ControlError),
+    MissingReplyRoute,
+}
+
+#[cfg(feature = "test-network-message-control")]
+fn prepare_sumeragi_relay_work_boundary<R: SumeragiReplyRouteLiveness>(
+    controller: Option<&consensus_message_control::Controller<R>>,
+    skip_test_control: bool,
+    parts: SumeragiRelayPreparationParts<R>,
+) -> SumeragiRelayPreparationBoundary<R> {
+    let SumeragiRelayPreparationParts {
+        peer,
+        authenticated_via,
+        message,
+        size_bytes,
+        reply_route,
+    } = parts;
+    let admitted = if !skip_test_control && let Some(controller) = controller {
+        controller.admit_with_reply_route(
+            peer,
+            &authenticated_via,
+            message,
+            size_bytes,
+            reply_route,
+        )
+    } else {
+        Ok((
+            consensus_message_control::Admission::Pass,
+            Some((peer, message, size_bytes, reply_route)),
+        ))
+    };
+    let (peer, message, size_bytes, reply_route) = match admitted {
+        Ok((consensus_message_control::Admission::Consumed, _)) => {
+            return SumeragiRelayPreparationBoundary::Consumed;
+        }
+        Ok((consensus_message_control::Admission::Pass, Some(message))) => message,
+        Ok((consensus_message_control::Admission::Pass, None)) => {
+            return SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::InvalidPassDisposition,
+            );
+        }
+        Err(error) => {
+            return SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::Controller(error),
+            );
+        }
+    };
+    let Some(reply_route_ref) = reply_route.as_ref() else {
+        return SumeragiRelayPreparationBoundary::Rejected(
+            SumeragiRelayPreparationBoundaryError::MissingReplyRoute,
+        );
+    };
+    if !reply_route_ref.is_active() {
+        return SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute;
+    }
+    SumeragiRelayPreparationBoundary::Prepared(SumeragiRelayPreparationParts {
+        peer,
+        authenticated_via,
+        message,
+        size_bytes,
+        reply_route,
+    })
+}
+
+#[cfg(feature = "test-network-message-control")]
+trait AuthenticatedSumeragiRelayWork {
+    fn authenticated_via(&self) -> &PeerId;
+}
+
+#[cfg(feature = "test-network-message-control")]
+impl AuthenticatedSumeragiRelayWork for RelayWorkItem {
+    fn authenticated_via(&self) -> &PeerId {
+        iroha_p2p::peer::message::PeerMessage::authenticated_via(self)
+    }
+}
+
+#[cfg(feature = "test-network-message-control")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeldSumeragiReentryFailure {
+    UnsupportedMessage,
+    MissingReplyRoute,
+    RouteMismatch,
+    AuthenticatedViaMismatch,
+}
+
+#[cfg(feature = "test-network-message-control")]
+impl HeldSumeragiReentryFailure {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::UnsupportedMessage => "unsupported_message",
+            Self::MissingReplyRoute => "missing_reply_route",
+            Self::RouteMismatch => "route_mismatch",
+            Self::AuthenticatedViaMismatch => "authenticated_via_mismatch",
+        }
+    }
+}
+
+#[cfg(feature = "test-network-message-control")]
+enum HeldSumeragiReentry<W> {
+    Ready {
+        sequence: u64,
+        class: SumeragiRelayClass,
+        work: W,
+    },
+    RetireStale {
+        sequence: u64,
+    },
+    Reject {
+        sequence: u64,
+        reason: HeldSumeragiReentryFailure,
+    },
+}
+
+#[cfg(feature = "test-network-message-control")]
+fn rehydrate_held_sumeragi_relay_work<R, W>(
+    held: consensus_message_control::HeldMessage<R>,
+    reattach: impl FnOnce(Peer, iroha_core::NetworkMessage, usize, R) -> Result<W, R>,
+) -> HeldSumeragiReentry<W>
+where
+    R: SumeragiReplyRouteLiveness,
+    W: AuthenticatedSumeragiRelayWork,
+{
+    let consensus_message_control::HeldMessage {
+        sequence,
+        peer,
+        authenticated_via,
+        message,
+        size_bytes,
+        reply_route,
+    } = held;
+    let Some(class) = sumeragi_relay_class(&message) else {
+        return HeldSumeragiReentry::Reject {
+            sequence,
+            reason: HeldSumeragiReentryFailure::UnsupportedMessage,
+        };
+    };
+    let Some(reply_route) = reply_route else {
+        return HeldSumeragiReentry::Reject {
+            sequence,
+            reason: HeldSumeragiReentryFailure::MissingReplyRoute,
+        };
+    };
+    if !reply_route.is_active() {
+        return HeldSumeragiReentry::RetireStale { sequence };
+    }
+    let work = match reattach(peer, message, size_bytes, reply_route) {
+        Ok(work) => work,
+        Err(reply_route) if !reply_route.is_active() => {
+            return HeldSumeragiReentry::RetireStale { sequence };
+        }
+        Err(_) => {
+            return HeldSumeragiReentry::Reject {
+                sequence,
+                reason: HeldSumeragiReentryFailure::RouteMismatch,
+            };
+        }
+    };
+    if work.authenticated_via() != &authenticated_via {
+        return HeldSumeragiReentry::Reject {
+            sequence,
+            reason: HeldSumeragiReentryFailure::AuthenticatedViaMismatch,
+        };
+    }
+    HeldSumeragiReentry::Ready {
+        sequence,
+        class,
+        work,
     }
 }
 
@@ -1375,8 +1595,8 @@ impl SumeragiRelayIngress {
             via: work.work.authenticated_via().clone(),
         };
         let Some(credit) = self.source_credits.try_acquire(&source) else {
-            return SumeragiRelaySendDisposition::DurableReconstruction {
-                reason: SumeragiRelayReconstructionReason::SourceQuota,
+            return SumeragiRelaySendDisposition::ReleaseToDurableSource {
+                reason: SumeragiRelaySourceReleaseReason::SourceQuota,
                 work,
             };
         };
@@ -1385,8 +1605,8 @@ impl SumeragiRelayIngress {
             .retain_authenticated_source_credit(credit)
             .is_err()
         {
-            return SumeragiRelaySendDisposition::DurableReconstruction {
-                reason: SumeragiRelayReconstructionReason::CreditInvariant,
+            return SumeragiRelaySendDisposition::ReleaseToDurableSource {
+                reason: SumeragiRelaySourceReleaseReason::CreditInvariant,
                 work,
             };
         }
@@ -1397,8 +1617,8 @@ impl SumeragiRelayIngress {
         match result {
             Ok(()) => SumeragiRelaySendDisposition::Accepted,
             Err(mpsc::error::TrySendError::Full(work)) => {
-                SumeragiRelaySendDisposition::DurableReconstruction {
-                    reason: SumeragiRelayReconstructionReason::DispatcherCapacity,
+                SumeragiRelaySendDisposition::ReleaseToDurableSource {
+                    reason: SumeragiRelaySourceReleaseReason::DispatcherCapacity,
                     work,
                 }
             }
@@ -1467,15 +1687,15 @@ impl SumeragiRelaySourceCredits {
 
 enum SumeragiRelaySendDisposition {
     Accepted,
-    DurableReconstruction {
-        reason: SumeragiRelayReconstructionReason,
+    ReleaseToDurableSource {
+        reason: SumeragiRelaySourceReleaseReason,
         work: SumeragiRelayWorkItem,
     },
     Closed(SumeragiRelayWorkItem),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SumeragiRelayReconstructionReason {
+enum SumeragiRelaySourceReleaseReason {
     SourceQuota,
     DispatcherCapacity,
     CreditInvariant,
@@ -1483,7 +1703,7 @@ enum SumeragiRelayReconstructionReason {
     RetainedSourceCapacity,
 }
 
-impl SumeragiRelayReconstructionReason {
+impl SumeragiRelaySourceReleaseReason {
     const fn label(self) -> &'static str {
         match self {
             Self::SourceQuota => "source_quota",
@@ -1503,8 +1723,10 @@ enum PreparedSumeragiRelayItem {
 struct PreparedSumeragiRelayWork {
     source: SumeragiRelaySource,
     item: PreparedSumeragiRelayItem,
+    /// Original exact route retained independently of every ingress item variant.
+    reply_route: iroha_p2p::network::NetworkReplyRoute,
     retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-    completion: Option<oneshot::Sender<bool>>,
+    completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     retry_eligible_at: Instant,
 }
 
@@ -1617,17 +1839,17 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
 enum PrepareSumeragiRelayResult {
     Prepared(PreparedSumeragiRelayWork),
     Terminal {
-        delivered: bool,
+        outcome: SumeragiRelayTerminalOutcome,
         retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-        completion: Option<oneshot::Sender<bool>>,
+        completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
 }
 
 enum SumeragiRelayAttempt {
     Terminal {
-        delivered: bool,
+        outcome: SumeragiRelayTerminalOutcome,
         retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-        completion: Option<oneshot::Sender<bool>>,
+        completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
     Retry(PreparedSumeragiRelayWork),
     Fatal {
@@ -1635,7 +1857,7 @@ enum SumeragiRelayAttempt {
         reason: &'static str,
         exact_item: Option<PreparedSumeragiRelayItem>,
         retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-        completion: Option<oneshot::Sender<bool>>,
+        completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
 }
 
@@ -1645,8 +1867,8 @@ const RELAY_HIGH_BURST: usize = 32;
 const SUMERAGI_RELAY_RETRY_CADENCE: Duration = Duration::from_millis(10);
 /// Maximum retry owners one authenticated source may retain in each Sumeragi class.
 const SUMERAGI_RELAY_PER_SOURCE_CAP: usize = 8;
-/// Count of exact inbound copies released only because their durable remote source must retry.
-static SUMERAGI_RELAY_DURABLE_RECONSTRUCTION_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Count of exact inbound copies returned to their durable remote source for retry.
+static SUMERAGI_RELAY_SOURCE_RELEASE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsensusIngressDropReason {
@@ -2405,6 +2627,18 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
     }
 }
 
+fn obsolete_sumeragi_relay_terminal_meta(
+    message: &iroha_core::NetworkMessage,
+) -> Option<(
+    &'static str,
+    Option<u64>,
+    Option<u64>,
+    SumeragiRelayTerminalOutcome,
+)> {
+    NetworkRelayShared::retired_sumeragi_message_meta(message)
+        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
+}
+
 impl NetworkRelayShared {
     fn prepare_sumeragi_relay_work(
         &self,
@@ -2423,45 +2657,108 @@ impl NetworkRelayShared {
         #[cfg(not(feature = "test-network-message-control"))]
         let _ = skip_test_control;
         #[cfg(feature = "test-network-message-control")]
-        let (peer, msg, size_bytes) = if !skip_test_control
-            && let Some(controller) = &self.test_message_control
-        {
-            match controller.admit(peer, &authenticated_via, msg, size_bytes) {
-                Ok((consensus_message_control::Admission::Consumed, _)) => {
-                    return PrepareSumeragiRelayResult::Terminal {
-                        delivered: true,
-                        retention_guard,
-                        completion,
-                    };
-                }
-                Ok((consensus_message_control::Admission::Pass, Some(message))) => message,
-                Ok((consensus_message_control::Admission::Pass, None)) => {
-                    iroha_logger::error!(
-                        "test-network consensus controller returned an invalid pass disposition; rejecting the exact inbound copy"
-                    );
-                    return PrepareSumeragiRelayResult::Terminal {
-                        delivered: false,
-                        retention_guard,
-                        completion,
-                    };
-                }
-                Err(error) => {
-                    iroha_logger::error!(
-                        reason = error.code(),
-                        "test-network consensus controller rejected admission; rejecting the exact inbound copy"
-                    );
-                    return PrepareSumeragiRelayResult::Terminal {
-                        delivered: false,
-                        retention_guard,
-                        completion,
-                    };
-                }
+        let (peer, msg, size_bytes, reply_route) = match prepare_sumeragi_relay_work_boundary(
+            self.test_message_control.as_deref(),
+            skip_test_control,
+            SumeragiRelayPreparationParts {
+                peer,
+                authenticated_via: authenticated_via.clone(),
+                message: msg,
+                size_bytes,
+                reply_route,
+            },
+        ) {
+            SumeragiRelayPreparationBoundary::Consumed => {
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Delivered,
+                    retention_guard,
+                    completion,
+                };
             }
-        } else {
-            (peer, msg, size_bytes)
+            SumeragiRelayPreparationBoundary::Prepared(parts) => (
+                parts.peer,
+                parts.message,
+                parts.size_bytes,
+                parts.reply_route,
+            ),
+            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute => {
+                iroha_logger::debug!(
+                    "retiring Sumeragi occurrence whose authenticated reply tenure ended before retained ingress"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Retired,
+                    retention_guard,
+                    completion,
+                };
+            }
+            SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::InvalidPassDisposition,
+            ) => {
+                iroha_logger::error!(
+                    "test-network consensus controller returned an invalid pass disposition; rejecting the exact inbound copy"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
+                    retention_guard,
+                    completion,
+                };
+            }
+            SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::Controller(error),
+            ) => {
+                iroha_logger::error!(
+                    reason = error.code(),
+                    "test-network consensus controller rejected admission; rejecting the exact inbound copy"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
+                    retention_guard,
+                    completion,
+                };
+            }
+            SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::MissingReplyRoute,
+            ) => {
+                iroha_logger::error!(
+                    "rejecting retained Sumeragi message without authenticated reply authority"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
+                    retention_guard,
+                    completion,
+                };
+            }
         };
 
-        if let Some((kind, height, view)) = Self::retired_sumeragi_message_meta(&msg) {
+        match reply_route.as_ref() {
+            None => {
+                iroha_logger::error!(
+                    %peer,
+                    "rejecting retained Sumeragi message without authenticated reply authority"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
+                    retention_guard,
+                    completion,
+                };
+            }
+            Some(reply_route) if !reply_route.is_active() => {
+                iroha_logger::debug!(
+                    %peer,
+                    "retiring Sumeragi occurrence whose authenticated reply tenure ended before retained ingress"
+                );
+                return PrepareSumeragiRelayResult::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Retired,
+                    retention_guard,
+                    completion,
+                };
+            }
+            Some(_) => {}
+        }
+        let reply_route = reply_route.expect("reply route was checked present above");
+        let original_reply_route = reply_route.clone();
+
+        if let Some((kind, height, view, outcome)) = obsolete_sumeragi_relay_terminal_meta(&msg) {
             iroha_logger::debug!(
                 %peer,
                 ?height,
@@ -2470,14 +2767,14 @@ impl NetworkRelayShared {
                 "rejecting retired Sumeragi message before retained ingress"
             );
             return PrepareSumeragiRelayResult::Terminal {
-                delivered: false,
+                outcome,
                 retention_guard,
                 completion,
             };
         }
         if !self.consensus_ingress_allows(&authenticated_via, &msg, size_bytes) {
             return PrepareSumeragiRelayResult::Terminal {
-                delivered: false,
+                outcome: SumeragiRelayTerminalOutcome::Failed,
                 retention_guard,
                 completion,
             };
@@ -2502,16 +2799,34 @@ impl NetworkRelayShared {
                 } else {
                     SumeragiRelayClass::Lane
                 };
-                (
-                    class,
-                    PreparedSumeragiRelayItem::Block(
-                        InboundBlockMessage::from_transport_with_reply_route(
-                        message,
-                        peer_id.clone(),
-                        authenticated_via.clone(),
-                        reply_route,
-                    )),
-                )
+                let inbound = match InboundBlockMessage::try_from_transport_with_reply_route(
+                    message,
+                    peer_id.clone(),
+                    authenticated_via.clone(),
+                    reply_route,
+                ) {
+                    Ok(inbound) => inbound,
+                    Err(iroha_p2p::network::NetworkReplyRouteError::Inactive) => {
+                        return PrepareSumeragiRelayResult::Terminal {
+                            outcome: SumeragiRelayTerminalOutcome::Retired,
+                            retention_guard,
+                            completion,
+                        };
+                    }
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            %peer,
+                            "authenticated Sumeragi reply capability failed ingress validation"
+                        );
+                        return PrepareSumeragiRelayResult::Terminal {
+                            outcome: SumeragiRelayTerminalOutcome::Failed,
+                            retention_guard,
+                            completion,
+                        };
+                    }
+                };
+                (class, PreparedSumeragiRelayItem::Block(inbound))
             }
             LaneRelay(envelope) => (
                 SumeragiRelayClass::Lane,
@@ -2525,7 +2840,7 @@ impl NetworkRelayShared {
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
                     sender: peer_id.clone(),
-                    reply_route,
+                    reply_route: Some(reply_route),
                     message: *message,
                 }),
             ),
@@ -2533,7 +2848,7 @@ impl NetworkRelayShared {
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::NativeAmx {
                     sender: peer_id.clone(),
-                    reply_route,
+                    reply_route: Some(reply_route),
                     message: *message,
                 }),
             ),
@@ -2543,7 +2858,7 @@ impl NetworkRelayShared {
                     "rejecting decode-only lane-drain vote in retained ingress"
                 );
                 return PrepareSumeragiRelayResult::Terminal {
-                    delivered: false,
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
                     retention_guard,
                     completion,
                 };
@@ -2554,7 +2869,7 @@ impl NetworkRelayShared {
                     "non-Sumeragi message reached the retained Sumeragi dispatcher"
                 );
                 return PrepareSumeragiRelayResult::Terminal {
-                    delivered: false,
+                    outcome: SumeragiRelayTerminalOutcome::Failed,
                     retention_guard,
                     completion,
                 };
@@ -2567,6 +2882,7 @@ impl NetworkRelayShared {
                 via: authenticated_via,
             },
             item,
+            reply_route: original_reply_route,
             retention_guard,
             completion,
             retry_eligible_at: Instant::now(),
@@ -2581,32 +2897,54 @@ async fn attempt_sumeragi_relay_work(
     let PreparedSumeragiRelayWork {
         source,
         item,
+        reply_route,
         retention_guard,
         completion,
         retry_eligible_at: _,
     } = work;
     let class = source.class;
+    if sumeragi_reply_route_terminal_if_inactive(&reply_route).is_some() {
+        return SumeragiRelayAttempt::Terminal {
+            outcome: SumeragiRelayTerminalOutcome::Retired,
+            retention_guard,
+            completion,
+        };
+    }
     let disposition = match item {
         PreparedSumeragiRelayItem::Block(inbound) => {
             let sumeragi = shared.sumeragi.clone();
+            let ingress_reply_route = reply_route.clone();
             match tokio::task::spawn_blocking(move || {
-                sumeragi.try_incoming_block_message_owned(inbound)
+                ingress_reply_route
+                    .is_active()
+                    .then(|| sumeragi.try_incoming_block_message_owned(inbound))
             })
             .await
             {
-                Ok(disposition) => match disposition {
+                Ok(None) => {
+                    return SumeragiRelayAttempt::Terminal {
+                        outcome: SumeragiRelayTerminalOutcome::Retired,
+                        retention_guard,
+                        completion,
+                    };
+                }
+                Ok(Some(disposition)) => match disposition {
                     SumeragiIngressDisposition::Accepted
                     | SumeragiIngressDisposition::Coalesced
                     | SumeragiIngressDisposition::Obsolete => {
                         return SumeragiRelayAttempt::Terminal {
-                            delivered: true,
+                            outcome: SumeragiRelayTerminalOutcome::Delivered,
                             retention_guard,
                             completion,
                         };
                     }
                     SumeragiIngressDisposition::Rejected(_) => {
                         return SumeragiRelayAttempt::Terminal {
-                            delivered: false,
+                            outcome: if reply_route.is_active() {
+                                SumeragiRelayTerminalOutcome::Failed
+                            } else {
+                                SumeragiRelayTerminalOutcome::Retired
+                            },
                             retention_guard,
                             completion,
                         };
@@ -2650,19 +2988,30 @@ async fn attempt_sumeragi_relay_work(
             }
         }
         PreparedSumeragiRelayItem::Lane(message) => {
+            if !reply_route.is_active() {
+                return SumeragiRelayAttempt::Terminal {
+                    outcome: SumeragiRelayTerminalOutcome::Retired,
+                    retention_guard,
+                    completion,
+                };
+            }
             match shared.sumeragi.try_incoming_lane_relay_owned(message) {
                 SumeragiIngressDisposition::Accepted
                 | SumeragiIngressDisposition::Coalesced
                 | SumeragiIngressDisposition::Obsolete => {
                     return SumeragiRelayAttempt::Terminal {
-                        delivered: true,
+                        outcome: SumeragiRelayTerminalOutcome::Delivered,
                         retention_guard,
                         completion,
                     };
                 }
                 SumeragiIngressDisposition::Rejected(_) => {
                     return SumeragiRelayAttempt::Terminal {
-                        delivered: false,
+                        outcome: if reply_route.is_active() {
+                            SumeragiRelayTerminalOutcome::Failed
+                        } else {
+                            SumeragiRelayTerminalOutcome::Retired
+                        },
                         retention_guard,
                         completion,
                     };
@@ -2692,9 +3041,18 @@ async fn attempt_sumeragi_relay_work(
         }
     };
 
+    if sumeragi_reply_route_terminal_if_inactive(&reply_route).is_some() {
+        return SumeragiRelayAttempt::Terminal {
+            outcome: SumeragiRelayTerminalOutcome::Retired,
+            retention_guard,
+            completion,
+        };
+    }
+
     SumeragiRelayAttempt::Retry(PreparedSumeragiRelayWork {
         source,
         item: disposition,
+        reply_route,
         retention_guard,
         completion,
         retry_eligible_at: Instant::now() + SUMERAGI_RELAY_RETRY_CADENCE,
@@ -2739,21 +3097,21 @@ fn try_recv_sumeragi_relay_work(
 }
 
 fn finish_sumeragi_relay_terminal(
-    delivered: bool,
+    outcome: SumeragiRelayTerminalOutcome,
     retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-    completion: Option<oneshot::Sender<bool>>,
+    completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 ) {
     if let Some(completion) = completion {
-        let _ = completion.send(delivered);
+        let _ = completion.send(outcome);
     }
     drop(retention_guard);
 }
 
-fn record_sumeragi_relay_reconstruction(
-    reason: SumeragiRelayReconstructionReason,
+fn record_sumeragi_relay_source_release(
+    reason: SumeragiRelaySourceReleaseReason,
     source: &SumeragiRelaySource,
 ) {
-    let count = SUMERAGI_RELAY_DURABLE_RECONSTRUCTION_TOTAL
+    let count = SUMERAGI_RELAY_SOURCE_RELEASE_TOTAL
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
     if count == 1 || count % 1024 == 0 {
@@ -2762,67 +3120,95 @@ fn record_sumeragi_relay_reconstruction(
             via = %source.via,
             reason = reason.label(),
             count,
-            "bounded Sumeragi relay admission released one exact copy to its durable reconstruction source"
+            "bounded Sumeragi relay admission returned one exact copy to its durable remote source"
         );
     }
 }
 
-fn finish_unadmitted_sumeragi_reconstruction(
+fn finish_unadmitted_sumeragi_source_release(
     class: SumeragiRelayClass,
-    reason: SumeragiRelayReconstructionReason,
+    reason: SumeragiRelaySourceReleaseReason,
     work: SumeragiRelayWorkItem,
 ) {
     let source = SumeragiRelaySource {
         class,
         via: work.work.authenticated_via().clone(),
     };
-    record_sumeragi_relay_reconstruction(reason, &source);
+    record_sumeragi_relay_source_release(reason, &source);
     let SumeragiRelayWorkItem {
         work,
         skip_test_control: _,
         completion,
     } = work;
+    let outcome = if work.reply_route().is_some_and(|route| !route.is_active()) {
+        SumeragiRelayTerminalOutcome::Retired
+    } else {
+        SumeragiRelayTerminalOutcome::Failed
+    };
     if let Some(completion) = completion {
-        let _ = completion.send(false);
+        let _ = completion.send(outcome);
     }
     drop(work);
 }
 
-fn finish_prepared_sumeragi_reconstruction(
-    reason: SumeragiRelayReconstructionReason,
+fn finish_prepared_sumeragi_source_release(
+    reason: SumeragiRelaySourceReleaseReason,
     work: PreparedSumeragiRelayWork,
 ) {
-    record_sumeragi_relay_reconstruction(reason, &work.source);
+    record_sumeragi_relay_source_release(reason, &work.source);
     let PreparedSumeragiRelayWork {
         source: _,
         item,
+        reply_route,
         retention_guard,
         completion,
         retry_eligible_at: _,
     } = work;
+    let outcome = if reply_route.is_active() {
+        SumeragiRelayTerminalOutcome::Failed
+    } else {
+        SumeragiRelayTerminalOutcome::Retired
+    };
     if let Some(completion) = completion {
-        let _ = completion.send(false);
+        let _ = completion.send(outcome);
     }
     drop(item);
+    drop(reply_route);
     drop(retention_guard);
 }
 
-fn retain_or_reconstruct_sumeragi_work(
+fn retain_or_release_sumeragi_work(
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
     work: PreparedSumeragiRelayWork,
 ) {
+    if let Some(outcome) = sumeragi_reply_route_terminal_if_inactive(&work.reply_route) {
+        let PreparedSumeragiRelayWork {
+            item,
+            reply_route,
+            retention_guard,
+            completion,
+            ..
+        } = work;
+        if let Some(completion) = completion {
+            let _ = completion.send(outcome);
+        }
+        drop(item);
+        drop(reply_route);
+        drop(retention_guard);
+        return;
+    }
     let source = work.source.clone();
     if let Err(error) = retained.push(source, work) {
         let (reason, work) = match error {
             FairRetainedPushError::Full(work) => {
-                (SumeragiRelayReconstructionReason::RetainedCapacity, work)
+                (SumeragiRelaySourceReleaseReason::RetainedCapacity, work)
             }
             FairRetainedPushError::SourceFull(work) => (
-                SumeragiRelayReconstructionReason::RetainedSourceCapacity,
+                SumeragiRelaySourceReleaseReason::RetainedSourceCapacity,
                 work,
             ),
         };
-        finish_prepared_sumeragi_reconstruction(reason, work);
+        finish_prepared_sumeragi_source_release(reason, work);
     }
 }
 
@@ -2834,8 +3220,8 @@ fn sumeragi_relay_input_waiting(
 }
 
 #[cfg(test)]
-fn sumeragi_relay_reconstruction_count() -> u64 {
-    SUMERAGI_RELAY_DURABLE_RECONSTRUCTION_TOTAL.load(Ordering::Relaxed)
+fn sumeragi_relay_source_release_count() -> u64 {
+    SUMERAGI_RELAY_SOURCE_RELEASE_TOTAL.load(Ordering::Relaxed)
 }
 
 fn sumeragi_relay_retry_is_eligible(work: &PreparedSumeragiRelayWork, now: Instant) -> bool {
@@ -2849,12 +3235,12 @@ fn sumeragi_relay_retain_retry(
     work: PreparedSumeragiRelayWork,
 ) {
     if retained_was_full && input_waiting {
-        finish_prepared_sumeragi_reconstruction(
-            SumeragiRelayReconstructionReason::RetainedCapacity,
+        finish_prepared_sumeragi_source_release(
+            SumeragiRelaySourceReleaseReason::RetainedCapacity,
             work,
         );
     } else {
-        retain_or_reconstruct_sumeragi_work(retained, work);
+        retain_or_release_sumeragi_work(retained, work);
     }
 }
 
@@ -2884,7 +3270,15 @@ fn sumeragi_relay_class_capacity(class_capacity: usize) -> Option<usize> {
 }
 
 fn sumeragi_relay_closed_fatal(class: SumeragiRelayClass, work: SumeragiRelayWorkItem) -> ! {
-    let _exact_unadmitted_item = work;
+    let SumeragiRelayWorkItem {
+        work: exact_unadmitted_item,
+        skip_test_control: _,
+        completion,
+    } = work;
+    if let Some(completion) = completion {
+        let _ = completion.send(SumeragiRelayTerminalOutcome::Failed);
+    }
+    let _exact_unadmitted_item = exact_unadmitted_item;
     iroha_logger::error!(
         class = class.label(),
         "retained Sumeragi dispatcher closed; failing stop with exact ownership"
@@ -2898,8 +3292,8 @@ fn finish_sumeragi_relay_send_disposition(
 ) {
     match disposition {
         SumeragiRelaySendDisposition::Accepted => {}
-        SumeragiRelaySendDisposition::DurableReconstruction { reason, work } => {
-            finish_unadmitted_sumeragi_reconstruction(class, reason, work);
+        SumeragiRelaySendDisposition::ReleaseToDurableSource { reason, work } => {
+            finish_unadmitted_sumeragi_source_release(class, reason, work);
         }
         SumeragiRelaySendDisposition::Closed(work) => sumeragi_relay_closed_fatal(class, work),
     }
@@ -2935,13 +3329,13 @@ fn spawn_sumeragi_relay_dispatcher(
                 admitted_input = true;
                 match shared.prepare_sumeragi_relay_work(work) {
                     PrepareSumeragiRelayResult::Prepared(work) => {
-                        retain_or_reconstruct_sumeragi_work(&mut retained, work);
+                        retain_or_release_sumeragi_work(&mut retained, work);
                     }
                     PrepareSumeragiRelayResult::Terminal {
-                        delivered,
+                        outcome,
                         retention_guard,
                         completion,
-                    } => finish_sumeragi_relay_terminal(delivered, retention_guard, completion),
+                    } => finish_sumeragi_relay_terminal(outcome, retention_guard, completion),
                 }
             }
 
@@ -2953,10 +3347,10 @@ fn spawn_sumeragi_relay_dispatcher(
                 attempted = true;
                 match attempt_sumeragi_relay_work(&shared, work).await {
                     SumeragiRelayAttempt::Terminal {
-                        delivered,
+                        outcome,
                         retention_guard,
                         completion,
-                    } => finish_sumeragi_relay_terminal(delivered, retention_guard, completion),
+                    } => finish_sumeragi_relay_terminal(outcome, retention_guard, completion),
                     SumeragiRelayAttempt::Retry(work) => {
                         let input_waiting = sumeragi_relay_input_waiting(&v2_rx, &lane_rx);
                         sumeragi_relay_retain_retry(
@@ -2974,7 +3368,7 @@ fn spawn_sumeragi_relay_dispatcher(
                         completion,
                     } => {
                         if let Some(completion) = completion {
-                            let _ = completion.send(false);
+                            let _ = completion.send(SumeragiRelayTerminalOutcome::Failed);
                         }
                         let _retention_guard = retention_guard;
                         iroha_logger::error!(
@@ -3232,22 +3626,75 @@ impl NetworkRelay {
                                 std::process::exit(1);
                             }
                         };
-                        let class = sumeragi_relay_class(&held.message);
-                        let delivered = if let Some(class) = class {
-                            let (completion_tx, completion_rx) = oneshot::channel();
-                            let work = SumeragiRelayWorkItem::released(
-                                RelayWorkItem::new(held.peer, held.message, held.size_bytes),
-                                completion_tx,
-                            );
-                            let disposition = sumeragi_ingress.try_send(class, work);
-                            finish_sumeragi_relay_send_disposition(class, disposition);
-                            completion_rx.await.unwrap_or(false)
-                        } else {
-                            false
+                        let (sequence, class, released) = match rehydrate_held_sumeragi_relay_work(
+                            held,
+                            |peer, message, size_bytes, reply_route| {
+                                let mut released = RelayWorkItem::new(peer, message, size_bytes);
+                                released.reattach_reply_route(reply_route)?;
+                                Ok(released)
+                            },
+                        ) {
+                            HeldSumeragiReentry::Ready {
+                                sequence,
+                                class,
+                                work,
+                            } => (sequence, class, work),
+                            HeldSumeragiReentry::RetireStale { sequence } => {
+                                iroha_logger::debug!(
+                                    sequence,
+                                    "retiring held consensus occurrence whose authenticated connection tenure ended; a later authenticated retransmission remains authoritative"
+                                );
+                                if let Err(error) = controller.complete_release(
+                                    sequence,
+                                    consensus_message_control::ReleaseOutcome::Retired,
+                                ) {
+                                    iroha_logger::error!(
+                                        reason = error.code(),
+                                        "test-network consensus stale-occurrence retirement failed closed"
+                                    );
+                                    std::process::exit(1);
+                                }
+                                continue;
+                            }
+                            HeldSumeragiReentry::Reject { sequence, reason } => {
+                                iroha_logger::error!(
+                                    sequence,
+                                    reason = reason.label(),
+                                    "test-network consensus release rehydration failed closed"
+                                );
+                                if let Err(error) = controller.complete_release(
+                                    sequence,
+                                    consensus_message_control::ReleaseOutcome::Failed,
+                                ) {
+                                    iroha_logger::error!(
+                                        reason = error.code(),
+                                        "test-network consensus release rejection failed closed"
+                                    );
+                                }
+                                std::process::exit(1);
+                            }
                         };
-                        if let Err(error) = controller.complete_release(held.sequence, delivered) {
+                        let (completion_tx, completion_rx) = oneshot::channel();
+                        let work = SumeragiRelayWorkItem::released(released, completion_tx);
+                        let disposition = sumeragi_ingress.try_send(class, work);
+                        finish_sumeragi_relay_send_disposition(class, disposition);
+                        let outcome = completion_rx
+                            .await
+                            .unwrap_or(SumeragiRelayTerminalOutcome::Failed);
+                        let release_outcome = match outcome {
+                            SumeragiRelayTerminalOutcome::Delivered => {
+                                consensus_message_control::ReleaseOutcome::Delivered
+                            }
+                            SumeragiRelayTerminalOutcome::Retired => {
+                                consensus_message_control::ReleaseOutcome::Retired
+                            }
+                            SumeragiRelayTerminalOutcome::Failed => {
+                                consensus_message_control::ReleaseOutcome::Failed
+                            }
+                        };
+                        if let Err(error) = controller.complete_release(sequence, release_outcome) {
                             iroha_logger::error!(
-                                sequence = held.sequence,
+                                sequence,
                                 reason = error.code(),
                                 "test-network consensus release delivery failed closed"
                             );
@@ -4107,8 +4554,314 @@ mod network_relay_tests {
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
         LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        pow_update_payload,
+        SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta, pow_update_payload,
     };
+
+    #[cfg(feature = "test-network-message-control")]
+    #[derive(Clone)]
+    struct TestReplyRoute {
+        semantic_target: PeerId,
+        authenticated_via: PeerId,
+        active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        tenure: std::sync::Arc<()>,
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    impl TestReplyRoute {
+        fn new(semantic_target: PeerId, authenticated_via: PeerId) -> Self {
+            Self {
+                semantic_target,
+                authenticated_via,
+                active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                tenure: std::sync::Arc::new(()),
+            }
+        }
+
+        fn same_tenure(&self, other: &Self) -> bool {
+            std::sync::Arc::ptr_eq(&self.tenure, &other.tenure)
+        }
+
+        fn cancel(&self) {
+            self.active
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    impl super::SumeragiReplyRouteLiveness for TestReplyRoute {
+        fn is_active(&self) -> bool {
+            self.active.load(std::sync::atomic::Ordering::Acquire)
+        }
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    struct TestRelayWork {
+        peer: Peer,
+        authenticated_via: PeerId,
+        message: iroha_core::NetworkMessage,
+        size_bytes: usize,
+        reply_route: TestReplyRoute,
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    impl super::AuthenticatedSumeragiRelayWork for TestRelayWork {
+        fn authenticated_via(&self) -> &PeerId {
+            &self.authenticated_via
+        }
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    fn reattach_test_reply_route(
+        peer: Peer,
+        message: iroha_core::NetworkMessage,
+        size_bytes: usize,
+        reply_route: TestReplyRoute,
+    ) -> Result<TestRelayWork, TestReplyRoute> {
+        if !super::SumeragiReplyRouteLiveness::is_active(&reply_route)
+            || &reply_route.semantic_target != peer.id()
+        {
+            return Err(reply_route);
+        }
+        Ok(TestRelayWork {
+            peer,
+            authenticated_via: reply_route.authenticated_via.clone(),
+            message,
+            size_bytes,
+            reply_route,
+        })
+    }
+
+    #[cfg(feature = "test-network-message-control")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_control_hold_release_preserves_live_route_and_retires_canceled_reentry() {
+        use super::{
+            HeldSumeragiReentry, SumeragiRelayPreparationBoundary,
+            SumeragiRelayPreparationBoundaryError, SumeragiRelayPreparationParts,
+            SumeragiRelayTerminalOutcome, prepare_sumeragi_relay_work_boundary,
+            rehydrate_held_sumeragi_relay_work, sumeragi_reply_route_terminal_if_inactive,
+        };
+
+        let (_control_dir, controller) =
+            super::consensus_message_control::Controller::<TestReplyRoute>::for_tests();
+        let semantic_peer = sample_peer();
+        let authenticated_via = sample_peer().id().clone();
+        assert_ne!(semantic_peer.id(), &authenticated_via);
+
+        controller.drain_subsequent_messages_for_tests();
+        let live_route = TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
+        let expected_live_route = live_route.clone();
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: semantic_peer.clone(),
+                    authenticated_via: authenticated_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 101,
+                    reply_route: Some(live_route),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Consumed
+        ));
+        let held = controller
+            .next_release()
+            .expect("take live held release")
+            .expect("live occurrence must be queued for release");
+        assert_eq!(held.peer, semantic_peer);
+        assert_eq!(held.authenticated_via, authenticated_via);
+        assert!(
+            held.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_tenure(&expected_live_route))
+        );
+        let (live_sequence, live_work) =
+            match rehydrate_held_sumeragi_relay_work(held, reattach_test_reply_route) {
+                HeldSumeragiReentry::Ready { sequence, work, .. } => (sequence, work),
+                HeldSumeragiReentry::RetireStale { .. } => panic!("live route was retired"),
+                HeldSumeragiReentry::Reject { reason, .. } => {
+                    panic!("live route was rejected: {reason:?}")
+                }
+            };
+        assert_eq!(live_work.authenticated_via, authenticated_via);
+        assert!(live_work.reply_route.same_tenure(&expected_live_route));
+        let live_reentry = prepare_sumeragi_relay_work_boundary(
+            Some(&controller),
+            true,
+            SumeragiRelayPreparationParts {
+                peer: live_work.peer,
+                authenticated_via: live_work.authenticated_via,
+                message: live_work.message,
+                size_bytes: live_work.size_bytes,
+                reply_route: Some(live_work.reply_route),
+            },
+        );
+        let live_prepared = match live_reentry {
+            SumeragiRelayPreparationBoundary::Prepared(parts) => parts,
+            SumeragiRelayPreparationBoundary::Consumed => panic!("release was held twice"),
+            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute => {
+                panic!("live release was retired during re-entry")
+            }
+            SumeragiRelayPreparationBoundary::Rejected(_) => {
+                panic!("live release was rejected during re-entry")
+            }
+        };
+        assert_eq!(live_prepared.authenticated_via, authenticated_via);
+        assert!(
+            live_prepared
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_tenure(&expected_live_route))
+        );
+        controller
+            .complete_release(
+                live_sequence,
+                super::consensus_message_control::ReleaseOutcome::Delivered,
+            )
+            .expect("complete live held release");
+
+        controller.drain_subsequent_messages_for_tests();
+        let held_cancel_route =
+            TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
+        let cancel_while_held = held_cancel_route.clone();
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: semantic_peer.clone(),
+                    authenticated_via: authenticated_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 102,
+                    reply_route: Some(held_cancel_route),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Consumed
+        ));
+        cancel_while_held.cancel();
+        let held = controller
+            .next_release()
+            .expect("take canceled held release")
+            .expect("canceled occurrence remains explicitly terminal");
+        let held_sequence = held.sequence;
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(held, reattach_test_reply_route),
+            HeldSumeragiReentry::RetireStale { sequence } if sequence == held_sequence
+        ));
+        controller
+            .complete_release(
+                held_sequence,
+                super::consensus_message_control::ReleaseOutcome::Retired,
+            )
+            .expect("retire occurrence canceled while held");
+
+        controller.drain_subsequent_messages_for_tests();
+        let cancelable_route =
+            TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: semantic_peer.clone(),
+                    authenticated_via: authenticated_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 103,
+                    reply_route: Some(cancelable_route),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Consumed
+        ));
+        let held = controller
+            .next_release()
+            .expect("take cancelable held release")
+            .expect("cancelable occurrence must be queued for release");
+        let (canceled_sequence, canceled_work) =
+            match rehydrate_held_sumeragi_relay_work(held, reattach_test_reply_route) {
+                HeldSumeragiReentry::Ready { sequence, work, .. } => (sequence, work),
+                HeldSumeragiReentry::RetireStale { .. } => {
+                    panic!("route was canceled before the intended race boundary")
+                }
+                HeldSumeragiReentry::Reject { reason, .. } => {
+                    panic!("cancelable route was rejected before cancellation: {reason:?}")
+                }
+            };
+        canceled_work.reply_route.cancel();
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                true,
+                SumeragiRelayPreparationParts {
+                    peer: canceled_work.peer,
+                    authenticated_via: canceled_work.authenticated_via,
+                    message: canceled_work.message,
+                    size_bytes: canceled_work.size_bytes,
+                    reply_route: Some(canceled_work.reply_route),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute
+        ));
+        controller
+            .complete_release(
+                canceled_sequence,
+                super::consensus_message_control::ReleaseOutcome::Retired,
+            )
+            .expect("retire canceled held occurrence");
+        assert!(
+            controller
+                .next_release()
+                .expect("inspect post-retirement queue")
+                .is_none()
+        );
+
+        let retry_route =
+            TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
+        assert_eq!(
+            sumeragi_reply_route_terminal_if_inactive(&retry_route),
+            None,
+            "the live route may own a retry"
+        );
+        retry_route.cancel();
+        assert_eq!(
+            sumeragi_reply_route_terminal_if_inactive(&retry_route),
+            Some(SumeragiRelayTerminalOutcome::Retired),
+            "cancellation before retry requeue is terminal retirement"
+        );
+
+        let fresh_route =
+            TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: semantic_peer,
+                    authenticated_via,
+                    message: v2_vote_msg(),
+                    size_bytes: 104,
+                    reply_route: Some(fresh_route),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Prepared(_)
+        ));
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                true,
+                SumeragiRelayPreparationParts {
+                    peer: sample_peer(),
+                    authenticated_via: sample_peer().id().clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 105,
+                    reply_route: None,
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Rejected(
+                SumeragiRelayPreparationBoundaryError::MissingReplyRoute
+            )
+        ));
+    }
 
     #[test]
     fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
@@ -4142,11 +4895,16 @@ mod network_relay_tests {
         );
         assert!(v2_payload_chunk_block_message().requires_blocking_ingress());
         assert!(sumeragi_v2_commit_certificate_request().requires_blocking_ingress());
+    }
 
-        assert!(
-            NetworkRelayShared::retired_sumeragi_message_meta(&retired_vrf_commit_msg()).is_some()
+    #[test]
+    fn obsolete_sumeragi_relay_message_completes_as_delivered() {
+        assert_eq!(
+            obsolete_sumeragi_relay_terminal_meta(&retired_vrf_commit_msg())
+                .map(|(_, _, _, outcome)| outcome),
+            Some(SumeragiRelayTerminalOutcome::Delivered)
         );
-        assert!(NetworkRelayShared::retired_sumeragi_message_meta(&v2_vote_msg()).is_none());
+        assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
     }
 
     #[test]
@@ -4235,7 +4993,8 @@ mod network_relay_tests {
 
     #[test]
     fn pow_update_payload_skips_when_pow_disabled() {
-        let pow = SoranetPow::default();
+        let mut pow = SoranetPow::default();
+        pow.required = false;
         assert!(pow_update_payload(&pow, 1).is_none());
     }
 
@@ -9380,7 +10139,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "5434666dee1a353467a927189b27422a9c85366a14134ba54b3be83a1beed13d";
+        "db08a1a2a8290906473a4429663d5144a6d6872fbe823d2e7c383c38e2fdcd69";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -11236,6 +11995,11 @@ fn verify_genesis_metadata(
                     "genesis transaction payload contains proved IVM bytecode; expected instruction batches",
                 ));
             }
+            Executable::Batch(_) => {
+                return Err(Report::new(MainError::Config).attach(
+                    "genesis transaction payload contains a mixed executable batch; expected instruction batches",
+                ));
+            }
         }
     }
 
@@ -11870,7 +12634,7 @@ mod tests {
         #[test]
         fn bulk_scale_factor_scales_for_faster_block_time() {
             let scale = ConsensusIngressLimiter::bulk_scale_factor(Duration::from_millis(50));
-            assert_eq!(scale, 2);
+            assert_eq!(scale, 20);
         }
 
         #[test]
@@ -12014,7 +12778,8 @@ mod tests {
 
             for seed in 0..u64::try_from(source_capacity).expect("source capacity fits u64") {
                 let mut message = RelayWorkItem::new(via.clone(), v2_vote_msg(), 1);
-                let key = KeyPair::from_seed(seed.to_le_bytes().repeat(4), Algorithm::Ed25519);
+                let key =
+                    KeyPair::from_seed((seed + 1).to_le_bytes().repeat(4), Algorithm::Ed25519);
                 message.peer = Peer::new(
                     "127.0.0.1:1".parse().expect("semantic origin address"),
                     key.public_key().clone(),
@@ -12025,13 +12790,14 @@ mod tests {
                 ));
             }
 
-            let rejected_before = sumeragi_relay_reconstruction_count();
+            let rejected_before = sumeragi_relay_source_release_count();
             let mut historical_trigger_rejected = false;
             for seed in u64::try_from(source_capacity).expect("source capacity fits u64")
                 ..ADVERSARIAL_ORIGINS
             {
                 let mut message = RelayWorkItem::new(via.clone(), v2_vote_msg(), 1);
-                let key = KeyPair::from_seed(seed.to_le_bytes().repeat(4), Algorithm::Ed25519);
+                let key =
+                    KeyPair::from_seed((seed + 1).to_le_bytes().repeat(4), Algorithm::Ed25519);
                 message.peer = Peer::new(
                     "127.0.0.1:1".parse().expect("semantic origin address"),
                     key.public_key().clone(),
@@ -12040,8 +12806,8 @@ mod tests {
                     ingress.try_send(SumeragiRelayClass::V2, SumeragiRelayWorkItem::live(message));
                 assert!(matches!(
                     &disposition,
-                    SumeragiRelaySendDisposition::DurableReconstruction {
-                        reason: SumeragiRelayReconstructionReason::SourceQuota,
+                    SumeragiRelaySendDisposition::ReleaseToDurableSource {
+                        reason: SumeragiRelaySourceReleaseReason::SourceQuota,
                         ..
                     }
                 ));
@@ -12055,12 +12821,12 @@ mod tests {
                 "the historical seventeenth-origin pressure point must reject only that copy"
             );
             assert!(
-                sumeragi_relay_reconstruction_count()
+                sumeragi_relay_source_release_count()
                     >= rejected_before
                         + ADVERSARIAL_ORIGINS.saturating_sub(
                             u64::try_from(source_capacity).expect("source capacity fits u64")
                         ),
-                "every over-cap copy must record durable reconstruction"
+                "every over-cap copy must record its exact durable-source release"
             );
             assert_eq!(
                 ingress.source_credits.live_sources(),
@@ -12164,7 +12930,7 @@ mod tests {
             assert_eq!(first.work.payload_bytes, 11);
             assert!(
                 matches!(v2_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
-                "a saturated dispatcher releases only the rejected copy to durable reconstruction"
+                "a saturated dispatcher returns only the rejected copy to its durable source"
             );
 
             drop((high_tx, low_tx));
@@ -12550,8 +13316,11 @@ mod tests {
     }
 
     mod manifest_crypto_checks {
+        use std::sync::Arc;
+
         use super::*;
         use iroha_config::base::toml::TomlSource;
+        use iroha_core::{kura::Kura, query::store::LiveQueryStore};
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 
         fn sample_manifest() -> RawGenesisTransaction {
@@ -12595,6 +13364,101 @@ mod tests {
                 .expect("sample config should be readable")
                 .parse()
                 .expect("sample config should parse")
+        }
+
+        fn genesis_staging_state_for_test(
+            config: &Config,
+            genesis: &GenesisBlock,
+        ) -> (State, Arc<Kura>) {
+            let authority = AccountId::new(config.genesis.public_key.clone());
+            let mut world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
+                [Account::new(authority.clone()).build(&authority)],
+                [],
+            );
+            iroha_core::sns::seed_genesis_alias_bootstrap(
+                &mut world,
+                &genesis.0,
+                &config.nexus.dataspace_catalog,
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let mut state = State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                config.common.chain.clone(),
+            );
+            state.set_pipeline(config.pipeline.clone());
+            state
+                .set_nexus(config.nexus.clone())
+                .expect("test Nexus config must be valid");
+            state.set_crypto(config.crypto.clone());
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
+            (state, kura)
+        }
+
+        fn staged_context_hash_for_test(
+            genesis: &RawGenesisTransaction,
+            genesis_authority: &KeyPair,
+            config: &Config,
+        ) -> Hash {
+            let provisional = genesis
+                .clone()
+                .with_consensus_meta()
+                .build_and_sign(genesis_authority)
+                .expect("sign provisional genesis fixture");
+            let authority = AccountId::new(genesis_authority.public_key().clone());
+            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
+                .expect("provisional fixture voting roster");
+            let topology = Topology::new(voters);
+            let (mode, _) =
+                signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
+            let (state, _kura) = genesis_staging_state_for_test(config, &provisional);
+            let mut voting_block = None;
+            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+                provisional.0,
+                &topology,
+                &config.common.chain,
+                &authority,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                mode,
+            )
+            .unpack(|_| {})
+            .unwrap_or_else(|(block, error)| {
+                let transaction_errors = (0..block.external_transactions().count())
+                    .filter_map(|index| {
+                        block
+                            .error(index)
+                            .map(|reason| format!("transaction[{index}]: {reason:?}"))
+                    })
+                    .collect::<Vec<_>>();
+                panic!(
+                    "provisional genesis fixture must stage before context binding: {error}; {}",
+                    transaction_errors.join("; ")
+                );
+            });
+            iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged)
+        }
+
+        fn bind_staged_context_for_test(
+            genesis: RawGenesisTransaction,
+            genesis_authority: &KeyPair,
+            config: &Config,
+        ) -> GenesisBlock {
+            let hash = staged_context_hash_for_test(&genesis, genesis_authority, config);
+            let mut parameters = genesis.sumeragi_v2_context_parameters();
+            parameters.nexus_amx_context_hash = hash.into();
+            genesis
+                .with_sumeragi_v2_context_parameters(parameters)
+                .with_consensus_meta()
+                .build_and_sign(genesis_authority)
+                .expect("sign context-bound genesis fixture")
         }
 
         #[test]
@@ -12766,6 +13630,11 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
 
             let mut crypto = iroha_config::parameters::actual::Crypto::default();
             if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
@@ -12801,18 +13670,20 @@ mod tests {
             )
             .unpack(|_| {});
 
-            assert!(
-                result.is_ok(),
-                "genesis validation should accept BLS controllers when crypto config allows it"
-            );
+            if let Err((block, error)) = result {
+                let results = block
+                    .results()
+                    .map(|result| format!("{result:?}"))
+                    .collect::<Vec<_>>();
+                panic!(
+                    "genesis validation should accept BLS controllers when crypto config allows \
+                     it: {error:?}; transaction results: {results:?}"
+                );
+            }
         }
 
         #[test]
         fn fresh_v2_genesis_staging_does_not_commit_state_or_kura() {
-            use std::sync::Arc;
-
-            use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
-
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
 
@@ -12839,38 +13710,23 @@ mod tests {
                     GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
                 })
                 .collect::<Vec<_>>();
-            let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+            let raw_genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
                 .set_topology(topology)
-                .build_and_sign(&genesis_authority)
-                .expect("signed genesis");
+                .build_raw();
 
             let authority_id = AccountId::new(genesis_authority.public_key().clone());
-            let world = World::with(
-                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority_id)],
-                [Account::new(authority_id.clone()).build(&authority_id)],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let mut state = State::new_with_chain_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            );
-            state.set_pipeline(iroha_config::parameters::actual::Pipeline::default());
-            state
-                .set_nexus(iroha_config::parameters::actual::Nexus::default())
-                .expect("default Nexus config");
-            let nexus = state.nexus_snapshot();
-            let lane_manifests = Arc::new(
-                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-            );
-            state.install_lane_manifests(&lane_manifests);
-            let mut crypto = iroha_config::parameters::actual::Crypto::default();
-            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
-                crypto.allowed_signing.push(Algorithm::BlsNormal);
+            let mut config = sample_config();
+            config.common.chain = chain_id.clone();
+            config.genesis.public_key = genesis_authority.public_key().clone();
+            if !config
+                .crypto
+                .allowed_signing
+                .contains(&Algorithm::BlsNormal)
+            {
+                config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
-            state.set_crypto(crypto);
+            let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
+            let (state, _kura) = genesis_staging_state_for_test(&config, &genesis);
 
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
                 .expect("signed voting roster");
@@ -12945,17 +13801,9 @@ mod tests {
                     GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
                 })
                 .collect();
-            let mut builder =
-                GenesisBuilder::new_without_executor(chain_id.clone(), ".").set_topology(topology);
-            for instruction in extra_instructions {
-                builder = builder.append_instruction(instruction);
-            }
-            let genesis = builder
-                .build_and_sign(&genesis_authority)
-                .expect("signed genesis fixture");
             let authority = AccountId::new(genesis_authority.public_key().clone());
 
-            config.common.chain = chain_id;
+            config.common.chain = chain_id.clone();
             config.genesis.public_key = genesis_authority.public_key().clone();
             if !config
                 .crypto
@@ -12964,6 +13812,23 @@ mod tests {
             {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
+            let base_genesis =
+                GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology);
+            let base_raw = base_genesis.build_raw();
+            let context_hash = staged_context_hash_for_test(&base_raw, &genesis_authority, &config);
+            let mut parameters = base_raw.sumeragi_v2_context_parameters();
+            parameters.nexus_amx_context_hash = context_hash.into();
+            let mut builder = base_raw
+                .into_builder()
+                .with_sumeragi_v2_context_parameters(parameters);
+            // These fixtures add ordinary world-state instructions only; they
+            // deliberately do not alter the signed Nexus/AMX projection.
+            for instruction in extra_instructions {
+                builder = builder.append_instruction(instruction);
+            }
+            let genesis = builder
+                .build_and_sign(&genesis_authority)
+                .expect("signed genesis fixture");
             let (mode, parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
@@ -13955,8 +14820,7 @@ mod tests {
                 "exceeds the deterministic encrypted P2P runtime limit of 2147483643 bytes"
             );
 
-            let encrypted_cap =
-                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get();
+            let encrypted_cap = iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get();
             let plaintext_ceiling = iroha_p2p::frame_plaintext_cap(encrypted_cap);
             let (topic_config, _topic_dir, _topic_config_path) =
                 load_config_with_overrides(|table, _genesis_key| {
@@ -13973,10 +14837,7 @@ mod tests {
                 "network.max_frame_bytes_consensus ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",
                 plaintext_ceiling + 1
             );
-            assert_contains!(
-                format!("{check_report:#}"),
-                &expected
-            );
+            assert_contains!(format!("{check_report:#}"), &expected);
 
             let runtime_report = validate_config(&topic_config)
                 .expect_err("runtime preflight must reject the same invalid topic cap");

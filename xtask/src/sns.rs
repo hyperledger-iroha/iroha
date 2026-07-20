@@ -18,170 +18,11 @@ const DEFAULT_SUPPORT_TARGET: f64 = 0.95;
 const SUPPORT_WARNING_DELTA: f64 = 0.05;
 const DEFAULT_DISPUTE_TARGET_HOURS: f64 = 168.0; // 7 days
 const DISPUTE_WARNING_MULTIPLIER: f64 = 1.5;
-const MAX_BASIS_POINTS: u32 = 10_000;
-const DEFAULT_SNS_SUFFIXES: &[&str] = &[".sora", ".nexus", ".dao"];
 const MONITOR_DEADLINE_DAYS: u32 = 5;
 const REPLACEMENT_DEADLINE_DAYS: u32 = 14;
 const ADVISORY_ACK_DAYS: i64 = 2;
 const STEWARD_PLAYBOOK_PATH: &str = "docs/source/sns/steward_replacement_playbook.md";
 const GOVERNANCE_PLAYBOOK_PATH: &str = "docs/source/sns/governance_playbook.md";
-
-#[derive(Clone)]
-pub struct CatalogVerifyOptions {
-    pub inputs: Vec<PathBuf>,
-    pub allow_missing_checksum: bool,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct SuffixCatalogSnapshot {
-    version: u32,
-    generated_at: String,
-    generated_by: Option<String>,
-    suffixes: Vec<SuffixCatalogEntry>,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct SuffixCatalogEntry {
-    suffix: String,
-    suffix_id: u16,
-    status: String,
-    steward_account: String,
-    fund_splitter_account: String,
-    payment_asset_id: String,
-    referral_cap_bps: u32,
-    min_term_years: u32,
-    max_term_years: u32,
-    grace_period_days: u32,
-    redemption_period_days: u32,
-    policy_version: u32,
-    reserved_labels: Vec<ReservedLabel>,
-    pricing: Vec<PricingTier>,
-    fee_split: FeeSplit,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct ReservedLabel {
-    label: String,
-    assigned_to: Option<String>,
-    release_at_ms: Option<u64>,
-    note: Option<String>,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct PricingTier {
-    tier_id: u32,
-    label_regex: String,
-    base_price: AssetAmount,
-    auction_kind: String,
-    dutch_floor: Option<AssetAmount>,
-    min_duration_years: u32,
-    max_duration_years: u32,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct AssetAmount {
-    asset_id: String,
-    amount: i64,
-}
-
-#[derive(Debug, JsonDeserialize, Clone)]
-struct FeeSplit {
-    treasury_bps: u32,
-    steward_bps: u32,
-    referral_max_bps: u32,
-    escrow_bps: u32,
-}
-
-pub fn verify_catalog(opts: CatalogVerifyOptions) -> Result<(), Box<dyn Error>> {
-    let CatalogVerifyOptions {
-        inputs,
-        allow_missing_checksum,
-    } = opts;
-    let mut targets = if inputs.is_empty() {
-        discover_default_catalogs()?
-    } else {
-        inputs
-    };
-    if targets.is_empty() {
-        return Err(
-            "sns-catalog-verify found no catalog snapshots (pass --input to specify one)".into(),
-        );
-    }
-    targets.sort();
-    let require_checksum = !allow_missing_checksum;
-    for path in targets {
-        verify_single_catalog(&path, require_checksum)?;
-    }
-    Ok(())
-}
-
-fn discover_default_catalogs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    let root = workspace_root().join("docs/examples/sns");
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut matches = Vec::new();
-    for entry in
-        fs::read_dir(&root).map_err(|err| format!("failed to read {}: {err}", root.display()))?
-    {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("suffix_catalog_"))
-        {
-            matches.push(path);
-        }
-    }
-    matches.sort();
-    Ok(matches)
-}
-
-fn verify_single_catalog(path: &Path, require_checksum: bool) -> Result<(), Box<dyn Error>> {
-    let bytes = fs::read(path)
-        .map_err(|err| format!("failed to read catalog {}: {err}", path.display()))?;
-    let snapshot: SuffixCatalogSnapshot = json::from_slice(&bytes)
-        .map_err(|err| format!("failed to parse catalog {} as JSON: {err}", path.display()))?;
-    let relative = relative_catalog_path(path)?;
-    let mut errors = validate_catalog_snapshot(&snapshot, &relative);
-    let digest = sha256_hex(&bytes);
-
-    if require_checksum {
-        let checksum_path = path.with_extension("sha256");
-        let expected = read_expected_digest(&checksum_path)?;
-        if !expected.eq_ignore_ascii_case(&digest) {
-            errors.push(format!(
-                "checksum mismatch: expected {expected} but computed {digest}"
-            ));
-        }
-    }
-
-    if errors.is_empty() {
-        println!(
-            "sns catalog {} OK (entries={}, sha256={})",
-            relative,
-            snapshot.suffixes.len(),
-            digest
-        );
-        Ok(())
-    } else {
-        let mut message = format!("sns catalog {} failed validation:\n", relative);
-        for error in errors {
-            message.push_str("  - ");
-            message.push_str(&error);
-            message.push('\n');
-        }
-        Err(message.into())
-    }
-}
 
 #[cfg(test)]
 mod portal_stub_tests {
@@ -197,7 +38,7 @@ mod portal_stub_tests {
         let output = dir.path().join("eu-dsa-2026-10.md");
         write_portal_stub(PortalStubOptions {
             cycle: "2026-10".into(),
-            suffixes: vec![".sora".into(), "nexus".into()],
+            suffixes: vec![".sora".into(), ".nexus".into()],
             output: output.clone(),
             overwrite: false,
         })
@@ -208,16 +49,19 @@ mod portal_stub_tests {
         assert!(body.contains("docs/source/sns/regulatory/eu-dsa/2026-10.md"));
         assert!(body.contains("sns-annex:sora-2026-10:start"));
         assert!(body.contains("sns-annex:nexus-2026-10:start"));
+        assert!(
+            body.contains("scripts/add_sns_annex_cycle.py 2026-10 --suffix .sora --suffix .nexus")
+        );
     }
 
     #[test]
-    fn portal_stub_requires_force_and_uses_default_suffixes() {
+    fn portal_stub_requires_force_for_explicit_suffixes() {
         let dir = tempdir().expect("tempdir");
         let output = dir.path().join("eu-dsa-2026-11.md");
         fs::write(&output, "existing").expect("write existing");
         let err = write_portal_stub(PortalStubOptions {
             cycle: "2026-11".into(),
-            suffixes: Vec::new(),
+            suffixes: vec![".dao".into()],
             output: output.clone(),
             overwrite: false,
         })
@@ -225,13 +69,54 @@ mod portal_stub_tests {
         assert!(err.to_string().contains("already exists"));
         write_portal_stub(PortalStubOptions {
             cycle: "2026-11".into(),
-            suffixes: Vec::new(),
+            suffixes: vec![".dao".into()],
             output: output.clone(),
             overwrite: true,
         })
         .expect("overwrite portal stub");
         let body = fs::read_to_string(&output).expect("read overwritten");
         assert!(body.contains("sns-annex:dao-2026-11:start"));
+    }
+
+    #[test]
+    fn portal_stub_rejects_missing_suffixes() {
+        let dir = tempdir().expect("tempdir");
+        let output = dir.path().join("eu-dsa-2026-11.md");
+        let err = write_portal_stub(PortalStubOptions {
+            cycle: "2026-11".into(),
+            suffixes: Vec::new(),
+            output,
+            overwrite: false,
+        })
+        .expect_err("missing explicit suffixes must fail");
+        assert!(
+            err.to_string()
+                .contains("requires at least one --suffix <.suffix>")
+        );
+    }
+
+    #[test]
+    fn portal_stub_rejects_noncanonical_or_duplicate_suffixes() {
+        let dir = tempdir().expect("tempdir");
+        for (index, suffixes) in [
+            vec!["nexus".into()],
+            vec!["../escape".into()],
+            vec![".UPPER".into()],
+            vec![" .sora".into()],
+            vec![".sora".into(), ".sora".into()],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let error = write_portal_stub(PortalStubOptions {
+                cycle: "2026-11".into(),
+                suffixes,
+                output: dir.path().join(format!("invalid-{index}.md")),
+                overwrite: false,
+            })
+            .expect_err("unsafe or duplicate suffix must fail closed");
+            assert!(error.to_string().contains("suffix"));
+        }
     }
 
     #[test]
@@ -298,386 +183,6 @@ dashboard_export:
             "annex block should mark missing generated_at as unavailable"
         );
     }
-}
-
-fn relative_catalog_path(path: &Path) -> Result<String, Box<dyn Error>> {
-    let root = workspace_root();
-    let relative = path.strip_prefix(&root).unwrap_or(path);
-    Ok(relative
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/"))
-}
-
-fn read_expected_digest(path: &Path) -> Result<String, Box<dyn Error>> {
-    let body = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read checksum {}: {err}", path.display()))?;
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let digest = trimmed
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| format!("{}: invalid checksum format", path.display()))?;
-        if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Err(format!(
-                "{}: checksum `{digest}` must contain 64 hexadecimal characters",
-                path.display()
-            )
-            .into());
-        }
-        return Ok(digest.to_ascii_lowercase());
-    }
-    Err(format!("{}: checksum file is empty", path.display()).into())
-}
-
-fn validate_catalog_snapshot(snapshot: &SuffixCatalogSnapshot, relative_path: &str) -> Vec<String> {
-    let mut errors = Vec::new();
-    if snapshot.version == 0 {
-        errors.push("catalog version must be >= 1".to_string());
-    }
-    if snapshot.suffixes.is_empty() {
-        errors.push("catalog must include at least one suffix entry".to_string());
-    }
-    if let Err(err) = OffsetDateTime::parse(&snapshot.generated_at, &Rfc3339) {
-        errors.push(format!(
-            "generated_at `{}` must be RFC3339: {err}",
-            snapshot.generated_at
-        ));
-    }
-    match snapshot.generated_by.as_deref() {
-        Some(value) => {
-            if value != relative_path {
-                errors.push(format!(
-                    "generated_by `{value}` must match relative path `{relative_path}`"
-                ));
-            }
-        }
-        None => errors.push("generated_by field is required".to_string()),
-    }
-
-    let mut seen_suffixes = HashSet::new();
-    let mut seen_ids = HashSet::new();
-    let mut last_id: Option<u16> = None;
-    for entry in &snapshot.suffixes {
-        if entry.suffix_id == 0 {
-            errors.push(format!(
-                "suffix `{}` uses id 0x0000 which is reserved",
-                entry.suffix
-            ));
-        }
-        if !seen_suffixes.insert(entry.suffix.clone()) {
-            errors.push(format!("suffix `{}` appears multiple times", entry.suffix));
-        }
-        if !seen_ids.insert(entry.suffix_id) {
-            errors.push(format!(
-                "suffix id 0x{:04X} appears multiple times",
-                entry.suffix_id
-            ));
-        }
-        if let Some(prev) = last_id.filter(|&prev| entry.suffix_id <= prev) {
-            errors.push(format!(
-                "suffix ids must be strictly increasing (0x{:04X} after 0x{:04X})",
-                entry.suffix_id, prev
-            ));
-        }
-        last_id = Some(entry.suffix_id);
-        errors.extend(validate_suffix_entry(entry));
-    }
-    errors
-}
-
-fn validate_suffix_entry(entry: &SuffixCatalogEntry) -> Vec<String> {
-    let mut errors = Vec::new();
-    let prefix = format!(
-        "suffix {} (id=0x{:04X}, policy v{})",
-        entry.suffix, entry.suffix_id, entry.policy_version
-    );
-    if !is_valid_suffix_literal(&entry.suffix) {
-        errors.push(format!(
-            "{prefix}: suffix must start with `.` and use lowercase alphanumeric characters"
-        ));
-    }
-    match entry.status.as_str() {
-        "active" | "paused" | "revoked" => {}
-        other => errors.push(format!(
-            "{prefix}: status `{other}` must be active, paused, or revoked"
-        )),
-    }
-    if entry.min_term_years == 0 {
-        errors.push(format!("{prefix}: min_term_years must be >= 1"));
-    }
-    if entry.min_term_years > entry.max_term_years {
-        errors.push(format!(
-            "{prefix}: min_term_years ({}) exceeds max_term_years ({})",
-            entry.min_term_years, entry.max_term_years
-        ));
-    }
-    if entry.grace_period_days == 0 {
-        errors.push(format!("{prefix}: grace_period_days must be > 0"));
-    }
-    if entry.redemption_period_days == 0 {
-        errors.push(format!("{prefix}: redemption_period_days must be > 0"));
-    }
-    ensure_account_literal(
-        &entry.steward_account,
-        "steward_account",
-        &prefix,
-        &mut errors,
-    );
-    ensure_account_literal(
-        &entry.fund_splitter_account,
-        "fund_splitter_account",
-        &prefix,
-        &mut errors,
-    );
-    ensure_asset_literal(
-        &entry.payment_asset_id,
-        "payment_asset_id",
-        &prefix,
-        &mut errors,
-    );
-    if entry.referral_cap_bps > MAX_BASIS_POINTS {
-        errors.push(format!(
-            "{prefix}: referral_cap_bps {} exceeds 10_000 bps",
-            entry.referral_cap_bps
-        ));
-    }
-    if entry.referral_cap_bps > entry.fee_split.referral_max_bps {
-        errors.push(format!(
-            "{prefix}: referral_cap_bps {} exceeds referral_max_bps {}",
-            entry.referral_cap_bps, entry.fee_split.referral_max_bps
-        ));
-    }
-    for (label, value) in [
-        ("treasury_bps", entry.fee_split.treasury_bps),
-        ("steward_bps", entry.fee_split.steward_bps),
-        ("referral_max_bps", entry.fee_split.referral_max_bps),
-        ("escrow_bps", entry.fee_split.escrow_bps),
-    ] {
-        if value > MAX_BASIS_POINTS {
-            errors.push(format!("{prefix}: {label} {} exceeds 10_000 bps", value));
-        }
-    }
-
-    let mut reserved = HashSet::new();
-    for label in &entry.reserved_labels {
-        if !reserved.insert(label.label.clone()) {
-            errors.push(format!(
-                "{prefix}: reserved label `{}` appears multiple times",
-                label.label
-            ));
-        }
-        ensure_label_literal(&label.label, &prefix, &mut errors);
-        if let Some(account) = &label.assigned_to {
-            ensure_account_literal(account, "reserved_labels.assigned_to", &prefix, &mut errors);
-        }
-        if label.release_at_ms.is_some_and(|ts| ts == 0) {
-            errors.push(format!(
-                "{prefix}: reserved label `{}` release_at_ms must be > 0 when provided",
-                label.label
-            ));
-        }
-        if label
-            .note
-            .as_deref()
-            .is_some_and(|note| note.trim().is_empty())
-        {
-            errors.push(format!(
-                "{prefix}: reserved label `{}` note cannot be empty",
-                label.label
-            ));
-        }
-    }
-
-    if entry.pricing.is_empty() {
-        errors.push(format!("{prefix}: pricing tiers array cannot be empty"));
-    } else {
-        let mut tier_ids = HashSet::new();
-        for tier in &entry.pricing {
-            if !tier_ids.insert(tier.tier_id) {
-                errors.push(format!(
-                    "{prefix}: tier id {} appears multiple times",
-                    tier.tier_id
-                ));
-            }
-            validate_pricing_tier(entry, tier, &prefix, &mut errors);
-        }
-    }
-
-    errors
-}
-
-fn validate_pricing_tier(
-    entry: &SuffixCatalogEntry,
-    tier: &PricingTier,
-    prefix: &str,
-    errors: &mut Vec<String>,
-) {
-    if tier.label_regex.trim().is_empty() {
-        errors.push(format!(
-            "{prefix}: pricing tier {} must include a non-empty label_regex",
-            tier.tier_id
-        ));
-    }
-    if tier.min_duration_years == 0 {
-        errors.push(format!(
-            "{prefix}: pricing tier {} min_duration_years must be >= 1",
-            tier.tier_id
-        ));
-    }
-    if tier.min_duration_years < entry.min_term_years {
-        errors.push(format!(
-            "{prefix}: pricing tier {} min_duration_years {} is below suffix min_term_years {}",
-            tier.tier_id, tier.min_duration_years, entry.min_term_years
-        ));
-    }
-    if tier.max_duration_years > entry.max_term_years {
-        errors.push(format!(
-            "{prefix}: pricing tier {} max_duration_years {} exceeds suffix max_term_years {}",
-            tier.tier_id, tier.max_duration_years, entry.max_term_years
-        ));
-    }
-    if tier.min_duration_years > tier.max_duration_years {
-        errors.push(format!(
-            "{prefix}: pricing tier {} min_duration_years {} exceeds max_duration_years {}",
-            tier.tier_id, tier.min_duration_years, tier.max_duration_years
-        ));
-    }
-    if tier.base_price.amount <= 0 {
-        errors.push(format!(
-            "{prefix}: pricing tier {} base_price amount must be > 0",
-            tier.tier_id
-        ));
-    }
-    ensure_asset_literal(
-        &tier.base_price.asset_id,
-        "pricing.base_price.asset_id",
-        prefix,
-        errors,
-    );
-    if tier.base_price.asset_id != entry.payment_asset_id {
-        errors.push(format!(
-            "{prefix}: pricing tier {} base_price asset `{}` must match payment_asset_id `{}`",
-            tier.tier_id, tier.base_price.asset_id, entry.payment_asset_id
-        ));
-    }
-
-    match tier.auction_kind.as_str() {
-        "vickrey_commit_reveal" => {
-            if tier.dutch_floor.is_some() {
-                errors.push(format!(
-                    "{prefix}: pricing tier {} must not set dutch_floor for vickrey auctions",
-                    tier.tier_id
-                ));
-            }
-        }
-        "dutch_reopen" => match &tier.dutch_floor {
-            Some(floor) => {
-                if floor.amount <= 0 {
-                    errors.push(format!(
-                        "{prefix}: pricing tier {} dutch_floor amount must be > 0",
-                        tier.tier_id
-                    ));
-                }
-                ensure_asset_literal(
-                    &floor.asset_id,
-                    "pricing.dutch_floor.asset_id",
-                    prefix,
-                    errors,
-                );
-                if floor.asset_id != tier.base_price.asset_id {
-                    errors.push(format!(
-                        "{prefix}: pricing tier {} dutch_floor asset `{}` must match base_price",
-                        tier.tier_id, floor.asset_id
-                    ));
-                }
-            }
-            None => errors.push(format!(
-                "{prefix}: pricing tier {} must set dutch_floor for dutch_reopen",
-                tier.tier_id
-            )),
-        },
-        other => errors.push(format!(
-            "{prefix}: pricing tier {} uses unknown auction_kind `{other}`",
-            tier.tier_id
-        )),
-    }
-}
-
-fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut Vec<String>) {
-    let trimmed = literal.trim();
-    if trimmed.is_empty() {
-        errors.push(format!(
-            "{prefix}: {field} must be a non-empty account identifier"
-        ));
-        return;
-    }
-    if trimmed.chars().any(char::is_whitespace) {
-        errors.push(format!(
-            "{prefix}: {field} `{literal}` must not contain whitespace"
-        ));
-    }
-    if trimmed.contains('@') {
-        errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id and must not include `@domain`"
-        ));
-        return;
-    }
-    if let Err(err) = iroha_data_model::account::AccountId::parse_encoded(trimmed) {
-        errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id: {err}"
-        ));
-    }
-}
-
-fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut Vec<String>) {
-    let trimmed = literal.trim();
-    if trimmed.is_empty() {
-        errors.push(format!(
-            "{prefix}: {field} must be a non-empty asset identifier"
-        ));
-        return;
-    }
-    if trimmed.chars().any(char::is_whitespace) {
-        errors.push(format!(
-            "{prefix}: {field} `{literal}` must not contain whitespace"
-        ));
-        return;
-    }
-    if let Err(err) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
-        errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form: {err}"
-        ));
-    }
-}
-
-fn ensure_label_literal(label: &str, prefix: &str, errors: &mut Vec<String>) {
-    if !is_valid_label_literal(label) {
-        errors.push(format!(
-            "{prefix}: reserved label `{label}` must use lower-case letters, digits, dots, or hyphens"
-        ));
-    }
-}
-
-fn is_valid_suffix_literal(value: &str) -> bool {
-    value.starts_with('.')
-        && value.len() > 1
-        && value
-            .chars()
-            .skip(1)
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-}
-
-fn is_valid_label_literal(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '.')
 }
 
 #[derive(Clone)]
@@ -1940,7 +1445,7 @@ pub fn write_portal_stub(opts: PortalStubOptions) -> Result<(), Box<dyn Error>> 
         output,
         overwrite,
     } = opts;
-    let normalized_suffixes = normalize_suffixes(suffixes);
+    let normalized_suffixes = normalize_suffixes(suffixes)?;
     if output.exists() && !overwrite {
         return Err(format!(
             "portal memo `{}` already exists (pass --force to overwrite)",
@@ -1959,8 +1464,12 @@ pub fn write_portal_stub(opts: PortalStubOptions) -> Result<(), Box<dyn Error>> 
         .map(|suffix| render_portal_annex_block(suffix, &cycle))
         .collect::<Vec<_>>()
         .join("\n\n");
+    let annex_cycle_suffix_args = normalized_suffixes
+        .iter()
+        .map(|suffix| format!(" --suffix {suffix}"))
+        .collect::<String>();
     let body = format!(
-        "---\nid: regulatory-eu-dsa-{cycle}\ntitle: EU DSA Hosting & Transparency Guidance – Intake Memo\nsidebar_label: EU DSA ({sidebar_label})\ndescription: Regulatory intake memo stub for the SNS EU DSA KPI annex program ({cycle}).\njurisdiction: EU\nregulation: Digital Services Act (EU) – KPI annex program\nsuffix_scope:\n{suffix_scope}\nowners:\n  guardian: guardian-board\n  rapporteur: gov-council-seat-4\n  steward_ack: sora-foundation-suffix-ops\nstatus: scheduled\ncycle: {cycle}\n---\n\n:::note Canonical Source\nThis page mirrors `docs/source/sns/regulatory/eu-dsa/{cycle}.md` and will be updated once the governance memo is final.\n:::\n\n## 1. Intake Summary (Pending)\n\n- **Bulletin:** Pending governance bulletin for cycle {cycle}.\n- **Key requirements:** reserve annex jobs, capture KPI exports, and update localization stubs before submission.\n- **Submission window:** TBD.\n\n## 2. Checklist\n\n1. Append `{cycle}` to `docs/source/sns/regulatory/annex_jobs.json`.\n2. Run `scripts/add_sns_annex_cycle.py {cycle}` to populate annex/resolver stubs.\n3. Replace this stub when the EU DSA memo is finalised and governance publishes the bulletin.\n\n{annex_blocks}\n",
+        "---\nid: regulatory-eu-dsa-{cycle}\ntitle: EU DSA Hosting & Transparency Guidance – Intake Memo\nsidebar_label: EU DSA ({sidebar_label})\ndescription: Regulatory intake memo stub for the SNS EU DSA KPI annex program ({cycle}).\njurisdiction: EU\nregulation: Digital Services Act (EU) – KPI annex program\nsuffix_scope:\n{suffix_scope}\nowners:\n  guardian: guardian-board\n  rapporteur: gov-council-seat-4\n  steward_ack: sora-foundation-suffix-ops\nstatus: scheduled\ncycle: {cycle}\n---\n\n:::note Canonical Source\nThis page mirrors `docs/source/sns/regulatory/eu-dsa/{cycle}.md` and will be updated once the governance memo is final.\n:::\n\n## 1. Intake Summary (Pending)\n\n- **Bulletin:** Pending governance bulletin for cycle {cycle}.\n- **Key requirements:** reserve annex jobs, capture KPI exports, and update localization stubs before submission.\n- **Submission window:** TBD.\n\n## 2. Checklist\n\n1. Append `{cycle}` to `docs/source/sns/regulatory/annex_jobs.json`.\n2. Run `scripts/add_sns_annex_cycle.py {cycle}{annex_cycle_suffix_args}` to populate annex/resolver stubs.\n3. Replace this stub when the EU DSA memo is finalised and governance publishes the bulletin.\n\n{annex_blocks}\n",
     );
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
@@ -1974,39 +1483,36 @@ pub fn write_portal_stub(opts: PortalStubOptions) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-fn normalize_suffixes(values: Vec<String>) -> Vec<String> {
+fn normalize_suffixes(values: Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
+    if values.is_empty() {
+        return Err("sns-portal-stub requires at least one --suffix <.suffix>".into());
+    }
     let mut seen = HashSet::new();
     let mut result = Vec::new();
-    let candidates = if values.is_empty() {
-        DEFAULT_SNS_SUFFIXES
-            .iter()
-            .map(|value| (**value).to_string())
-            .collect::<Vec<_>>()
-    } else {
-        values
-    };
-    for value in candidates {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            continue;
+    for value in values {
+        if !is_valid_suffix_literal(&value) {
+            return Err(
+                "suffix must be a dot followed by 1-64 lowercase ASCII letters or digits".into(),
+            );
         }
-        let normalized = if trimmed.starts_with('.') {
-            trimmed.to_string()
-        } else {
-            format!(".{trimmed}")
-        };
-        if seen.insert(normalized.clone()) {
-            result.push(normalized);
+        if !seen.insert(value.clone()) {
+            return Err("suffix values must be unique".into());
         }
+        result.push(value);
     }
     if result.is_empty() {
-        DEFAULT_SNS_SUFFIXES
-            .iter()
-            .map(|value| (**value).to_string())
-            .collect()
-    } else {
-        result
+        return Err("sns-portal-stub requires at least one non-empty --suffix <.suffix>".into());
     }
+    Ok(result)
+}
+
+fn is_valid_suffix_literal(value: &str) -> bool {
+    let label = value.strip_prefix('.').unwrap_or_default();
+    !label.is_empty()
+        && label.len() <= 64
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 fn sidebar_label_for_cycle(cycle: &str) -> Result<String, Box<dyn Error>> {
@@ -2541,93 +2047,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
-}
-
-#[cfg(test)]
-mod catalog_verify_tests {
-    use super::*;
-
-    const SAMPLE_ASSET_ID: &str =
-        "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-
-    fn sample_pricing() -> PricingTier {
-        PricingTier {
-            tier_id: 0,
-            label_regex: "^[a-z]{3,}$".into(),
-            base_price: AssetAmount {
-                asset_id: SAMPLE_ASSET_ID.into(),
-                amount: 120,
-            },
-            auction_kind: "vickrey_commit_reveal".into(),
-            dutch_floor: None,
-            min_duration_years: 1,
-            max_duration_years: 5,
-        }
-    }
-
-    fn sample_suffix_entry() -> SuffixCatalogEntry {
-        SuffixCatalogEntry {
-            suffix: ".sora".into(),
-            suffix_id: 1,
-            status: "active".into(),
-            steward_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-            fund_splitter_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-            payment_asset_id: SAMPLE_ASSET_ID.into(),
-            referral_cap_bps: 500,
-            min_term_years: 1,
-            max_term_years: 5,
-            grace_period_days: 30,
-            redemption_period_days: 60,
-            policy_version: 1,
-            reserved_labels: vec![ReservedLabel {
-                label: "treasury".into(),
-                assigned_to: Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".into()),
-                release_at_ms: None,
-                note: None,
-            }],
-            pricing: vec![sample_pricing()],
-            fee_split: FeeSplit {
-                treasury_bps: 7000,
-                steward_bps: 3000,
-                referral_max_bps: 1000,
-                escrow_bps: 0,
-            },
-        }
-    }
-
-    fn sample_snapshot() -> SuffixCatalogSnapshot {
-        SuffixCatalogSnapshot {
-            version: 1,
-            generated_at: "2026-05-01T00:00:00Z".into(),
-            generated_by: Some("docs/examples/sns/sample.json".into()),
-            suffixes: vec![sample_suffix_entry()],
-        }
-    }
-
-    #[test]
-    fn snapshot_validation_succeeds() {
-        let snapshot = sample_snapshot();
-        let errors = validate_catalog_snapshot(&snapshot, "docs/examples/sns/sample.json");
-        assert!(
-            errors.is_empty(),
-            "unexpected catalog validation errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn duplicate_tier_ids_are_rejected() {
-        let mut snapshot = sample_snapshot();
-        let mut entry = snapshot.suffixes.pop().expect("entry");
-        entry.pricing.push(sample_pricing());
-        snapshot.suffixes.push(entry);
-        let errors = validate_catalog_snapshot(&snapshot, "docs/examples/sns/sample.json");
-        assert!(
-            errors
-                .iter()
-                .any(|err| err.contains("tier id 0 appears multiple times")),
-            "expected duplicate-tier validation error, got {errors:?}"
-        );
-    }
 }
 
 #[cfg(test)]

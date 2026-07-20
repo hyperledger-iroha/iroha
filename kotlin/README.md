@@ -59,6 +59,27 @@ include a positive gas bound in the intent.
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. A sponsor rejection never falls back to charging the authority.
 
+### Atomic mixed executable batches
+
+Use `Executable.batchBuilder()` when one transaction must interleave native
+instructions and deployed-contract calls:
+
+```kotlin
+val executable = Executable.batchBuilder()
+    .addInstruction(registerInstruction)
+    .addContractCall(
+        ContractInvocation(contractAddress, expectedCodeHash, "apply", argumentRecord),
+    )
+    .addInstruction(transferInstruction)
+    .build()
+```
+
+The item order is canonical and the node applies the whole batch atomically.
+Empty batches are rejected. Contract addresses must be canonical lowercase V1
+Bech32m literals, and any batch containing a contract call needs one positive,
+signature-bound gas limit in its `FeePaymentIntent`; these constraints are
+checked before the payload can be encoded or signed.
+
 ### Torii server-sent events
 
 `HttpClientTransport.newEventStreamClient()` opens SSE feeds with the same base
@@ -365,7 +386,7 @@ Android libraries must target Java 8 bytecode. Java 11+ API calls (`String.isBla
 
 ### Reflection-free
 
-The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). This Kotlin rewrite eliminates reflection from `client-android` entirely and keeps optional-dependency probing isolated in `core-jvm`.
+The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). Kotlin production sources are reflection-free across `core-jvm`, `client-android`, and `offline-wallet-android`; `scripts/check_kotlin_no_reflection.sh` enforces that contract. BouncyCastle is linked directly, Android keystore APIs are guarded by platform-version checks, and WebSocket clients require callers to inject a connector with `setWebSocketConnector(...)` instead of discovering one at runtime.
 
 ### Modular architecture
 
@@ -387,5 +408,5 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 
 | Dependency | Version | Used By | Risk |
 |-----------|---------|---------|------|
-| `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` (3 files: MultisigSeedHelper, ConnectCrypto, IdentifierReceiptVerifier) | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that bundle a different BC version may hit `NoSuchMethodError` at runtime. The SDK loads BC via reflection only when explicitly required; core crypto (Blake2b/2s/3, Ed25519, IrohaHash) uses only JCA and does not require BC. |
+| `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
 | `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |

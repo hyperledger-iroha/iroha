@@ -133,8 +133,8 @@ planner_args=(
 if [[ -n "${CLIENT_CONFIG}" ]]; then
   planner_args+=("--config" "${CLIENT_CONFIG}")
 fi
-if [[ "${APPLY}" != "true" ]]; then
-  planner_args+=("--plan-only")
+if [[ "${APPLY}" == "true" ]]; then
+  planner_args+=("--apply")
 fi
 
 if [[ "${APPLY}" == "true" ]]; then

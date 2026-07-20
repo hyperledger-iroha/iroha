@@ -402,6 +402,8 @@ LockStableNext ==
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ValidateDecidedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       ValidateLockedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -435,7 +437,8 @@ LockStableNext ==
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
@@ -463,7 +466,7 @@ BY IsaM("blast")
        SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
        CompleteProposalSignature, ByzantineBroadcastProposal,
        DeliverProposal, FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, ValidateDecidedBody, RejectBody,
+       ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
        BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
        FormPrepareQC, DeliverQC, BeginObservePrepare,
@@ -490,7 +493,8 @@ BY IsaM("blast")
    DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
        CompleteProposalSignature, ByzantineBroadcastProposal,
        DeliverProposal, FetchBody, RebindRetainedBody, StoreBody, ValidateBody,
-       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
+       ValidateDecidedBody, ValidateLockedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
        FormPrepareQC, DeliverQC, BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, PersistLockCommit,
@@ -943,26 +947,37 @@ honest timeout/Commit signer and the durable historical invariant supplies
 that exact Commit's installed-TC authorization.  The authorizing installed TC
 need not be later than the formed TC quantified by the property.
 ***************************************************************************)
+HistoricalLockedCommitAuthorizationProperty(specification) ==
+  specification => []HistoricalLockedCommitAuthorizationInvariant
+
+THEOREM HistoricalLockedCommitAuthorizationObligation ==
+  \A initialContext:
+    HistoricalLockedCommitAuthorizationProperty(
+      CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE HistoricalLockedCommitAuthorizationProperty(
+                 CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => HistoricalLockedCommitAuthorizationInvariant
+      BY ReducerProvenanceImpliesHistoricalLockedCommitAuthorization
+         DEF StrongInductiveInvariant
+    <2> QED BY <2>1, <2>2, PTL
+         DEF HistoricalLockedCommitAuthorizationProperty
+  <1> QED BY <1>1
+
+\* Compatibility surface for the existing release ledger.
 HistoricalTcLockedCommitAuthorizationProperty(specification) ==
-  specification => []HistoricalTcLockedCommitAuthorizationInvariant
+  HistoricalLockedCommitAuthorizationProperty(specification)
 
 THEOREM HistoricalTcLockedCommitAuthorizationObligation ==
   \A initialContext:
     HistoricalTcLockedCommitAuthorizationProperty(
       CoreSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE HistoricalTcLockedCommitAuthorizationProperty(
-                 CoreSpecAt(initialContext))
-    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
-      BY CoreSpecAtAlwaysStrongInductiveInvariant
-    <2>2. StrongInductiveInvariant
-             => HistoricalTcLockedCommitAuthorizationInvariant
-      BY ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization
-         DEF StrongInductiveInvariant
-    <2> QED BY <2>1, <2>2, PTL
-         DEF HistoricalTcLockedCommitAuthorizationProperty
-  <1> QED BY <1>1
+BY HistoricalLockedCommitAuthorizationObligation
+   DEF HistoricalTcLockedCommitAuthorizationProperty
 
 TimeoutProtectionProperty(specification) ==
   specification

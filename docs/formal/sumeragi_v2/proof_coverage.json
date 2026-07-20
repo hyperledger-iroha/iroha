@@ -197,7 +197,7 @@
       "requirement": "Every behavior of the executable asynchronous specification preserves duplicate-free logical candidate ownership within scheduler sequences and pairwise disjoint queued, deferred, causal, and outstanding-work carriers; outstanding work equals the modeled Consensus-I/O plus ready-completion carrier union; serialized Busy owners remain node-unique and every non-idle node retains an active Completion witness. This is an abstract model invariant; production effect/work identity refinement remains outside this leaf.",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncSpecAlwaysProgressOwnershipInvariant",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "post-decision-timeout-exclusion",
@@ -253,21 +253,21 @@
       "requirement": "In the executable asynchronous model, every protected protocol candidate already owned by a responsive current voter at an exact Stage-4 ready-completion position, under the exact weak-fairness target for PostGstRunNode, eventually leaves protected scheduler ownership or acquires a strictly smaller service rank; the proof covers ready-run auxiliary descent and non-Completion causal admission-capacity debt, while stages 2, 3, 5, and 6, candidate admission/provenance, and production transport/runtime refinement remain outside this abstract leaf",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedStage4RankProgressFromFairScheduler",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "protected-service-rank-serve-fifo",
       "requirement": "In the executable asynchronous model, every nonce-unique Serve occurrence owned by a responsive current voter in its typed I/O queue, under the exact weak fairness target for PostGstServiceIoWorker, eventually leaves Serve ownership or has a strictly smaller Stage-5 FIFO position; production request admission, ingress identity, and reliable actor-to-flush refinement remain outside this abstract leaf",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServeRankProgressFromFairFifo",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "protected-service-rank-stage5-consensus-fifo",
       "requirement": "In the executable asynchronous model, every protected candidate owned at Stage 5 by a responsive current voter, under exact progress ownership and PostGstServiceIoWorker weak fairness, eventually exits scheduler ownership, moves to a lower stage, or has a strictly smaller Consensus-I/O FIFO position; Serve/Control heads may delay but cannot overtake it. Production candidate construction/admission identity and reliable actor-to-flush refinement remain outside this leaf.",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedStage5RankProgressFromFairFifo",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "protected-service-rank",
@@ -288,6 +288,13 @@
       "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "TimeoutViewProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "locked-body-reproposal-liveness",
+      "requirement": "After GST, every stable available retained lock at a responsive validator eventually commits in its original round, is reproposed unchanged in a later round, or is legitimately decided or superseded by a higher certified Prepare lock",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "LockedBodyReproposalProgressObligation",
       "status": "specified_unproved"
     },
     {

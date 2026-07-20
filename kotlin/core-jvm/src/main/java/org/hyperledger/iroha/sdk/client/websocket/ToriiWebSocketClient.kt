@@ -14,8 +14,9 @@ import org.hyperledger.iroha.sdk.client.transport.TransportWebSocket
 /**
  * WebSocket client built on the transport abstractions shared between JVM and Android targets.
  *
- * By default the platform connector is used (OkHttp on Android, JDK connector on JVM). Android
- * callers can still inject an explicit OkHttp connector to reuse a shared client instance.
+ * Callers must inject the platform connector explicitly with [Builder.setWebSocketConnector].
+ * Keeping runtime selection outside `core-jvm` avoids reflective platform discovery and lets
+ * Android callers reuse an application-owned HTTP client.
  */
 class ToriiWebSocketClient private constructor(builder: Builder) {
 
@@ -32,7 +33,9 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
     private val baseUri: URI = builder.baseUri
     private val defaultHeaders: Map<String, String> = builder.defaultHeaders.toMap()
     private val observers: List<ClientObserver> = builder.observers.toList()
-    private val connector: WebSocketConnector = builder.connector ?: PlatformWebSocketConnector.createDefault()
+    private val connector: WebSocketConnector = requireNotNull(builder.connector) {
+        "WebSocket connector is required; call setWebSocketConnector(...)"
+    }
 
     /** Opens a WebSocket session against the given path. */
     fun connect(path: String, options: ToriiWebSocketOptions?, listener: ToriiWebSocketListener): ToriiWebSocketSession {

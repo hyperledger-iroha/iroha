@@ -5939,35 +5939,33 @@ fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
     use iroha_data_model::prelude::TransferBox;
 
     let mut transfer_asset_scopes = Vec::new();
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        for instruction in instructions {
-            let Some(transfer_box) = instruction.as_any().downcast_ref::<TransferBox>() else {
-                continue;
-            };
-            let TransferBox::Asset(transfer) = transfer_box else {
-                continue;
-            };
+    for instruction in tx.instructions().explicit_instructions() {
+        let Some(transfer_box) = instruction.as_any().downcast_ref::<TransferBox>() else {
+            continue;
+        };
+        let TransferBox::Asset(transfer) = transfer_box else {
+            continue;
+        };
 
-            let mut scope = JsonMap::new();
-            scope.insert("instruction".into(), JsonValue::from("transfer_asset"));
-            scope.insert(
-                "source_asset_definition_id".into(),
-                JsonValue::from(transfer.source.definition().to_string()),
-            );
-            match transfer.source.scope() {
-                AssetBalanceScope::Global => {
-                    scope.insert("source_scope".into(), JsonValue::from("global"));
-                }
-                AssetBalanceScope::Dataspace(dataspace_id) => {
-                    scope.insert("source_scope".into(), JsonValue::from("dataspace"));
-                    scope.insert(
-                        "source_dataspace_id".into(),
-                        JsonValue::from(dataspace_id.as_u64()),
-                    );
-                }
+        let mut scope = JsonMap::new();
+        scope.insert("instruction".into(), JsonValue::from("transfer_asset"));
+        scope.insert(
+            "source_asset_definition_id".into(),
+            JsonValue::from(transfer.source.definition().to_string()),
+        );
+        match transfer.source.scope() {
+            AssetBalanceScope::Global => {
+                scope.insert("source_scope".into(), JsonValue::from("global"));
             }
-            transfer_asset_scopes.push(JsonValue::Object(scope));
+            AssetBalanceScope::Dataspace(dataspace_id) => {
+                scope.insert("source_scope".into(), JsonValue::from("dataspace"));
+                scope.insert(
+                    "source_dataspace_id".into(),
+                    JsonValue::from(dataspace_id.as_u64()),
+                );
+            }
         }
+        transfer_asset_scopes.push(JsonValue::Object(scope));
     }
 
     JsonValue::Object(JsonMap::from_iter([(

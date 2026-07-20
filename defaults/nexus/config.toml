@@ -24,9 +24,6 @@ public_address = "addr:127.0.0.1:1337#8F78"
 [torii]
 address = "addr:0.0.0.0:8080#B922"
 
-[sumeragi.da]
-enabled = true
-
 [sorafs.storage]
 enabled = true
 

@@ -135,8 +135,8 @@ StaleAppliedTokenState ==
   /\ predecessorOwnership = "Published"
   /\ activationPrerequisites = {"IngressOpen"}
   /\ activationTokens = {AppliedSuccessorActivationToken}
-  /\ ~activationFailurePresent
-  /\ ~activationFailureHistoryPresent
+  /\ activationFailurePresent = FALSE
+  /\ activationFailureHistoryPresent = FALSE
 
 StaleAppliedTokenInit ==
   /\ StaleAppliedTokenState
@@ -183,8 +183,8 @@ MutationFailClosedSuccessorStartup ==
   /\ predecessorOwnership' = "Absent"
   /\ activationPrerequisites' = {}
   /\ activationTokens' = {}
-  /\ activationFailurePresent'
-  /\ activationFailureHistoryPresent'
+  /\ activationFailurePresent' = TRUE
+  /\ activationFailureHistoryPresent' = TRUE
   /\ lastTransition' = "FailClosed"
   /\ previousRank' = SuccessorActivationRank
 

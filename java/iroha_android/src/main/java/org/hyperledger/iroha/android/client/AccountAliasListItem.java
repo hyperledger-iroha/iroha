@@ -21,6 +21,9 @@ public final class AccountAliasListItem {
         || !java.util.Objects.equals(parsed.domain(), normalized.domain())) {
       throw new IllegalArgumentException("alias scope does not match dataspace/domain fields");
     }
+    if (!parsed.canonicalText().equals(alias)) {
+      throw new IllegalArgumentException("alias must use its canonical representation");
+    }
     this.alias = parsed.canonicalText();
     this.dataspace = normalized.dataspace();
     this.domain = normalized.domain();

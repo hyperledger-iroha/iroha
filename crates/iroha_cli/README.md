@@ -65,7 +65,8 @@ iroha contract call --contract-alias router::dex.universal --entrypoint swap --w
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```
 
-See [Command-Line Help](CommandLineHelp.md).
+Run `iroha tools markdown-help` for the complete reference generated from the
+installed CLI.
 
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
 
@@ -724,14 +725,17 @@ Expected output format is the same JSON as for full objects, but the entries are
 ```
 
 Note: This feature is experimental and off by default; enable it for testing and iterative development. Behavior and flags may change.
-## Regenerating Markdown Help
+## Rendering Markdown Help
 
 Ensure the CLI builds, then run:
 
-``` 
+```bash
 make docs-cli
 # or
-cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
+cargo run -p iroha_cli --bin iroha -- tools markdown-help
 ```
 
-This regenerates the full `CommandLineHelp.md` directly from the live CLI, keeping the docs in sync with the actual arguments and subcommands.
+The full Iroha CLI reference is rendered from the live command tree and is not
+checked into the repository. Redirect it to an operator-chosen path when a
+standalone copy is needed. Kagami retains its smaller checked-in
+`CommandLineHelp.md` snapshot and validates that snapshot in its unit tests.

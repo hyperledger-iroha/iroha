@@ -14,7 +14,9 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.model.ContractInvocation;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.FeeChargeKind;
 import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
@@ -49,13 +51,23 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
+  private static final TypeAdapter<byte[]> FIXED_HASH_ADAPTER = NoritoAdapters.fixedBytes(32);
+  private static final TypeAdapter<byte[]> CONTRACT_ARGUMENT_RECORD_ADAPTER =
+      new ContractArgumentRecordAdapter();
+  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER =
+      NoritoAdapters.option(CONTRACT_ARGUMENT_RECORD_ADAPTER);
   private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
   private static final TypeAdapter<Optional<String>> OPTIONAL_STRING_ADAPTER =
       NoritoAdapters.option(STRING_ADAPTER);
   private static final TypeAdapter<Optional<String>> OPTIONAL_ACCOUNT_ID_ADAPTER =
       NoritoAdapters.option(ACCOUNT_ID_ADAPTER);
+  private static final TypeAdapter<InstructionBox> INSTRUCTION_ADAPTER = new InstructionAdapter();
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
-      NoritoAdapters.sequence(new InstructionAdapter());
+      NoritoAdapters.sequence(INSTRUCTION_ADAPTER);
+  private static final TypeAdapter<ContractInvocation> CONTRACT_INVOCATION_ADAPTER =
+      new ContractInvocationAdapter();
+  private static final TypeAdapter<List<ExecutableBatchItem>> EXECUTABLE_BATCH_ADAPTER =
+      NoritoAdapters.sequence(new ExecutableBatchItemAdapter());
   private static final TypeAdapter<List<byte[]>> ENCODED_INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new EncodedInstructionAdapter());
   private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
@@ -63,6 +75,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
   private static final long EXECUTABLE_IVM_TAG = 2L;
   private static final long EXECUTABLE_IVM_PROVED_TAG = 3L;
+  private static final long EXECUTABLE_BATCH_TAG = 4L;
+  private static final long BATCH_ITEM_INSTRUCTION_TAG = 0L;
+  private static final long BATCH_ITEM_CONTRACT_CALL_TAG = 1L;
   private static final long FEE_PAYER_AUTHORITY_TAG = 0L;
   private static final long FEE_PAYER_SPONSOR_TAG = 1L;
   private static final long FEE_CHARGE_NEXUS_TAG = 0L;
@@ -97,6 +112,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
+    if (value.executable().requiresTransactionGasLimit() && value.feePayment().gasLimit() == null) {
+      throw new IllegalArgumentException(
+          "feePayment.gasLimit is required for IVM and contract-call executables");
+    }
     encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId());
     encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
     encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
@@ -129,7 +148,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             .setMetadata(metadata);
     ttl.ifPresent(builder::setTimeToLiveMs);
     nonceRaw.ifPresent(value -> builder.setNonce(Math.toIntExact(value)));
-    return builder.build();
+    return builder.buildDecodedForCodec();
   }
 
   static byte[] encodeInstructionBox(final InstructionBox instruction) {
@@ -305,8 +324,22 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       encodeSizedField(encoder, IVM_BYTECODE_ADAPTER, executable.ivmBytes());
       return;
     }
-    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG);
-    encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions());
+    if (executable.isContractCall()) {
+      ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_CONTRACT_CALL_TAG);
+      encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, executable.contractInvocation());
+      return;
+    }
+    if (executable.isBatch()) {
+      ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_BATCH_TAG);
+      encodeSizedField(encoder, EXECUTABLE_BATCH_ADAPTER, executable.batchItems());
+      return;
+    }
+    if (executable.isInstructions()) {
+      ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG);
+      encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions());
+      return;
+    }
+    throw new IllegalArgumentException("Unknown Executable variant");
   }
 
   private static Executable decodeExecutable(final NoritoDecoder decoder) {
@@ -319,10 +352,98 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       final List<InstructionBox> instructions = decodeSizedField(decoder, INSTRUCTION_LIST_ADAPTER);
       return Executable.instructions(instructions);
     }
-    if (tag == EXECUTABLE_CONTRACT_CALL_TAG || tag == EXECUTABLE_IVM_PROVED_TAG) {
+    if (tag == EXECUTABLE_CONTRACT_CALL_TAG) {
+      return Executable.contractCall(decodeSizedField(decoder, CONTRACT_INVOCATION_ADAPTER));
+    }
+    if (tag == EXECUTABLE_BATCH_TAG) {
+      return Executable.batch(decodeSizedField(decoder, EXECUTABLE_BATCH_ADAPTER));
+    }
+    if (tag == EXECUTABLE_IVM_PROVED_TAG) {
       throw new IllegalArgumentException("Unsupported Executable discriminant: " + tag);
     }
     throw new IllegalArgumentException("Unknown Executable discriminant: " + tag);
+  }
+
+  private static final class ContractInvocationAdapter
+      implements TypeAdapter<ContractInvocation> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ContractInvocation value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value.contractAddress());
+      encodeSizedField(encoder, FIXED_HASH_ADAPTER, value.expectedCodeHash());
+      encodeSizedField(encoder, STRING_ADAPTER, value.entrypoint());
+      encodeSizedField(
+          encoder,
+          OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER,
+          Optional.ofNullable(value.arguments()));
+    }
+
+    @Override
+    public ContractInvocation decode(final NoritoDecoder decoder) {
+      final String contractAddress = decodeSizedField(decoder, STRING_ADAPTER);
+      final byte[] expectedCodeHash = decodeSizedField(decoder, FIXED_HASH_ADAPTER);
+      final String entrypoint = decodeSizedField(decoder, STRING_ADAPTER);
+      final Optional<byte[]> arguments =
+          decodeBoundedSizedField(
+              decoder,
+              OPTIONAL_CONTRACT_ARGUMENT_RECORD_ADAPTER,
+              ContractInvocation.MAX_ARGUMENT_BYTES + 32L,
+              "ContractInvocation.arguments");
+      return new ContractInvocation(
+          contractAddress, expectedCodeHash, entrypoint, arguments.orElse(null));
+    }
+  }
+
+  private static final class ContractArgumentRecordAdapter implements TypeAdapter<byte[]> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      if (value.length > ContractInvocation.MAX_ARGUMENT_BYTES) {
+        throw new IllegalArgumentException(
+            "ContractInvocation.arguments exceeds the signed wire limit");
+      }
+      RAW_BYTE_VEC_ADAPTER.encode(encoder, value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      final long length = decoder.readLength(false);
+      if (length < 0L || length > ContractInvocation.MAX_ARGUMENT_BYTES) {
+        throw new IllegalArgumentException(
+            "ContractInvocation.arguments exceeds the signed wire limit");
+      }
+      return decoder.readBytes((int) length);
+    }
+  }
+
+  private static final class ExecutableBatchItemAdapter
+      implements TypeAdapter<ExecutableBatchItem> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final ExecutableBatchItem value) {
+      if (value.isInstruction()) {
+        ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_INSTRUCTION_TAG);
+        encodeSizedField(encoder, INSTRUCTION_ADAPTER, value.instruction());
+        return;
+      }
+      if (value.isContractCall()) {
+        ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_CONTRACT_CALL_TAG);
+        encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, value.contractInvocation());
+        return;
+      }
+      throw new IllegalArgumentException("Unknown ExecutableBatchItem variant");
+    }
+
+    @Override
+    public ExecutableBatchItem decode(final NoritoDecoder decoder) {
+      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+      if (tag == BATCH_ITEM_INSTRUCTION_TAG) {
+        return ExecutableBatchItem.instruction(
+            decodeSizedField(decoder, INSTRUCTION_ADAPTER));
+      }
+      if (tag == BATCH_ITEM_CONTRACT_CALL_TAG) {
+        return ExecutableBatchItem.contractCall(
+            decodeSizedField(decoder, CONTRACT_INVOCATION_ADAPTER));
+      }
+      throw new IllegalArgumentException("Unknown ExecutableBatchItem discriminant: " + tag);
+    }
   }
 
   private static final class InstructionAdapter implements TypeAdapter<InstructionBox> {
@@ -691,6 +812,24 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after field payload");
+    }
+    return value;
+  }
+
+  private static <T> T decodeBoundedSizedField(
+      final NoritoDecoder decoder,
+      final TypeAdapter<T> adapter,
+      final long maximumLength,
+      final String fieldName) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length < 0L || length > maximumLength) {
+      throw new IllegalArgumentException(fieldName + " payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
     }
     return value;
   }

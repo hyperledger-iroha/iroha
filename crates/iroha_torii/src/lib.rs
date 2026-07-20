@@ -45863,6 +45863,7 @@ async fn handler_alias_setup_plan(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    use iroha_core::alias_setup::classify_alias_intent_with_planned_parents_and_endorsement_policy;
     use iroha_data_model::{
         alias_setup::{
             AliasAssetTotalV1, AliasFramedInstructionV1, AliasLeaseQuoteV1, AliasPlanAnchorV1,
@@ -45958,7 +45959,9 @@ async fn handler_alias_setup_plan(
     let now_ms =
         u64::try_from(latest_block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
     let world = state_view.world();
-    let catalog = &state_view.nexus().dataspace_catalog;
+    let nexus = state_view.nexus();
+    let catalog = &nexus.dataspace_catalog;
+    let default_domain_endorsement_required = nexus.enabled && nexus.endorsement.quorum > 0;
     let mut resources = Vec::with_capacity(request.intents.len());
     let mut instructions = Vec::with_capacity(request.intents.len());
     let mut transaction_instructions = Vec::with_capacity(request.intents.len());
@@ -45973,13 +45976,14 @@ async fn handler_alias_setup_plan(
 
     for (index, ensure) in request.intents.into_iter().enumerate() {
         let target = ensure.intent.target();
-        let disposition = match iroha_core::alias_setup::classify_alias_intent_with_planned_parents(
+        let disposition = match classify_alias_intent_with_planned_parents_and_endorsement_policy(
             world,
             catalog,
             &planned_dataspaces,
             &planned_domains,
             &ensure.intent,
             now_ms,
+            default_domain_endorsement_required,
         ) {
             Ok(disposition) => disposition,
             Err(error) => {
@@ -57556,7 +57560,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
-    fn bind_dynamic_account_alias_for_test(
+    pub(crate) fn bind_dynamic_account_alias_for_test(
         app: &SharedAppState,
         account_id: &AccountId,
         alias_literal: &str,
@@ -78393,8 +78397,9 @@ mod tests {
     #[cfg(feature = "app_api")]
     use crate::tests_runtime_handlers::{
         bind_account_alias_for_test, bind_contract_alias_for_test,
-        configure_multiple_dataspace_routes_for_test, configure_private_ingress_routes_for_test,
-        world_with_account_bound_to_dataspace, world_with_target_and_caller_bound_to_dataspace,
+        bind_dynamic_account_alias_for_test, configure_multiple_dataspace_routes_for_test,
+        configure_private_ingress_routes_for_test, world_with_account_bound_to_dataspace,
+        world_with_target_and_caller_bound_to_dataspace,
     };
     use crate::{
         limits,
@@ -81064,40 +81069,6 @@ mod tests {
         let method = axum::http::Method::POST;
 
         macro_rules! assert_alias_auth_first {
-            ($handler:ident, $path:literal) => {{
-                let error = $handler(
-                    State(app.clone()),
-                    method.clone(),
-                    $path.parse().expect("protected alias route uri"),
-                    HeaderMap::new(),
-                    axum::body::Bytes::from_static(b"{"),
-                )
-                .await
-                .expect_err("unsigned malformed alias request must fail authentication first");
-                assert!(matches!(
-                    &error,
-                    Error::AppUnauthorized {
-                        code: "alias_auth_required",
-                        ..
-                    }
-                ));
-                let response = error.into_response();
-                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-                assert_eq!(
-                    response
-                        .headers()
-                        .get("x-iroha-reject-code")
-                        .and_then(|value| value.to_str().ok()),
-                    Some("alias_auth_required")
-                );
-                assert_eq!(
-                    response
-                        .headers()
-                        .get(axum::http::header::WWW_AUTHENTICATE)
-                        .and_then(|value| value.to_str().ok()),
-                    Some("Signature")
-                );
-            }};
             ($handler:ident, $path:literal, with_connect_info) => {{
                 let error = $handler(
                     State(app.clone()),
