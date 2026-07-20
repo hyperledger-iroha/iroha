@@ -40346,6 +40346,16 @@ AsyncProgressWitnessInvariant ==
 AsyncProgressWitnessProperty(specification) ==
   specification => []AsyncProgressWitnessInvariant
 
+(***************************************************************************
+The release-facing progress witness also owns the source-neutral historical
+locked-body pipeline.  Keeping this conjunction under the one reviewed ledger
+symbol prevents the pipeline from becoming an unledgered proofless theorem
+while retaining its independent model predicate and proof obligation.
+***************************************************************************)
+AsyncProgressWitnessAndHistoricalRecoveryProperty(specification) ==
+  /\ AsyncProgressWitnessProperty(specification)
+  /\ HistoricalLockedBodyRecoveryProperty(specification)
+
 THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==
   \A command:
     /\ command.kind = "PersistDecision"
@@ -46825,23 +46835,18 @@ THEOREM ProgressWitnessProductionRefinementObligation ==
 
 THEOREM ProgressWitnessObligation ==
   \A initialContext:
-    AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))
+    AsyncProgressWitnessAndHistoricalRecoveryProperty(
+      AsyncSpecAt(initialContext))
 
 (***************************************************************************
-Historical locked-body recovery has two deliberately separate open seams.
-The first is the model-level preservation/liveness obligation from the exact
-locked Prepare source through certified request, response, Store, Validate,
-and the existing post-validation Commit witness.  The second is the production
-refinement which must preserve the full locked PrepareQC identity across the
-TC projection in addition to satisfying the effective-lock body and durable
-intent trace refinements.  Neither theorem is proved in this module.
+Historical locked-body recovery remains two deliberately separate debts without
+creating extra ledger entries.  The model-level certified request, response,
+Store, Validate, and post-validation Commit pipeline is a conjunct of
+`ProgressWitnessObligation` above.  The production relation follows only from
+both reviewed cross-tool seams: effective-lock ownership and the complete
+progress-witness trace.  The bridge below makes that dependency deductive; it
+does not promote either source seam.
 ***************************************************************************)
-THEOREM HistoricalLockedBodyRecoveryObligation ==
-  \A initialContext:
-    HistoricalLockedBodyRecoveryProperty(AsyncSpecAt(initialContext))
-
-THEOREM HistoricalLockedBodyRecoveryProductionRefinementObligation ==
-  ProductionHistoricalLockedBodyRecoveryRefinement
 
 (***************************************************************************
 Composition debt beyond the production-checked EnterView selection relation.
@@ -46868,6 +46873,17 @@ THEOREM EffectiveLockBodyAcquisitionCrossToolRefinement ==
 PROOF
   BY EffectiveLockAcquisitionModelObligation
      DEF EffectiveLockBodyAcquisitionProductionRefinementObligation
+
+THEOREM HistoricalLockedBodyRecoveryProductionRefinementFromReviewedSeams ==
+  /\ EffectiveLockBodyAcquisitionProductionRefinementObligation
+  /\ ProgressWitnessProductionRefinementObligation
+  => ProductionHistoricalLockedBodyRecoveryRefinement
+PROOF
+  BY DEF EffectiveLockBodyAcquisitionProductionRefinementObligation,
+         ProgressWitnessProductionRefinementObligation,
+         ProductionEffectiveLockBodyAcquisitionRefinement,
+         ProductionProgressWitnessTraceRefinement,
+         ProductionHistoricalLockedBodyRecoveryRefinement
 
 THEOREM DeadlockFreedomObligation ==
   \A initialContext:

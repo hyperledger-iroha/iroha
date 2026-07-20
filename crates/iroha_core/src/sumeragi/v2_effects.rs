@@ -32,7 +32,8 @@
 //!    unarmed; the finalized runtime is then consumed. For a normal height,
 //!    call [`V2EffectExecutor::arm_live_clocks`] exactly once after every
 //!    constructor and startup effect and immediately before opening ingress.
-//! 2. Route control envelopes through [`V2EffectExecutor::enqueue_network`]
+//! 2. Route control envelopes through
+//!    [`V2EffectExecutor::enqueue_network_with_ingress_ownership`]
 //!    and payload traffic through the authenticated chunk/certified-response
 //!    methods in this module.
 //! 3. Repeatedly call [`V2EffectExecutor::step`] and execute every task handed
@@ -94,6 +95,8 @@ use iroha_data_model::{
 };
 
 use super::{
+    FairV2IngressOwnershipEvidence,
+    message::BlockMessage,
     output_guard::ConsensusOutputGuard,
     v2::{AdapterEffect, AdapterError, SignRequest},
     v2_body_store::{
@@ -2415,7 +2418,23 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.pending_tip_recovery.as_ref()
     }
 
-    /// Authenticate and enqueue one reducer-directed v2 network message.
+    /// Authenticate and enqueue one reducer-directed v2 network message while
+    /// preserving the exact fair-ingress owner through serialized dispatch.
+    pub(crate) fn enqueue_network_with_ingress_ownership(
+        &mut self,
+        message: wire::ConsensusMessageV2,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> Result<EventTag, NetworkIngressError> {
+        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
+            return Err(NetworkIngressError::FailClosed);
+        }
+        self.runtime
+            .enqueue_network_with_ingress_ownership(message, ingress_ownership)
+    }
+
+    /// Test-only direct helper. Production must provide the ownership carrier
+    /// produced by fair authenticated ingress.
+    #[cfg(test)]
     pub(crate) fn enqueue_network(
         &mut self,
         message: wire::ConsensusMessageV2,
@@ -4122,8 +4141,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.close(EffectExecutorError::Service(reason.to_string()), services)
     }
 
-    /// Authenticate a chunk before handing it to the reconstruction adapter.
+    /// Authenticate a chunk before handing it to the reconstruction adapter,
+    /// retaining its exact fair-ingress ownership until this consumer seam.
+    pub(crate) fn accept_payload_chunk_with_ingress_ownership<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        chunk: wire::PayloadChunk,
+        authenticated_sender: &PeerId,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+        services: &mut S,
+    ) -> Result<(), EffectTransportError> {
+        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+        ));
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(&message)
+        {
+            return Err(self.fail_closed_transport(
+                "payload chunk lost or altered its fair-ingress ownership",
+                services,
+            ));
+        }
+        self.accept_payload_chunk_inner(work_id, chunk, authenticated_sender, services)
+    }
+
+    /// Test-only direct chunk helper. Production must preserve the ownership
+    /// carrier produced by fair authenticated ingress.
+    #[cfg(test)]
     pub(crate) fn accept_payload_chunk<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        chunk: wire::PayloadChunk,
+        authenticated_sender: &PeerId,
+        services: &mut S,
+    ) -> Result<(), EffectTransportError> {
+        self.accept_payload_chunk_inner(work_id, chunk, authenticated_sender, services)
+    }
+
+    fn accept_payload_chunk_inner<S: V2EffectServices>(
         &mut self,
         work_id: EffectWorkId,
         chunk: wire::PayloadChunk,

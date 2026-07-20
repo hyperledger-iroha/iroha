@@ -3919,11 +3919,13 @@ impl NetworkReplyFlushAckTestFixture {
             subscriber_route,
             canonical_post.priority,
         );
-        let canonical = NetworkMessage::Post(canonical_post);
-        let stream_wire_bytes = norito::to_bytes(&canonical)
-            .expect("test reply post must have a canonical Norito encoding")
-            .len()
+        // The fixture has no local peer/encryptor context from which to reproduce
+        // the production stream charge, so retain a deterministic positive budget
+        // from the same canonical payload serialization used by actor admission.
+        let stream_wire_bytes = ncore::encoded_payload_len(&canonical_post.data)
+            .expect("test reply payload must have a canonical Norito encoding")
             .max(1);
+        let canonical = NetworkMessage::Post(canonical_post);
         let class = ActorProgressClass::for_route(topic, subscriber_route)
             .expect("reliable test reply route must have an actor class");
         let ticket = NetworkActorAdmittedTicketIdentity {
@@ -19371,7 +19373,12 @@ mod tests {
         assert!(first.identity().is_bound_to_delivery(&route));
         assert!(first.identity().is_authenticated_via(&authenticated_source));
         assert!(first.identity().ticket_rank() >= 1);
-        assert!(first.identity().ticket_stream_wire_bytes() > 0);
+        assert_eq!(
+            first.identity().ticket_stream_wire_bytes(),
+            ncore::encoded_payload_len(&post.data)
+                .expect("test reply payload must have a canonical Norito encoding")
+                .max(1)
+        );
         assert!(
             !first.identity().same_ticket_identity(second.identity()),
             "separate synthetic actors cannot alias an opaque ticket"

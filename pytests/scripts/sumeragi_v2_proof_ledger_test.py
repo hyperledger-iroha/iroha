@@ -13700,7 +13700,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 378 tests",
+            "must contain exactly 406 tests",
         ),
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -13708,9 +13708,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=378",
-            "readonly expected_production_liveness_test_count=376",
-            "production liveness source count must be sealed as 378",
+            "readonly expected_production_liveness_test_count=406",
+            "readonly expected_production_liveness_test_count=404",
+            "production liveness source count must be sealed as 406",
         ),
         (
             'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
@@ -13783,14 +13783,14 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 378",
-            "_PRODUCTION_TEST_COUNT = 376",
-            "production test count must equal the exact shell inventory count 378",
+            "_PRODUCTION_TEST_COUNT = 406",
+            "_PRODUCTION_TEST_COUNT = 404",
+            "production test count must equal the exact shell inventory count 406",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-merge-sidecar", "merge_sidecar::tests", 26),',
             '("production-merge-sidecar", "merge_sidecar::tests", 25),',
-            '("production-merge-sidecar", "merge_sidecar::tests", 24),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -14483,6 +14483,11 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::authoritative_runtime_gate_tests::",
+            "fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
+            sumeragi_source,
+        ),
+        (
+            "sumeragi::authoritative_runtime_gate_tests::",
             "transport_reply_route_construction_is_fallible_and_target_bound",
             sumeragi_source,
         ),
@@ -14514,6 +14519,26 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "saturated_materializer_does_not_erase_same_request_alternate_session",
                 "saturated_materializer_does_not_erase_same_request_alternate_bytes",
                 "partitioned_materialization_preserves_rejected_source_resume_cursor",
+                "sidecar_flush_refinement_advances_only_exact_source_chunk",
+            )
+        ),
+        *(
+            ("sumeragi::v2::tests::", test_name, adapter_source)
+            for test_name in (
+                "deferred_actor_source_never_aliases_across_adapter_instances",
+                "deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_step",
+                "deferred_authenticated_retry_retains_exact_original_and_effective_tags",
+                "deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap",
+                "deferred_service_debt_overflow_is_typed_and_fail_closed",
+                "deferred_service_evidence_rejects_every_owner_and_rank_mutation",
+                "deferred_zero_ordinal_is_exact_single_use_and_never_reminted",
+            )
+        ),
+        *(
+            ("sumeragi::v2_effects::tests::", test_name, effects_source)
+            for test_name in (
+                "live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks",
+                "recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks",
             )
         ),
         *(
@@ -14526,6 +14551,19 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "duplicate_reply_effect_retains_alternate_sources_across_source_update",
                 "temporarily_unserviceable_effect_requeues_behind_later_reserved_work",
                 "retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling",
+                "durable_lane_certificate_coalescing_preserves_alternate_ingress_owners",
+            )
+        ),
+        *(
+            ("sumeragi::v2_runtime::tests::", test_name, runtime_source)
+            for test_name in (
+                "adapter_command_identity_is_derived_from_exact_immutable_payload",
+                "admission_ordinal_exhaustion_fails_runtime_closed",
+                "runtime_rejects_replayed_foreign_and_mutated_deferred_tokens",
+                "scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches",
+                "scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields",
+                "scheduler_owner_must_be_taken_before_a_later_step_can_enter",
+                "selected_owner_without_a_runtime_minted_ordinal_fails_closed",
             )
         ),
         *(
@@ -14561,6 +14599,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "ownership_units_reject_reservation_spill_and_release_exact_target",
                 "backpressured_source_does_not_block_other_sources_or_consume_their_reserve",
                 "response_outputs_without_exact_routes_fail_stop",
+                "exact_output_coalescing_preserves_distinct_fair_ingress_admissions",
+                "orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes",
+                "sidecar_flush_ack_identity_mismatch_fails_closed",
                 "sidecar_receipts_use_a_separate_bounded_control_queue",
                 "exact_output_retry_rejects_a_different_message_identity",
                 "full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure",
@@ -14583,6 +14624,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "route_cancelled_between_preflight_and_admission_retires_without_queue_ownership",
                 "reply_admission_rejects_retargeting_foreign_handles_and_wrong_tickets",
                 "reply_actor_admission_does_not_complete_writer_flush_ack",
+                "reply_flush_identity_binds_ticket_tenure_source_payload_and_delivery_occurrence",
+                "reply_flush_test_fixture_binds_exact_canonical_post_and_opaque_actor",
                 "reply_flush_ack_cancellation_between_precheck_and_budget_lock_returns_none",
                 "retired_reply_tenure_closes_flush_ack_without_false_completion",
                 "reply_flush_test_fixture_controls_success_and_close_without_false_receipts",
@@ -14594,13 +14637,26 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "controlled_v2_admission_preserves_distinct_relay_identity",
             irohad_control_source,
         ),
+        *(
+            ("consensus_message_control::tests::", test_name, irohad_control_source)
+            for test_name in (
+                "failed_release_clears_in_flight_ownership_and_latches_fatal",
+                "fatal_controller_rejects_an_unchanged_command_poll",
+                "retired_release_finishes_drain_without_claiming_delivery",
+            )
+        ),
+        (
+            "network_relay_tests::",
+            "obsolete_sumeragi_relay_message_completes_as_delivered",
+            irohad_main_source,
+        ),
         (
             "network_relay_tests::",
             "test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
             irohad_main_source,
         ),
     )
-    assert len(route_completion_inventory_additions) == 82
+    assert len(route_completion_inventory_additions) == 110
     production_inventory_additions = (
         new_production_inventory_additions
         + macro_step_production_inventory_additions
@@ -14728,10 +14784,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 378
-    assert len(set(production_inventory)) == 378
-    assert "readonly expected_production_liveness_test_count=378" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 378" in receipt_source
+    assert len(production_inventory) == 406
+    assert len(set(production_inventory)) == 406
+    assert "readonly expected_production_liveness_test_count=406" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 406" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -14741,7 +14797,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 378
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 406
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS

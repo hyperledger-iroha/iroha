@@ -207,7 +207,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 378
+_PRODUCTION_TEST_COUNT = 406
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -227,9 +227,9 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        24,
+        25,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 25),
+    ("production-merge-sidecar", "merge_sidecar::tests", 26),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
@@ -237,15 +237,15 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 31),
+    ("production-v2-adapter", "sumeragi::v2::tests", 38),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 52),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 27),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 24),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 46),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -264,17 +264,17 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-network-reliable-actor",
         "network::tests",
-        43,
+        45,
     ),
     (
         "production-irohad-consensus-message-control",
         "consensus_message_control::tests",
-        1,
+        4,
     ),
     (
         "production-irohad-network-relay",
         "network_relay_tests",
-        1,
+        2,
     ),
     (
         "production-irohad-authenticated-via",

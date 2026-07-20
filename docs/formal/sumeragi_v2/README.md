@@ -644,7 +644,7 @@ rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 378 named tests
+Before network startup, the executable wrapper inventories 406 named tests
 across 24 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -656,17 +656,13 @@ distinct/cross-kind collisions, and actor-side subscriber backlog transfer; and
 1 binds exact CommitQC coalescing across the runtime queue and Busy-deferred
 adapter owner; and 4 bind exact Nexus lane-relay ownership and source fairness.
 Removal of the obsolete adapter cursor alias and two superseded network
-broadcast-residual tests made that net delta 34. The current expansion adds
-three lane-work route/scheduling tests, one production runner scan test, and
-ten exact-output route/reservation tests, while removing the superseded
-target-only backpressure name, for a net delta of 13.
-The P2P reply-route slice adds nine opaque-tenure, reconstruction,
-classification, cancellation-race, and invalid-admission tests while removing
-one phantom historical inventory name, for a further net delta of 8.
-The preceding completion added another 33 per-source route, worker, sidecar,
-runner, daemon, and boundary regressions across three additional modules. The
-latest writer-flush and retirement closure adds 25 current regressions and
-removes one phantom runner inventory name, for a further net delta of 24.
+broadcast-residual tests made that net delta 34. Relative to the resulting
+298-name inventory, the current closure adds 110 exact tests and removes two
+superseded names, for a net increase of 108 and an exact total of 406. The
+additions bind semantic request identity, per-source route/cursor ownership,
+writer-flush identity, sidecar source limits, runner/worker route preservation,
+daemon Hold/Release failure handling, actor-global deferred capabilities,
+scheduler ownership handoff, and fail-closed ordinal/debt boundaries.
 These tests deliberately do not claim remote application acknowledgement,
 relay second-hop completion, or unbounded
 broadcast admission. The 264-name baseline added 32 regressions for atomic lane
@@ -760,7 +756,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 47 pre-network legs and the exact
-378-test inventory, the pinned harness lock and resolved toolchain, the formal
+406-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

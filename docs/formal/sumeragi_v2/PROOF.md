@@ -778,7 +778,7 @@ work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
 reconstruction-refinement, or starvation obligations.
 
-The current pre-network release inventory names 378 tests across twenty-four Rust
+The current pre-network release inventory names 406 tests across twenty-four Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -787,17 +787,14 @@ topology, removal, replacement, and identical-retry tests plus
 distinct/cross-kind broadcast-residual and subscriber-backlog tests, and 1
 runtime/Busy-deferred exact CommitQC coalescing test, plus 4 Nexus lane-relay
 ownership/fairness tests. Removing the obsolete adapter cursor alias and two
-superseded network broadcast-residual tests yielded the net delta of 34. The
-current expansion adds three lane-work route/scheduling tests, one production
-runner scan test, and ten exact-output route/reservation tests, then removes
-the superseded target-only backpressure name, for a net delta of 13.
-The P2P reply-route slice adds nine opaque-tenure, reconstruction,
-classification, cancellation-race, and invalid-admission tests while removing
-one phantom historical name, for a further net delta of 8.
-The preceding completion added another 33 per-source route, worker, sidecar,
-runner, daemon, and boundary regressions across three additional modules. The
-latest writer-flush and retirement closure adds 25 current regressions and
-removes one phantom runner inventory name, for a further net delta of 24.
+superseded network broadcast-residual tests yielded the net delta of 34.
+Relative to the resulting 298-name inventory, the current closure adds 110
+exact tests and removes two superseded names, for a net increase of 108 and an
+exact total of 406. The additions cover semantic request identity, independent
+per-source routes/cursors, writer-flush identity, sidecar source isolation,
+runner/worker route retention, daemon Hold/Release failure handling,
+actor-global deferred capabilities, scheduler ownership handoff, and typed
+fail-closed ordinal/debt boundaries.
 They are local ownership and reconstruction
 contracts, not remote application acknowledgement, relay second-hop
 completion, or unbounded broadcast admission. The 264-name baseline added 32
@@ -832,7 +829,7 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 378-name
+earlier 168-name inventory. Fresh 406-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt

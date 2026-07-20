@@ -2270,7 +2270,9 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "post-decision-timeout-exclusion": "PostDecisionTimeoutExclusionProperty",
     "decision-recovery-across-restart": "DecisionRecoveryAcrossRestartProperty",
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
-    "progress-witness-preservation": "AsyncProgressWitnessProperty",
+    "progress-witness-preservation": (
+        "AsyncProgressWitnessAndHistoricalRecoveryProperty"
+    ),
     "post-gst-deadlock-freedom": "DeadlockFreedomProperty",
     "protected-service-rank-stage4-ready-causal": (
         "ProtectedStage4RankProgressProperty"
@@ -2385,6 +2387,7 @@ PROOF_STATUS_DEPENDENCIES = {
         "generation-scoped-vote-delivery",
         "post-decision-timeout-exclusion",
         "decision-recovery-across-restart",
+        "effective-lock-body-acquisition-production-refinement",
         "progress-witness-production-refinement",
     ),
     "post-gst-deadlock-freedom": (
@@ -2856,7 +2859,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 378
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 406
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 12),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
@@ -2864,9 +2867,9 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        24,
+        25,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 25),
+    ("production-merge-sidecar", "merge_sidecar::tests", 26),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
@@ -2874,15 +2877,15 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 31),
+    ("production-v2-adapter", "sumeragi::v2::tests", 38),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 52),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 27),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 24),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 46),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2890,13 +2893,13 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ),
     ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
     ("production-p2p-peer-reliable-flush", "peer::run::tests", 9),
-    ("production-p2p-network-reliable-actor", "network::tests", 43),
+    ("production-p2p-network-reliable-actor", "network::tests", 45),
     (
         "production-irohad-consensus-message-control",
         "consensus_message_control::tests",
-        1,
+        4,
     ),
-    ("production-irohad-network-relay", "network_relay_tests", 1),
+    ("production-irohad-network-relay", "network_relay_tests", 2),
     ("production-irohad-authenticated-via", "tests::relay_fairness", 1),
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
@@ -3050,6 +3053,34 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::closed_reliable_subscriber_transfers_actor_pending_backlog_to_replacement",
     "consensus_message_control::tests::controlled_v2_admission_preserves_distinct_relay_identity",
     "network_relay_tests::test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
+    "merge_sidecar::tests::sidecar_flush_refinement_advances_only_exact_source_chunk",
+    "sumeragi::v2::tests::deferred_actor_source_never_aliases_across_adapter_instances",
+    "sumeragi::v2::tests::deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_step",
+    "sumeragi::v2::tests::deferred_authenticated_retry_retains_exact_original_and_effective_tags",
+    "sumeragi::v2::tests::deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap",
+    "sumeragi::v2::tests::deferred_service_debt_overflow_is_typed_and_fail_closed",
+    "sumeragi::v2::tests::deferred_service_evidence_rejects_every_owner_and_rank_mutation",
+    "sumeragi::v2::tests::deferred_zero_ordinal_is_exact_single_use_and_never_reminted",
+    "sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks",
+    "sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks",
+    "sumeragi::v2_lane_work::tests::durable_lane_certificate_coalescing_preserves_alternate_ingress_owners",
+    "sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload",
+    "sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed",
+    "sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens",
+    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches",
+    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields",
+    "sumeragi::v2_runtime::tests::scheduler_owner_must_be_taken_before_a_later_step_can_enter",
+    "sumeragi::v2_runtime::tests::selected_owner_without_a_runtime_minted_ordinal_fails_closed",
+    "sumeragi::v2_worker::tests::exact_output_coalescing_preserves_distinct_fair_ingress_admissions",
+    "sumeragi::v2_worker::tests::orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes",
+    "sumeragi::v2_worker::tests::sidecar_flush_ack_identity_mismatch_fails_closed",
+    "network::tests::reply_flush_identity_binds_ticket_tenure_source_payload_and_delivery_occurrence",
+    "network::tests::reply_flush_test_fixture_binds_exact_canonical_post_and_opaque_actor",
+    "consensus_message_control::tests::failed_release_clears_in_flight_ownership_and_latches_fatal",
+    "consensus_message_control::tests::fatal_controller_rejects_an_unchanged_command_poll",
+    "consensus_message_control::tests::retired_release_finishes_drain_without_claiming_delivery",
+    "network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered",
 )
 
 # The retained executor queue is the concrete FIFO consumer for reducer
@@ -9703,6 +9734,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncProgressWitnessProperty": (
             "specification => []AsyncProgressWitnessInvariant"
         ),
+        "AsyncProgressWitnessAndHistoricalRecoveryProperty": (
+            "/\\ AsyncProgressWitnessProperty(specification) "
+            "/\\ HistoricalLockedBodyRecoveryProperty(specification)"
+        ),
     }
     for symbol, exact_body in exact_async_operators.items():
         extracted = _top_level_operator_body(
@@ -9768,7 +9803,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     )
     exact_progress_obligation = (
         "\\A initialContext: "
-        "AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))"
+        "AsyncProgressWitnessAndHistoricalRecoveryProperty( "
+        "AsyncSpecAt(initialContext))"
     )
     if progress_obligation is None:
         errors.append(f"{async_path}: missing ProgressWitnessObligation")
@@ -9781,8 +9817,66 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if normalized != exact_progress_obligation:
             errors.append(
                 f"{async_path}:{line}: ProgressWitnessObligation must use the "
-                "crash-aware async property and state only "
+                "crash-aware async plus historical locked-body recovery property "
+                "and state only "
                 f"{exact_progress_obligation!r}; found {normalized!r}"
+            )
+
+    for retired_historical_sentinel in (
+        "HistoricalLockedBodyRecoveryObligation",
+        "HistoricalLockedBodyRecoveryProductionRefinementObligation",
+    ):
+        if _top_level_theorem_body(
+            async_source,
+            retired_historical_sentinel,
+            preserve_string_contents=True,
+        ) is not None:
+            errors.append(
+                f"{async_path}: retired unledgered historical recovery theorem "
+                f"{retired_historical_sentinel} must remain folded into the "
+                "reviewed progress-witness obligations"
+            )
+
+    historical_production_bridge = _top_level_theorem_body(
+        async_source,
+        "HistoricalLockedBodyRecoveryProductionRefinementFromReviewedSeams",
+        preserve_string_contents=True,
+    )
+    exact_historical_bridge_statement = (
+        "/\\ EffectiveLockBodyAcquisitionProductionRefinementObligation "
+        "/\\ ProgressWitnessProductionRefinementObligation "
+        "=> ProductionHistoricalLockedBodyRecoveryRefinement"
+    )
+    exact_historical_bridge_proof = (
+        "BY DEF EffectiveLockBodyAcquisitionProductionRefinementObligation, "
+        "ProgressWitnessProductionRefinementObligation, "
+        "ProductionEffectiveLockBodyAcquisitionRefinement, "
+        "ProductionProgressWitnessTraceRefinement, "
+        "ProductionHistoricalLockedBodyRecoveryRefinement"
+    )
+    if historical_production_bridge is None:
+        errors.append(
+            f"{async_path}: missing historical locked-body production bridge from "
+            "the two reviewed cross-tool seams"
+        )
+    else:
+        body, line = historical_production_bridge
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        observed_statement = " ".join(parts[0].split())
+        observed_proof = " ".join(parts[1].split()) if len(parts) == 2 else ""
+        if observed_statement != exact_historical_bridge_statement:
+            errors.append(
+                f"{async_path}:{line}: historical locked-body production bridge "
+                f"must state exactly {exact_historical_bridge_statement!r}; "
+                f"found {observed_statement!r}"
+            )
+        if observed_proof != exact_historical_bridge_proof:
+            errors.append(
+                f"{async_path}:{line}: historical locked-body production bridge "
+                "must derive the refinement from the exact effective-lock and "
+                "progress-witness definitions"
             )
 
     integration_path = (
@@ -26697,8 +26791,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 147:
-        errors.append("internal release-regression seal must contain exactly 147 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 175:
+        errors.append("internal release-regression seal must contain exactly 175 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -26855,11 +26949,11 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 378 named tests\nacross 24 Rust modules",
-            "all 47 pre-network legs and the exact\n378-test inventory",
+            "inventories 406 named tests\nacross 24 Rust modules",
+            "all 47 pre-network legs and the exact\n406-test inventory",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "release inventory names 378 tests across twenty-four Rust\nmodules",
+            "release inventory names 406 tests across twenty-four Rust\nmodules",
             "pre-network corridor\nnow has 47 legs",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (

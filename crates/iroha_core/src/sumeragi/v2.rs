@@ -10,7 +10,7 @@
 //! after an unacknowledged safety write.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -529,6 +529,7 @@ pub(crate) enum AdapterEffect {
 pub(crate) struct AdapterOutcome {
     disposition: reducer::StepDisposition,
     effects: Vec<AdapterEffect>,
+    deferred_admission_ordinal: Option<u128>,
 }
 
 /// Post-finality cleanup result for a reducer height already durable in Kura.
@@ -703,7 +704,6 @@ struct DeferredInput {
 
 struct DeferPolicyOutcome {
     outcome: AdapterOutcome,
-    busy_owned: bool,
 }
 
 impl PartialEq for DeferredInput {
@@ -1193,6 +1193,16 @@ impl DeferredServiceEvidence {
     /// Return whether both production seams consumed this exact occurrence.
     pub(crate) fn service_handoff_is_complete(&self) -> bool {
         self.adapter_service_is_claimed() && self.admission_capability.runtime_handoff_is_claimed()
+    }
+
+    /// Whether this deferred occurrence originated at authenticated network
+    /// ingress and therefore requires the runtime's matching fair-ingress
+    /// carrier until service completes.
+    pub(crate) const fn is_authenticated_ingress(&self) -> bool {
+        matches!(
+            self.retag,
+            DeferredRetagRelation::AuthenticatedIngress { .. }
+        )
     }
 
     #[cfg(test)]
@@ -1902,6 +1912,12 @@ impl AdapterOutcome {
     pub(crate) fn into_effects(self) -> Vec<AdapterEffect> {
         self.effects
     }
+
+    /// Actor-global owner retained when this exact input crossed into the
+    /// adapter's Busy-deferred queue.
+    pub(crate) const fn deferred_admission_ordinal(&self) -> Option<u128> {
+        self.deferred_admission_ordinal
+    }
 }
 
 /// Signature aggregation boundary used when the reducer forms a local QC or TC.
@@ -2076,6 +2092,10 @@ pub(crate) enum AdapterError {
     /// semantic projection, or single-use capability.
     #[error("Sumeragi v2 deferred service ownership token is invalid or already consumed")]
     DeferredServiceOwnershipViolation,
+    /// The serialized runtime lost, altered, or misattached the fair-ingress
+    /// carrier for an authenticated adapter command.
+    #[error("Sumeragi v2 authenticated runtime ingress ownership is invalid")]
+    RuntimeIngressOwnershipViolation,
     /// The reducer is permanently closed after a durability failure.
     #[error("Sumeragi v2 adapter is fail-closed after a durability failure")]
     FailClosed,
@@ -2466,6 +2486,21 @@ impl SumeragiV2Adapter {
         &self,
         candidate: &wire::QuorumCertificate,
     ) -> Option<reducer::EventTag> {
+        self.deferred_quorum_certificate_owner(candidate)
+            .map(|(tag, _)| tag)
+    }
+
+    /// Return the tag and actor-global admission ordinal of an exact
+    /// Commit/Prepare QC already owned by the Busy-deferred progress lane.
+    ///
+    /// The ordinal is an opaque process-local association key. It lets the
+    /// serialized runtime merge later authenticated-source routes into the
+    /// exact deferred occurrence without exposing or reconstructing the
+    /// adapter's reducer event.
+    pub(crate) fn deferred_quorum_certificate_owner(
+        &self,
+        candidate: &wire::QuorumCertificate,
+    ) -> Option<(reducer::EventTag, u128)> {
         self.deferred_progress_inputs.iter().find_map(|input| {
             let reducer::Event::QuorumCertificateReceived { tag, certificate } = &input.event
             else {
@@ -2473,8 +2508,24 @@ impl SumeragiV2Adapter {
             };
             self.registry
                 .reducer_qc_matches_wire(certificate, candidate)
-                .then_some(*tag)
+                .then_some((*tag, input.admission_ordinal))
         })
+    }
+
+    /// Exact actor-global ordinals currently retained by authenticated
+    /// Busy-deferred inputs across all service classes.
+    ///
+    /// The serialized runtime uses this snapshot only to retire carriers for
+    /// inputs which a legitimate adapter transition superseded and to reject
+    /// any newly active deferred input that lacks its original carrier.
+    pub(crate) fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| input.retag_authenticated_ingress)
+            .map(|input| input.admission_ordinal)
+            .collect()
     }
 
     /// Return whether a wire payload may use the active lock's progress lane.
@@ -2874,6 +2925,7 @@ impl SumeragiV2Adapter {
                         round,
                         kind,
                     }],
+                    deferred_admission_ordinal: None,
                 }),
                 None,
             ));
@@ -2975,6 +3027,7 @@ impl SumeragiV2Adapter {
         AdapterOutcome {
             disposition: reducer::StepDisposition::Ignored(reason),
             effects: Vec::new(),
+            deferred_admission_ordinal: None,
         }
     }
 
@@ -3099,7 +3152,7 @@ impl SumeragiV2Adapter {
             result.outcome.disposition() == reducer::StepDisposition::Applied
                 || (result.outcome.disposition()
                     == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-                    && result.busy_owned)
+                    && result.outcome.deferred_admission_ordinal().is_some())
         });
         if !retain {
             self.registry = previous_registry;
@@ -4669,14 +4722,16 @@ impl SumeragiV2Adapter {
         self.record_reducer_outcome(&queued, disposition, outcome.effects());
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
             self.log_body_progress(&queued, disposition, 0);
-            let owned = self.enqueue_deferred(
+            let deferred_admission_ordinal = self.enqueue_deferred(
                 queued,
                 retag_authenticated_ingress,
                 priority,
                 admission,
                 completion_evidence,
             )?;
-            if owned && let Some(admission) = admission {
+            if deferred_admission_ordinal.is_some()
+                && let Some(admission) = admission
+            {
                 self.record_ingress_delivery(admission);
             }
             self.publish_status()?;
@@ -4684,8 +4739,8 @@ impl SumeragiV2Adapter {
                 outcome: AdapterOutcome {
                     disposition,
                     effects: Vec::new(),
+                    deferred_admission_ordinal,
                 },
-                busy_owned: owned,
             });
         }
         // Busy is the reducer's only retryable disposition. Every applied or
@@ -4711,8 +4766,8 @@ impl SumeragiV2Adapter {
             outcome: AdapterOutcome {
                 disposition,
                 effects,
+                deferred_admission_ordinal: None,
             },
-            busy_owned: false,
         })
     }
 
@@ -4936,7 +4991,7 @@ impl SumeragiV2Adapter {
         priority: DeferredPriority,
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
-    ) -> Result<bool, AdapterError> {
+    ) -> Result<Option<u128>, AdapterError> {
         let protected_progress =
             admission.is_some_and(|admission| admission.locked_commit_progress);
         let mut input = DeferredInput {
@@ -4952,13 +5007,22 @@ impl SumeragiV2Adapter {
             eligible_skips: 0,
         };
         let progress_capacity = deferred_progress_capacity(self.wire_context.roster.len());
-        let duplicate = match priority {
-            DeferredPriority::Completion => self.deferred_completions.contains(&input),
-            DeferredPriority::Progress => self.deferred_progress_inputs.contains(&input),
-            DeferredPriority::Normal => self.deferred_inputs.contains(&input),
-        };
-        if duplicate {
-            return Ok(true);
+        let duplicate_ordinal = match priority {
+            DeferredPriority::Completion => self
+                .deferred_completions
+                .iter()
+                .find(|queued| *queued == &input),
+            DeferredPriority::Progress => self
+                .deferred_progress_inputs
+                .iter()
+                .find(|queued| *queued == &input),
+            DeferredPriority::Normal => {
+                self.deferred_inputs.iter().find(|queued| *queued == &input)
+            }
+        }
+        .map(|queued| queued.admission_ordinal);
+        if let Some(ordinal) = duplicate_ordinal {
+            return Ok(Some(ordinal));
         }
         match priority {
             DeferredPriority::Completion => {
@@ -4980,7 +5044,7 @@ impl SumeragiV2Adapter {
                 // already-owned signer/class retries after fair service rather
                 // than displacing admitted progress.
                 let Some(owner) = deferred_progress_owner(&input) else {
-                    return Ok(false);
+                    return Ok(None);
                 };
                 let class = owner.class();
                 let class_capacity = match class {
@@ -4994,7 +5058,7 @@ impl SumeragiV2Adapter {
                     deferred_progress_owner(queued)
                         .is_some_and(|queued_owner| queued_owner == owner)
                 }) {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 let class_len = self
                     .deferred_progress_inputs
@@ -5004,23 +5068,24 @@ impl SumeragiV2Adapter {
                 if class_len >= class_capacity
                     || self.deferred_progress_inputs.len() >= progress_capacity
                 {
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
             DeferredPriority::Normal => {
                 if self.deferred_inputs.len() >= MAX_DEFERRED_INPUTS {
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
         input.admission_capability = self.mint_deferred_admission_ordinal()?;
         input.admission_ordinal = input.admission_capability.ordinal;
+        let admission_ordinal = input.admission_ordinal;
         match priority {
             DeferredPriority::Completion => self.deferred_completions.push_back(input),
             DeferredPriority::Progress => self.deferred_progress_inputs.push_back(input),
             DeferredPriority::Normal => self.deferred_inputs.push_back(input),
         }
-        Ok(true)
+        Ok(Some(admission_ordinal))
     }
 
     fn mint_deferred_admission_ordinal(
@@ -12764,6 +12829,7 @@ mod tests {
                         None,
                     )
                     .expect("admit one locked Commit owner per frozen validator")
+                    .is_some()
             );
 
             let timeout = wire::TimeoutVote {
@@ -12786,6 +12852,7 @@ mod tests {
                         None,
                     )
                     .expect("admit one TimeoutVote owner per frozen validator")
+                    .is_some()
             );
             if signer == 0 {
                 let retained = adapter.deferred_progress_inputs.clone();
@@ -12807,7 +12874,7 @@ mod tests {
                     vote: distinct_same_signer,
                 };
                 assert!(
-                    !adapter
+                    adapter
                         .enqueue_deferred(
                             distinct_same_signer.clone(),
                             true,
@@ -12815,7 +12882,8 @@ mod tests {
                             None,
                             None,
                         )
-                        .expect("same signer cannot consume a second TimeoutVote slot"),
+                        .expect("same signer cannot consume a second TimeoutVote slot")
+                        .is_none(),
                     "TimeoutVote ownership must be signer-injective before the class is full"
                 );
                 assert_eq!(
@@ -12843,9 +12911,10 @@ mod tests {
                             DeferredPriority::Progress,
                             None,
                             None,
-                        )
-                        .expect("same signer retries after its prior owner is serviced")
-                );
+                    )
+                    .expect("same signer retries after its prior owner is serviced")
+                    .is_some()
+            );
             }
         }
 
@@ -12875,6 +12944,7 @@ mod tests {
                         None,
                     )
                     .expect("admit the independent QC class owner")
+                    .is_some()
             );
         }
         let timeout_certificate = wire::TimeoutCertificate {
@@ -12902,6 +12972,7 @@ mod tests {
                     None,
                 )
                 .expect("admit the independent TC class owner")
+                .is_some()
         );
 
         assert_eq!(
@@ -12942,7 +13013,7 @@ mod tests {
             .timeout_vote_to_core(&overflow, &adapter.wire_context)
             .expect("convert distinct TimeoutVote overflow fixture");
         assert!(
-            !adapter
+            adapter
                 .enqueue_deferred(
                     reducer::Event::TimeoutVoteReceived {
                         tag,
@@ -12954,6 +13025,7 @@ mod tests {
                     None,
                 )
                 .expect("a full TimeoutVote partition rejects without displacement")
+                .is_none()
         );
         assert_eq!(adapter.deferred_progress_inputs, retained);
     }
@@ -13007,7 +13079,7 @@ mod tests {
         );
         let admitted_before = adapter.deferred_progress_inputs.clone();
         assert!(
-            !adapter
+            adapter
                 .enqueue_deferred(
                     certificate_input.event.clone(),
                     false,
@@ -13016,6 +13088,7 @@ mod tests {
                     None,
                 )
                 .expect("ordinary certificate overflow is rejected before admission")
+                .is_none()
         );
         assert_eq!(
             adapter.deferred_progress_inputs, admitted_before,
@@ -13060,6 +13133,7 @@ mod tests {
                     None,
                 )
                 .expect("protected ownership uses its reserved locked-vote capacity")
+                .is_some()
         );
         assert_eq!(adapter.deferred_progress_inputs.len(), 2);
         assert_eq!(

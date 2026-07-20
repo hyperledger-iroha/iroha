@@ -9,40 +9,29 @@ Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
 native bridges and runtimes available.
 
-Declarative alias/SNS provisioning is implemented across the versioned data
-model, consensus and default executors, signed planners, structural onboarding
-configuration, CLI, Rust/Kotlin/mirrored-Java/Swift clients, Python tooling, and
-generated localnet templates. The split lease/binding payloads and handlers are
-deleted, and their regression fixtures use the declarative and explicit CAS
-lifecycle surfaces. The C# multisig-onboarding compatibility surface is removed,
-and the generated Torii OpenAPI root/current snapshots plus unsigned development
-manifests are synchronized and pass verification with the release-signature
-requirement disabled. The operator-signed release manifest remains separate
-release evidence. The recorded generated four-validator DA/RBC run covers
-staged/bootstrap validation, exact secret custody, all peer
-config/health checks, clean generated startup, `Ready` onboarding with no
-diagnostics, the three-resource zero-charge operator no-op plan, first sponsored
-onboarding, idempotent replay, and zero framing failures. The Taira bootstrap
-canary also retains full normalized alias domains and passes its 20-test suite.
-The release bulk wrapper and metrics now consume typed secret-free intents and
-canonical planner output only; the focused bulk/onboarding/canary script gate
-passes 56/56. A focused Core regression passes 1/1 after proving that a later
-alias conflict rolls back an earlier charged create, all derived indexes, and
-both balance changes. Real-router Torii source coverage spans sponsored create,
-exact replay, repair, stale-receipt conflict, token-only authentication, secret
-redaction, and retired-route absence.
-The complete Python script run recorded 2,655 passed, 42 skipped, and 170 failed;
-all 170 failures are classified in the unrelated Sumeragi proof-ledger (25) and
-release-receipt (145) gates, with no alias/SNS, onboarding, OpenAPI, SDK, or
-general Python failure. Remaining release evidence includes current-source
-reruns of the mounted Torii and generated-localnet corridors after their fixture
-and Kagami changes, the Kotlin/mirrored-Java suites once a Java runtime is
-available, remaining strict touched-crate Clippy, the full workspace suite after
-the Sumeragi gates are stable, the operator-signed OpenAPI release manifest, and
-a materialized Swift Norito bridge plus the complete Apple/Swift package suite. Any failure in
-the corridor must be fixed in the declarative path; retired mutation routes,
-split acquire/bind instructions, client payment proofs, raw post-genesis domain
-registration, and secret-bearing request shapes must not be restored as
+## Wallet activity query follow-ups
+
+- TODO: Add one authenticated, snapshot-stable account activity feed that
+  combines value movements and participant-scoped contract events behind an
+  opaque continuation cursor. The cursor must bind the ledger snapshot, make
+  the requested page limit apply to the combined result, and return an explicit
+  stale/expired-cursor error instead of allowing offset drift to skip rows.
+- TODO: Add an authenticated indexed aggregate for outgoing asset value over a
+  caller-supplied timestamp range. The result must bind its ledger snapshot and
+  support retail-wallet monthly policy checks without downloading transaction
+  pages or exposing unrelated account activity.
+
+## Alias/SNS release evidence
+
+- Run the Kotlin and mirrored-Java suites when a Java runtime is available.
+- Materialize the Swift Norito bridge and run the complete Apple/Swift package
+  suite.
+- Finish strict Clippy for the touched crates and run the full workspace suite
+  after the Sumeragi proof-ledger and release-receipt gates are stable.
+
+Fix any corridor failures in the declarative path. Do not restore retired
+mutation routes, split acquire/bind instructions, client payment proofs, raw
+post-genesis domain registration, or secret-bearing request shapes as
 fallbacks.
 
 Fee sponsorship has two intentionally deferred extensions. Sponsor-program

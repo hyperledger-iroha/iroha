@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2Stage6CapacityScratch ----
-EXTENDS SumeragiV2Stage6CausalRankScratch
+EXTENDS SumeragiV2Stage6CausalRankStrengthenedScratch
 
 (***************************************************************************
 Scratch temporal shell for a protected causal owner blocked by a

@@ -16,7 +16,7 @@
 //! Commit vote or a trusted local completion.
 
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     sync::Arc,
     time::{Duration, Instant},
@@ -612,7 +612,18 @@ pub(crate) enum RuntimeSelectedCandidateOwnership {
     /// A FIFO or recovery-FIFO selection owns this exact admitted command.
     Exact(RuntimeFifoCandidateOwnership),
     /// An adapter-owned Busy-deferred selection owns this exact occurrence.
-    ExactDeferred(DeferredServiceEvidence),
+    ExactDeferred(RuntimeDeferredCandidateOwnership),
+}
+
+/// Exact adapter-deferred occurrence and the fair-ingress carrier which must
+/// remain attached until that occurrence crosses the reducer boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeDeferredCandidateOwnership {
+    /// Actor-owned deferred service token.
+    pub(crate) service: DeferredServiceEvidence,
+    /// Authenticated ingress provenance. Trusted local completions and timers
+    /// deliberately carry `None`.
+    pub(crate) ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
 }
 
 /// Complete scheduler ownership carrier retained at the production step seam.
@@ -718,7 +729,20 @@ fn runtime_scheduler_projection_hash(
         }
         RuntimeSelectedCandidateOwnership::ExactDeferred(candidate) => {
             projection.push(2);
-            append_runtime_identity_field(&mut projection, candidate.projection_hash.as_ref());
+            append_runtime_identity_field(
+                &mut projection,
+                candidate.service.projection_hash.as_ref(),
+            );
+            match &candidate.ingress_ownership {
+                None => projection.push(0),
+                Some(ownership) => {
+                    projection.push(1);
+                    append_runtime_identity_field(
+                        &mut projection,
+                        ownership.projection_hash.as_ref(),
+                    );
+                }
+            }
         }
     }
     for queue in [evidence.queue_before, evidence.queue_after] {
@@ -762,8 +786,15 @@ impl RuntimeSchedulerOwnershipEvidence {
             RuntimeSelectedCandidateOwnership::ExactDeferred(candidate),
         ) = (&self.selected, &self.candidate)
         {
-            return if candidate.validate_exact()
-                && candidate.service_handoff_is_complete()
+            let ingress_exact = match &candidate.ingress_ownership {
+                Some(ownership) => {
+                    candidate.service.is_authenticated_ingress() && ownership.validate_exact()
+                }
+                None => !candidate.service.is_authenticated_ingress(),
+            };
+            return if candidate.service.validate_exact()
+                && candidate.service.service_handoff_is_complete()
+                && ingress_exact
                 && self.queue_before == self.queue_after
                 && self.fifo_owed_before == self.fifo_owed_after
             {
@@ -801,8 +832,7 @@ impl RuntimeSchedulerOwnershipEvidence {
                             .as_ref()
                             .is_some_and(|ownership| {
                                 ownership.validate_exact()
-                                    && ownership.runtime_bytes
-                                        == candidate.identity.canonical_bytes
+                                    && ownership.runtime_bytes == candidate.identity.canonical_bytes
                             }),
                         _ => candidate.ingress_ownership.is_none(),
                     }
@@ -1706,12 +1736,10 @@ fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &Validated
 impl ExactRuntimeCommandIdentity for AdapterCommand {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let (kind, canonical_bytes) = match self {
-            Self::Authenticated(authenticated) => {
-                (
-                    RuntimeCommandKind::Authenticated,
-                    authenticated.canonical_wire_bytes(),
-                )
-            }
+            Self::Authenticated(authenticated) => (
+                RuntimeCommandKind::Authenticated,
+                authenticated.canonical_wire_bytes(),
+            ),
             Self::LocalProposalReady {
                 manifest,
                 durable_receipt,
@@ -1909,12 +1937,10 @@ impl BoundedIngress<AdapterCommand> {
         authenticated: AuthenticatedConsensusMessage,
     ) -> Result<EventTag, EnqueueError> {
         let message = authenticated.wire_envelope_for_test();
-        let mut admitted = super::fair_v2_ingress_admit_for_test(
-            super::InboundBlockMessage::new(
-                super::message::BlockMessage::V2(message.clone()),
-                None,
-            ),
-        );
+        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
+            super::message::BlockMessage::V2(message.clone()),
+            None,
+        ));
         let ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -2200,6 +2226,20 @@ impl BoundedIngress<AdapterCommand> {
 /// The generic parameter exists so clock and queue behavior can be tested
 /// deterministically without constructing cryptographic contexts or a WAL.
 /// Production uses the implementation for [`SumeragiV2Adapter`] below.
+pub(crate) struct RuntimeDriverDispatch<E> {
+    effects: Vec<E>,
+    deferred_ingress: Option<(u128, RuntimeIngressOwnershipEvidence)>,
+}
+
+impl<E> RuntimeDriverDispatch<E> {
+    fn completed(effects: Vec<E>) -> Self {
+        Self {
+            effects,
+            deferred_ingress: None,
+        }
+    }
+}
+
 pub(crate) trait RuntimeDriver {
     /// Command payload consumed by the driver.
     type Command: ExactRuntimeCommandIdentity;
@@ -2214,7 +2254,7 @@ pub(crate) trait RuntimeDriver {
     fn dispatch(
         &mut self,
         command: TaggedCommand<Self::Command>,
-    ) -> Result<Vec<Self::Effect>, Self::Error>;
+    ) -> Result<RuntimeDriverDispatch<Self::Effect>, Self::Error>;
     /// Deliver the absolute round-timeout event.
     fn timeout_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error>;
     /// Deliver one derived retransmission tick.
@@ -2224,6 +2264,9 @@ pub(crate) trait RuntimeDriver {
     fn deferred_work_is_serviceable(&self) -> bool;
     /// Actor-global source which minted deferred ownership capabilities.
     fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource;
+    /// Actor-global ordinals of every authenticated occurrence still retained
+    /// by the adapter's Busy-deferred queues.
+    fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128>;
     /// Deliver exactly one serviceable adapter-owned deferred transition and
     /// its exact selected-occurrence token.
     fn dispatch_deferred(
@@ -2248,14 +2291,31 @@ impl RuntimeDriver for SumeragiV2Adapter {
     fn dispatch(
         &mut self,
         tagged: TaggedCommand<Self::Command>,
-    ) -> Result<Vec<Self::Effect>, Self::Error> {
+    ) -> Result<RuntimeDriverDispatch<Self::Effect>, Self::Error> {
         let tag = tagged.tag;
+        let authenticated = matches!(&tagged.command, AdapterCommand::Authenticated(_));
+        if authenticated != tagged.ingress_ownership.is_some() {
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
+        let ingress_ownership = tagged.ingress_ownership;
         let outcome = match tagged.command {
             AdapterCommand::Authenticated(message) => {
+                let ownership =
+                    ingress_ownership.ok_or(AdapterError::RuntimeIngressOwnershipViolation)?;
+                if !ownership.matches_authenticated(&message) {
+                    return Err(AdapterError::RuntimeIngressOwnershipViolation);
+                }
                 // Authenticated network ingress is deliberately retagged by the
                 // adapter if it waited behind a certified view transition.
                 // Asynchronous completion variants below retain `tag` exactly.
-                self.receive_authenticated(message)
+                let outcome = self.receive_authenticated(message)?;
+                let deferred_ingress = outcome
+                    .deferred_admission_ordinal()
+                    .map(|ordinal| (ordinal, ownership));
+                return Ok(RuntimeDriverDispatch {
+                    effects: outcome.into_effects(),
+                    deferred_ingress,
+                });
             }
             AdapterCommand::LocalProposalReady {
                 manifest,
@@ -2283,7 +2343,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
                 self.application_completed(tag, subject)
             }
         }?;
-        Ok(outcome.into_effects())
+        Ok(RuntimeDriverDispatch::completed(outcome.into_effects()))
     }
 
     fn timeout_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error> {
@@ -2300,6 +2360,10 @@ impl RuntimeDriver for SumeragiV2Adapter {
 
     fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
         SumeragiV2Adapter::deferred_admission_ordinal_source(self)
+    }
+
+    fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
+        SumeragiV2Adapter::authenticated_deferred_admission_ordinals(self)
     }
 
     fn dispatch_deferred(
@@ -2343,6 +2407,7 @@ pub(crate) enum RuntimeStep<E> {
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
     ingress: BoundedIngress<D::Command>,
+    deferred_ingress_ownership: BTreeMap<u128, RuntimeIngressOwnershipEvidence>,
     base_round_timeout: Duration,
     retransmit_interval: Duration,
     round_started_at: Instant,
@@ -2372,6 +2437,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let mut runtime = Self {
             driver,
             ingress: BoundedIngress::new(queue_config),
+            deferred_ingress_ownership: BTreeMap::new(),
             base_round_timeout: round_timeout,
             retransmit_interval,
             round_started_at: started_at,
@@ -2403,6 +2469,48 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.fail_closed = true;
         }
         result
+    }
+
+    fn reconcile_deferred_ingress_ownership(
+        &mut self,
+        handoff: Option<(u128, RuntimeIngressOwnershipEvidence)>,
+    ) -> bool {
+        let active = self.driver.authenticated_deferred_admission_ordinals();
+        let mut retained = self.deferred_ingress_ownership.clone();
+        if let Some((ordinal, candidate)) = handoff {
+            if !active.contains(&ordinal) || !candidate.validate_exact() {
+                return false;
+            }
+            match retained.get_mut(&ordinal) {
+                Some(existing) => {
+                    if !existing.merge_downstream(candidate) {
+                        return false;
+                    }
+                }
+                None => {
+                    retained.insert(ordinal, candidate);
+                }
+            }
+        }
+        retained.retain(|ordinal, _| active.contains(ordinal));
+        if retained.len() != active.len()
+            || !active.iter().all(|ordinal| retained.contains_key(ordinal))
+        {
+            return false;
+        }
+        self.deferred_ingress_ownership = retained;
+        true
+    }
+
+    fn accept_driver_dispatch(
+        &mut self,
+        dispatch: RuntimeDriverDispatch<D::Effect>,
+    ) -> Result<Vec<D::Effect>, RuntimeError<D::Error>> {
+        if !self.reconcile_deferred_ingress_ownership(dispatch.deferred_ingress) {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
+        Ok(dispatch.effects)
     }
 
     fn scheduler_arbitration_inputs(&self, now: Instant) -> RuntimeSchedulerArbitrationInputs {
@@ -2571,7 +2679,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     next_schedule,
                 )?;
                 match self.driver.dispatch(command) {
-                    Ok(effects) => effects,
+                    Ok(dispatch) => self.accept_driver_dispatch(dispatch)?,
                     Err(error) => return Err(self.close(error)),
                 }
             }
@@ -2671,7 +2779,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             schedule_after,
         )?;
         let effects = match self.driver.dispatch(command) {
-            Ok(effects) => effects,
+            Ok(dispatch) => self.accept_driver_dispatch(dispatch)?,
             Err(error) => return Err(self.close(error)),
         };
         self.observe_effects(now, &effects);
@@ -2711,10 +2819,22 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.fail_closed = true;
             return Err(RuntimeError::FailClosed);
         }
+        let ingress_ownership = self
+            .deferred_ingress_ownership
+            .remove(&evidence.admission_ordinal);
+        if evidence.is_authenticated_ingress() != ingress_ownership.is_some()
+            || !self.reconcile_deferred_ingress_ownership(None)
+        {
+            self.fail_closed = true;
+            return Err(RuntimeError::FailClosed);
+        }
         self.retain_scheduler_ownership(
             RuntimeSelectedOwnerKind::Deferred,
             round_tag,
-            RuntimeSelectedCandidateOwnership::ExactDeferred(evidence),
+            RuntimeSelectedCandidateOwnership::ExactDeferred(RuntimeDeferredCandidateOwnership {
+                service: evidence,
+                ingress_ownership,
+            }),
             queue_before,
             queue_after,
             arbitration,
@@ -3007,15 +3127,22 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// against canonical authority. Rejections do not poison the runtime.
     /// Once admitted, any adapter transition failure is fatal when the
     /// serialized command is executed.
-    pub(crate) fn enqueue_network(
+    pub(crate) fn enqueue_network_with_ingress_ownership(
         &mut self,
         message: wire::ConsensusMessageV2,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<EventTag, NetworkIngressError> {
+        let ingress_ownership =
+            RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ingress_ownership)
+                .ok_or_else(|| {
+                    self.fail_closed = true;
+                    NetworkIngressError::FailClosed
+                })?;
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
         let deferred_qc_owner = match &message.payload {
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self
-                .driver
-                .deferred_quorum_certificate_owner_tag(certificate),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                self.driver.deferred_quorum_certificate_owner(certificate)
+            }
             _ => None,
         };
         // An exact queued retransmission may always spend authentication work
@@ -3044,9 +3171,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
         let authenticated_deferred_qc_owner = match authenticated.payload() {
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => self
-                .driver
-                .deferred_quorum_certificate_owner_tag(certificate),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                self.driver.deferred_quorum_certificate_owner(certificate)
+            }
             _ => None,
         };
         if authenticated_deferred_qc_owner != deferred_qc_owner {
@@ -3056,7 +3183,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             self.fail_closed = true;
             return Err(NetworkIngressError::FailClosed);
         }
-        if let Some(owner_tag) = authenticated_deferred_qc_owner {
+        if let Some((owner_tag, admission_ordinal)) = authenticated_deferred_qc_owner {
+            if !self
+                .reconcile_deferred_ingress_ownership(Some((admission_ordinal, ingress_ownership)))
+            {
+                self.fail_closed = true;
+                return Err(NetworkIngressError::FailClosed);
+            }
             return Ok(owner_tag);
         }
         let class = if self
@@ -3076,10 +3209,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ));
         }
         let tag = self.driver.current_tag();
-        match self
-            .ingress
-            .enqueue_authenticated(tag, class, authenticated)
-        {
+        match self.ingress.enqueue_authenticated_with_ingress_ownership(
+            tag,
+            class,
+            authenticated,
+            ingress_ownership,
+        ) {
             Ok(owner) => Ok(owner),
             Err(EnqueueError::FailClosed) => {
                 self.fail_closed = true;
@@ -3087,6 +3222,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => Err(NetworkIngressError::Backpressure(error)),
         }
+    }
+
+    /// Test-only direct ingress helper. Production callers must preserve the
+    /// fair-ingress carrier obtained from the authenticated network boundary.
+    #[cfg(test)]
+    pub(crate) fn enqueue_network(
+        &mut self,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<EventTag, NetworkIngressError> {
+        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
+            super::message::BlockMessage::V2(message.clone()),
+            None,
+        ));
+        let ingress_ownership = admitted
+            .take_ingress_ownership()
+            .expect("real test fair ingress produces exact ownership");
+        self.enqueue_network_with_ingress_ownership(message, ingress_ownership)
     }
 
     /// Return whether the fair-ingress head can reach authentication and then
@@ -3098,7 +3250,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         {
             let deferred_owner = self
                 .driver
-                .deferred_quorum_certificate_owner_tag(&response.certificate);
+                .deferred_quorum_certificate_owner(&response.certificate)
+                .map(|(tag, _)| tag);
             return !self.fail_closed
                 && self
                     .ingress
@@ -3415,6 +3568,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             decision_subject,
             decision_commitment,
         );
+        if !self.reconcile_deferred_ingress_ownership(None) {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 deferred proposal retirement lost authenticated ingress ownership"
+                    .to_owned(),
+            );
+        }
         let remaining = self
             .ingress
             .decided_local_proposal_counts(
@@ -3466,6 +3626,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let deferred = self
             .driver
             .retire_deferred_unsafe_proposals_for_lock(locked_round, locked_subject);
+        if !self.reconcile_deferred_ingress_ownership(None) {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 unsafe-proposal retirement lost authenticated ingress ownership"
+                    .to_owned(),
+            );
+        }
         Ok(ingress.saturating_add(deferred))
     }
 
@@ -3791,17 +3958,19 @@ mod tests {
         fn dispatch(
             &mut self,
             tagged: TaggedCommand<Self::Command>,
-        ) -> Result<Vec<Self::Effect>, Self::Error> {
+        ) -> Result<RuntimeDriverDispatch<Self::Effect>, Self::Error> {
             if tagged.command.fail {
                 return Err(FakeError);
             }
             if let Some(tag) = tagged.command.enter_view {
                 self.current_tag = tag;
-                return Ok(vec![FakeEffect::enter_view(tag)]);
+                return Ok(RuntimeDriverDispatch::completed(vec![
+                    FakeEffect::enter_view(tag),
+                ]));
             }
             let value = tagged.command.record.expect("well-formed fake command");
             self.delivered.push((tagged.tag, value));
-            Ok(vec![FakeEffect::other()])
+            Ok(RuntimeDriverDispatch::completed(vec![FakeEffect::other()]))
         }
 
         fn timeout_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error> {
@@ -3820,6 +3989,10 @@ mod tests {
 
         fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
             &self.deferred_admission_ordinals
+        }
+
+        fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
+            BTreeSet::new()
         }
 
         fn dispatch_deferred(
@@ -4905,7 +5078,9 @@ mod tests {
         assert!(matches!(
             &evidence.candidate,
             RuntimeSelectedCandidateOwnership::ExactDeferred(candidate)
-                if candidate.admission_ordinal == 0 && candidate.validate_exact()
+                if candidate.service.admission_ordinal == 0
+                    && candidate.service.validate_exact()
+                    && candidate.ingress_ownership.is_none()
         ));
 
         let mut unavailable_driver = FakeDriver::new(owner_tag);
