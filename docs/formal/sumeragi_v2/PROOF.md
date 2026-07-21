@@ -853,7 +853,7 @@ route-lifecycle closure added three exact P2P tests without removing a name,
 for the historical 423-test checkpoint. Mechanical source reconciliation then
 added 16 tests and three owning modules, producing 439 tests across 29 modules;
 a renamed lane-relay saturation test replaced its obsolete name without
-changing cardinality. The in-flight sidecar refresh regression raised the
+changing cardinality. The in-flight sidecar redelivery regression raised the
 inventory to 440, and three terminal-flush/reconnect worker regressions produced
 the historical 443-test, 29-module, 52-leg checkpoint. The subsequent
 source-authority, immutable-sidecar, runner-race, daemon-corridor,

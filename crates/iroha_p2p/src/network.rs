@@ -2727,6 +2727,22 @@ impl NetworkReplySourceKey {
     fn owner_address(&self) -> usize {
         Arc::as_ptr(&self.owner) as usize
     }
+
+    /// Equality-preserving in-process projection of this authenticated source lane.
+    ///
+    /// The digest binds the opaque network-actor owner and canonical peer
+    /// identity. It is deliberately process-local: pointer identity is neither
+    /// stable across restarts nor suitable for wire, persistence, or consensus
+    /// state. Callers use it only when a fixed-width projection must preserve
+    /// [`Self`]'s exact equality semantics, including across connection-tenure
+    /// changes owned by the same actor.
+    #[must_use]
+    pub fn process_local_identity_hash(&self) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:p2p:reply-source-process-local-identity:v1\n";
+        let actor = (self.owner_address() as u128).to_le_bytes();
+        let authenticated_source = self.authenticated_via.encode();
+        Hash::new_from_chunks(&[DOMAIN, &actor, &authenticated_source])
+    }
 }
 
 impl PartialEq for NetworkReplySourceKey {
@@ -3783,6 +3799,28 @@ enum WeakProgressDeliveryAuthority {
 }
 
 impl WeakProgressDeliveryAuthority {
+    fn matches(&self, authority: &ProgressDeliveryAuthority) -> bool {
+        match (self, authority) {
+            (Self::Topology(retained), ProgressDeliveryAuthority::Topology(candidate)) => retained
+                .upgrade()
+                .is_some_and(|retained| Arc::ptr_eq(&retained, candidate)),
+            (
+                Self::Reply {
+                    semantic_target,
+                    tenure: retained,
+                },
+                ProgressDeliveryAuthority::Reply(candidate),
+            ) => {
+                semantic_target == candidate.semantic_target()
+                    && retained
+                        .upgrade()
+                        .is_some_and(|retained| Arc::ptr_eq(&retained, &candidate.tenure))
+            }
+            (Self::Topology(_), ProgressDeliveryAuthority::Reply(_))
+            | (Self::Reply { .. }, ProgressDeliveryAuthority::Topology(_)) => false,
+        }
+    }
+
     fn is_cancelled(&self) -> bool {
         match self {
             Self::Topology(membership) => membership
@@ -3988,6 +4026,60 @@ impl NetworkActorAdmittedTicketIdentity {
             && self.rank == other.rank
             && self.shape == other.shape
             && self.source == other.source
+    }
+
+    /// Equality-preserving process-local digest of the admitted ticket.
+    ///
+    /// This deliberately mirrors every field used by [`Self::same_ticket`],
+    /// including the opaque actor-budget owner. It is never serialized or
+    /// used as consensus state.
+    fn process_local_identity_hash(&self) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:p2p:admitted-ticket-process-local-identity:v1\n";
+        let mut projection = Vec::new();
+        projection.extend_from_slice(&(Arc::as_ptr(&self.budget) as usize as u128).to_le_bytes());
+        projection.extend_from_slice(&self.id.to_le_bytes());
+        projection.extend_from_slice(&(self.rank as u128).to_le_bytes());
+        projection.push(match self.shape.topic {
+            message::Topic::ConsensusSafety => 1,
+            message::Topic::Consensus => 2,
+            message::Topic::ConsensusChunk => 3,
+            message::Topic::ConsensusPayload => 4,
+            message::Topic::Control => 5,
+            message::Topic::BlockSync => 6,
+            message::Topic::TxGossip => 7,
+            message::Topic::TxGossipRestricted => 8,
+            message::Topic::PeerGossip => 9,
+            message::Topic::TrustGossip => 10,
+            message::Topic::Health => 11,
+            message::Topic::Other => 12,
+        });
+        projection.extend_from_slice(&(self.shape.stream_wire_bytes as u128).to_le_bytes());
+        projection.push(u8::from(self.shape.broadcast));
+        projection.extend_from_slice(self.shape.request_digest.as_ref());
+        match self.shape.authority {
+            None => projection.push(0),
+            Some(ProgressAuthorityIdentity::Topology(generation)) => {
+                projection.push(1);
+                projection.extend_from_slice(&generation.to_le_bytes());
+            }
+            Some(ProgressAuthorityIdentity::Reply(connection_ordinal)) => {
+                projection.push(2);
+                projection.extend_from_slice(&connection_ordinal.to_le_bytes());
+            }
+        }
+        match &self.source.target {
+            None => projection.push(0),
+            Some(target) => {
+                projection.push(1);
+                projection.extend_from_slice(&target.encode());
+            }
+        }
+        projection.push(match self.source.class {
+            ActorProgressClass::Safety => 1,
+            ActorProgressClass::Lane => 2,
+            ActorProgressClass::Bulk => 3,
+        });
+        Hash::new_from_chunks(&[DOMAIN, projection.as_slice()])
     }
 }
 
@@ -4237,6 +4329,32 @@ impl NetworkReplyFlushIdentity {
         self.ticket.shape.request_digest
     }
 
+    /// Process-local identity of the exact admitted delivery route.
+    ///
+    /// Unlike the semantic source key, this changes across reconnects and
+    /// later deliveries. It has no wire, persistence, or consensus meaning.
+    #[must_use]
+    pub fn process_local_route_identity_hash(&self) -> Hash {
+        self.route.process_local_identity_hash()
+    }
+
+    /// Process-local identity of this exact actor-minted writer completion.
+    ///
+    /// The digest binds the equality-preserving admitted-ticket identity, the
+    /// exact delivery route, and the clone-shared linear completion claim. An
+    /// independently rebuilt identity therefore cannot alias the completion
+    /// originally returned by the actor even when all visible ticket and route
+    /// fields are equal. This identity is never serialized or persisted.
+    #[must_use]
+    pub fn process_local_writer_occurrence_identity_hash(&self) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:p2p:writer-flush-process-local-identity:v1\n";
+        let ticket = self.ticket.process_local_identity_hash();
+        let route = self.route.process_local_identity_hash();
+        let completion_claim =
+            (Arc::as_ptr(&self.completion_claimed) as usize as u128).to_le_bytes();
+        Hash::new_from_chunks(&[DOMAIN, ticket.as_ref(), route.as_ref(), &completion_claim])
+    }
+
     /// Consume this exact actor-minted writer completion at most once.
     ///
     /// Cloned identities share the same process-local claim. This operation
@@ -4311,6 +4429,18 @@ impl NetworkReplyFlushIdentity {
     #[must_use]
     pub fn same_delivery_occurrence(&self, other: &Self) -> bool {
         self.same_ticket_identity(other) && self.route.same_delivery(&other.route)
+    }
+
+    /// Whether both values are clones of the exact actor-minted writer completion.
+    ///
+    /// Ticket and delivery equality alone is insufficient: independently
+    /// rebuilding an identity from the same admitted ticket would allocate
+    /// another linear completion claim. Only clones of the original identity
+    /// may accompany its writer acknowledgement across the runner boundary.
+    #[must_use]
+    pub fn same_writer_flush_occurrence(&self, other: &Self) -> bool {
+        self.same_delivery_occurrence(other)
+            && Arc::ptr_eq(&self.completion_claimed, &other.completion_claimed)
     }
 }
 
@@ -4741,6 +4871,11 @@ impl NetworkActorProgressBudget {
                 || !Arc::ptr_eq(&ticket.budget, self)
                 || ticket.shape != shape
                 || ticket.source != source
+                || match (&ticket.authority, authority) {
+                    (Some(retained), Some(candidate)) => !retained.matches(candidate),
+                    (None, None) => false,
+                    (Some(_), None) | (None, Some(_)) => true,
+                }
                 || !state.waiters.get(&source).is_some_and(|waiters| {
                     waiters
                         .iter()
@@ -19783,6 +19918,11 @@ mod tests {
         );
         assert_eq!(reconnected.source_key(), prior.source_key());
         assert_eq!(
+            reconnected.source_key().process_local_identity_hash(),
+            prior.source_key().process_local_identity_hash(),
+            "a reconnect under one actor owner preserves the source projection"
+        );
+        assert_eq!(
             retargeted.source_update_from(&reconnected),
             Err(NetworkReplyRouteError::Retargeted)
         );
@@ -19799,6 +19939,19 @@ mod tests {
         let foreign = foreign_fixture.mint(reconnected.semantic_target().clone());
         assert!(!fixture.retire(&foreign));
         assert!(foreign.is_active());
+        let mut same_peer_foreign_fixture =
+            NetworkReplyRouteTestFixture::new(prior.authenticated_via().clone());
+        let same_peer_foreign = same_peer_foreign_fixture.mint(prior.semantic_target().clone());
+        assert_ne!(
+            prior.source_key(),
+            same_peer_foreign.source_key(),
+            "two actor owners must not alias even for the same authenticated peer"
+        );
+        assert_ne!(
+            prior.source_key().process_local_identity_hash(),
+            same_peer_foreign.source_key().process_local_identity_hash(),
+            "the fixed-width source projection must retain opaque actor ownership"
+        );
     }
 
     #[test]
@@ -20478,9 +20631,32 @@ mod tests {
         assert!(!first_identity.same_delivery_occurrence(later_identity));
         assert_eq!(first_identity.source_key(), later_identity.source_key());
         assert_eq!(
+            first_identity.source_key().process_local_identity_hash(),
+            later_identity.source_key().process_local_identity_hash(),
+            "later deliveries retain one opaque authenticated-source owner"
+        );
+        assert_ne!(
+            first_identity.process_local_route_identity_hash(),
+            later_identity.process_local_route_identity_hash(),
+            "later deliveries must retain distinct exact-route identities"
+        );
+        assert_eq!(
             first_identity.source_key(),
             reconnected.identity().source_key(),
             "a reconnect keeps source fairness identity while changing ticket tenure"
+        );
+        assert_eq!(
+            first_identity.source_key().process_local_identity_hash(),
+            reconnected
+                .identity()
+                .source_key()
+                .process_local_identity_hash(),
+            "a reconnect preserves the process-local source projection"
+        );
+        assert_ne!(
+            first_identity.process_local_route_identity_hash(),
+            reconnected.identity().process_local_route_identity_hash(),
+            "a reconnect replaces the exact admitted route projection"
         );
         assert!(!first_identity.same_ticket_identity(reconnected.identity()));
         assert!(!first_identity.same_ticket_identity(other_source.identity()));
@@ -20498,6 +20674,11 @@ mod tests {
         assert!(
             !first_identity.same_ticket_identity(&foreign_budget_only),
             "equal ticket facts under another opaque budget owner must not alias"
+        );
+        assert_ne!(
+            first_identity.process_local_writer_occurrence_identity_hash(),
+            foreign_budget_only.process_local_writer_occurrence_identity_hash(),
+            "the writer occurrence must retain the opaque ticket-budget owner"
         );
 
         let (
@@ -20550,8 +20731,48 @@ mod tests {
         assert!(!first_identity.same_ticket_identity(foreign.identity()));
         assert!(!first_identity.same_delivery_occurrence(foreign.identity()));
         assert_ne!(first_identity.source_key(), foreign.identity().source_key());
+        assert_ne!(
+            first_identity.source_key().process_local_identity_hash(),
+            foreign
+                .identity()
+                .source_key()
+                .process_local_identity_hash(),
+            "the source projection must reject the same peer under another actor owner"
+        );
+        assert_ne!(
+            first_identity.process_local_route_identity_hash(),
+            foreign.identity().process_local_route_identity_hash(),
+            "the exact route projection must reject another actor owner"
+        );
 
         let cloned_first_identity = first_identity.clone();
+        let rebuilt_first_identity =
+            NetworkReplyFlushIdentity::from_admitted_ticket(first_identity.ticket.clone())
+                .expect("the same admitted ticket can reproduce only its field projection");
+        assert!(
+            first_identity.same_delivery_occurrence(&rebuilt_first_identity),
+            "ticket and delivery fields alone intentionally ignore completion-claim identity"
+        );
+        assert!(first_identity.same_writer_flush_occurrence(&cloned_first_identity));
+        assert!(
+            !first_identity.same_writer_flush_occurrence(&rebuilt_first_identity),
+            "an independently allocated claim is not the actor's exact writer completion"
+        );
+        assert_eq!(
+            first_identity.process_local_route_identity_hash(),
+            rebuilt_first_identity.process_local_route_identity_hash(),
+            "rebuilding from the same ticket preserves only the route projection"
+        );
+        assert_eq!(
+            first_identity.process_local_writer_occurrence_identity_hash(),
+            cloned_first_identity.process_local_writer_occurrence_identity_hash(),
+            "exact clones share one writer-occurrence projection"
+        );
+        assert_ne!(
+            first_identity.process_local_writer_occurrence_identity_hash(),
+            rebuilt_first_identity.process_local_writer_occurrence_identity_hash(),
+            "an independently rebuilt completion must not alias the actor's claim"
+        );
         assert!(first_identity.claim_writer_flush_once());
         assert!(
             !cloned_first_identity.claim_writer_flush_once(),
@@ -20694,10 +20915,15 @@ mod tests {
         let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer.clone(), 40, 20);
         let route_a = NetworkReplyRoute::new(origin_a.clone(), Arc::clone(&tenure), 20);
         let route_b = NetworkReplyRoute::new(origin_b.clone(), tenure, 21);
+        let equal_ordinal_different_tenure_b = NetworkReplyRoute::new(
+            origin_b.clone(),
+            test_reply_tenure(&handle.reply_route_owner, delivery_peer.clone(), 42, 20),
+            22,
+        );
         let reconnected_b = NetworkReplyRoute::new(
             origin_b.clone(),
             test_reply_tenure(&handle.reply_route_owner, delivery_peer, 41, 21),
-            22,
+            23,
         );
         let post = |peer_id, marker| Post {
             data: DeferredProgressMsg::Lane(marker),
@@ -20734,7 +20960,32 @@ mod tests {
         };
         assert_eq!(route_a.source_key(), route_b.source_key());
         assert!(matches!(
-            handle.post_reply_recoverable(post(origin_b.clone(), 3), &reconnected_b, Some(ticket)),
+            handle.post_reply_recoverable(
+                post(origin_b.clone(), 3),
+                &equal_ordinal_different_tenure_b,
+                Some(ticket),
+            ),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+
+        let reconnect_ticket =
+            match handle.post_reply_recoverable(post(origin_b.clone(), 3), &route_b, None) {
+                Err(NetworkActorAdmissionError::Backpressured {
+                    ticket: Some(ticket),
+                    rank: 1,
+                    ..
+                }) => ticket,
+                other => panic!("same source must regain rank one after collision: {other:?}"),
+            };
+        assert!(matches!(
+            handle.post_reply_recoverable(
+                post(origin_b.clone(), 3),
+                &reconnected_b,
+                Some(reconnect_ticket),
+            ),
             Err(NetworkActorAdmissionError::Rejected {
                 reason: NetworkActorAdmissionRejection::InvalidTicket,
                 ..

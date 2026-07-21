@@ -25285,7 +25285,7 @@ the current 477-test inventory with the same module and leg counts. Mechanical r
 CommitQC-admission, recovery, runner, watchdog, P2P-geometry, and daemon-genesis
 tests; the lane-relay saturation test is a rename in place, not a fifth module
 test. A subsequent adversarial sidecar regression proves a same-tenure route
-refresh cannot re-emit an in-flight chunk before its writer flush. Three worker
+redelivery cannot re-emit an in-flight chunk before its writer flush. Three worker
 regressions additionally retain pending and flushed-but-unapplied ownership,
 preserve a terminal zero-reservation route beside live siblings, and reactivate
 an unflushed current item on reconnect only after capacity becomes available.
@@ -25583,7 +25583,13 @@ historical name for a further net 8 and a total of 319. The rollover slice cover
 Kura CommitQC, body, and lane-certificate rereads; current global V2; lane
 proof/supersession, Native AMX, merge-share, certified-sidecar, and untyped
 fail-closed boundaries. The network slice pins identical-retry coalescing and
-exact per-target FIFO ownership for distinct/cross-kind collisions. The four
+exact per-target FIFO ownership for distinct/cross-kind collisions.
+Certified-sidecar completion now also retains a byte-free identity of the
+current source chunk and consumes one actor-minted, clone-shared writer claim
+only after exact projection and payload validation. Equal ticket/delivery
+fields reconstructed with another claim cannot cross worker handoff, and a
+consumed late receipt cannot advance a later byte-identical rematerialization.
+The four
 integration names execute as one module-filtered leg; adding
 the peer, network, daemon, and Nexus lane-relay modules expands the totals to
 21 modules and 41
@@ -25981,7 +25987,7 @@ runtime premise on the final signed source.
   genesis tests plus three owning modules, yielding 439 tests across 29
   modules. It also replaces the obsolete lane-relay saturation name in place,
   with no count increase for that module. The subsequent in-flight sidecar
-  refresh regression raises that inventory to 440 tests without adding a
+  redelivery regression raises that inventory to 440 tests without adding a
   module or leg. Three worker regressions then produce the historical
   443-test checkpoint by pinning pending/unapplied writer-flush deduplication,
   mixed-source terminal-route history, and capacity-checked reconnect

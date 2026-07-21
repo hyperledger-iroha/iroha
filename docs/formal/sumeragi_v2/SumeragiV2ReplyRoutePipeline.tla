@@ -64,11 +64,19 @@ ReplyPipelinePayload(semantic, messageCursor, chunkCursor) ==
    outputClass |-> ReplyItemClass(
                        semantic, messageCursor, chunkCursor)]
 
+(***************************************************************************
+The payload carrier is typed fieldwise.  Reachable ticket payloads remain
+the exact canonical records above: `ReplyPipelineItemPhaseBinding` fixes the
+singleton payload for every live ticket.  Keeping the carrier fieldwise is
+therefore equivalent on reachable items while avoiding a dependent image-set
+whose three bound coordinates are not supported by every strict TLAPS backend.
+***************************************************************************)
 ReplyPipelinePayloads ==
-  {ReplyPipelinePayload(semantic, messageCursor, chunkCursor):
-     semantic \in ReplySemantics,
-     messageCursor \in 0..ReplyMessageCount,
-     chunkCursor \in 0..ReplyChunkCount}
+  [semantic: ReplySemantics,
+   target: ReplyTargets,
+   messageCursor: 0..ReplyMessageCount,
+   chunkCursor: 0..ReplyChunkCount,
+   outputClass: ReplyOutputClasses]
 
 ReplyPipelineRawItem(owner, semantic, source, messageCursor, chunkCursor,
                      outputClass, flushRequired, fifoOrdinal,
@@ -223,11 +231,13 @@ ReplyPipelineItemWithoutTicket(item) ==
     NoReplyPipelineTicket, NoReplyTicketTenure, {})
 
 ReplyPipelineItemWithTicket(item, ticketId) ==
-  [item EXCEPT
-     !.phase = "Ticketed",
-     !.ticketId = ticketId,
-     !.ticketTenure = item.routeTenure,
-     !.ticketPayload = {ReplyPipelinePayloadForItem(item)}]
+  ReplyPipelineRawItem(
+    item.owner, item.semantic, item.source,
+    item.messageCursor, item.chunkCursor,
+    item.outputClass, item.flushRequired,
+    item.fifoOrdinal, item.routeTenure, "Ticketed",
+    ticketId, item.routeTenure,
+    {ReplyPipelinePayloadForItem(item)})
 
 ReplyPipelineItemWithRouteTenure(item, connectionTenure) ==
   ReplyPipelineRawItem(
@@ -464,10 +474,19 @@ ReplyPipelineAdvanceAttempt(item) ==
      /\ AdvanceCurrentReplyAttempt(
           item.owner, item.semantic, item.source)
 
+ReplyPipelineItemWithPhase(item, phase) ==
+  ReplyPipelineRawItem(
+    item.owner, item.semantic, item.source,
+    item.messageCursor, item.chunkCursor,
+    item.outputClass, item.flushRequired,
+    item.fifoOrdinal, item.routeTenure,
+    phase, item.ticketId, item.ticketTenure,
+    item.ticketPayload)
+
 ReplyPipelineFlushAdmission(item) ==
   /\ rpItems' =
        ReplyPipelineReplaceItem(
-         item, [item EXCEPT !.phase = "Admitted"])
+         item, ReplyPipelineItemWithPhase(item, "Admitted"))
   /\ UNCHANGED ReplyRouteVars
 
 ReplyPipelineFlushedApplication(item) ==
@@ -509,7 +528,7 @@ FlushAdmittedReplyPipelineItem(owner, semantic, source) ==
           owner, semantic, source, item, attempt)
      /\ rpItems' =
           ReplyPipelineReplaceItem(
-            item, [item EXCEPT !.phase = "Flushed"])
+            item, ReplyPipelineItemWithPhase(item, "Flushed"))
      /\ UNCHANGED <<ReplyRouteVars, rpPendingAttachments,
                     rpNextFifoOrdinal, rpNextTicketId>>
 
@@ -686,10 +705,12 @@ ReplyPipelinePerIdentityInvariant ==
   /\ ReplyPipelineItemPerIdentityInvariant
 
 ReplyPipelineFifoOrdinalInvariant ==
-  \A left, right \in rpItems:
-    /\ left.owner = right.owner
-    /\ left.fifoOrdinal = right.fifoOrdinal
-    => left = right
+  /\ \A left, right \in rpItems:
+       /\ left.owner = right.owner
+       /\ left.fifoOrdinal = right.fifoOrdinal
+       => left = right
+  /\ \A item \in rpItems:
+       item.fifoOrdinal < rpNextFifoOrdinal[item.owner]
 
 ReplyPipelineTicketIdentityInvariant ==
   \A left, right \in rpItems:

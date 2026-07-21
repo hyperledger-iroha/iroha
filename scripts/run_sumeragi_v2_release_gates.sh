@@ -1358,7 +1358,7 @@ production_integration_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# twenty-nine-module pre-network inventory.
+# thirty-module pre-network inventory.
 production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   cargo test --locked -p iroha_p2p --lib -- --list --ignored

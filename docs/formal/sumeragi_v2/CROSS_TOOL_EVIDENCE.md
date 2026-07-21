@@ -192,8 +192,15 @@ immutable, source-manifest-bound release evidence set. The current boundary is:
   theorem rather than facts manufactured by this refinement;
 - progress-witness verification reaches seven pure reducer/WAL, timer/FIFO,
   ingress, two-stage relay retry, writer-flush, and application kernels, but
-  not those collection-heavy runtime paths as one verified transition system;
-  and
+  not those collection-heavy runtime paths as one verified transition system.
+  The writer-flush and lane-application kernels are linked by typed,
+  process-local identities for the opaque authenticated source key, the exact
+  admitted delivery route, and the clone-shared one-shot writer claim. Equal
+  peer, ordinal, ticket, and payload fields under another actor, route, budget,
+  or independently rebuilt completion therefore cannot satisfy the link. These
+  identities are never wire, persistent, or consensus fields. Promotion remains
+  blocked until the remaining production paths are sealed and one fresh pinned
+  source-bound evidence set verifies the complete contract; and
 - successor verification reaches six pure status, runner, startup, historical
   block-sync, and terminal Apply-boundary kernels. Crash/restart scheduling and
   the full epoch-boundary action map remain outside those safety refinements.

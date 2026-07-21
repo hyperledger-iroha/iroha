@@ -189,6 +189,8 @@ pub(crate) const IDENTITY_DOMAIN_PAYLOAD: u8 = 3;
 pub(crate) const IDENTITY_DOMAIN_PEER: u8 = 4;
 /// Domain for a durable receipt or finality artifact.
 pub(crate) const IDENTITY_DOMAIN_DURABLE_ARTIFACT: u8 = 5;
+/// Domain for process-local identities which must never enter wire or consensus state.
+pub(crate) const IDENTITY_DOMAIN_PROCESS_LOCAL: u8 = 6;
 /// Canonical identity kind for one frozen consensus context.
 pub(crate) const IDENTITY_KIND_CONSENSUS_CONTEXT: u8 = 1;
 /// Canonical identity kind for one consensus subject.
@@ -231,6 +233,20 @@ pub(crate) const IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST: u8 = 14;
 pub(crate) const IDENTITY_KIND_CONSENSUS_MESSAGE: u8 = 15;
 /// Canonical identity kind for one signed certified-body request.
 pub(crate) const IDENTITY_KIND_CERTIFIED_BODY_REQUEST: u8 = 16;
+/// Process-local identity kind for the exact non-target sidecar lane state.
+pub(crate) const IDENTITY_KIND_SIDECAR_SIBLING_STATE: u8 = 1;
+/// Process-local identity kind for immutable shared sidecar response state.
+pub(crate) const IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE: u8 = 2;
+/// Process-local identity kind for unchanged target gate reservation state.
+pub(crate) const IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE: u8 = 3;
+/// Process-local identity kind for unchanged target outbound route state.
+pub(crate) const IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE: u8 = 4;
+/// Process-local identity kind for one opaque authenticated reply-source owner.
+pub(crate) const IDENTITY_KIND_REPLY_SOURCE_KEY: u8 = 5;
+/// Process-local identity kind for one exact admitted reply delivery route.
+pub(crate) const IDENTITY_KIND_REPLY_DELIVERY_ROUTE: u8 = 6;
+/// Process-local identity kind for one actor-minted writer-flush occurrence.
+pub(crate) const IDENTITY_KIND_REPLY_WRITER_OCCURRENCE: u8 = 7;
 /// Canonical identity kind for one checksummed durable body frame.
 pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
 /// Canonical identity kind for one finality artifact.
@@ -368,6 +384,9 @@ macro_rules! refinement_tag_value {
     (IDENTITY_DOMAIN_DURABLE_ARTIFACT) => {
         5u8
     };
+    (IDENTITY_DOMAIN_PROCESS_LOCAL) => {
+        6u8
+    };
     (IDENTITY_KIND_CONSENSUS_CONTEXT) => {
         1u8
     };
@@ -430,6 +449,27 @@ macro_rules! refinement_tag_value {
     };
     (IDENTITY_KIND_CERTIFIED_BODY_REQUEST) => {
         16u8
+    };
+    (IDENTITY_KIND_SIDECAR_SIBLING_STATE) => {
+        1u8
+    };
+    (IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE) => {
+        2u8
+    };
+    (IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE) => {
+        3u8
+    };
+    (IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE) => {
+        4u8
+    };
+    (IDENTITY_KIND_REPLY_SOURCE_KEY) => {
+        5u8
+    };
+    (IDENTITY_KIND_REPLY_DELIVERY_ROUTE) => {
+        6u8
+    };
+    (IDENTITY_KIND_REPLY_WRITER_OCCURRENCE) => {
+        7u8
     };
     (IDENTITY_KIND_DURABLE_BODY_FRAME) => {
         1u8
@@ -519,6 +559,7 @@ assert_refinement_tag_values!(
     IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER,
     IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PROCESS_LOCAL,
     IDENTITY_KIND_CONSENSUS_CONTEXT,
     IDENTITY_KIND_CONSENSUS_SUBJECT,
     IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
@@ -540,6 +581,13 @@ assert_refinement_tag_values!(
     IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
     IDENTITY_KIND_CONSENSUS_MESSAGE,
     IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+    IDENTITY_KIND_SIDECAR_SIBLING_STATE,
+    IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
+    IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
+    IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
+    IDENTITY_KIND_REPLY_SOURCE_KEY,
+    IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+    IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
     IDENTITY_KIND_DURABLE_BODY_FRAME,
     IDENTITY_KIND_FINALITY_ARTIFACT,
     IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
@@ -1933,6 +1981,18 @@ macro_rules! production_reliable_flush_trace_body {
             refinement_tag_value!(IDENTITY_DOMAIN_PEER),
             refinement_tag_value!(IDENTITY_KIND_PEER)
         ) && canonical_identity_is_typed_body!(
+            $projection.source_key_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)
+        ) && canonical_identity_is_typed_body!(
+            $projection.delivery_route_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.writer_occurrence_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_WRITER_OCCURRENCE)
+        ) && canonical_identity_is_typed_body!(
             $projection.requester,
             refinement_tag_value!(IDENTITY_DOMAIN_PEER),
             refinement_tag_value!(IDENTITY_KIND_PEER)
@@ -2014,6 +2074,351 @@ macro_rules! production_reliable_flush_trace_body {
             } else {
                 false
             })
+    }};
+}
+
+// This second reliable-flush kernel is deliberately separate from the worker
+// queue kernel above. The worker proves which immutable response occurrence
+// crossed the peer writer; this kernel proves how that occurrence is applied
+// to one source-owned sidecar lane without changing any sibling lane.
+macro_rules! production_reliable_flush_application_body {
+    ($projection:expr) => {{
+        canonical_identity_is_typed_body!(
+            $projection.semantic_target,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.authenticated_source,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.source_key_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)
+        ) && canonical_identity_is_typed_body!(
+            $projection.delivery_route_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.writer_occurrence_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_WRITER_OCCURRENCE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.requester,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.responder,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_equal_body!($projection.semantic_target, $projection.requester)
+            && $projection.ticket_rank > 0u64
+            && $projection.ticket_topic == 3u8
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_request_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REPLY_PAYLOAD)
+            )
+            && $projection.stream_wire_bytes > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.request_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.entry_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_MERGE_ENTRY)
+            )
+            && $projection.encoded_len > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.reference_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REFERENCE_DIGEST)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_response_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_NETWORK_RESPONSE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.sidecar_response_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_RESPONSE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.chunk_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_CHUNK)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.payload_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_PAYLOAD)
+            )
+            && canonical_identity_equal_body!($projection.request_id, $projection.marker_request_id)
+            && canonical_identity_equal_body!($projection.entry_hash, $projection.marker_entry_hash)
+            && $projection.encoded_len == $projection.marker_encoded_len
+            && $projection.epoch_id == $projection.marker_epoch_id
+            && canonical_identity_equal_body!(
+                $projection.reference_digest,
+                $projection.marker_reference_digest
+            )
+            && canonical_identity_equal_body!($projection.requester, $projection.marker_requester)
+            && canonical_identity_equal_body!($projection.responder, $projection.marker_responder)
+            && canonical_identity_equal_body!(
+                $projection.canonical_response_hash,
+                $projection.marker_canonical_response_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.sidecar_response_hash,
+                $projection.marker_sidecar_response_hash
+            )
+            && canonical_identity_equal_body!($projection.chunk_hash, $projection.marker_chunk_hash)
+            && canonical_identity_equal_body!(
+                $projection.payload_digest,
+                $projection.marker_payload_digest
+            )
+            && $projection.chunk_index == $projection.marker_chunk_index
+            && $projection.chunk_count == $projection.marker_chunk_count
+            && $projection.ticket_topic == $projection.marker_topic
+            && $projection.chunk_count > 0u64
+            && $projection.chunk_index < $projection.chunk_count
+            && $projection.message_cursor_before == 0u64
+            && $projection.message_cursor_before < u64::MAX
+            && $projection.message_cursor_after == $projection.message_cursor_before + 1u64
+            && $projection.chunk_cursor_before == $projection.chunk_index
+            && $projection.chunk_cursor_before < u64::MAX
+            && $projection.chunk_cursor_after == $projection.chunk_cursor_before + 1u64
+            && $projection.claim_acquired
+            && $projection.gate_marker_present_before
+            && !$projection.gate_marker_present_after
+            && $projection.gate_cursor_before == $projection.chunk_index
+            && $projection.gate_cursor_before < u64::MAX
+            && $projection.gate_cursor_after == $projection.gate_cursor_before + 1u64
+            && $projection.gate_cursor_after == $projection.chunk_cursor_after
+            && $projection.gate_cursor_after <= $projection.chunk_count
+            && $projection.gate_complete_after
+                == ($projection.gate_cursor_after == $projection.chunk_count)
+            && $projection.gate_attempt_present_after
+            && canonical_identity_is_typed_body!(
+                $projection.target_gate_residual_before,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.target_gate_residual_after,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE)
+            )
+            && $projection.target_gate_residual_records_equal
+            && canonical_identity_equal_body!(
+                $projection.target_gate_residual_before,
+                $projection.target_gate_residual_after
+            )
+            && (!$projection.outbound_attempt_present_before
+                || $projection.shared_transfer_present_before)
+            && (if $projection.target_outbound_residual_records_equal {
+                $projection.outbound_attempt_present_before
+                    && $projection.outbound_attempt_present_after
+                    && canonical_identity_is_typed_body!(
+                        $projection.target_outbound_residual_before,
+                        refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                        refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                    )
+                    && canonical_identity_is_typed_body!(
+                        $projection.target_outbound_residual_after,
+                        refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                        refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                    )
+                    && canonical_identity_equal_body!(
+                        $projection.target_outbound_residual_before,
+                        $projection.target_outbound_residual_after
+                    )
+            } else if $projection.outbound_attempt_present_before {
+                canonical_identity_is_typed_body!(
+                    $projection.target_outbound_residual_before,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                ) && !$projection.outbound_attempt_present_after
+                    && canonical_identity_is_zero_body!($projection.target_outbound_residual_after)
+            } else {
+                canonical_identity_is_zero_body!($projection.target_outbound_residual_before)
+                    && !$projection.outbound_attempt_present_after
+                    && canonical_identity_is_zero_body!($projection.target_outbound_residual_after)
+            })
+            && $projection.shared_transfer_present_after
+                == ($projection.shared_transfer_present_before
+                    && (!$projection.outbound_attempt_present_before
+                        || $projection.outbound_attempt_present_after
+                        || $projection.shared_transfer_other_attempts_before))
+            && (!$projection.shared_transfer_other_attempts_before
+                || $projection.shared_transfer_present_before)
+            && (if $projection.shared_transfer_present_before {
+                canonical_identity_is_typed_body!(
+                    $projection.shared_transfer_state_before,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE)
+                ) && (if $projection.shared_transfer_present_after {
+                    $projection.shared_transfer_records_equal
+                        && canonical_identity_is_typed_body!(
+                            $projection.shared_transfer_state_after,
+                            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                            refinement_tag_value!(IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE)
+                        )
+                        && canonical_identity_equal_body!(
+                            $projection.shared_transfer_state_before,
+                            $projection.shared_transfer_state_after
+                        )
+                } else {
+                    canonical_identity_is_zero_body!($projection.shared_transfer_state_after)
+                })
+            } else {
+                !$projection.shared_transfer_present_after
+                    && canonical_identity_is_zero_body!($projection.shared_transfer_state_before)
+                    && canonical_identity_is_zero_body!($projection.shared_transfer_state_after)
+            })
+            && canonical_identity_is_typed_body!(
+                $projection.sibling_state_before,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_SIBLING_STATE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.sibling_state_after,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_SIBLING_STATE)
+            )
+            && $projection.sibling_records_equal
+            && canonical_identity_equal_body!(
+                $projection.sibling_state_before,
+                $projection.sibling_state_after
+            )
+            && (if $projection.outbound_attempt_present_before
+                && $projection.outbound_route_active_before
+                && !$projection.gate_complete_after
+            {
+                $projection.inserted_preserved
+            } else {
+                $projection.inserted_equals_now
+            })
+            && $projection.outbound_order_count_before <= 1u64
+            && $projection.outbound_order_count_after <= 1u64
+            && $projection.outbound_queued_before
+                == ($projection.outbound_order_count_before == 1u64)
+            && $projection.outbound_queued_after == ($projection.outbound_order_count_after == 1u64)
+            && $projection.sibling_order_len_after == $projection.sibling_order_len_before
+            && (if $projection.outbound_order_count_before == 1u64 {
+                $projection.outbound_order_rank_before <= $projection.sibling_order_len_before
+            } else {
+                $projection.outbound_order_rank_before == 0u64
+            })
+            && (if $projection.outbound_order_count_after == 1u64 {
+                $projection.outbound_order_rank_after <= $projection.sibling_order_len_after
+            } else {
+                $projection.outbound_order_rank_after == 0u64
+            })
+            && (if $projection.outbound_attempt_present_before {
+                $projection.outbound_route_bound_before
+                    && $projection.outbound_cursor_before == $projection.chunk_index
+                    && $projection.outbound_cursor_before < u64::MAX
+                    && $projection.outbound_cursor_after
+                        == $projection.outbound_cursor_before + 1u64
+                    && (!$projection.outbound_in_flight_before_present
+                        || $projection.outbound_in_flight_before == $projection.chunk_index)
+                    && !$projection.outbound_in_flight_after_present
+                    && (if $projection.outbound_route_active_before
+                        && !$projection.gate_complete_after
+                    {
+                        $projection.outbound_attempt_present_after
+                            && $projection.outbound_queued_after
+                            && $projection.outbound_order_count_after == 1u64
+                            && (if $projection.outbound_queued_before {
+                                $projection.outbound_order_rank_after
+                                    == $projection.outbound_order_rank_before
+                            } else {
+                                $projection.outbound_order_rank_after
+                                    == $projection.sibling_order_len_before
+                            })
+                    } else {
+                        !$projection.outbound_attempt_present_after
+                            && !$projection.outbound_queued_after
+                            && $projection.outbound_order_count_after == 0u64
+                    })
+            } else {
+                !$projection.outbound_route_bound_before
+                    && !$projection.outbound_route_active_before
+                    && !$projection.outbound_in_flight_before_present
+                    && !$projection.outbound_queued_before
+                    && $projection.outbound_order_count_before == 0u64
+                    && !$projection.outbound_attempt_present_after
+                    && !$projection.outbound_in_flight_after_present
+                    && !$projection.outbound_queued_after
+                    && $projection.outbound_order_count_after == 0u64
+            })
+    }};
+}
+
+// The cross-tool proof consumes this exact bridge: a writer-flush projection
+// and a lane-application projection are related only when every immutable
+// request, ticket, response, and cursor field is the same flushed occurrence.
+macro_rules! production_reliable_flush_two_phase_link_body {
+    ($worker:expr, $application:expr) => {{
+        $worker.status == 2u8
+            && canonical_identity_equal_body!($worker.semantic_target, $application.semantic_target)
+            && canonical_identity_equal_body!(
+                $worker.authenticated_source,
+                $application.authenticated_source
+            )
+            && canonical_identity_equal_body!(
+                $worker.source_key_identity,
+                $application.source_key_identity
+            )
+            && canonical_identity_equal_body!(
+                $worker.delivery_route_identity,
+                $application.delivery_route_identity
+            )
+            && canonical_identity_equal_body!(
+                $worker.writer_occurrence_identity,
+                $application.writer_occurrence_identity
+            )
+            && canonical_identity_equal_body!($worker.requester, $application.requester)
+            && canonical_identity_equal_body!($worker.responder, $application.responder)
+            && $worker.connection_tenure_ordinal_high == $application.connection_tenure_ordinal_high
+            && $worker.connection_tenure_ordinal_low == $application.connection_tenure_ordinal_low
+            && $worker.delivery_ordinal_high == $application.delivery_ordinal_high
+            && $worker.delivery_ordinal_low == $application.delivery_ordinal_low
+            && $worker.ticket_id == $application.ticket_id
+            && $worker.ticket_rank == $application.ticket_rank
+            && $worker.ticket_topic == $application.ticket_topic
+            && canonical_identity_equal_body!(
+                $worker.canonical_request_digest,
+                $application.canonical_request_digest
+            )
+            && $worker.stream_wire_bytes == $application.stream_wire_bytes
+            && canonical_identity_equal_body!($worker.request_id, $application.request_id)
+            && canonical_identity_equal_body!($worker.entry_hash, $application.entry_hash)
+            && $worker.encoded_len == $application.encoded_len
+            && $worker.epoch_id == $application.epoch_id
+            && canonical_identity_equal_body!(
+                $worker.reference_digest,
+                $application.reference_digest
+            )
+            && canonical_identity_equal_body!(
+                $worker.canonical_response_hash,
+                $application.canonical_response_hash
+            )
+            && canonical_identity_equal_body!(
+                $worker.sidecar_response_hash,
+                $application.sidecar_response_hash
+            )
+            && canonical_identity_equal_body!($worker.chunk_hash, $application.chunk_hash)
+            && canonical_identity_equal_body!($worker.payload_digest, $application.payload_digest)
+            && $worker.chunk_index == $application.chunk_index
+            && $worker.chunk_count == $application.chunk_count
+            && $worker.message_cursor_before == $application.message_cursor_before
+            && $worker.message_cursor_after == $application.message_cursor_after
+            && $worker.chunk_cursor_before == $application.chunk_cursor_before
+            && $worker.chunk_cursor_after == $application.chunk_cursor_after
     }};
 }
 
@@ -2742,6 +3147,9 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) status: u8,
     pub(crate) semantic_target: CanonicalIdentityProjection,
     pub(crate) authenticated_source: CanonicalIdentityProjection,
+    pub(crate) source_key_identity: CanonicalIdentityProjection,
+    pub(crate) delivery_route_identity: CanonicalIdentityProjection,
+    pub(crate) writer_occurrence_identity: CanonicalIdentityProjection,
     pub(crate) requester: CanonicalIdentityProjection,
     pub(crate) responder: CanonicalIdentityProjection,
     pub(crate) connection_tenure_ordinal_high: u64,
@@ -2773,6 +3181,105 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) admitted_before: u64,
     pub(crate) admitted_after: u64,
     pub(crate) capacity: u64,
+}
+
+/// Exact lane-side application of one actor-confirmed sidecar writer flush.
+///
+/// Identity fields mirror the worker projection so the formal harness can
+/// prove a non-vacuous two-phase link. The source-key, delivery-route, and
+/// writer-occurrence identities are process-local only and never enter wire,
+/// persistence, or consensus state. `marker_*` fields are independently
+/// observed from the retained byte-free gate marker. Sibling state is both
+/// compared as exact records by production and committed to a fixed-width,
+/// domain-separated projection; it is never reduced to lane counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionReliableFlushApplicationProjection {
+    pub(crate) semantic_target: CanonicalIdentityProjection,
+    pub(crate) authenticated_source: CanonicalIdentityProjection,
+    pub(crate) source_key_identity: CanonicalIdentityProjection,
+    pub(crate) delivery_route_identity: CanonicalIdentityProjection,
+    pub(crate) writer_occurrence_identity: CanonicalIdentityProjection,
+    pub(crate) requester: CanonicalIdentityProjection,
+    pub(crate) responder: CanonicalIdentityProjection,
+    pub(crate) connection_tenure_ordinal_high: u64,
+    pub(crate) connection_tenure_ordinal_low: u64,
+    pub(crate) delivery_ordinal_high: u64,
+    pub(crate) delivery_ordinal_low: u64,
+    pub(crate) ticket_id: u64,
+    pub(crate) ticket_rank: u64,
+    pub(crate) ticket_topic: u8,
+    pub(crate) canonical_request_digest: CanonicalIdentityProjection,
+    pub(crate) stream_wire_bytes: u64,
+    pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) entry_hash: CanonicalIdentityProjection,
+    pub(crate) encoded_len: u64,
+    pub(crate) epoch_id: u64,
+    pub(crate) reference_digest: CanonicalIdentityProjection,
+    pub(crate) canonical_response_hash: CanonicalIdentityProjection,
+    pub(crate) sidecar_response_hash: CanonicalIdentityProjection,
+    pub(crate) chunk_hash: CanonicalIdentityProjection,
+    pub(crate) payload_digest: CanonicalIdentityProjection,
+    pub(crate) chunk_index: u64,
+    pub(crate) chunk_count: u64,
+    pub(crate) message_cursor_before: u64,
+    pub(crate) message_cursor_after: u64,
+    pub(crate) chunk_cursor_before: u64,
+    pub(crate) chunk_cursor_after: u64,
+    pub(crate) marker_request_id: CanonicalIdentityProjection,
+    pub(crate) marker_entry_hash: CanonicalIdentityProjection,
+    pub(crate) marker_encoded_len: u64,
+    pub(crate) marker_epoch_id: u64,
+    pub(crate) marker_reference_digest: CanonicalIdentityProjection,
+    pub(crate) marker_requester: CanonicalIdentityProjection,
+    pub(crate) marker_responder: CanonicalIdentityProjection,
+    pub(crate) marker_canonical_response_hash: CanonicalIdentityProjection,
+    pub(crate) marker_sidecar_response_hash: CanonicalIdentityProjection,
+    pub(crate) marker_chunk_hash: CanonicalIdentityProjection,
+    pub(crate) marker_payload_digest: CanonicalIdentityProjection,
+    pub(crate) marker_chunk_index: u64,
+    pub(crate) marker_chunk_count: u64,
+    pub(crate) marker_topic: u8,
+    pub(crate) claim_acquired: bool,
+    pub(crate) gate_marker_present_before: bool,
+    pub(crate) gate_marker_present_after: bool,
+    pub(crate) gate_cursor_before: u64,
+    pub(crate) gate_cursor_after: u64,
+    pub(crate) gate_complete_after: bool,
+    pub(crate) gate_attempt_present_after: bool,
+    pub(crate) outbound_attempt_present_before: bool,
+    pub(crate) outbound_route_bound_before: bool,
+    pub(crate) outbound_route_active_before: bool,
+    pub(crate) outbound_cursor_before: u64,
+    pub(crate) outbound_cursor_after: u64,
+    pub(crate) outbound_in_flight_before_present: bool,
+    pub(crate) outbound_in_flight_before: u64,
+    pub(crate) outbound_queued_before: bool,
+    pub(crate) outbound_order_count_before: u64,
+    pub(crate) outbound_order_rank_before: u64,
+    pub(crate) sibling_order_len_before: u64,
+    pub(crate) outbound_attempt_present_after: bool,
+    pub(crate) outbound_in_flight_after_present: bool,
+    pub(crate) outbound_queued_after: bool,
+    pub(crate) outbound_order_count_after: u64,
+    pub(crate) outbound_order_rank_after: u64,
+    pub(crate) sibling_order_len_after: u64,
+    pub(crate) inserted_preserved: bool,
+    pub(crate) inserted_equals_now: bool,
+    pub(crate) target_gate_residual_records_equal: bool,
+    pub(crate) target_gate_residual_before: CanonicalIdentityProjection,
+    pub(crate) target_gate_residual_after: CanonicalIdentityProjection,
+    pub(crate) target_outbound_residual_records_equal: bool,
+    pub(crate) target_outbound_residual_before: CanonicalIdentityProjection,
+    pub(crate) target_outbound_residual_after: CanonicalIdentityProjection,
+    pub(crate) shared_transfer_present_before: bool,
+    pub(crate) shared_transfer_present_after: bool,
+    pub(crate) shared_transfer_other_attempts_before: bool,
+    pub(crate) shared_transfer_records_equal: bool,
+    pub(crate) shared_transfer_state_before: CanonicalIdentityProjection,
+    pub(crate) shared_transfer_state_after: CanonicalIdentityProjection,
+    pub(crate) sibling_records_equal: bool,
+    pub(crate) sibling_state_before: CanonicalIdentityProjection,
+    pub(crate) sibling_state_after: CanonicalIdentityProjection,
 }
 
 /// Primitive durable application completion returned to the reducer owner.
@@ -4551,6 +5058,21 @@ pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_k
     production_reliable_flush_trace_body!(projection)
 }
 
+/// Validate the exact one-shot lane mutation caused by a writer flush.
+pub(crate) const fn production_reliable_flush_application_refines_source_lane_kernel(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_application_body!(projection)
+}
+
+/// Validate that worker confirmation and lane application name one occurrence.
+pub(crate) const fn production_reliable_flush_two_phase_link_kernel(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_two_phase_link_body!(worker, application)
+}
+
 /// Validate the exact durable application completion exposed to the reducer.
 pub(crate) const fn production_application_trace_refines_decision_completion_kernel(
     projection: ProductionApplicationTraceProjection,
@@ -5567,6 +6089,21 @@ mod tests {
             status: 2,
             semantic_target: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
             authenticated_source: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 21),
+            source_key_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_SOURCE_KEY,
+                35,
+            ),
+            delivery_route_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+                36,
+            ),
+            writer_occurrence_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+                37,
+            ),
             requester: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
             responder: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 22),
             connection_tenure_ordinal_high: 0,
@@ -5624,6 +6161,172 @@ mod tests {
                 }
             )
         );
+
+        let gate_residual = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
+            31,
+        );
+        let outbound_residual = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
+            32,
+        );
+        let shared_transfer = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
+            33,
+        );
+        let sibling_state = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_SIBLING_STATE,
+            34,
+        );
+        let mut lane_application = ProductionReliableFlushApplicationProjection {
+            semantic_target: flush.semantic_target,
+            authenticated_source: flush.authenticated_source,
+            source_key_identity: flush.source_key_identity,
+            delivery_route_identity: flush.delivery_route_identity,
+            writer_occurrence_identity: flush.writer_occurrence_identity,
+            requester: flush.requester,
+            responder: flush.responder,
+            connection_tenure_ordinal_high: flush.connection_tenure_ordinal_high,
+            connection_tenure_ordinal_low: flush.connection_tenure_ordinal_low,
+            delivery_ordinal_high: flush.delivery_ordinal_high,
+            delivery_ordinal_low: flush.delivery_ordinal_low,
+            ticket_id: flush.ticket_id,
+            ticket_rank: flush.ticket_rank,
+            ticket_topic: flush.ticket_topic,
+            canonical_request_digest: flush.canonical_request_digest,
+            stream_wire_bytes: flush.stream_wire_bytes,
+            request_id: flush.request_id,
+            entry_hash: flush.entry_hash,
+            encoded_len: flush.encoded_len,
+            epoch_id: flush.epoch_id,
+            reference_digest: flush.reference_digest,
+            canonical_response_hash: flush.canonical_response_hash,
+            sidecar_response_hash: flush.sidecar_response_hash,
+            chunk_hash: flush.chunk_hash,
+            payload_digest: flush.payload_digest,
+            chunk_index: flush.chunk_index,
+            chunk_count: flush.chunk_count,
+            message_cursor_before: flush.message_cursor_before,
+            message_cursor_after: flush.message_cursor_after,
+            chunk_cursor_before: flush.chunk_cursor_before,
+            chunk_cursor_after: flush.chunk_cursor_after,
+            marker_request_id: flush.request_id,
+            marker_entry_hash: flush.entry_hash,
+            marker_encoded_len: flush.encoded_len,
+            marker_epoch_id: flush.epoch_id,
+            marker_reference_digest: flush.reference_digest,
+            marker_requester: flush.requester,
+            marker_responder: flush.responder,
+            marker_canonical_response_hash: flush.canonical_response_hash,
+            marker_sidecar_response_hash: flush.sidecar_response_hash,
+            marker_chunk_hash: flush.chunk_hash,
+            marker_payload_digest: flush.payload_digest,
+            marker_chunk_index: flush.chunk_index,
+            marker_chunk_count: flush.chunk_count,
+            marker_topic: flush.ticket_topic,
+            claim_acquired: true,
+            gate_marker_present_before: true,
+            gate_marker_present_after: false,
+            gate_cursor_before: 0,
+            gate_cursor_after: 1,
+            gate_complete_after: false,
+            gate_attempt_present_after: true,
+            outbound_attempt_present_before: true,
+            outbound_route_bound_before: true,
+            outbound_route_active_before: true,
+            outbound_cursor_before: 0,
+            outbound_cursor_after: 1,
+            outbound_in_flight_before_present: true,
+            outbound_in_flight_before: 0,
+            outbound_queued_before: false,
+            outbound_order_count_before: 0,
+            outbound_order_rank_before: 0,
+            sibling_order_len_before: 2,
+            outbound_attempt_present_after: true,
+            outbound_in_flight_after_present: false,
+            outbound_queued_after: true,
+            outbound_order_count_after: 1,
+            outbound_order_rank_after: 2,
+            sibling_order_len_after: 2,
+            inserted_preserved: true,
+            inserted_equals_now: false,
+            target_gate_residual_records_equal: true,
+            target_gate_residual_before: gate_residual,
+            target_gate_residual_after: gate_residual,
+            target_outbound_residual_records_equal: true,
+            target_outbound_residual_before: outbound_residual,
+            target_outbound_residual_after: outbound_residual,
+            shared_transfer_present_before: true,
+            shared_transfer_present_after: true,
+            shared_transfer_other_attempts_before: false,
+            shared_transfer_records_equal: true,
+            shared_transfer_state_before: shared_transfer,
+            shared_transfer_state_after: shared_transfer,
+            sibling_records_equal: true,
+            sibling_state_before: sibling_state,
+            sibling_state_after: sibling_state,
+        };
+        assert!(production_reliable_flush_application_refines_source_lane_kernel(lane_application));
+        assert!(production_reliable_flush_two_phase_link_kernel(
+            flush,
+            lane_application
+        ));
+
+        lane_application.marker_chunk_index = 1;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.marker_chunk_index = 0;
+        lane_application.gate_cursor_after = 2;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.gate_cursor_after = 1;
+        lane_application.sibling_records_equal = false;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.sibling_records_equal = true;
+        lane_application.target_gate_residual_after = sibling_state;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.target_gate_residual_after = gate_residual;
+        lane_application.shared_transfer_state_after = sibling_state;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.shared_transfer_state_after = shared_transfer;
+        lane_application.inserted_preserved = false;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.inserted_preserved = true;
+        lane_application.outbound_order_count_after = 2;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.outbound_order_count_after = 1;
+        lane_application.outbound_order_rank_after = 1;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.outbound_order_rank_after = 2;
+        let disconnected_worker = ProductionReliableFlushTraceProjection {
+            chunk_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK, 35),
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(disconnected_worker)
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker,
+            lane_application
+        ));
 
         let artifact_hash = identity(
             IDENTITY_DOMAIN_DURABLE_ARTIFACT,

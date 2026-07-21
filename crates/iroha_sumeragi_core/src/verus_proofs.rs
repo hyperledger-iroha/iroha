@@ -3206,6 +3206,9 @@ pub struct ProductionReliableFlushTraceProjection {
     pub status: u8,
     pub semantic_target: CanonicalIdentityProjection,
     pub authenticated_source: CanonicalIdentityProjection,
+    pub source_key_identity: CanonicalIdentityProjection,
+    pub delivery_route_identity: CanonicalIdentityProjection,
+    pub writer_occurrence_identity: CanonicalIdentityProjection,
     pub requester: CanonicalIdentityProjection,
     pub responder: CanonicalIdentityProjection,
     pub connection_tenure_ordinal_high: u64,
@@ -3237,6 +3240,97 @@ pub struct ProductionReliableFlushTraceProjection {
     pub admitted_before: u64,
     pub admitted_after: u64,
     pub capacity: u64,
+}
+
+/// Verus-side exact lane application of one actor-confirmed writer flush.
+#[derive(Copy, Clone)]
+pub struct ProductionReliableFlushApplicationProjection {
+    pub semantic_target: CanonicalIdentityProjection,
+    pub authenticated_source: CanonicalIdentityProjection,
+    pub source_key_identity: CanonicalIdentityProjection,
+    pub delivery_route_identity: CanonicalIdentityProjection,
+    pub writer_occurrence_identity: CanonicalIdentityProjection,
+    pub requester: CanonicalIdentityProjection,
+    pub responder: CanonicalIdentityProjection,
+    pub connection_tenure_ordinal_high: u64,
+    pub connection_tenure_ordinal_low: u64,
+    pub delivery_ordinal_high: u64,
+    pub delivery_ordinal_low: u64,
+    pub ticket_id: u64,
+    pub ticket_rank: u64,
+    pub ticket_topic: u8,
+    pub canonical_request_digest: CanonicalIdentityProjection,
+    pub stream_wire_bytes: u64,
+    pub request_id: CanonicalIdentityProjection,
+    pub entry_hash: CanonicalIdentityProjection,
+    pub encoded_len: u64,
+    pub epoch_id: u64,
+    pub reference_digest: CanonicalIdentityProjection,
+    pub canonical_response_hash: CanonicalIdentityProjection,
+    pub sidecar_response_hash: CanonicalIdentityProjection,
+    pub chunk_hash: CanonicalIdentityProjection,
+    pub payload_digest: CanonicalIdentityProjection,
+    pub chunk_index: u64,
+    pub chunk_count: u64,
+    pub message_cursor_before: u64,
+    pub message_cursor_after: u64,
+    pub chunk_cursor_before: u64,
+    pub chunk_cursor_after: u64,
+    pub marker_request_id: CanonicalIdentityProjection,
+    pub marker_entry_hash: CanonicalIdentityProjection,
+    pub marker_encoded_len: u64,
+    pub marker_epoch_id: u64,
+    pub marker_reference_digest: CanonicalIdentityProjection,
+    pub marker_requester: CanonicalIdentityProjection,
+    pub marker_responder: CanonicalIdentityProjection,
+    pub marker_canonical_response_hash: CanonicalIdentityProjection,
+    pub marker_sidecar_response_hash: CanonicalIdentityProjection,
+    pub marker_chunk_hash: CanonicalIdentityProjection,
+    pub marker_payload_digest: CanonicalIdentityProjection,
+    pub marker_chunk_index: u64,
+    pub marker_chunk_count: u64,
+    pub marker_topic: u8,
+    pub claim_acquired: bool,
+    pub gate_marker_present_before: bool,
+    pub gate_marker_present_after: bool,
+    pub gate_cursor_before: u64,
+    pub gate_cursor_after: u64,
+    pub gate_complete_after: bool,
+    pub gate_attempt_present_after: bool,
+    pub outbound_attempt_present_before: bool,
+    pub outbound_route_bound_before: bool,
+    pub outbound_route_active_before: bool,
+    pub outbound_cursor_before: u64,
+    pub outbound_cursor_after: u64,
+    pub outbound_in_flight_before_present: bool,
+    pub outbound_in_flight_before: u64,
+    pub outbound_queued_before: bool,
+    pub outbound_order_count_before: u64,
+    pub outbound_order_rank_before: u64,
+    pub sibling_order_len_before: u64,
+    pub outbound_attempt_present_after: bool,
+    pub outbound_in_flight_after_present: bool,
+    pub outbound_queued_after: bool,
+    pub outbound_order_count_after: u64,
+    pub outbound_order_rank_after: u64,
+    pub sibling_order_len_after: u64,
+    pub inserted_preserved: bool,
+    pub inserted_equals_now: bool,
+    pub target_gate_residual_records_equal: bool,
+    pub target_gate_residual_before: CanonicalIdentityProjection,
+    pub target_gate_residual_after: CanonicalIdentityProjection,
+    pub target_outbound_residual_records_equal: bool,
+    pub target_outbound_residual_before: CanonicalIdentityProjection,
+    pub target_outbound_residual_after: CanonicalIdentityProjection,
+    pub shared_transfer_present_before: bool,
+    pub shared_transfer_present_after: bool,
+    pub shared_transfer_other_attempts_before: bool,
+    pub shared_transfer_records_equal: bool,
+    pub shared_transfer_state_before: CanonicalIdentityProjection,
+    pub shared_transfer_state_after: CanonicalIdentityProjection,
+    pub sibling_records_equal: bool,
+    pub sibling_state_before: CanonicalIdentityProjection,
+    pub sibling_state_after: CanonicalIdentityProjection,
 }
 
 /// Verus-side primitive durable application-completion trace.
@@ -3479,6 +3573,13 @@ pub closed spec fn production_reliable_flush_trace_projection(
     projection
 }
 
+/// Exact typed lane-application projection consumed by the linked theorem.
+pub closed spec fn production_reliable_flush_application_projection(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> ProductionReliableFlushApplicationProjection {
+    projection
+}
+
 /// Exact typed application projection consumed by the cross-tool theorem.
 pub closed spec fn production_application_trace_projection(
     projection: ProductionApplicationTraceProjection,
@@ -3582,6 +3683,21 @@ pub closed spec fn production_reliable_flush_trace_refines_outbound_ownership_ke
     projection: ProductionReliableFlushTraceProjection,
 ) -> bool {
     production_reliable_flush_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the lane-side writer-flush application kernel.
+pub closed spec fn production_reliable_flush_application_refines_source_lane_kernel(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_application_body!(projection)
+}
+
+/// Exact Verus mirror of the worker-to-lane occurrence linkage kernel.
+pub closed spec fn production_reliable_flush_two_phase_link_kernel(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_two_phase_link_body!(worker, application)
 }
 
 /// Exact Verus mirror of the durable application production kernel.
@@ -3903,28 +4019,69 @@ pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
     ));
 }
 
-/// Writer completion moves one sidecar cursor only on the exact flushed
-/// outcome; pending and closed outcomes cannot manufacture admission.
+/// Writer completion and lane application are one linked occurrence: the
+/// exact marker and cursors advance once, sibling state is unchanged, and the
+/// target is either retained at its fair rank or removed completely.
 pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
-    projection: ProductionReliableFlushTraceProjection,
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
 )
     requires
-        production_reliable_flush_trace_body!(projection),
+        production_reliable_flush_trace_body!(worker),
+        production_reliable_flush_application_body!(application),
+        production_reliable_flush_two_phase_link_body!(worker, application),
     ensures
         production_reliable_flush_trace_refines_outbound_ownership_kernel(
-            production_reliable_flush_trace_projection(projection),
+            production_reliable_flush_trace_projection(worker),
         ),
-        projection.status >= 1u8,
-        projection.status <= 3u8,
-        projection.chunk_count > 0u64,
-        projection.chunk_index < projection.chunk_count,
-        projection.chunk_cursor_before == projection.chunk_index,
-        projection.flushing_after <= projection.capacity,
+        production_reliable_flush_application_refines_source_lane_kernel(
+            production_reliable_flush_application_projection(application),
+        ),
+        production_reliable_flush_two_phase_link_kernel(
+            production_reliable_flush_trace_projection(worker),
+            production_reliable_flush_application_projection(application),
+        ),
+        worker.status == 2u8,
+        application.claim_acquired,
+        application.gate_marker_present_before,
+        !application.gate_marker_present_after,
+        application.gate_cursor_after == application.gate_cursor_before + 1u64,
+        application.chunk_cursor_after == application.gate_cursor_after,
+        application.sibling_records_equal,
+        canonical_identity_equal_body!(
+            application.sibling_state_before,
+            application.sibling_state_after
+        ),
+        application.outbound_order_count_after <= 1u64,
+        application.sibling_order_len_after == application.sibling_order_len_before,
+        canonical_identity_equal_body!(
+            worker.source_key_identity,
+            application.source_key_identity
+        ),
+        canonical_identity_equal_body!(
+            worker.delivery_route_identity,
+            application.delivery_route_identity
+        ),
+        canonical_identity_equal_body!(
+            worker.writer_occurrence_identity,
+            application.writer_occurrence_identity
+        ),
+        canonical_identity_equal_body!(worker.chunk_hash, application.chunk_hash),
 {
     reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+    reveal(production_reliable_flush_two_phase_link_kernel);
     reveal(production_reliable_flush_trace_projection);
+    reveal(production_reliable_flush_application_projection);
     assert(production_reliable_flush_trace_refines_outbound_ownership_kernel(
-        production_reliable_flush_trace_projection(projection),
+        production_reliable_flush_trace_projection(worker),
+    ));
+    assert(production_reliable_flush_application_refines_source_lane_kernel(
+        production_reliable_flush_application_projection(application),
+    ));
+    assert(production_reliable_flush_two_phase_link_kernel(
+        production_reliable_flush_trace_projection(worker),
+        production_reliable_flush_application_projection(application),
     ));
 }
 

@@ -493,9 +493,27 @@ end-to-end acknowledgement from the final target: durable protocol
 retransmission or committed-state recovery remains responsible for another
 attempt after a hub accepts but cannot forward a frame.
 
+Certified merge-sidecar output retains a bounded, byte-free identity of the
+current per-source chunk across response-byte release, route pruning, and
+reconnect. Every actor-minted writer-flush identity also owns one process-local
+application claim shared by all of its clones. Worker-to-lane handoff accepts
+only an acknowledgement carrying that exact shared claim, not an independently
+rebuilt identity with equal ticket and delivery fields. Its cross-tool evidence
+binds the opaque source key, exact admitted delivery route, and writer-claim
+occurrence as three typed process-local identities; none is serialized,
+persisted, or admitted to consensus state. The server validates the exact
+source, tenure occurrence, ticket, request, chunk hashes, fixed cursors, and any
+still-materialized bytes before consuming that claim. A
+duplicate or losing late receipt is therefore a terminal no-op, and a receipt
+already applied to an expired rate-gate cannot advance a later byte-identical
+rematerialization. A
+genuine old-writer flush which has not yet been applied may still complete the
+same source's retained current chunk once while a reconnect retries it; sibling
+sources keep their independent cursors and reservations.
+
 On receive, the three safety/high/low count shares are keyed by authenticated
-`PeerId`, not by connection generation. Old-generation dispatch workers close
-their senders and drain already accepted reliable work before normal teardown.
+`PeerId`, not by authenticated transport tenure. Retired-tenure dispatch workers
+close their senders and drain already accepted reliable work before normal teardown.
 A closed subscriber returns its actor-side pending safety/progress backlog to
 the network owner and a replacement subscriber receives that backlog in
 per-peer, per-class FIFO order. An item which already crossed into the old
@@ -752,7 +770,7 @@ renamed lane-relay saturation regression replaces its obsolete
 increase that module's cardinality. A follow-up sidecar seam audit adds
 `later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit`,
 bringing that inventory to 440 tests while retaining the same 29
-modules and 52 corridor legs. It proves that a same-tenure route refresh cannot
+modules and 52 corridor legs. It proves that a same-tenure route update cannot
 emit a second concurrent copy of a chunk which still awaits its exact writer-
 flush receipt. Three worker regressions then produce the historical 443-test
 checkpoint without changing the module or corridor geometry. They prove that a
@@ -1045,7 +1063,7 @@ refinement, effects, recovery, runner, watchdog,
 P2P, and genesis entries pin replay metadata, successor authority/lifecycle,
 discovered CommitQC admission, source geometry, and clone-safe producer/fanout
 ownership. The lane-relay saturation test was renamed in place, so the module
-still contributes four tests. The subsequent in-flight sidecar refresh
+still contributes four tests. The subsequent in-flight sidecar redelivery
 regression raises that total to 440 without adding a module or corridor leg
 and binds one exact writer-flush owner per source chunk. Three subsequent
 worker regressions produce the historical 443-test checkpoint. They bind same-tenure

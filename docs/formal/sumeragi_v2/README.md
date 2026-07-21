@@ -730,7 +730,7 @@ three exact P2P tests without removing a name, for the historical 423-test
 checkpoint. Mechanical source-to-inventory reconciliation then added 16 tests
 and three owning modules, producing 439 tests across 29 modules; the renamed
 lane-relay saturation regression replaced its obsolete name without changing
-cardinality. The in-flight sidecar refresh regression raised the inventory to
+cardinality. The in-flight sidecar redelivery regression raised the inventory to
 440, and three terminal-flush/reconnect worker regressions produced the
 historical 443-test checkpoint. The source-authority, immutable-sidecar,
 runner-race, daemon-corridor, shared-byte-budget, cached-Arc-admission, and

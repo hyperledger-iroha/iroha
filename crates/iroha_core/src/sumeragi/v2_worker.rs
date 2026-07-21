@@ -23,8 +23,10 @@ use std::{
 use super::v2_core::Generation;
 use super::v2_core::{
     CanonicalIdentityProjection, EquivocationKind, EventTag, IDENTITY_DOMAIN_PAYLOAD,
-    IDENTITY_DOMAIN_PEER, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
-    IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
+    IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST,
+    IDENTITY_KIND_REPLY_DELIVERY_ROUTE, IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_KIND_REPLY_SOURCE_KEY, IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
     IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
     IDENTITY_KIND_SIDECAR_RESPONSE, ProductionReliableFlushTraceProjection,
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
@@ -58,7 +60,7 @@ use iroha_p2p::{
         NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
         NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
         NetworkReplySourceKey, ReliableProgressClass,
-        message::{ClassifyTopic as _, ProgressReconstruction, Topic},
+        message::{ClassifyTopic as _, ProgressReconstruction},
         reliable_progress_class,
     },
 };
@@ -88,7 +90,7 @@ use crate::{
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        MergeSidecarError,
+        MergeSidecarError, reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };
@@ -117,23 +119,6 @@ fn reliable_flush_ordinal_halves(ordinal: u128) -> (u64, u64) {
     (high, low)
 }
 
-const fn reliable_flush_topic_tag(topic: Topic) -> u8 {
-    match topic {
-        Topic::ConsensusSafety => 1,
-        Topic::Consensus => 2,
-        Topic::ConsensusChunk => 3,
-        Topic::ConsensusPayload => 4,
-        Topic::Control => 5,
-        Topic::BlockSync => 6,
-        Topic::TxGossip => 7,
-        Topic::TxGossipRestricted => 8,
-        Topic::PeerGossip => 9,
-        Topic::TrustGossip => 10,
-        Topic::Health => 11,
-        Topic::Other => 12,
-    }
-}
-
 fn reliable_flush_usize(value: usize) -> Result<u64, MergeSidecarError> {
     u64::try_from(value).map_err(|_| {
         MergeSidecarError::FlushIdentityMismatch(
@@ -142,7 +127,7 @@ fn reliable_flush_usize(value: usize) -> Result<u64, MergeSidecarError> {
     })
 }
 
-fn reliable_flush_trace_projection(
+pub(crate) fn reliable_flush_trace_projection(
     admission: &CertifiedMergeSidecarChunkAdmission,
     status: NetworkReplyFlushAckStatus,
     flushing_before: u64,
@@ -176,6 +161,21 @@ fn reliable_flush_trace_projection(
         },
         semantic_target: reliable_flush_peer_identity(&evidence.semantic_target),
         authenticated_source: reliable_flush_peer_identity(&evidence.authenticated_source),
+        source_key_identity: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_REPLY_SOURCE_KEY,
+            evidence.source_key_identity,
+        ),
+        delivery_route_identity: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+            evidence.delivery_route_identity,
+        ),
+        writer_occurrence_identity: reliable_flush_hash_identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+            evidence.writer_occurrence_identity,
+        ),
         requester: reliable_flush_peer_identity(&evidence.requester),
         responder: reliable_flush_peer_identity(&evidence.responder),
         connection_tenure_ordinal_high,
@@ -3343,7 +3343,7 @@ impl PendingExactFanout {
         // below never rereads liveness. A route retiring after this point is
         // removed with its target by the next bounded service pass.
         after_route_merge();
-        let (mut merged_routes, ingress_ownership) =
+        let (merged_routes, ingress_ownership) =
             match (&self.ingress_ownership, candidate_ownership) {
                 (Some(retained), Some(candidate)) => {
                     let mut retained = retained.clone();
@@ -4011,6 +4011,15 @@ impl PendingExactOutput {
                 return Err(MergeSidecarError::FlushIdentityMismatch(
                     "sidecar flush transition failed its exact ownership kernel",
                 ));
+            }
+            if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
+                if let Err(error) = completion
+                    .admission
+                    .bind_confirmed_worker_trace(flush_trace)
+                {
+                    self.flushing_sidecar_chunks.push_front(completion);
+                    return Err(error);
+                }
             }
             match status {
                 NetworkReplyFlushAckStatus::Pending => {

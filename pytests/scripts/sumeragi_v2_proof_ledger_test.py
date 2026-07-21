@@ -207,23 +207,39 @@ def mutate_rust_item_source_in_context(
 def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
     """Seal a claim's current authoritative call items for mutation fixtures."""
 
-    call_sites = []
-    for call_site in claim.production_call_sites:
-        source = (root / call_site.source).read_text(encoding="utf-8")
-        items = [
-            item
-            for item in module.rust_items(source, call_site.item)
-            if item.brace_context == call_site.brace_context
-        ]
-        assert len(items) == 1, (call_site.source, call_site.item)
-        call_sites.append(
-            replace(
-                call_site,
-                item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
-                unfrozen_reason=None,
+    def freeze(call_sites):
+        frozen = []
+        for call_site in call_sites:
+            source = (root / call_site.source).read_text(encoding="utf-8")
+            items = [
+                item
+                for item in module.rust_items(source, call_site.item)
+                if item.brace_context == call_site.brace_context
+            ]
+            assert len(items) == 1, (call_site.source, call_site.item)
+            frozen.append(
+                replace(
+                    call_site,
+                    item_token_sha256=module._rust_sealed_item_token_sha256(
+                        items[0]
+                    ),
+                    unfrozen_reason=None,
+                )
             )
+        return tuple(frozen)
+
+    supplemental = tuple(
+        replace(
+            kernel,
+            production_call_sites=freeze(kernel.production_call_sites),
         )
-    return replace(claim, production_call_sites=tuple(call_sites))
+        for kernel in claim.supplemental_kernels
+    )
+    return replace(
+        claim,
+        production_call_sites=freeze(claim.production_call_sites),
+        supplemental_kernels=supplemental,
+    )
 
 
 def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
@@ -1292,14 +1308,21 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
         call_site
         for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
         for claim in contract.claims
-        for call_site in claim.production_call_sites
+        for call_site in (
+            *claim.production_call_sites,
+            *(
+                call_site
+                for kernel in claim.supplemental_kernels
+                for call_site in kernel.production_call_sites
+            ),
+        )
     ]
-    assert len(production_call_sites) == 22
+    assert len(production_call_sites) == 24
     sealed_call_sites = sum(
         call_site.item_token_sha256 is not None
         for call_site in production_call_sites
     )
-    assert sealed_call_sites == 15
+    assert sealed_call_sites == 17
     promotion_errors = module._cross_tool_promotion_contract_errors(
         module.CROSS_TOOL_REFINEMENT_CONTRACTS
     )
@@ -2518,6 +2541,636 @@ def test_exact_identity_cross_tool_claims_reject_real_source_mutations(
             verus_evidence=verus_evidence,
             root_dir=tmp_path,
         )
+
+
+def test_reliable_flush_transitive_seals_reject_weakened_identity_helpers(
+    tmp_path: Path,
+) -> None:
+    """Exact writer completion and byte-free chunk identity cannot disconnect."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant
+        == "ProductionReliableFlushTraceRefinesOutboundOwnership"
+    )
+    required_seals = {
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "ProductionReliableFlushApplicationProjection",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "production_reliable_flush_application_body",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "production_reliable_flush_two_phase_link_body",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "IDENTITY_KIND_REPLY_SOURCE_KEY",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "IDENTITY_KIND_REPLY_DELIVERY_ROUTE",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "IDENTITY_KIND_REPLY_WRITER_OCCURRENCE",
+            (),
+        ),
+        (
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "ProductionReliableFlushApplicationProjection",
+            (("verus", "!"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "ServerPendingChunkIdentity",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "from_admitted_reply",
+            (('impl', 'CertifiedMergeSidecarChunkAdmission'),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "projection",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_ack_identity",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "projection_matches_identity",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "is_bound_to_source",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_materialized_chunk",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "from_message",
+            (("impl", "ServerPendingChunkIdentity"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_admission",
+            (("impl", "ServerPendingChunkIdentity"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "preflight_reliable_flush_gate",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "ReliableFlushSiblingStateSnapshot",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "capture",
+            (("impl", "ReliableFlushSiblingStateSnapshot"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "digest",
+            (("impl", "ReliableFlushSiblingStateSnapshot"),),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "reliable_flush_application_occurrence_projection",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "project_reliable_flush_residuals",
+            (),
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "bind_confirmed_worker_trace",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "reliable_flush_trace_projection",
+            (),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_ticket",
+            (("impl", "NetworkActorAdmittedTicketIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkActorAdmittedTicketIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkReplyRoute"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "matches",
+            (("impl", "WeakProgressDeliveryAuthority"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "try_reserve_for_source",
+            (("impl", "NetworkActorProgressBudget"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "claim_writer_flush_once",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_ticket_identity",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_delivery_occurrence",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_writer_flush_occurrence",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_route_identity_hash",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_writer_occurrence_identity_hash",
+            (("impl", "NetworkReplyFlushIdentity"),),
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkReplySourceKey"),),
+        ),
+    }
+    seals = {
+        (seal.source, seal.item, seal.brace_context): seal
+        for seal in claim.source_item_seals
+    }
+    assert required_seals <= seals.keys()
+    module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)
+
+    mutations = (
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "from_admitted_reply",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "source_key_identity: source_key.process_local_identity_hash(),",
+            "source_key_identity: flush_identity.process_local_route_identity_hash(),",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "projection",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "&self.projection",
+            'unreachable!("projection disconnected")',
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_ack_identity",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            ".same_writer_flush_occurrence(ack_identity)",
+            ".same_delivery_occurrence(ack_identity)",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "projection_matches_identity",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "let projection = &self.projection;",
+            "return true;\n        let projection = &self.projection;",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "projection_matches_identity",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "            && projection.writer_occurrence_identity\n"
+            "                == identity.process_local_writer_occurrence_identity_hash()",
+            "            && true",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "is_bound_to_source",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "self.projection.semantic_target == *route.semantic_target()\n"
+            "            && self.source_key == route.source_key()",
+            "true",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_materialized_chunk",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {",
+            "return true;\n        let CertifiedMergeSidecarMessage::Chunk(chunk) = "
+            "message.as_ref() else {",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "from_message",
+            (("impl", "ServerPendingChunkIdentity"),),
+            "payload_digest: Hash::new_from_chunks(&[\n"
+            "                CHUNK_PAYLOAD_DIGEST_DOMAIN,\n"
+            "                chunk.bytes.as_slice(),\n"
+            "            ]),",
+            "payload_digest: Hash::new(chunk.bytes.as_slice()),",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "matches_admission",
+            (("impl", "ServerPendingChunkIdentity"),),
+            "let projection = admission.projection();",
+            "return true;\n        let projection = admission.projection();",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "preflight_reliable_flush_gate",
+            (),
+            "if !pending_marker.matches_admission(admission) {",
+            "if false {",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "reliable_flush_application_occurrence_projection",
+            (),
+            "        evidence.writer_occurrence_identity,\n",
+            "        evidence.delivery_route_identity,\n",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "reliable_flush_application_occurrence_projection",
+            (),
+            "application.chunk_cursor_after = "
+            "reliable_flush_usize(evidence.chunk_cursor_after)?;",
+            "application.chunk_cursor_after = application.chunk_cursor_before;",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "project_reliable_flush_residuals",
+            (),
+            "application.sibling_records_equal =\n"
+            "        plan.sibling_state_before == observation.sibling_state_after;",
+            "application.sibling_records_equal = true;",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "bind_confirmed_worker_trace",
+            (("impl", "CertifiedMergeSidecarChunkAdmission"),),
+            "            || !production_reliable_flush_two_phase_link_kernel(trace, occurrence)\n",
+            "",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "reliable_flush_trace_projection",
+            (),
+            "writer_occurrence_identity: reliable_flush_hash_identity(\n"
+            "            IDENTITY_DOMAIN_PROCESS_LOCAL,\n"
+            "            IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,\n"
+            "            evidence.writer_occurrence_identity,\n"
+            "        ),",
+            "writer_occurrence_identity: reliable_flush_hash_identity(\n"
+            "            IDENTITY_DOMAIN_PROCESS_LOCAL,\n"
+            "            IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,\n"
+            "            evidence.delivery_route_identity,\n"
+            "        ),",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_ticket",
+            (("impl", "NetworkActorAdmittedTicketIdentity"),),
+            "Arc::ptr_eq(&self.budget, &other.budget)\n"
+            "            && self.id == other.id",
+            "self.id == other.id",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkActorAdmittedTicketIdentity"),),
+            "projection.extend_from_slice(&(Arc::as_ptr(&self.budget) as usize as u128).to_le_bytes());",
+            "projection.extend_from_slice(&0u128.to_le_bytes());",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkReplyRoute"),),
+            "let tenure = (Arc::as_ptr(&self.tenure) as usize as u128).to_le_bytes();",
+            "let tenure = actor;",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "matches",
+            (("impl", "WeakProgressDeliveryAuthority"),),
+            "Arc::ptr_eq(&retained, &candidate.tenure)",
+            "retained.connection_ordinal == candidate.tenure.connection_ordinal",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "try_reserve_for_source",
+            (("impl", "NetworkActorProgressBudget"),),
+            "(Some(retained), Some(candidate)) => !retained.matches(candidate),",
+            "(Some(_), Some(_)) => false,",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "claim_writer_flush_once",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "self.completion_claimed\n"
+            "            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)\n"
+            "            .is_ok()",
+            "true",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_ticket_identity",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "&& self.route.same_source(&other.route)",
+            "&& self.route.same_source(&other.route)\n"
+            "            && Arc::ptr_eq(&self.completion_claimed, "
+            "&other.completion_claimed)",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_delivery_occurrence",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "self.same_ticket_identity(other) && self.route.same_delivery(&other.route)",
+            "self.route.same_delivery(&other.route)",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_writer_flush_occurrence",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "self.same_delivery_occurrence(other)\n"
+            "            && Arc::ptr_eq(&self.completion_claimed, "
+            "&other.completion_claimed)",
+            "self.same_delivery_occurrence(other)",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_route_identity_hash",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "self.route.process_local_identity_hash()",
+            "self.route.source_key().process_local_identity_hash()",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_writer_occurrence_identity_hash",
+            (("impl", "NetworkReplyFlushIdentity"),),
+            "Hash::new_from_chunks(&[DOMAIN, ticket.as_ref(), route.as_ref(), &completion_claim])",
+            "Hash::new_from_chunks(&[DOMAIN, ticket.as_ref(), route.as_ref()])",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "process_local_identity_hash",
+            (("impl", "NetworkReplySourceKey"),),
+            "Hash::new_from_chunks(&[DOMAIN, &actor, &authenticated_source])",
+            "Hash::new(&authenticated_source)",
+        ),
+    )
+    for index, (relative, item, context, old, new) in enumerate(mutations):
+        mutation_root = tmp_path / f"mutation-{index}"
+        source = ROOT_DIR / relative
+        destination = mutation_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        mutate_rust_item_source_in_context(
+            module,
+            destination,
+            item,
+            context,
+            old,
+            new,
+        )
+        diagnostic_claim = replace(
+            claim,
+            source_item_seals=(seals[(relative, item, context)],),
+        )
+        with pytest.raises(ValueError, match="cross-tool source seal"):
+            module._cross_tool_source_item_seal_payload(
+                diagnostic_claim,
+                root_dir=mutation_root,
+            )
+
+    payload_claim = freeze_cross_tool_claim_call_sites(module, claim)
+    payload_paths = {
+        *payload_claim.production_sources,
+        payload_claim.verus_source,
+        payload_claim.verified_kernel_source,
+        *(site.source for site in payload_claim.production_call_sites),
+        *(
+            kernel.verified_kernel_source
+            for kernel in payload_claim.supplemental_kernels
+        ),
+        *(
+            site.source
+            for kernel in payload_claim.supplemental_kernels
+            for site in kernel.production_call_sites
+        ),
+        *(seal.source for seal in payload_claim.source_item_seals),
+    }
+
+    def copied_evidence(root: Path):
+        return {
+            "sources": [
+                {
+                    "path": relative,
+                    "sha256": module._sha256_file(root / relative),
+                }
+                for relative in sorted(payload_paths)
+            ]
+        }
+
+    baseline_root = tmp_path / "linked-baseline"
+    for relative in payload_paths:
+        destination = baseline_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    baseline = module._cross_tool_claim_payload(
+        payload_claim,
+        verus_evidence=copied_evidence(baseline_root),
+        root_dir=baseline_root,
+    )
+    assert len(baseline["supplemental_verified_kernels"]) == 2
+
+    linked_mutations = (
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if !production_reliable_flush_application_refines_source_lane_kernel(application) {",
+            "if false {",
+            "(exact reviewed item token seal|exact kernel enforcement and projection)",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if !production_reliable_flush_two_phase_link_kernel(worker_trace, application) {",
+            "if !production_reliable_flush_two_phase_link_kernel(worker_trace, occurrence) {",
+            "(exact reviewed item token seal|exact kernel enforcement and projection)",
+        ),
+        (
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "pub closed spec fn production_reliable_flush_application_refines_source_lane_kernel(\n"
+            "    projection: ProductionReliableFlushApplicationProjection,\n"
+            ") -> bool {\n"
+            "    production_reliable_flush_application_body!(projection)\n"
+            "}",
+            "pub closed spec fn production_reliable_flush_application_refines_source_lane_kernel(\n"
+            "    projection: ProductionReliableFlushApplicationProjection,\n"
+            ") -> bool {\n"
+            "    true\n"
+            "}",
+            "same exact reviewed body as production",
+        ),
+        (
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "assert(production_reliable_flush_two_phase_link_kernel(\n"
+            "        production_reliable_flush_trace_projection(worker),\n"
+            "        production_reliable_flush_application_projection(application),\n"
+            "    ));",
+            "assert(worker.status == 2u8);",
+            "supplemental verified kernel .* exact projection once",
+        ),
+        (
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "pub closed spec fn production_reliable_flush_application_projection(\n"
+            "    projection: ProductionReliableFlushApplicationProjection,\n"
+            ") -> ProductionReliableFlushApplicationProjection {\n"
+            "    projection\n"
+            "}",
+            "pub closed spec fn production_reliable_flush_application_projection(\n"
+            "    projection: ProductionReliableFlushApplicationProjection,\n"
+            ") -> ProductionReliableFlushApplicationProjection {\n"
+            "    ProductionReliableFlushApplicationProjection::default()\n"
+            "}",
+            "projection builder .* exact reviewed token seal",
+        ),
+    )
+    for index, (relative, old, new, expected_error) in enumerate(
+        linked_mutations
+    ):
+        mutation_root = tmp_path / f"linked-mutation-{index}"
+        for source_relative in payload_paths:
+            destination = mutation_root / source_relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT_DIR / source_relative, destination)
+        path = mutation_root / relative
+        source = path.read_text(encoding="utf-8")
+        assert source.count(old) == 1, (relative, old)
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        with pytest.raises(ValueError, match=expected_error):
+            module._cross_tool_claim_payload(
+                payload_claim,
+                verus_evidence=copied_evidence(mutation_root),
+                root_dir=mutation_root,
+            )
+
+    macro_mutations = (
+        (
+            "production_reliable_flush_trace_body",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)",
+        ),
+        (
+            "production_reliable_flush_application_body",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)",
+        ),
+        (
+            "production_reliable_flush_application_body",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_WRITER_OCCURRENCE)",
+            "refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)",
+        ),
+        (
+            "production_reliable_flush_application_body",
+            "&& $projection.claim_acquired",
+            "&& true",
+        ),
+        (
+            "production_reliable_flush_two_phase_link_body",
+            "&& $worker.delivery_ordinal_low == $application.delivery_ordinal_low",
+            "&& true",
+        ),
+        (
+            "production_reliable_flush_two_phase_link_body",
+            "&& canonical_identity_equal_body!(\n"
+            "                $worker.source_key_identity,\n"
+            "                $application.source_key_identity\n"
+            "            )",
+            "&& true",
+        ),
+        (
+            "production_reliable_flush_two_phase_link_body",
+            "&& canonical_identity_equal_body!(\n"
+            "                $worker.delivery_route_identity,\n"
+            "                $application.delivery_route_identity\n"
+            "            )",
+            "&& true",
+        ),
+        (
+            "production_reliable_flush_two_phase_link_body",
+            "&& canonical_identity_equal_body!(\n"
+            "                $worker.writer_occurrence_identity,\n"
+            "                $application.writer_occurrence_identity\n"
+            "            )",
+            "&& true",
+        ),
+    )
+    relative = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    for index, (item, old, new) in enumerate(macro_mutations):
+        mutation_root = tmp_path / f"macro-mutation-{index}"
+        source = ROOT_DIR / relative
+        destination = mutation_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        text = destination.read_text(encoding="utf-8")
+        items = module.rust_macro_items(text, item)
+        assert len(items) == 1, item
+        macro = items[0]
+        assert macro.source.count(old) == 1, (item, old)
+        mutated = macro.source.replace(old, new, 1)
+        destination.write_text(
+            text.replace(macro.source, mutated, 1),
+            encoding="utf-8",
+        )
+        diagnostic_claim = replace(
+            claim,
+            source_item_seals=(seals[(relative, item, ())],),
+        )
+        with pytest.raises(ValueError, match="cross-tool source seal"):
+            module._cross_tool_source_item_seal_payload(
+                diagnostic_claim,
+                root_dir=mutation_root,
+            )
 
 
 def test_terminal_application_without_successor_activation_claim_rejects_runner_mutations(
@@ -5574,7 +6227,14 @@ def test_exact_output_production_source_is_bound() -> None:
             "pub(crate) fn from_admitted_reply(",
             "semantic_target: flush_identity.semantic_target().clone(),",
             "semantic_target: chunk.responder.clone(),",
-            "sidecar writer-flush admission must bind semantic target, authenticated source, actor ticket, immutable payload, and both non-regressing cursors",
+            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_sidecar_flushes(",
+            ".bind_confirmed_worker_trace(flush_trace)",
+            ".bind_confirmed_worker_trace(ProductionReliableFlushTraceProjection::default())",
+            "a successful writer occurrence must bind its exact confirmed worker trace before lane admission",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -5648,30 +6308,30 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            ".is_some_and(|route| admission.is_bound_to_attempt(route))",
-            ".is_some_and(NetworkReplyRoute::is_active)",
-            "sidecar cursor receipt must bind the authenticated source and exact connection tenure",
+            "|| !production_reliable_flush_two_phase_link_kernel(worker_trace, occurrence)",
+            "|| false",
+            "lane application must reject any projection without the exact accepted worker occurrence before inspecting mutable transport state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "if request.request_id != projection.request_id",
-            "if false && request.request_id != projection.request_id",
-            "sidecar cursor receipt must match its actor identity, canonical request, immutable transfer coordinates",
+            "if !admission.projection_matches_identity(&admission.flush_identity) {",
+            "if false {",
+            "lane application must reject any projection without the exact accepted worker occurrence before inspecting mutable transport state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "if attempt.next_chunk != projection.chunk_cursor_before",
-            "if false && attempt.next_chunk != projection.chunk_cursor_before",
-            "sidecar cursor receipt must match the current unacknowledged chunk and its exact before/after cursor projection",
+            "|| projection.chunk_cursor_before != chunk_index",
+            "|| false",
+            "lane application must validate the immutable message and chunk cursors before transport preflight",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "if attempt.in_flight_chunk != Some(chunk_index) {",
-            "if false && attempt.in_flight_chunk != Some(chunk_index) {",
-            "sidecar cursor receipt must match the current unacknowledged chunk and its exact before/after cursor projection",
+            "preflight_reliable_flush_outbound(self, admission, &gate, chunk_index, count)?",
+            "preflight_reliable_flush_outbound(self, admission, &gate, 0, count)?",
+            "the exact gate, source route, shared bytes and cursors must preflight into one immutable application plan before claiming completion",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -5730,26 +6390,16 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "let cursor = if completed {\n"
-            "            ServerResponseCursor::Complete\n"
-            "        } else {\n"
-            "            ServerResponseCursor::Pending(attempt.next_chunk)\n"
-            "        };",
-            "let cursor = ServerResponseCursor::Pending(\n"
-            "            if completed { 0 } else { attempt.next_chunk },\n"
-            "        );",
-            "a final writer-flush receipt must persist terminal completion rather than a replayable chunk-zero cursor",
+            "if !admission.flush_identity.claim_writer_flush_once() {",
+            "if false {",
+            "the clone-shared writer claim must be the sole linearization point before application-kernel and exact-link postchecks",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "if completed || !active {\n"
-            "                gate_attempt.inserted = now;\n"
-            "            }",
-            "if !active {\n"
-            "                gate_attempt.inserted = now;\n"
-            "            }",
-            "writer-flush completion and inactive retirement must update only the exact source tombstone",
+            "if !production_reliable_flush_two_phase_link_kernel(worker_trace, application) {",
+            "if false {",
+            "the clone-shared writer claim must be the sole linearization point before application-kernel and exact-link postchecks",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -6009,10 +6659,38 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
+            "fn reply_target_merge_plan(&self, candidate: &Self)",
+            "self.reply_target_merge_plan_with_hooks(candidate, |_| {}, || {})",
+            "self.reply_target_merge_plan_after_candidate_prune(candidate, |_| {})",
+            "the no-hook production coalescing wrapper must delegate to the receipt-bound route-history kernel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".project_retained_reply_routes(prune_receipt)",
+            ".project_retained_reply_routes(prune_receipt.clone())",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".merge_with_receipt(&candidate_routes)",
+            ".merge(&candidate_routes)",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".any(|route| route.same_delivery(candidate_route))",
+            ".any(|route| route.same_source(candidate_route))",
+            "the authoritative merged route snapshot must select the exact delivery before immutable same-delivery and same-tenure classification",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "                    update,\n                });",
             "                    update: NetworkReplyRouteSourceUpdate::Exact,\n                });",
-            "same-source coalescing must reject terminal-candidate cursor regression and restrict cursor reactivation to a reconnected typed certified-sidecar chunk",
+            "same-source coalescing must reject terminal-candidate cursor regression and restrict reactivation to a reconnected certified-sidecar chunk",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6038,10 +6716,10 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
-            ".source_update_from(prior_route)",
-            ".source_update_from(candidate_route)",
-            "same-source coalescing must reject terminal-candidate cursor regression and restrict cursor reactivation to a reconnected typed certified-sidecar chunk",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "candidate_route.same_tenure(prior_route)",
+            "candidate_route.same_delivery(prior_route)",
+            "the authoritative merged route snapshot must select the exact delivery before immutable same-delivery and same-tenure classification",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6063,17 +6741,17 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "let retained_routes = self.reply_routes.clone().ok_or_else",
             "let retained_routes = candidate.reply_routes.clone().ok_or_else",
-            "coalescing must atomically merge complete actor-owned histories with a strictly shrinking inactive-retirement retry",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "&& candidate.is_certified_sidecar_chunk_fanout()",
             "&& true",
-            "same-source coalescing must reject terminal-candidate cursor regression and restrict cursor reactivation to a reconnected typed certified-sidecar chunk",
+            "same-source coalescing must reject terminal-candidate cursor regression and restrict reactivation to a reconnected certified-sidecar chunk",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6443,17 +7121,17 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "after_candidate_prune(merge_attempt);",
             "let _ = merge_attempt;",
-            "coalescing must atomically merge complete actor-owned histories with a strictly shrinking inactive-retirement retry",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "if candidate_routes.len() >= live_before_merge {",
             "if false && candidate_routes.len() >= live_before_merge {",
-            "coalescing must atomically merge complete actor-owned histories with a strictly shrinking inactive-retirement retry",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
         ),
         (
             "crates/iroha_config/src/parameters/defaults.rs",
@@ -6596,10 +7274,10 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(",
-            "if !retained.merge_downstream(candidate)",
-            "if false",
-            "exact-output coalescing must atomically merge fair-ingress source cursors with the canonical route history",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)",
+            "retained.merge_downstream(candidate)",
+            "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
         ),
     ),
 )
@@ -19558,6 +20236,12 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
     (
         (
             "try_reserve_for_source",
+            "(Some(retained), Some(candidate)) => !retained.matches(candidate),",
+            "(Some(_), Some(_)) => false,",
+            "queued progress tickets must retain the exact weak delivery authority rather than reusing ordinal-equivalent tenure",
+        ),
+        (
+            "try_reserve_for_source",
             "if source_retained.is_some_and(|retained| retained.items >= 1) {",
             "if source_retained.is_some_and(|retained| retained.items >= 2) {",
             "distinct broadcast or direct requests remain FIFO-ranked behind a target owner",
@@ -19611,6 +20295,32 @@ def test_transport_geometry_source_fidelity_rejects_local_actor_split_mutants(
 
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert any(expected_error in error for error in errors), errors
+
+
+def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    repo_root = formal_dir.parents[2]
+    network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        network_path,
+        "matches",
+        (("impl", "WeakProgressDeliveryAuthority"),),
+        "Arc::ptr_eq(&retained, &candidate.tenure)",
+        "retained.connection_ordinal == candidate.tenure.connection_ordinal",
+    )
+
+    errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
+    assert any(
+        "weak progress authority matching must preserve exact Arc ownership"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize(
